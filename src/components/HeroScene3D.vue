@@ -10,10 +10,30 @@
  * three 動態載入不進首屏；prefers-reduced-motion 或無 WebGL 時退回靜態漸層。
  */
 import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
-import { canonicalArt } from '@/lib/tcgdex'
 
-// 經典角色卡面（象徵性展示，非特定實體卡）—— 讓漂浮卡片不再是空白色塊
-const CLASSIC_NAMES = ['皮卡丘', '妙蛙種子', '小火龍', '傑尼龜', '噴火龍', '夢幻', '卡比獸', '胡地', '快龍', '耿鬼', '拉普拉斯', '迷唇姐']
+/**
+ * 經典角色卡面（象徵性展示，非特定實體卡）。
+ *
+ * 這裡刻意寫死網址而不走 canonicalArt() 搜尋：
+ *  1. 搜尋要先打一次 API 再載圖，12 張就是 12 次額外往返 —— 卡片會慢半拍才出現
+ *  2. 部分角色（快龍、耿鬼、迷唇姐…）在 TCGdex 繁中庫查得到卡但沒有圖，
+ *     搜尋會回 null，那幾張就永遠停在空白色塊
+ * 以下 12 組皆已實測回 200 且確實有圖。
+ */
+const CLASSIC_ART = [
+  'https://assets.tcgdex.net/zh-tw/SV/SVF/001/low.webp',  // 光輝噴火龍
+  'https://assets.tcgdex.net/zh-tw/SV/SVC/001/low.webp',  // 皮卡丘
+  'https://assets.tcgdex.net/zh-tw/S/S8a/002/low.webp',   // 夢幻
+  'https://assets.tcgdex.net/zh-tw/SV/SVEM/001/low.webp', // 超夢
+  'https://assets.tcgdex.net/zh-tw/S/SCB/001/low.webp',   // 妙蛙花
+  'https://assets.tcgdex.net/zh-tw/SV/SV2a/009/low.webp', // 水箭龜
+  'https://assets.tcgdex.net/zh-tw/S/SDL/005/low.webp',   // 風速狗
+  'https://assets.tcgdex.net/zh-tw/S/S8a/004/low.webp',   // 鳳王
+  'https://assets.tcgdex.net/zh-tw/S/S8a/005/low.webp',   // 洛奇亞
+  'https://assets.tcgdex.net/zh-tw/S/SLL/004/low.webp',   // 路卡利歐
+  'https://assets.tcgdex.net/zh-tw/S/S6a/002/low.webp',   // 伊布
+  'https://assets.tcgdex.net/zh-tw/SV/SV3a/002/low.webp'  // 拉普拉斯
+]
 
 const host = ref<HTMLDivElement | null>(null)
 const ready = ref(false)
@@ -128,12 +148,10 @@ onMounted(async () => {
       scene.add(m)
       cards.push(m)
 
-      // 卡面貼圖非同步進場：先用色塊墊著，圖抓到才淡入換上，不擋動畫啟動
-      const name = CLASSIC_NAMES[globalIdx % CLASSIC_NAMES.length]
+      // 卡面貼圖非同步進場：先用色塊墊著，圖載到就換上，不擋動畫啟動
+      const url = CLASSIC_ART[globalIdx % CLASSIC_ART.length]
       globalIdx++
-      canonicalArt(name).then(url => {
-        if (disposed || !url) return
-        loader.load(
+      loader.load(
           url,
           tex => {
             if (disposed) { tex.dispose(); return }
@@ -153,9 +171,8 @@ onMounted(async () => {
             disposables.push(tex)
           },
           undefined,
-          () => { /* 抓圖失敗，保留原本的粉彩色塊 */ }
-        )
-      })
+          () => { /* 載圖失敗，保留原本的粉彩色塊 */ }
+      )
     }
   })
 

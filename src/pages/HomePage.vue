@@ -23,13 +23,10 @@ const steps = [
         <div class="copy">
           <p class="eyebrow">PSA 鑑定卡 · 定量抽選 · 可驗證公平</p>
           <h1 class="display">
-            每一支籤<br />
-            <em>開賣前就已封存</em>
+            <span class="line l1">每一支籤</span>
+            <span class="line l2"><em data-text="開賣前就已封存">開賣前就已封存</em></span>
           </h1>
-          <p class="lede">
-            總籤數與各賞剩餘全程公開。籤序在開賣前以 SHA-256 承諾封存，
-            完抽後公開種子，任何人都能自行驗算。
-          </p>
+          <p class="lede">籤序封存、剩餘公開、完抽可驗算。</p>
           <div class="cta">
             <RouterLink to="/pools" class="btn primary">看抽選中的池</RouterLink>
             <RouterLink to="/fairness" class="btn ghost">公平性怎麼驗證 →</RouterLink>
@@ -86,12 +83,56 @@ const steps = [
 h1 {
   /* 上限壓在 72px：再大「開賣前就已封存」在 1440 寬會斷成三行 */
   font-size: clamp(40px, 4.6vw, 72px);
-  margin: 22px 0 24px;
+  margin: 22px 0 20px;
   text-wrap: balance;
 }
-h1 em { font-style: normal; color: var(--accent); }
+/* 兩行分別淡入上移，讓標題有進場節奏而不是一次全出現 */
+.line {
+  display: block;
+  opacity: 0;
+  transform: translateY(14px);
+  animation: line-in .7s cubic-bezier(.2, .7, .3, 1) forwards;
+}
+.l1 { animation-delay: .05s; }
+.l2 { animation-delay: .18s; }
+@keyframes line-in {
+  to { opacity: 1; transform: none; }
+}
+
+h1 em {
+  font-style: normal;
+  position: relative;
+  /* 漸層文字：橘紅過渡到暖橘，比單色更有層次 */
+  background: linear-gradient(92deg, var(--accent) 0%, #ff7a3d 46%, var(--accent) 100%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: sheen 6s ease-in-out infinite;
+}
+@keyframes sheen {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+/* 底層再疊一次同樣文字做柔光暈，讓標題在淺色底上更立體 */
+h1 em::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  color: var(--accent);
+  filter: blur(18px);
+  opacity: .35;
+}
+
 .lede { font-size: 18px; color: var(--muted); max-width: 480px; margin: 0; line-height: 1.62; }
-.cta { display: flex; gap: 12px; margin-top: 34px; flex-wrap: wrap; }
+.cta { display: flex; gap: 12px; margin-top: 30px; flex-wrap: wrap; }
+
+/* 減少動態偏好：關掉進場與流光，只留靜態漸層 */
+@media (prefers-reduced-motion: reduce) {
+  .line { opacity: 1; transform: none; animation: none; }
+  h1 em { animation: none; }
+}
 /* 3D 舞台向外溢出容器，讓環繞的卡片不會被切齊邊界 */
 .stage {
   height: 620px;
