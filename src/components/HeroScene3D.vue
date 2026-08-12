@@ -61,8 +61,10 @@ onMounted(async () => {
   const rich = window.innerWidth >= 900 && (navigator.hardwareConcurrency ?? 4) >= 6
 
   renderer.setPixelRatio(dpr)
-  renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 0.92
+  // ACESFilmic 會把飽和色往白色帶（電影感但卡圖會變粉），Neutral 保留原始色相與
+  // 彩度，只在真正過曝的地方滾出漸層 —— 寶可夢卡圖要的是鮮豔不是電影感。
+  renderer.toneMapping = THREE.NeutralToneMapping
+  renderer.toneMappingExposure = 1.05
   renderer.domElement.style.width = '100%'
   renderer.domElement.style.height = '100%'
   renderer.domElement.style.display = 'block'
@@ -94,7 +96,7 @@ onMounted(async () => {
       depth, bevelEnabled: true, bevelSize: 0.025, bevelThickness: 0.025, bevelSegments: 3, curveSegments: 10
     })
   }
-  const SLAB_W = 1.75, SLAB_H = 2.45
+  const SLAB_W = 2.15, SLAB_H = 3.0
   const geo = slab(SLAB_W, SLAB_H, 0.15, 0.07)
   geo.center()
   // ExtrudeGeometry 預設 UV 不適合直接貼卡圖（會拉伸/重複），跟 CardReveal3D
@@ -118,10 +120,14 @@ onMounted(async () => {
   const loader = new THREE.TextureLoader()
   loader.setCrossOrigin('anonymous')
 
-  // 兩層環繞：內圈大而近、外圈小而遠，製造縱深
+  /* 兩層環繞：內圈大而近、外圈小而遠，製造縱深。
+     12 → 9 張：卡片放大後張數不減會互相遮擋，圈半徑同步外推留出間距。
+     手機收窄環半徑 —— 視窗窄、水平視角小，卡片放大後用桌機的半徑會被切掉半張。
+     這裡縮的是「散開程度」不是卡片本身，所以卡片在手機上仍然是放大後的尺寸。 */
+  const spread = window.innerWidth < 720 ? 0.78 : 1
   const rings = [
-    { count: 5, radius: 3.1, z: 0.4, scale: 1.0, speed: 0.16 },
-    { count: 7, radius: 5.3, z: -3.2, scale: 0.72, speed: -0.1 }
+    { count: 4, radius: 3.35 * spread, z: 0.4, scale: 1.0, speed: 0.16 },
+    { count: 5, radius: 5.7 * spread, z: -3.2, scale: 0.8, speed: -0.1 }
   ]
   let globalIdx = 0
   rings.forEach((ring, ri) => {
@@ -161,13 +167,19 @@ onMounted(async () => {
             // 原本為了「空白色塊」調校的高虹彩/高光澤/高反射，疊在真圖上會
             // 把圖案整片洗成死白（清漆反射亮光 + 環境反射 + 虹彩色移三層疊加）。
             // 貼圖後全部收斂，讓角色圖案讀得清楚，只留一點卡片該有的光澤。
-            mat.iridescence = 0.05
+            mat.iridescence = 0.16
             mat.sheen = 0
-            // 清漆留一點點卡套的光澤感就好，太高會在卡面糊出一片反光
-            mat.clearcoat = 0.18
-            mat.clearcoatRoughness = 0.55
-            mat.envMapIntensity = 0.15
-            mat.roughness = 0.62
+            /* 反光的關鍵不是 clearcoat 強度，是 clearcoatRoughness：
+               粗糙度高 → 反光散開糊滿整面（就是之前「太亮看不到卡圖」）
+               粗糙度低 → 反光收成一道細亮條，隨卡片旋轉掃過，像真的卡套
+               所以強度給滿、粗糙度壓到極低，才會「看得到反光」又不吃掉圖案。 */
+            mat.clearcoat = 1
+            // 0.06 會讓清漆變成完全鏡面，把環境貼圖的亮面整片反射出來（淺色卡直接
+            // 被打白）。0.11 剛好把環境反射糊掉、又保留主光的細亮條。
+            mat.clearcoatRoughness = 0.11
+            mat.envMapIntensity = 0.22
+            // 本體粗糙度偏低讓卡面本身也有光澤，彩度靠低環境光 + Neutral 色調映射保住
+            mat.roughness = 0.34
             mat.metalness = 0.05
             mat.needsUpdate = true
             disposables.push(tex)
@@ -201,12 +213,13 @@ onMounted(async () => {
      decay=2 讓它們貼近卡面時強度暴增，每掃過一張就爆一次白斑、卡圖整片吃掉。
      染色效果改由後方的加法光暈面片負責，那個不會直接打在卡面上。
      主光也從 2.0 降下來 —— 卡片有 clearcoat，方向光一強就整排鏡面反光。 */
-  const key = new THREE.DirectionalLight(0xffffff, 1.05)
+  const key = new THREE.DirectionalLight(0xffffff, 1.5)
   key.position.set(4, 6, 8)
   // 補一盞弱背光拉出卡片輪廓，避免只靠單一主光導致背面全黑
-  const rim = new THREE.DirectionalLight(0xffffff, 0.35)
+  const rim = new THREE.DirectionalLight(0xffffff, 0.4)
   rim.position.set(-5, -2, -6)
-  scene.add(key, rim, new THREE.AmbientLight(0xffffff, 0.75))
+  // 環境光壓低 —— 均勻打亮會讓所有顏色往灰白靠，明暗對比才是彩度的來源
+  scene.add(key, rim, new THREE.AmbientLight(0xffffff, 0.42))
 
   /* ---- 光暈：用場景內的加法混合面片，不用後製泛光 ----
      UnrealBloomPass 會把背景合成成不透明，在透明 canvas 上會露出一塊
