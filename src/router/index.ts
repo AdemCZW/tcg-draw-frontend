@@ -1,7 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 export const router = createRouter({
-  history: createWebHistory(),
+  // 跟 vite.config.ts 的 base 同步，否則 GitHub Pages 的 /tcg-draw-frontend/
+  // 前綴會讓路由比對失敗（router 以為自己在網域根目錄）。
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', component: () => import('@/pages/HomePage.vue') },
     { path: '/pools', component: () => import('@/pages/PoolListPage.vue') },
