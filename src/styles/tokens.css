@@ -1,0 +1,70 @@
+/* ------------------------------------------------------------------
+   Design tokens — "Soft Vault"
+   參考 jeton.com 的視覺語言：柔和粉彩漸層底、超大細字、圓角膠囊、
+   鮮明的橘紅強調色。留白多、對比低、陰影柔。
+------------------------------------------------------------------- */
+:root {
+  /* surfaces —— 幾乎純白的暖底，區塊靠淡色與圓角區分而非邊線 */
+  --bg: #fdfbfa;
+  --surface: #ffffff;
+  --surface-2: #f6f2f0;
+  --surface-3: #efe9e6;
+  --line: #e8e0dc;
+  --line-soft: #f0eae7;
+
+  /* text */
+  --ink: #1a1614;
+  --text: #1a1614;
+  --muted: #7a706b;
+  --faint: #a89f9a;
+
+  /* brand —— Jeton 的橘紅 */
+  --accent: #f73b20;
+  --accent-soft: #f84d35;
+  --accent-wash: #fde8e4;
+
+  /* 粉彩漸層（hero / 區塊底） */
+  --wash-peach: #fce4dd;
+  --wash-rose: #fbdde6;
+  --wash-lilac: #e9e3fb;
+  --wash-mint: #ddf0ec;
+  --wash-sand: #f8eddc;
+
+  /* 全息箔光譜（卡片稀有度專用，維持鮮明度） */
+  --holo-a: #5ad6e8;
+  --holo-b: #9b7ef5;
+  --holo-c: #f58fd0;
+  --holo: linear-gradient(115deg, var(--holo-a), var(--holo-b) 48%, var(--holo-c));
+
+  /* tiers */
+  --tier-a: #e0961b;
+  --tier-b: #8b6ff0;
+  --tier-c: #3aa5c9;
+  --tier-d: #a49a92;
+  --tier-last: #f73b20;
+  --gold: #e0a338;
+  --gold-deep: #b9801c;
+
+  /* state */
+  --ok: #23a06a;
+  --warn: #d98324;
+  --danger: #e0453a;
+
+  /* type */
+  --font-body: "Inter", "Noto Sans TC", system-ui, sans-serif;
+  --font-display: "Inter", "Noto Sans TC", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* rhythm —— 大圓角是這套語言的核心特徵 */
+  --radius: 18px;
+  --radius-lg: 28px;
+  --radius-xl: 40px;
+  --pill: 999px;
+  --pad: 20px;
+  --maxw: 1180px;
+
+  /* 柔和陰影，取代原本的硬陰影 */
+  --shadow-sm: 0 2px 8px rgba(26, 22, 20, .05);
+  --shadow: 0 8px 30px rgba(26, 22, 20, .07);
+  --shadow-lg: 0 24px 60px rgba(26, 22, 20, .10);
+}

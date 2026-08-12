@@ -1,0 +1,9 @@
+node_modules
+dist
+vaultdraw-dist
+*.local
+.DS_Store
+.playwright-mcp
+tsconfig.app.tsbuildinfo
+tsconfig.node.tsbuildinfo
+*.zip

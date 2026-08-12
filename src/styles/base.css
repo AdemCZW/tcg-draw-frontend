@@ -1,0 +1,131 @@
+@import "./tokens.css";
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  /* clip（而非 hidden）不會建立捲動容器，sticky 定位仍可運作 */
+  overflow-x: clip;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  letter-spacing: -0.011em;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+input, select { font-family: inherit; }
+
+.container { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--pad); }
+
+@media (max-width: 720px) {
+  :root { --pad: 20px; }
+  body { font-size: 15px; }
+  input, select, textarea { font-size: 16px; }
+}
+
+/* ---- type roles ----
+   Jeton 的標題是「大而細」：字級很大但字重只有 450–500，行高貼近 1。 */
+.display {
+  font-family: var(--font-display);
+  /* 中文字面本來就重，跟拉丁字用同一個字重會顯得過黑 —— 降一級 */
+  font-weight: 400;
+  line-height: 1.06;
+  letter-spacing: -0.03em;
+}
+.display:lang(en) { font-weight: 500; }
+.mono { font-family: var(--font-mono); letter-spacing: 0; }
+.muted { color: var(--muted); }
+
+.eyebrow {
+  display: inline-block;
+  font-size: 13px; font-weight: 600;
+  letter-spacing: .02em;
+  color: var(--accent);
+  padding: 6px 14px;
+  background: var(--accent-wash);
+  border-radius: var(--pill);
+}
+
+/* ---- 粉彩漸層底 ---- */
+.wash {
+  background:
+    radial-gradient(80% 60% at 15% 10%, var(--wash-peach), transparent 60%),
+    radial-gradient(70% 70% at 85% 20%, var(--wash-lilac), transparent 62%),
+    radial-gradient(90% 70% at 60% 95%, var(--wash-rose), transparent 60%),
+    var(--surface-2);
+}
+
+/* ---- 全息箔描邊（稀有卡） ---- */
+.holo-edge { position: relative; }
+.holo-edge::before {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: var(--holo);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: .85;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .holo-edge::before {
+    background-size: 220% 220%;
+    animation: holo-drift 6s ease-in-out infinite alternate;
+  }
+}
+@keyframes holo-drift {
+  from { background-position: 0% 0%; }
+  to   { background-position: 100% 100%; }
+}
+
+/* ---- 卡片：無邊線，靠柔和陰影與大圓角 ---- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---- 按鈕：膠囊形，實心強調色 ---- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border-radius: var(--pill);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  padding: 12px 24px;
+  font-size: 15px; font-weight: 600;
+  letter-spacing: -0.01em;
+  transition: transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .18s, background .18s, border-color .18s;
+}
+.btn:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: var(--line); }
+.btn:active { transform: translateY(0); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+.btn.primary:hover { background: var(--accent-soft); box-shadow: 0 10px 26px rgba(247, 59, 32, .28); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--accent); }
+.btn.ghost:hover { background: var(--accent-wash); box-shadow: none; }
+.btn:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 500;
+  padding: 5px 13px;
+  border-radius: var(--pill);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+/* ---- 3D 場景通用 ---- */
+.scene { perspective: 1200px; }
+.tilt { transform-style: preserve-3d; will-change: transform; }
