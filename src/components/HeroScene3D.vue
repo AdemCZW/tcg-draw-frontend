@@ -161,12 +161,14 @@ onMounted(async () => {
             // 原本為了「空白色塊」調校的高虹彩/高光澤/高反射，疊在真圖上會
             // 把圖案整片洗成死白（清漆反射亮光 + 環境反射 + 虹彩色移三層疊加）。
             // 貼圖後全部收斂，讓角色圖案讀得清楚，只留一點卡片該有的光澤。
-            mat.iridescence = 0.12
-            mat.sheen = 0.15
-            mat.clearcoat = 0.45
-            mat.clearcoatRoughness = 0.3
-            mat.envMapIntensity = 0.3
-            mat.roughness = 0.4
+            mat.iridescence = 0.05
+            mat.sheen = 0
+            // 清漆留一點點卡套的光澤感就好，太高會在卡面糊出一片反光
+            mat.clearcoat = 0.18
+            mat.clearcoatRoughness = 0.55
+            mat.envMapIntensity = 0.15
+            mat.roughness = 0.62
+            mat.metalness = 0.05
             mat.needsUpdate = true
             disposables.push(tex)
           },
@@ -194,18 +196,17 @@ onMounted(async () => {
   scene.add(dust)
   disposables.push(pGeo, pMat)
 
-  // ---- 燈光：白主光 + 三顆環繞彩光 ----
-  const key = new THREE.DirectionalLight(0xffffff, 2.0)
+  /* ---- 燈光 ----
+     原本還有三顆環繞彩光（紅/紫/青），軌道半徑 5.2 正好穿過卡片環（3.1 / 5.3），
+     decay=2 讓它們貼近卡面時強度暴增，每掃過一張就爆一次白斑、卡圖整片吃掉。
+     染色效果改由後方的加法光暈面片負責，那個不會直接打在卡面上。
+     主光也從 2.0 降下來 —— 卡片有 clearcoat，方向光一強就整排鏡面反光。 */
+  const key = new THREE.DirectionalLight(0xffffff, 1.05)
   key.position.set(4, 6, 8)
-  scene.add(key, new THREE.AmbientLight(0xffffff, 0.5))
-
-  // 強度求「染色」不求「照亮」—— 太亮會在卡面爆出白斑並被泛光放大
-  const orbs = [
-    new THREE.PointLight(0xf73b20, 9, 14, 2),
-    new THREE.PointLight(0x9b7ef5, 8, 14, 2),
-    new THREE.PointLight(0x5ad6e8, 7, 14, 2)
-  ]
-  orbs.forEach(o => scene.add(o))
+  // 補一盞弱背光拉出卡片輪廓，避免只靠單一主光導致背面全黑
+  const rim = new THREE.DirectionalLight(0xffffff, 0.35)
+  rim.position.set(-5, -2, -6)
+  scene.add(key, rim, new THREE.AmbientLight(0xffffff, 0.75))
 
   /* ---- 光暈：用場景內的加法混合面片，不用後製泛光 ----
      UnrealBloomPass 會把背景合成成不透明，在透明 canvas 上會露出一塊
@@ -297,15 +298,10 @@ onMounted(async () => {
     dust.rotation.y = t * 0.02
     dust.rotation.x = ptr.y * 0.05
 
-    orbs.forEach((o, i) => {
-      const a = t * (0.45 + i * 0.18) + (i / orbs.length) * Math.PI * 2
-      o.position.set(Math.cos(a) * 5.2, Math.sin(a * 1.4) * 3.2, Math.sin(a) * 3.4 + 1.5)
-    })
-
     // 光暈緩慢呼吸並輕微漂移
     glows.forEach((g, i) => {
       const m = g.material as import('three').MeshBasicMaterial
-      m.opacity = 0.4 + Math.sin(t * 0.6 + i * 2.1) * 0.14
+      m.opacity = 0.3 + Math.sin(t * 0.6 + i * 2.1) * 0.1
       g.position.x += Math.sin(t * 0.25 + i) * 0.004
       g.lookAt(camera.position)
     })
