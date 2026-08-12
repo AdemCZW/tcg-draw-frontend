@@ -1,11 +1,10 @@
 <script setup lang="ts">
 /**
- * 首頁 3D banner：雙層環繞的鑑定卡群 + 粒子塵光 + 泛光後製。
+ * 首頁 3D banner：雙層環繞的鑑定卡群 + 粒子塵光 + 後方加法光暈。
  *
- * 幾個讓畫面「有質感」的關鍵：
- *  1. 環境貼圖（RoomEnvironment）—— 沒有它，iridescence 沒東西可反射，會顯得平。
- *  2. ACESFilmic 色調映射 —— 讓高光滾出漸層而不是死白。
- *  3. UnrealBloom —— 只在效能足夠的裝置開，手機吃不消。
+ * 走「卡圖優先」的無反光路線：卡面全霧面、不上清漆與虹彩，也不掛環境貼圖。
+ * 先前試過鏡面卡套的質感，但反光不論調強調弱都會蓋掉卡圖 —— 太散糊成一片白，
+ * 太銳則把環境亮面整片映上淺色卡。改由 Neutral 色調映射與燈光負責畫面層次。
  *
  * three 動態載入不進首屏；prefers-reduced-motion 或無 WebGL 時退回靜態漸層。
  */
@@ -74,11 +73,9 @@ onMounted(async () => {
   const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100)
   camera.position.set(0, 0, 13)
 
-  // ---- 環境貼圖：讓金屬與虹彩有東西可反射 ----
-  const { RoomEnvironment } = await import('three/examples/jsm/environments/RoomEnvironment.js')
-  const pmrem = new THREE.PMREMGenerator(renderer)
-  const envRT = pmrem.fromScene(new RoomEnvironment(), 0.04)
-  scene.environment = envRT.texture
+  /* 這裡原本有 RoomEnvironment + PMREM 產生環境貼圖，唯一用途是給清漆與虹彩
+     反射。反光效果拿掉後就沒有反射對象了，一併移除 —— 順帶省下首屏的一次
+     動態 import 與一次 PMREM 運算。卡面改為純粹靠燈光照明。 */
 
   // ---- 卡片幾何 ----
   function slab(w: number, h: number, r: number, depth: number) {
@@ -132,19 +129,12 @@ onMounted(async () => {
   let globalIdx = 0
   rings.forEach((ring, ri) => {
     for (let i = 0; i < ring.count; i++) {
-      const mat = new THREE.MeshPhysicalMaterial({
+      // 無反光需求，用 MeshStandardMaterial 就夠 —— MeshPhysicalMaterial 的
+      // 清漆/虹彩/光澤層全部關掉後只是多編譯一份較貴的 shader。
+      const mat = new THREE.MeshStandardMaterial({
         color: palette[(i + ri * 3) % palette.length],
-        // 金屬度過高 + 明亮環境 = 白色鏡子，底色與虹彩會被反射蓋掉
-        metalness: 0.2,
-        roughness: 0.22,
-        clearcoat: 1,
-        clearcoatRoughness: 0.05,
-        iridescence: 1,
-        iridescenceIOR: 2.0,
-        iridescenceThicknessRange: [220, 1000],
-        envMapIntensity: 0.75,
-        sheen: 0.9,
-        sheenColor: new THREE.Color(0xffffff)
+        metalness: 0,
+        roughness: 0.75
       })
       disposables.push(mat)
       const m = new THREE.Mesh(geo, mat)
@@ -167,20 +157,9 @@ onMounted(async () => {
             // 原本為了「空白色塊」調校的高虹彩/高光澤/高反射，疊在真圖上會
             // 把圖案整片洗成死白（清漆反射亮光 + 環境反射 + 虹彩色移三層疊加）。
             // 貼圖後全部收斂，讓角色圖案讀得清楚，只留一點卡片該有的光澤。
-            mat.iridescence = 0.16
-            mat.sheen = 0
-            /* 反光的關鍵不是 clearcoat 強度，是 clearcoatRoughness：
-               粗糙度高 → 反光散開糊滿整面（就是之前「太亮看不到卡圖」）
-               粗糙度低 → 反光收成一道細亮條，隨卡片旋轉掃過，像真的卡套
-               所以強度給滿、粗糙度壓到極低，才會「看得到反光」又不吃掉圖案。 */
-            mat.clearcoat = 1
-            // 0.06 會讓清漆變成完全鏡面，把環境貼圖的亮面整片反射出來（淺色卡直接
-            // 被打白）。0.11 剛好把環境反射糊掉、又保留主光的細亮條。
-            mat.clearcoatRoughness = 0.11
-            mat.envMapIntensity = 0.22
-            // 本體粗糙度偏低讓卡面本身也有光澤，彩度靠低環境光 + Neutral 色調映射保住
-            mat.roughness = 0.34
-            mat.metalness = 0.05
+            // 全霧面：不要任何高光，卡圖顏色完全不被反光干擾
+            mat.roughness = 1
+            mat.metalness = 0
             mat.needsUpdate = true
             disposables.push(tex)
           },
@@ -212,14 +191,16 @@ onMounted(async () => {
      原本還有三顆環繞彩光（紅/紫/青），軌道半徑 5.2 正好穿過卡片環（3.1 / 5.3），
      decay=2 讓它們貼近卡面時強度暴增，每掃過一張就爆一次白斑、卡圖整片吃掉。
      染色效果改由後方的加法光暈面片負責，那個不會直接打在卡面上。
-     主光也從 2.0 降下來 —— 卡片有 clearcoat，方向光一強就整排鏡面反光。 */
-  const key = new THREE.DirectionalLight(0xffffff, 1.5)
+     卡面已改為全霧面，主光只負責塑形，強度不需要拉高。 */
+  const key = new THREE.DirectionalLight(0xffffff, 0.95)
   key.position.set(4, 6, 8)
   // 補一盞弱背光拉出卡片輪廓，避免只靠單一主光導致背面全黑
-  const rim = new THREE.DirectionalLight(0xffffff, 0.4)
+  const rim = new THREE.DirectionalLight(0xffffff, 0.3)
   rim.position.set(-5, -2, -6)
-  // 環境光壓低 —— 均勻打亮會讓所有顏色往灰白靠，明暗對比才是彩度的來源
-  scene.add(key, rim, new THREE.AmbientLight(0xffffff, 0.42))
+  /* 沒有高光之後環境光可以放大：先前壓低是因為高光會疊白造成失彩，
+     純漫射下環境光只是等比放大貼圖顏色，不會讓卡圖褪色，
+     反而能讓背向鏡頭的卡片不至於整片沉入暗部。 */
+  scene.add(key, rim, new THREE.AmbientLight(0xffffff, 1.05))
 
   /* ---- 光暈：用場景內的加法混合面片，不用後製泛光 ----
      UnrealBloomPass 會把背景合成成不透明，在透明 canvas 上會露出一塊
@@ -334,8 +315,6 @@ onMounted(async () => {
       cancelAnimationFrame(raf)
       window.removeEventListener('pointermove', onMove)
       ro.disconnect(); io.disconnect()
-      envRT.dispose()
-      pmrem.dispose()
       for (const d of disposables) d.dispose()
       renderer.dispose()
       renderer.domElement.remove()
