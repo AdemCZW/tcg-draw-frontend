@@ -5,11 +5,12 @@
  * 重點：整組結果共用「一個」WebGLRenderer。若每張卡各開一個 canvas，
  * 10 連抽就會逼近瀏覽器的 WebGL context 上限（約 8–16 個）並開始強制回收。
  *
- * 卡面用 CanvasTexture 程序生成（漸層 + 邊框 + 賞別 + 卡名），
- * 正式版換成 R2 實拍圖時只要改 faceTexture() 的來源即可。
+ * 卡面優先用真實卡圖（賣家實拍 / PSA / TCGdex），載不到才退回程序生成的
+ * 漸層卡面。兩者都會在上面疊賞別膠囊與籤號，維持一致的識別資訊。
  */
 import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import type { DrawResultItem, Tier } from '@/types/models'
+import { canonicalArt } from '@/lib/tcgdex'
 
 const props = defineProps<{ items: DrawResultItem[] }>()
 const emit = defineEmits<{ (e: 'revealed'): void }>()
@@ -30,29 +31,77 @@ function hueOf(image: string) {
   return m ? Number(m[1]) : 220
 }
 
-/** 把卡面畫到 canvas 當貼圖 */
-function faceCanvas(item: DrawResultItem) {
+/**
+ * 把卡面畫到 canvas 當貼圖。
+ * art 有值時鋪成底圖（cover 裁切保持比例），否則用原本的漸層底。
+ * 兩種情況都會疊上賞別與籤號，讓識別資訊一致。
+ */
+function faceCanvas(item: DrawResultItem, art?: HTMLImageElement) {
   const W = 512, H = 716
   const c = document.createElement('canvas')
   c.width = W; c.height = H
   const g = c.getContext('2d')!
-  const h = hueOf(item.card.image)
 
-  g.fillStyle = `hsl(${h} 40% 93%)`
-  g.fillRect(0, 0, W, H)
-  const g1 = g.createRadialGradient(W * 0.25, H * 0.1, 0, W * 0.25, H * 0.1, W * 1.05)
-  g1.addColorStop(0, `hsl(${h} 82% 86%)`)
-  g1.addColorStop(1, 'rgba(255,255,255,0)')
-  g.fillStyle = g1; g.fillRect(0, 0, W, H)
-  const g2 = g.createRadialGradient(W * 0.85, H * 0.95, 0, W * 0.85, H * 0.95, W * 1.05)
-  g2.addColorStop(0, `hsl(${(h + 55) % 360} 72% 82%)`)
-  g2.addColorStop(1, 'rgba(255,255,255,0)')
-  g.fillStyle = g2; g.fillRect(0, 0, W, H)
+  if (art) {
+    /* 卡圖本身已經有豐富的文字與圖案，直接把資訊疊上去會互相打架。
+       改成：卡圖等比縮小置中，下方留一條純色資訊帶放賞別與籤號。 */
+    const BAND = 132                      // 底部資訊帶高度
+    const areaH = H - BAND
+    g.fillStyle = '#141210'
+    g.fillRect(0, 0, W, H)
+    const scale = Math.min(W / art.width, areaH / art.height)
+    const dw = art.width * scale, dh = art.height * scale
+    g.drawImage(art, (W - dw) / 2, (areaH - dh) / 2, dw, dh)
 
-  // 內框
-  g.strokeStyle = 'rgba(255,255,255,.8)'
-  g.lineWidth = 6
-  g.strokeRect(26, 26, W - 52, H - 52)
+    // 資訊帶
+    g.fillStyle = '#141210'
+    g.fillRect(0, areaH, W, BAND)
+
+    const label = TIER_LABEL[item.tier]
+    g.font = '600 32px "Noto Sans TC", sans-serif'
+    const tw = g.measureText(label).width
+    g.fillStyle = TIER_COLOR[item.tier]
+    const bw = tw + 40, bh = 52
+    g.beginPath(); g.roundRect(40, areaH + 24, bw, bh, 26); g.fill()
+    g.fillStyle = item.tier === 'D' ? '#141210' : '#fff'
+    g.textBaseline = 'middle'
+    g.fillText(label, 40 + 20, areaH + 24 + bh / 2 + 1)
+
+    // 籤號靠右，跟膠囊同一條基線
+    g.fillStyle = 'rgba(255,255,255,.62)'
+    g.font = '400 26px "IBM Plex Mono", monospace'
+    const seq = item.bonus ? '加贈' : `籤 #${item.ticketSeq}`
+    g.textAlign = 'right'
+    g.fillText(seq, W - 40, areaH + 24 + bh / 2 + 1)
+    g.textAlign = 'left'
+
+    // 卡名放資訊帶下半，過長截斷
+    g.fillStyle = '#fff'
+    g.font = '500 34px "Noto Sans TC", sans-serif'
+    let nm = item.card.name
+    while (g.measureText(nm).width > W - 80 && nm.length > 2) nm = nm.slice(0, -1)
+    if (nm !== item.card.name) nm += '…'
+    g.fillText(nm, 40, areaH + 100)
+
+    return c
+  } else {
+    const h = hueOf(item.card.image)
+    g.fillStyle = `hsl(${h} 40% 93%)`
+    g.fillRect(0, 0, W, H)
+    const g1 = g.createRadialGradient(W * 0.25, H * 0.1, 0, W * 0.25, H * 0.1, W * 1.05)
+    g1.addColorStop(0, `hsl(${h} 82% 86%)`)
+    g1.addColorStop(1, 'rgba(255,255,255,0)')
+    g.fillStyle = g1; g.fillRect(0, 0, W, H)
+    const g2 = g.createRadialGradient(W * 0.85, H * 0.95, 0, W * 0.85, H * 0.95, W * 1.05)
+    g2.addColorStop(0, `hsl(${(h + 55) % 360} 72% 82%)`)
+    g2.addColorStop(1, 'rgba(255,255,255,0)')
+    g.fillStyle = g2; g.fillRect(0, 0, W, H)
+
+    // 內框
+    g.strokeStyle = 'rgba(255,255,255,.8)'
+    g.lineWidth = 6
+    g.strokeRect(26, 26, W - 52, H - 52)
+  }
 
   // 賞別膠囊
   const label = TIER_LABEL[item.tier]
@@ -65,6 +114,7 @@ function faceCanvas(item: DrawResultItem) {
   g.textBaseline = 'middle'
   g.fillText(label, bx + 22, by + bh / 2 + 1)
 
+  // 以下只走「無卡圖」的程序卡面（有圖的路徑已在上方 return）
   // 卡名（過長截斷）
   g.fillStyle = 'rgba(26,22,20,.88)'
   g.font = '500 40px "Noto Sans TC", sans-serif'
@@ -155,6 +205,8 @@ onMounted(async () => {
   const backTex = new THREE.CanvasTexture(backCanvas())
   backTex.colorSpace = THREE.SRGBColorSpace
   const disposables: { dispose(): void }[] = [geo, backTex]
+  // 擋掉還在飛的卡圖請求，避免載入後寫進已銷毀的 texture
+  let disposed = false
 
   const cards: import('three').Group[] = []
   const n = props.items.length
@@ -163,10 +215,25 @@ onMounted(async () => {
   const gapX = 1.62, gapY = 2.25
 
   props.items.forEach((item, i) => {
+    // 先用程序卡面立刻上場（不擋動畫），真實卡圖載到後再重繪貼圖換上
     const tex = new THREE.CanvasTexture(faceCanvas(item))
     tex.colorSpace = THREE.SRGBColorSpace
     tex.anisotropy = renderer.capabilities.getMaxAnisotropy()
     disposables.push(tex)
+
+    canonicalArt(item.card.name).then(url => {
+      if (disposed || !url) return
+      const img = new Image()
+      img.crossOrigin = 'anonymous'   // 沒設會污染 canvas，texture 讀不出來
+      img.onload = () => {
+        if (disposed) return
+        // 直接替換同一張 texture 的來源，材質不用重建
+        tex.image = faceCanvas(item, img)
+        tex.needsUpdate = true
+      }
+      img.onerror = () => { /* 載不到就保留程序卡面 */ }
+      img.src = url
+    })
 
     const rare = item.tier === 'A' || item.tier === 'LAST'
     const faceMat = new THREE.MeshPhysicalMaterial({
@@ -301,6 +368,7 @@ onMounted(async () => {
 
   ctx.value = {
     dispose() {
+      disposed = true
       cancelAnimationFrame(raf)
       root.removeEventListener('pointermove', onMove)
       root.removeEventListener('pointerleave', onLeave)
