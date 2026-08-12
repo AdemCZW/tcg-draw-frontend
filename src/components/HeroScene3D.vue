@@ -10,6 +10,10 @@
  * three 動態載入不進首屏；prefers-reduced-motion 或無 WebGL 時退回靜態漸層。
  */
 import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { canonicalArt } from '@/lib/tcgdex'
+
+// 經典角色卡面（象徵性展示，非特定實體卡）—— 讓漂浮卡片不再是空白色塊
+const CLASSIC_NAMES = ['皮卡丘', '妙蛙種子', '小火龍', '傑尼龜', '噴火龍', '夢幻', '卡比獸', '胡地', '快龍', '耿鬼', '拉普拉斯', '迷唇姐']
 
 const host = ref<HTMLDivElement | null>(null)
 const ready = ref(false)
@@ -70,19 +74,36 @@ onMounted(async () => {
       depth, bevelEnabled: true, bevelSize: 0.025, bevelThickness: 0.025, bevelSegments: 3, curveSegments: 10
     })
   }
-  const geo = slab(1.75, 2.45, 0.15, 0.07)
+  const SLAB_W = 1.75, SLAB_H = 2.45
+  const geo = slab(SLAB_W, SLAB_H, 0.15, 0.07)
   geo.center()
+  // ExtrudeGeometry 預設 UV 不適合直接貼卡圖（會拉伸/重複），跟 CardReveal3D
+  // 一樣手動依頂點座標投影重算，圖案才會乾淨貼滿正反面。
+  {
+    const pos = geo.attributes.position
+    const uv = new Float32Array(pos.count * 2)
+    for (let i = 0; i < pos.count; i++) {
+      uv[i * 2] = (pos.getX(i) + SLAB_W / 2) / SLAB_W
+      uv[i * 2 + 1] = (pos.getY(i) + SLAB_H / 2) / SLAB_H
+    }
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
+  }
 
   // 比頁面 wash 色更飽和 —— 在環境反射與泛光之下，太淡的顏色會被洗成白色
+  // 貼圖抓不到時（離線 / API 掛掉）就停在這個顏色，畫面仍然完整
   const palette = [0xff9d84, 0xa78bfa, 0x5fd8c4, 0xf58fd0, 0xffc76b, 0x7fb2f5]
   const disposables: { dispose(): void }[] = [geo]
   const cards: import('three').Mesh[] = []
+  let disposed = false
+  const loader = new THREE.TextureLoader()
+  loader.setCrossOrigin('anonymous')
 
   // 兩層環繞：內圈大而近、外圈小而遠，製造縱深
   const rings = [
     { count: 5, radius: 3.1, z: 0.4, scale: 1.0, speed: 0.16 },
     { count: 7, radius: 5.3, z: -3.2, scale: 0.72, speed: -0.1 }
   ]
+  let globalIdx = 0
   rings.forEach((ring, ri) => {
     for (let i = 0; i < ring.count; i++) {
       const mat = new THREE.MeshPhysicalMaterial({
@@ -106,6 +127,35 @@ onMounted(async () => {
       m.userData = { a, ring: ri, radius: ring.radius, baseZ: ring.z, speed: ring.speed }
       scene.add(m)
       cards.push(m)
+
+      // 卡面貼圖非同步進場：先用色塊墊著，圖抓到才淡入換上，不擋動畫啟動
+      const name = CLASSIC_NAMES[globalIdx % CLASSIC_NAMES.length]
+      globalIdx++
+      canonicalArt(name).then(url => {
+        if (disposed || !url) return
+        loader.load(
+          url,
+          tex => {
+            if (disposed) { tex.dispose(); return }
+            tex.colorSpace = THREE.SRGBColorSpace
+            mat.map = tex
+            mat.color.set(0xffffff)
+            // 原本為了「空白色塊」調校的高虹彩/高光澤/高反射，疊在真圖上會
+            // 把圖案整片洗成死白（清漆反射亮光 + 環境反射 + 虹彩色移三層疊加）。
+            // 貼圖後全部收斂，讓角色圖案讀得清楚，只留一點卡片該有的光澤。
+            mat.iridescence = 0.12
+            mat.sheen = 0.15
+            mat.clearcoat = 0.45
+            mat.clearcoatRoughness = 0.3
+            mat.envMapIntensity = 0.3
+            mat.roughness = 0.4
+            mat.needsUpdate = true
+            disposables.push(tex)
+          },
+          undefined,
+          () => { /* 抓圖失敗，保留原本的粉彩色塊 */ }
+        )
+      })
     }
   })
 
@@ -254,6 +304,7 @@ onMounted(async () => {
 
   ctx.value = {
     dispose() {
+      disposed = true // 擋掉還在飛的貼圖請求，避免載入後套到已銷毀的 material
       cancelAnimationFrame(raf)
       window.removeEventListener('pointermove', onMove)
       ro.disconnect(); io.disconnect()

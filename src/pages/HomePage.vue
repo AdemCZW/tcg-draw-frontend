@@ -123,8 +123,10 @@ h2 { font-size: clamp(26px, 3vw, 36px); margin: 0; }
   .lede { max-width: none; }
 }
 @media (max-width: 720px) {
-  .hero { padding: 22px 0 48px; border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
-  .stage { height: 360px; margin: -30px -12vw -18px; }
+  .hero { padding: 12px 0 40px; border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
+  /* 手機版拉滿版高度感 —— 原本固定 360px 在長螢幕上只佔畫面不到一半，
+     現在用視窗高度的比例撐開，同時設上下限避免極端裝置跑版 */
+  .stage { height: min(62vh, 560px); min-height: 400px; margin: -10px -14vw -6px; }
   h1 { margin: 14px 0 14px; }
   .lede { font-size: 15px; }
   .cta { gap: 10px; }
