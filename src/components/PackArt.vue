@@ -738,15 +738,38 @@ const rays = computed(() =>
             >{{ tierLabel }}</text>
           </g>
 
-          <!-- 火漆封緘 -->
+          <!-- 火漆封緘。
+               正常尺寸放完整字標鎖版；縮圖尺寸下 6–7px 的字只會糊成一團，
+               所以退回單一 V 字記號 —— 那個縮到多小都還認得出來。 -->
           <g :transform="`translate(150 ${CY})${compact ? ' scale(1.3)' : ''}`"
              :opacity="opened ? .3 : 1">
-            <path d="M0 -48 L42 -24 L42 24 L0 48 L-42 24 L-42 -24 Z"
-                  fill="#1c1610" fill-opacity=".82" :stroke="foil" stroke-width="2" />
-            <path d="M0 -35 L30 -17.5 L30 17.5 L0 35 L-30 17.5 L-30 -17.5 Z"
+            <path d="M0 -52 L45 -26 L45 26 L0 52 L-45 26 L-45 -26 Z"
+                  fill="#1c1610" fill-opacity=".85" :stroke="foil" stroke-width="2" />
+            <path d="M0 -39 L34 -19.5 L34 19.5 L0 39 L-34 19.5 L-34 -19.5 Z"
                   fill="none" stroke="#fff" stroke-opacity=".14" />
-            <path d="M-14 -13 L0 18 L14 -13" fill="none" :stroke="foil"
-                  stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+
+            <template v-if="compact">
+              <path d="M-14 -13 L0 18 L14 -13" fill="none" :stroke="foil"
+                    stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+            </template>
+
+            <template v-else>
+              <!-- 上緣微字：印章上的小字是「這是壓印品」最快的暗示 -->
+              <text class="sealMicro" y="-25" text-anchor="middle" :fill="foil">SEALED</text>
+
+              <!-- 主字標分兩行 —— VAULTDRAW 九個字排一行在六角形內會擠到邊，
+                   拆行後兩邊都留得出邊距，字距也才拉得開。 -->
+              <text class="sealWord" y="-3" text-anchor="middle" :fill="foil">VAULT</text>
+
+              <!-- 分隔線兩端各一顆菱形，是印章紋章常見的收邊 -->
+              <g :fill="foil" :stroke="foil">
+                <path d="M-30 6 H30" stroke-width="1" fill="none" opacity=".55" />
+                <path d="M-34 6 l3 -3 l3 3 l-3 3 Z" stroke="none" opacity=".8" />
+                <path d="M34 6 l-3 -3 l-3 3 l3 3 Z" stroke="none" opacity=".8" />
+              </g>
+
+              <text class="sealWord" y="26" text-anchor="middle" :fill="foil">DRAW</text>
+            </template>
           </g>
 
           <template v-if="!compact">
@@ -1000,6 +1023,22 @@ const rays = computed(() =>
   font-family: var(--font-mono);
   font-size: 13px; font-weight: 700; letter-spacing: .2em;
   fill: #efeae4;
+}
+/* 印章字標：等寬字 + 大字距，做出壓印的莊重感。
+   SVG 的 letter-spacing 會讓 text-anchor="middle" 的置中偏掉半個字距，
+   所以補一個等量的左移。 */
+.sealWord {
+  font-family: var(--font-mono);
+  font-size: 19px; font-weight: 700;
+  letter-spacing: .18em;
+  transform: translateX(-0.09em);
+}
+.sealMicro {
+  font-family: var(--font-mono);
+  font-size: 7.5px; font-weight: 600;
+  letter-spacing: .34em;
+  opacity: .75;
+  transform: translateX(-0.17em);
 }
 
 /* ---- 屬性特效 ----
