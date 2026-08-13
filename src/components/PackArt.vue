@@ -592,21 +592,8 @@ const rays = computed(() =>
         </svg>
       </div>
 
-      <!-- 頂面 -->
-      <div class="face top">
-        <span class="top-foil" :style="{ background: foil }"></span>
-        <!-- 卡榫在盒蓋上的落影，這道影子是「突出物」讀得出來的關鍵 -->
-        <span class="tab-shadow"></span>
-      </div>
-
-      <!-- 右側面 -->
+      <!-- 盒身的右側面（接縫以下） -->
       <div class="face side">
-        <span class="side-stripe" :style="{ background: foil }"></span>
-        <!-- 盒蓋接縫必須繞過側面。正面 y=96/400 = 24%，數字不一致的話
-             轉角處會斷開一截，那是最容易被看出來的破綻。 -->
-        <span class="side-seam"></span>
-        <!-- 上下摺邊：紙盒的頂蓋與底蓋都會壓出一道摺線 -->
-        <span class="side-crease top"></span>
         <span class="side-crease bottom"></span>
         <span class="side-text">VAULTDRAW</span>
       </div>
@@ -858,86 +845,9 @@ const rays = computed(() =>
 
           <rect x="0" y="0" width="300" height="500" :fill="`url(#${uid}-vig)`" />
 
-          <!-- 盒蓋接縫：暗帶（縫隙的環境遮蔽）+ 下緣受光的細亮線 -->
-          <rect x="0" y="88" width="300" height="10" :fill="`url(#${uid}-aoUp)`" />
-          <path d="M0 96.5 H300" stroke="#000" stroke-opacity=".42" stroke-width="1.6" />
-          <path d="M0 98.5 H300" stroke="#fff" stroke-opacity=".22" />
-          <rect x="0" y="99" width="300" height="9" :fill="`url(#${uid}-aoDown)`" opacity=".6" />
-
-          <!-- 防拆封條。撕開時分成三塊算繪：
-               還沒撕到的完好段、已經被扯下來往下翻的碎片、以及中間的鋸齒斷口。 -->
-          <clipPath :id="`${uid}-intact`">
-            <rect :x="tearX" y="66" :width="300 - tearX" height="60" />
-          </clipPath>
-          <clipPath :id="`${uid}-gone`">
-            <rect x="0" y="66" :width="tearX" height="60" />
-          </clipPath>
-
-          <!-- 已撕下的碎片：越撕越往下翻、越淡 -->
-          <g
-            v-if="tearX > 0" class="tearPiece" :class="{ tweening }"
-            :clip-path="`url(#${uid}-gone)`"
-            :transform="`translate(${(-tearX * 0.06).toFixed(1)} ${(tearX * 0.16).toFixed(1)}) rotate(${(-tearX * 0.02).toFixed(2)} 0 96)`"
-            :opacity="Math.max(0, 1 - tearX / 300)"
-          >
-            <rect x="0" y="72" width="300" height="48" :fill="`url(#${uid}-seal)`" />
-            <path d="M0 72 H300" stroke="#fff" :stroke-opacity="mat.matte ? .12 : .5" />
-            <path d="M0 120 H300" stroke="#000" stroke-opacity=".35" />
-          </g>
-
-          <g :opacity="isOpen ? .35 : 1" :clip-path="tearable ? `url(#${uid}-intact)` : undefined">
-            <rect x="0" y="72" width="300" height="48" :fill="`url(#${uid}-seal)`" />
-            <!-- 上緣高光是鏡面反射，霧面材質不該有；霧面只留極淡的一道邊 -->
-            <path d="M0 72 H300" stroke="#fff" :stroke-opacity="mat.matte ? .12 : .5" />
-            <path d="M0 120 H300" stroke="#000" stroke-opacity=".35" />
-            <path d="M0 96 H300" stroke="#000" stroke-opacity=".28" stroke-dasharray="3 4" />
-            <!-- 封條排版：左側是「標籤 + 數值」兩層，右側是賞別的主從組合。
-                 中間一道細分隔線把兩組資訊斷開 —— 沒有分隔的話兩邊會讀成一整行。 -->
-            <template v-if="!compact">
-              <text class="tLabel" x="20" y="87" :fill="mat.ink">COMMIT</text>
-              <text class="tData" x="20" y="108" :fill="mat.ink">{{ hashChip }}</text>
-
-              <path d="M212 80 V112" :stroke="mat.ink" stroke-opacity=".3" />
-
-              <!-- 賞別：字母吃主要字級，「賞」退到附屬 -->
-              <text class="tTierBig" x="234" y="109" :fill="mat.ink">{{ tierMark.big }}</text>
-              <text class="tTierSm" x="262" y="109" :fill="mat.ink">{{ tierMark.small }}</text>
-            </template>
-            <text
-              v-else class="seal-tier solo" x="150" y="102"
-              text-anchor="middle" :fill="mat.ink"
-            >{{ tierLabel }}</text>
-          </g>
-
-          <!-- 鋸齒斷口 -->
-          <path
-            v-if="tearable && tearX > 0 && tearX < 300"
-            :d="tearEdge" fill="none" class="tearEdge" :class="{ tweening }" :stroke="mat.ink"
-            stroke-opacity=".55" stroke-width="1.4"
-          />
-
-          <!-- 拉環：撕條的抓取點，也是「這裡可以撕」的唯一提示 -->
-          <!-- 拉環。定位在外層、呼吸動畫在內層 —— 兩者都寫 transform 的話
-               CSS 動畫會整個覆蓋 SVG 的定位屬性，拉環會彈回畫布原點。 -->
-          <g
-            v-if="tearable && !torn"
-            class="pullTabHit" :class="{ dragging: tearing }"
-            :transform="`translate(${Math.max(0, tearX - 4)} 0)`"
-            @pointerdown="onTearDown" @pointermove="onTearMove"
-            @pointerup="onTearUp" @pointercancel="onTearUp"
-          >
-            <g class="pullTab">
-              <rect x="-2" y="70" width="30" height="52" rx="4" :fill="mat.ink" fill-opacity=".82" />
-              <rect x="-2" y="70" width="30" height="52" rx="4" fill="none"
-                    :stroke="foil" stroke-opacity=".7" />
-              <!-- 三道橫線暗示這是可以捏住的凸起 -->
-              <g :stroke="foil" stroke-opacity=".8" stroke-width="1.6" stroke-linecap="round">
-                <path d="M6 88 H18" />
-                <path d="M6 96 H18" />
-                <path d="M6 104 H18" />
-              </g>
-            </g>
-          </g>
+          <!-- 盒內。翻蓋掀開後露出的就是這塊，要比盒面更暗才有「裡面」的深度 -->
+          <rect v-if="isOpen" x="0" y="0" width="300" height="126" fill="#05040a" fill-opacity=".9" />
+          <rect v-if="isOpen" x="0" y="118" width="300" height="14" :fill="`url(#${uid}-aoDown)`" />
 
           <!-- 火漆封緘。
                正常尺寸放完整字標鎖版；縮圖尺寸下 6–7px 的字只會糊成一團，
@@ -1042,6 +952,113 @@ const rays = computed(() =>
         ></span>
       </div>
 
+      <!--
+        翻蓋。撕條上方那一整段（正面 0–120、側面同高、整片頂面）是一塊剛體，
+        從「背面下緣」的鉸鏈往後翻 —— 這就是香煙盒掀蓋的做法。
+        先前只有薄薄的頂面板在轉，所以看起來只是掀了個蓋片而不是開盒。
+      -->
+      <div class="lid">
+        <!-- 頂面（跟著蓋子一起走） -->
+        <div class="face top">
+          <span class="top-foil" :style="{ background: foil }"></span>
+          <span class="tab-shadow"></span>
+        </div>
+
+        <!-- 蓋子的右側面 -->
+        <div class="face lidSide">
+          <span class="side-stripe" :style="{ background: foil }"></span>
+          <span class="side-crease top"></span>
+        </div>
+
+        <!-- 蓋子的正面：只露出上緣 24%，但內部 svg 撐滿整個盒高 ——
+             這樣漸層座標系跟盒身完全一致，闔上時接縫處才不會有色差。 -->
+        <div class="face lidFront">
+          <svg class="lidArt" viewBox="0 0 300 500" aria-hidden="true">
+            <!-- 盒蓋接縫：暗帶（縫隙的環境遮蔽）+ 下緣受光的細亮線 -->
+            <rect x="0" y="88" width="300" height="10" :fill="`url(#${uid}-aoUp)`" />
+            <path d="M0 96.5 H300" stroke="#000" stroke-opacity=".42" stroke-width="1.6" />
+            <path d="M0 98.5 H300" stroke="#fff" stroke-opacity=".22" />
+            <rect x="0" y="99" width="300" height="9" :fill="`url(#${uid}-aoDown)`" opacity=".6" />
+
+            <!-- 防拆封條。撕開時分成三塊算繪：
+                 還沒撕到的完好段、已經被扯下來往下翻的碎片、以及中間的鋸齒斷口。 -->
+            <clipPath :id="`${uid}-intact`">
+              <rect :x="tearX" y="66" :width="300 - tearX" height="60" />
+            </clipPath>
+            <clipPath :id="`${uid}-gone`">
+              <rect x="0" y="66" :width="tearX" height="60" />
+            </clipPath>
+
+            <!-- 已撕下的碎片：越撕越往下翻、越淡 -->
+            <g
+              v-if="tearX > 0" class="tearPiece" :class="{ tweening }"
+              :clip-path="`url(#${uid}-gone)`"
+              :transform="`translate(${(-tearX * 0.06).toFixed(1)} ${(tearX * 0.16).toFixed(1)}) rotate(${(-tearX * 0.02).toFixed(2)} 0 96)`"
+              :opacity="Math.max(0, 1 - tearX / 300)"
+            >
+              <rect x="0" y="72" width="300" height="48" :fill="`url(#${uid}-seal)`" />
+              <path d="M0 72 H300" stroke="#fff" :stroke-opacity="mat.matte ? .12 : .5" />
+              <path d="M0 120 H300" stroke="#000" stroke-opacity=".35" />
+            </g>
+
+            <g :opacity="isOpen ? .35 : 1" :clip-path="tearable ? `url(#${uid}-intact)` : undefined">
+              <rect x="0" y="72" width="300" height="48" :fill="`url(#${uid}-seal)`" />
+              <!-- 上緣高光是鏡面反射，霧面材質不該有；霧面只留極淡的一道邊 -->
+              <path d="M0 72 H300" stroke="#fff" :stroke-opacity="mat.matte ? .12 : .5" />
+              <path d="M0 120 H300" stroke="#000" stroke-opacity=".35" />
+              <path d="M0 96 H300" stroke="#000" stroke-opacity=".28" stroke-dasharray="3 4" />
+              <!-- 封條排版：左側是「標籤 + 數值」兩層，右側是賞別的主從組合。
+                   中間一道細分隔線把兩組資訊斷開 —— 沒有分隔的話兩邊會讀成一整行。 -->
+              <template v-if="!compact">
+                <text class="tLabel" x="20" y="87" :fill="mat.ink">COMMIT</text>
+                <text class="tData" x="20" y="108" :fill="mat.ink">{{ hashChip }}</text>
+
+                <path d="M212 80 V112" :stroke="mat.ink" stroke-opacity=".3" />
+
+                <!-- 賞別：字母吃主要字級，「賞」退到附屬 -->
+                <text class="tTierBig" x="234" y="109" :fill="mat.ink">{{ tierMark.big }}</text>
+                <text class="tTierSm" x="262" y="109" :fill="mat.ink">{{ tierMark.small }}</text>
+              </template>
+              <text
+                v-else class="seal-tier solo" x="150" y="102"
+                text-anchor="middle" :fill="mat.ink"
+              >{{ tierLabel }}</text>
+            </g>
+
+            <!-- 鋸齒斷口 -->
+            <path
+              v-if="tearable && tearX > 0 && tearX < 300"
+              :d="tearEdge" fill="none" class="tearEdge" :class="{ tweening }" :stroke="mat.ink"
+              stroke-opacity=".55" stroke-width="1.4"
+            />
+
+            <!-- 拉環：撕條的抓取點，也是「這裡可以撕」的唯一提示 -->
+            <!-- 拉環。定位在外層、呼吸動畫在內層 —— 兩者都寫 transform 的話
+                 CSS 動畫會整個覆蓋 SVG 的定位屬性，拉環會彈回畫布原點。 -->
+            <g
+              v-if="tearable && !torn"
+              class="pullTabHit" :class="{ dragging: tearing }"
+              :transform="`translate(${Math.max(0, tearX - 4)} 0)`"
+              @pointerdown="onTearDown" @pointermove="onTearMove"
+              @pointerup="onTearUp" @pointercancel="onTearUp"
+            >
+              <g class="pullTab">
+                <rect x="-2" y="70" width="30" height="52" rx="4" :fill="mat.ink" fill-opacity=".82" />
+                <rect x="-2" y="70" width="30" height="52" rx="4" fill="none"
+                      :stroke="foil" stroke-opacity=".7" />
+                <!-- 三道橫線暗示這是可以捏住的凸起 -->
+                <g :stroke="foil" stroke-opacity=".8" stroke-width="1.6" stroke-linecap="round">
+                  <path d="M6 88 H18" />
+                  <path d="M6 96 H18" />
+                  <path d="M6 104 H18" />
+                </g>
+              </g>
+            </g>
+          </svg>
+        </div>
+      </div>
+
+
       <div class="shadow"></div>
     </div>
   </div>
@@ -1075,6 +1092,9 @@ const rays = computed(() =>
    * 側面在 rotateY(-17°) 下的投影約 38 × sin17° ≈ 11.1cqw，
    * 視覺總寬約 69.1，left = (100 - 69.1) / 2 ≈ 15cqw。
    */
+  --pk-depth: 38cqw;
+  /* 撕條下緣 y=120 於 500 高 = 24%，蓋與身就以這條線分開 */
+  --pk-lid: 24%;
   left: 15cqw; top: 19cqw;
   width: 58cqw; height: 96cqw;
   transform-style: preserve-3d;
@@ -1094,6 +1114,8 @@ const rays = computed(() =>
  * stitchTiles='stitch' 讓噪點無縫平鋪，瀏覽器只解一次圖再重複用，很便宜。
  */
 .front::after,
+.lidFront::after,
+.lidSide::after,
 .side::after,
 .top::after {
   content: '';
@@ -1106,7 +1128,7 @@ const rays = computed(() =>
   mix-blend-mode: overlay;
 }
 /* 側面與頂面受光較少，顆粒相對更明顯 —— 真實紙盒也是暗面看得到纖維 */
-.side::after { opacity: .4; }
+.side::after, .lidSide::after { opacity: .4; }
 .top::after { opacity: .36; }
 
 /* 正面。稜線受光：右緣（朝向側面的摺角）打亮、左緣壓暗、上緣一道細光。
@@ -1147,7 +1169,8 @@ const rays = computed(() =>
 /* 右側面 */
 .side {
   left: 100%; top: 0;
-  width: 38cqw; height: 100%;
+  width: var(--pk-depth); height: calc(100% - var(--pk-lid));
+  top: var(--pk-lid);
   transform-origin: 0 50%;
   transform: rotateY(90deg);
   /* 側面是背光面，用同一組象牙色但整體壓暗，維持跟正面同一材質的錯覺。
@@ -1163,12 +1186,8 @@ const rays = computed(() =>
     inset 0 1px 0 rgba(255, 255, 255, .18),
     inset 0 -1px 0 rgba(0, 0, 0, .28);
 }
-/* 盒蓋接縫：對齊正面 y=96/400 = 24% */
-.side-seam {
-  position: absolute; left: 0; right: 0; top: 24%;
-  height: 2px;
-  background: linear-gradient(180deg, rgba(0, 0, 0, .4), rgba(255, 255, 255, .16));
-}
+/* .side-seam 已移除：蓋與身拆成兩個實體之後，接縫由兩塊的邊界自然形成，
+   不需要再畫一條假的線。 */
 /* 頂蓋與底蓋的摺線 */
 .side-crease {
   position: absolute; left: 0; right: 0;
@@ -1198,7 +1217,7 @@ const rays = computed(() =>
 /* 頂面：由淺至深，呼應側面同一光源方向 */
 .top {
   left: 0; bottom: 100%;
-  width: 100%; height: 38cqw;
+  width: 100%; height: var(--pk-depth);
   transform-origin: 50% 100%;
   transform: rotateX(90deg);
   background: linear-gradient(180deg, var(--pk-body-lo), var(--pk-body-hi));
@@ -1218,7 +1237,48 @@ const rays = computed(() =>
   top: 0; height: 34%;
   background: linear-gradient(180deg, rgba(0, 0, 0, .45), transparent);
 }
-.opened .top { transform: rotateX(58deg); }
+/* ---- 翻蓋 ----
+   鉸鏈在背面下緣：x 置中、y 對齊蓋子底邊、z 推到背板（-盒深）。
+   transform-origin 的第三個值就是 z，這是能把軸心放到盒子背面的關鍵；
+   少了它蓋子會繞著正面翻，看起來像門板而不是盒蓋。 */
+.lid {
+  position: absolute;
+  left: 0; top: 0;
+  width: 100%; height: var(--pk-lid);
+  transform-style: preserve-3d;
+  transform-origin: 50% 100% calc(-1 * var(--pk-depth));
+  transition: transform .8s cubic-bezier(.3, 1.3, .5, 1);
+}
+.opened .lid { transform: rotateX(-122deg); }
+
+/* 蓋子的正面：容器只有 24% 高，內部 svg 撐滿整個盒高後被裁切。
+   100 / 24 ≈ 416.67% —— 這樣 svg 的 0–500 座標系跟盒身那張完全對齊。 */
+.lidFront {
+  inset: 0;
+  overflow: hidden;
+  border-radius: 1.4cqw 1.4cqw 0 0;
+  box-shadow:
+    inset -1px 0 0 rgba(255, 255, 255, .5),
+    inset 0 1px 0 rgba(255, 255, 255, .3),
+    inset 2px 0 0 rgba(0, 0, 0, .42);
+}
+.lidArt { position: absolute; left: 0; top: 0; width: 100%; height: 416.667%; }
+
+.lidSide {
+  left: 100%; top: 0;
+  width: var(--pk-depth); height: 100%;
+  transform-origin: 0 50%;
+  transform: rotateY(90deg);
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--pk-body-hi) 78%, #fff 22%) 0%,
+    var(--pk-body-hi) 20%,
+    var(--pk-body-lo) 100%);
+  border-radius: 0 1.4cqw 0 0;
+  overflow: hidden;
+  box-shadow:
+    inset 1px 0 0 rgba(255, 255, 255, .3),
+    inset 0 1px 0 rgba(255, 255, 255, .18);
+}
 
 .shadow {
   position: absolute;
@@ -1248,7 +1308,8 @@ const rays = computed(() =>
  * 逐一補 pointer-events="none" 很容易漏（之後再加裝飾層就會再壞一次），
  * 所以反過來：預設全關，需要互動的元素自己打開。
  */
-.front svg { pointer-events: none; }
+.front svg,
+.lidArt { pointer-events: none; }
 
 .pullTabHit { pointer-events: auto; cursor: grab; touch-action: none; }
 .pullTabHit.dragging { cursor: grabbing; }
