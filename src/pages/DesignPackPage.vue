@@ -3,8 +3,11 @@
  * 卡包設計展示頁（未列在導覽，網址直達：/design/pack）
  * 用途是把各賞別、各狀態一次攤開比對，改配色時能立刻看出哪裡不對。
  */
+import { ref } from 'vue'
 import PackArt from '@/components/PackArt.vue'
 import type { Tier } from '@/types/models'
+
+const tornCount = ref(0)
 
 const effects = [
   { k: 'fire'    as const, n: '火 · 竄動火苗',   m: 'gold'   as const, t: 'A' as Tier,    h: 'f3a91c04bb27de44' },
@@ -27,6 +30,19 @@ const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
 <template>
   <div class="container page">
     <h1 class="display">卡包設計</h1>
+
+    <h2>撕條互動</h2>
+    <div class="grid pair">
+      <figure>
+        <PackArt
+          material="gold" effect="fire" tier="A" serial="VD-0001/080"
+          hash="f3a91c04bb27de44" tearable
+          card-image="https://assets.tcgdex.net/zh-tw/SV/SVF/001/high.webp"
+          @torn="tornCount++"
+        />
+        <figcaption class="mono muted">拖動左側拉環撕開（已撕 {{ tornCount }} 次）</figcaption>
+      </figure>
+    </div>
 
     <h2>產品視窗</h2>
     <div class="grid pair three">

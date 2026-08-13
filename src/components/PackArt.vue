@@ -43,11 +43,15 @@ const props = withDefaults(defineProps<{
    * 有卡圖時封緘會上移讓位，底部的文字標題也讓給卡片本身。
    */
   cardImage?: string
+  /** 開啟撕條互動。拖動封條上的拉環就能撕開 */
+  tearable?: boolean
 }>(), {
   tier: 'D', label: '', serial: '', hash: '',
   opened: false, compact: false, flat: false,
-  material: undefined, effect: undefined, cardImage: undefined
+  material: undefined, effect: undefined, cardImage: undefined, tearable: false
 })
+
+const emit = defineEmits<{ (e: 'torn'): void }>()
 
 /**
  * 材質：灰／銀／金。這是獨立於賞別的一條「等級軸」——
@@ -160,6 +164,93 @@ const serialParts = computed(() => {
 const uid = `bx${useId().replace(/:/g, '')}`
 
 const { el, rx, ry, gx, gy, active, onMove, reset } = useTilt(9)
+
+/* ---- 撕條互動 ----
+   tearX 是撕開進度，用 viewBox 的 0–300 當單位，跟繪圖座標一致。
+
+   位移用「相對拖曳距離」而不是「指標的絕對位置」：盒子有 rotateY(-17°)
+   與 rotateX(3°)，clientX 換算回 viewBox 座標會被透視扭曲，算出來的
+   撕開點會跟手指對不上。相對位移不受變形影響。 */
+const TEAR_MAX = 300
+const TEAR_COMMIT = 232        // 過這個點就算撕開，不再彈回
+const tearX = ref(0)
+const tearing = ref(false)
+const torn = ref(false)
+let tearStartX = 0
+let tearStartVal = 0
+let tearSpanPx = 1
+let tearRaf = 0
+
+/** 盒蓋掀起 / 封條褪色，撕開與外部傳入的 opened 兩者其一都算 */
+const isOpen = computed(() => props.opened || torn.value)
+
+function commitTear() {
+  tearing.value = false
+  torn.value = true
+  tearX.value = TEAR_MAX
+  emit('torn')
+}
+
+/** 點一下（沒有拖）也要能撕 —— 用補間把進度推到底 */
+function tweenTear() {
+  const from = tearX.value
+  const t0 = performance.now()
+  const step = (now: number) => {
+    const k = Math.min(1, (now - t0) / 520)
+    // easeOutCubic：撕開一開始快、末端收慢，像紙真的被扯斷
+    tearX.value = from + (TEAR_MAX - from) * (1 - Math.pow(1 - k, 3))
+    if (k < 1) tearRaf = requestAnimationFrame(step)
+    else commitTear()
+  }
+  tearRaf = requestAnimationFrame(step)
+}
+
+function onTearDown(e: PointerEvent) {
+  if (!props.tearable || torn.value) return
+  e.stopPropagation()          // 別讓拖撕條同時觸發盒子傾斜
+  cancelAnimationFrame(tearRaf)
+  // 先進入拖曳狀態，再嘗試指標捕捉。
+  // setPointerCapture 會在指標非活躍時丟 NotFoundError，而 `?.` 只防
+  // 「方法不存在」不防「方法丟例外」—— 放在前面的話一失敗就會中斷整個
+  // handler，tearing 永遠設不起來，拖曳直接失效。捕捉只是加分項，不是前提。
+  tearing.value = true
+  try {
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+  } catch { /* 捕捉失敗不影響拖曳，只是指標移出元素後會斷 */ }
+  tearStartX = e.clientX
+  tearStartVal = tearX.value
+  tearSpanPx = stage.value?.getBoundingClientRect().width || 1
+}
+
+function onTearMove(e: PointerEvent) {
+  if (!tearing.value) return
+  e.stopPropagation()
+  const dx = ((e.clientX - tearStartX) / tearSpanPx) * TEAR_MAX
+  tearX.value = Math.max(0, Math.min(TEAR_MAX, tearStartVal + dx))
+  if (tearX.value >= TEAR_COMMIT) commitTear()
+}
+
+function onTearUp(e: PointerEvent) {
+  if (!tearing.value) return
+  e.stopPropagation()
+  tearing.value = false
+  // 幾乎沒動 = 當成點擊，直接補間撕開；否則彈回
+  if (Math.abs(e.clientX - tearStartX) < 4) tweenTear()
+  else if (!torn.value) tearX.value = 0
+}
+
+onBeforeUnmount(() => cancelAnimationFrame(tearRaf))
+
+/** 撕開處的鋸齒邊，隨進度長出來 */
+const tearEdge = computed(() => {
+  const x = tearX.value
+  let d = `M${x.toFixed(1)} 72`
+  for (let y = 72; y < 120; y += 8) {
+    const j = (y / 8) % 2 ? 5 : -5
+    d += ` L${(x + j).toFixed(1)} ${Math.min(120, y + 8)}`
+  }
+  return d
+})
 
 /**
  * 離屏暫停。
@@ -465,7 +556,7 @@ const rays = computed(() =>
   <div
     ref="stage"
     class="stage"
-    :class="{ opened, tilting: !flat, active, paused: !visible }"
+    :class="{ opened: isOpen, tilting: !flat, active, paused: !visible }"
     :style="{ '--pk-body-hi': elem.bodyHi, '--pk-body-lo': elem.bodyLo }"
     @pointermove="flat || onMove($event)"
     @pointerleave="flat || reset()"
@@ -647,7 +738,7 @@ const rays = computed(() =>
           <circle cx="150" :cy="CY" r="118" :fill="`url(#${uid}-orb)`" />
 
           <!-- 火：連續火牆 + 餘燼 -->
-          <g v-if="fx === 'fire' && !opened" class="fire">
+          <g v-if="fx === 'fire' && !isOpen" class="fire">
             <ellipse cx="150" cy="504" rx="168" ry="112" :fill="`url(#${uid}-emberglow)`" />
             <!-- 整組套亂流位移，邊緣才會被撕開而不是平滑的曲線 -->
             <g :filter="warpFilter('fire')">
@@ -668,7 +759,7 @@ const rays = computed(() =>
           </g>
 
           <!-- 雷：分叉主幹 + 全屏爆光 -->
-          <g v-if="fx === 'bolt' && !opened" class="bolts">
+          <g v-if="fx === 'bolt' && !isOpen" class="bolts">
             <rect class="boltFlash" x="0" y="0" width="300" height="500" :fill="elem.mid" />
             <g class="boltStrike" fill="none" stroke-linecap="round" stroke-linejoin="round">
               <!-- 外層粗描邊做輝光，內層細白線做電芯 -->
@@ -682,7 +773,7 @@ const rays = computed(() =>
           </g>
 
           <!-- 水：翻湧水體 + 白沫 + 氣泡 -->
-          <g v-if="fx === 'water' && !opened" class="water">
+          <g v-if="fx === 'water' && !isOpen" class="water">
             <g :filter="warpFilter('water')">
               <path
                 v-for="(w, i) in WAVES" :key="i"
@@ -701,7 +792,7 @@ const rays = computed(() =>
           </g>
 
           <!-- 葉：被風捲起的落葉，深度分層 -->
-          <g v-if="fx === 'leaf' && !opened" class="leaves">
+          <g v-if="fx === 'leaf' && !isOpen" class="leaves">
             <g v-for="(l, i) in budget(LEAVES, 6)" :key="i"
                :transform="`translate(${l.x.toFixed(1)} -30) scale(${l.s.toFixed(2)})`">
               <!-- 外層 <g> 負責飄落路徑，內層負責翻面 —— 兩段動畫必須拆開，
@@ -718,7 +809,7 @@ const rays = computed(() =>
           </g>
 
           <!-- 晶：地面晶簇 + 懸浮碎晶 -->
-          <g v-if="fx === 'crystal' && !opened" class="crystals">
+          <g v-if="fx === 'crystal' && !isOpen" class="crystals">
             <!-- 地面長出的晶柱，每根拆亮暗兩面才有厚度 -->
             <g v-for="(c, i) in CRYSTAL_SPIKES" :key="'sp' + i" class="spike"
                :style="{ animationDelay: c.d }">
@@ -740,7 +831,7 @@ const rays = computed(() =>
           </g>
 
           <!-- 星：星塵 + 十字星芒 + 流星 -->
-          <g v-if="fx === 'star' && !opened" class="starfield">
+          <g v-if="fx === 'star' && !isOpen" class="starfield">
             <circle
               v-for="(p, i) in budget(STAR_DUST, 14)" :key="'d' + i"
               class="starDust" :cx="p.x.toFixed(1)" :cy="p.y.toFixed(1)" :r="p.rad.toFixed(2)"
@@ -773,8 +864,28 @@ const rays = computed(() =>
           <path d="M0 98.5 H300" stroke="#fff" stroke-opacity=".22" />
           <rect x="0" y="99" width="300" height="9" :fill="`url(#${uid}-aoDown)`" opacity=".6" />
 
-          <!-- 防拆封條 -->
-          <g :opacity="opened ? .35 : 1">
+          <!-- 防拆封條。撕開時分成三塊算繪：
+               還沒撕到的完好段、已經被扯下來往下翻的碎片、以及中間的鋸齒斷口。 -->
+          <clipPath :id="`${uid}-intact`">
+            <rect :x="tearX" y="66" :width="300 - tearX" height="60" />
+          </clipPath>
+          <clipPath :id="`${uid}-gone`">
+            <rect x="0" y="66" :width="tearX" height="60" />
+          </clipPath>
+
+          <!-- 已撕下的碎片：越撕越往下翻、越淡 -->
+          <g
+            v-if="tearX > 0" class="tearPiece"
+            :clip-path="`url(#${uid}-gone)`"
+            :transform="`translate(${(-tearX * 0.06).toFixed(1)} ${(tearX * 0.16).toFixed(1)}) rotate(${(-tearX * 0.02).toFixed(2)} 0 96)`"
+            :opacity="Math.max(0, 1 - tearX / 300)"
+          >
+            <rect x="0" y="72" width="300" height="48" :fill="`url(#${uid}-seal)`" />
+            <path d="M0 72 H300" stroke="#fff" :stroke-opacity="mat.matte ? .12 : .5" />
+            <path d="M0 120 H300" stroke="#000" stroke-opacity=".35" />
+          </g>
+
+          <g :opacity="isOpen ? .35 : 1" :clip-path="tearable ? `url(#${uid}-intact)` : undefined">
             <rect x="0" y="72" width="300" height="48" :fill="`url(#${uid}-seal)`" />
             <!-- 上緣高光是鏡面反射，霧面材質不該有；霧面只留極淡的一道邊 -->
             <path d="M0 72 H300" stroke="#fff" :stroke-opacity="mat.matte ? .12 : .5" />
@@ -798,11 +909,41 @@ const rays = computed(() =>
             >{{ tierLabel }}</text>
           </g>
 
+          <!-- 鋸齒斷口 -->
+          <path
+            v-if="tearable && tearX > 0 && tearX < 300"
+            :d="tearEdge" fill="none" :stroke="mat.ink"
+            stroke-opacity=".55" stroke-width="1.4"
+          />
+
+          <!-- 拉環：撕條的抓取點，也是「這裡可以撕」的唯一提示 -->
+          <!-- 拉環。定位在外層、呼吸動畫在內層 —— 兩者都寫 transform 的話
+               CSS 動畫會整個覆蓋 SVG 的定位屬性，拉環會彈回畫布原點。 -->
+          <g
+            v-if="tearable && !torn"
+            class="pullTabHit" :class="{ dragging: tearing }"
+            :transform="`translate(${Math.max(0, tearX - 4)} 0)`"
+            @pointerdown="onTearDown" @pointermove="onTearMove"
+            @pointerup="onTearUp" @pointercancel="onTearUp"
+          >
+            <g class="pullTab">
+              <rect x="-2" y="70" width="30" height="52" rx="4" :fill="mat.ink" fill-opacity=".82" />
+              <rect x="-2" y="70" width="30" height="52" rx="4" fill="none"
+                    :stroke="foil" stroke-opacity=".7" />
+              <!-- 三道橫線暗示這是可以捏住的凸起 -->
+              <g :stroke="foil" stroke-opacity=".8" stroke-width="1.6" stroke-linecap="round">
+                <path d="M6 88 H18" />
+                <path d="M6 96 H18" />
+                <path d="M6 104 H18" />
+              </g>
+            </g>
+          </g>
+
           <!-- 火漆封緘。
                正常尺寸放完整字標鎖版；縮圖尺寸下 6–7px 的字只會糊成一團，
                所以退回單一 V 字記號 —— 那個縮到多小都還認得出來。 -->
           <g :transform="`translate(150 ${CY})${compact ? ' scale(1.3)' : ''}`"
-             :opacity="opened ? .3 : 1">
+             :opacity="isOpen ? .3 : 1">
             <path d="M0 -52 L45 -26 L45 26 L0 52 L-45 26 L-45 -26 Z"
                   fill="#1c1610" fill-opacity=".85" :stroke="foil" stroke-width="2" />
             <path d="M0 -39 L34 -19.5 L34 19.5 L0 39 L-34 19.5 L-34 -19.5 Z"
@@ -1096,6 +1237,22 @@ const rays = computed(() =>
 .paused {
   animation-play-state: paused !important;
 }
+
+/* 拉環：cursor 與輕微的呼吸提示「這裡可以拖」。
+   撕的時候停掉呼吸，避免跟拖曳的位移打架。 */
+.pullTabHit { cursor: grab; touch-action: none; }
+.pullTabHit.dragging { cursor: grabbing; }
+.pullTab { transform-box: fill-box; transform-origin: 50% 50%; }
+@media (prefers-reduced-motion: no-preference) {
+  .pullTabHit:not(.dragging) .pullTab { animation: tab-nudge 2.4s ease-in-out infinite; }
+}
+@keyframes tab-nudge {
+  0%, 72%, 100% { transform: translateX(0); }
+  80%           { transform: translateX(3px); }
+  88%           { transform: translateX(0.5px); }
+}
+/* 撕下的碎片不吃指標，否則會擋住底下的拉環 */
+.tearPiece { pointer-events: none; }
 
 .gloss {
   position: absolute; inset: 0;
