@@ -127,6 +127,19 @@ const hashChip = computed(() => (props.hash ? props.hash.slice(0, 10).toUpperCas
 const tierLabel = computed(() =>
   props.tier === 'LAST' ? '最後賞' : props.tier === 'BUST' ? '爆賞' : `${props.tier} 賞`
 )
+/* 封條上的賞別拆成兩截排版：字母當主字、「賞」當附屬。
+   整串同級同色就只是一行字，拆開才有主從。 */
+const tierMark = computed(() =>
+  props.tier === 'LAST' ? { big: 'L', small: '最後賞' }
+  : props.tier === 'BUST' ? { big: 'X', small: '爆賞' }
+  : { big: props.tier, small: '賞' }
+)
+/** 序號拆分子母：001 是主角，/080 是註記 */
+const serialParts = computed(() => {
+  const raw = props.serial || ''
+  const m = raw.match(/(\d+)\s*\/\s*(\d+)/)
+  return m ? { n: m[1], total: m[2] } : { n: raw.slice(-3), total: '' }
+})
 /**
  * uid 必須在同一頁面的所有盒子之間保證唯一 —— SVG 的 <linearGradient>／
  * <clipPath> 用 id 全域查找，不受個別 <svg> 樹的邊界限制。兩個盒子若 id
@@ -767,12 +780,21 @@ const rays = computed(() =>
             <path d="M0 72 H300" stroke="#fff" :stroke-opacity="mat.matte ? .12 : .5" />
             <path d="M0 120 H300" stroke="#000" stroke-opacity=".35" />
             <path d="M0 96 H300" stroke="#000" stroke-opacity=".28" stroke-dasharray="3 4" />
-            <text v-if="hashChip && !compact" class="seal-text" x="20" y="102"
-                  :fill="mat.ink">封存 {{ hashChip }}</text>
+            <!-- 封條排版：左側是「標籤 + 數值」兩層，右側是賞別的主從組合。
+                 中間一道細分隔線把兩組資訊斷開 —— 沒有分隔的話兩邊會讀成一整行。 -->
+            <template v-if="!compact">
+              <text class="tLabel" x="20" y="87" :fill="mat.ink">COMMIT</text>
+              <text class="tData" x="20" y="108" :fill="mat.ink">{{ hashChip }}</text>
+
+              <path d="M212 80 V112" :stroke="mat.ink" stroke-opacity=".3" />
+
+              <!-- 賞別：字母吃主要字級，「賞」退到附屬 -->
+              <text class="tTierBig" x="234" y="109" :fill="mat.ink">{{ tierMark.big }}</text>
+              <text class="tTierSm" x="262" y="109" :fill="mat.ink">{{ tierMark.small }}</text>
+            </template>
             <text
-              class="seal-tier" :class="{ solo: compact }"
-              :x="compact ? 150 : 280" y="102"
-              :text-anchor="compact ? 'middle' : 'end'" :fill="mat.ink"
+              v-else class="seal-tier solo" x="150" y="102"
+              text-anchor="middle" :fill="mat.ink"
             >{{ tierLabel }}</text>
           </g>
 
@@ -836,14 +858,26 @@ const rays = computed(() =>
 
           <template v-if="!compact">
             <text v-if="label && !showWindow" class="label" x="150" y="392" text-anchor="middle">{{ label }}</text>
-            <g :transform="`translate(0 ${showWindow ? 452 : 424})`">
-              <path d="M26 0 H182 L194 12 V34 H26 Z" fill="#0b0a0c" fill-opacity=".9" />
-              <path d="M26 0 H182 L194 12 V34 H26 Z" fill="none" :stroke="foil" stroke-opacity=".45" />
-              <text class="brand" x="40" y="23">VAULTDRAW</text>
+            <g :transform="`translate(0 ${showWindow ? 448 : 420})`">
+              <!-- 品牌牌：VAULT 粗、DRAW 細，中間一道豎線斷開。
+                   同一個字重跑完九個字母就只是一串字，換重量才有鎖版感。 -->
+              <path d="M26 0 H176 L188 13 V38 H26 Z" fill="#0b0a0c" fill-opacity=".92" />
+              <path d="M26 0 H176 L188 13 V38 H26 Z" fill="none" :stroke="foil" stroke-opacity=".5" />
+              <text class="bMark" x="40" y="26">VAULT</text>
+              <path d="M96 10 V29" :stroke="foil" stroke-opacity=".55" />
+              <text class="bMarkThin" x="104" y="26">DRAW</text>
+
               <template v-if="serial">
-                <rect x="198" y="0" width="76" height="34" :fill="foil" opacity=".9" />
-                <text class="serial" x="236" y="23" text-anchor="middle"
-                      :fill="mat.ink">{{ serial.slice(-7) }}</text>
+                <!-- 序號塊：№ 記號 + 主號 + 小一級的分母，三個層級 -->
+                <rect x="194" y="0" width="80" height="38" :fill="foil" opacity=".92" />
+                <!-- № 與總數放上排、主號獨佔下排。
+                     三者同一條基線時，19px 的主號會撞到靠右對齊的分母。 -->
+                <text class="sNo" x="203" y="15" :fill="mat.ink">№</text>
+                <text
+                  v-if="serialParts.total" class="sTotal" x="266" y="15"
+                  text-anchor="end" :fill="mat.ink"
+                >/ {{ serialParts.total }}</text>
+                <text class="sNum" x="203" y="33" :fill="mat.ink">{{ serialParts.n }}</text>
               </template>
             </g>
           </template>
@@ -1071,19 +1105,62 @@ const rays = computed(() =>
 }
 .tilting.active .gloss { opacity: 1; }
 
-.seal-text, .seal-tier {
+/* ---- 盒面排版系統 ----
+   三個字級：微標籤 7.5 / 資料 16 / 主字 26。
+   先前全部落在 13–16 之間又都是同一個字重，所以「只是換字體」——
+   有階層差才讀得出主從。 */
+
+/* 微標籤：說明它旁邊那串數值是什麼 */
+.tLabel {
   font-family: var(--font-mono);
-  font-size: 16px; font-weight: 700; letter-spacing: .05em;
-  fill: #14110e;
+  font-size: 7.5px; font-weight: 700;
+  letter-spacing: .34em;
+  opacity: .58;
 }
-.seal-tier { letter-spacing: .02em; }
+/* 資料值 */
+.tData {
+  font-family: var(--font-mono);
+  font-size: 16.5px; font-weight: 700;
+  letter-spacing: .04em;
+}
+/* 賞別主字：吃最大字級，是封條上的視覺重點 */
+.tTierBig {
+  font-family: var(--font-mono);
+  font-size: 27px; font-weight: 700;
+  letter-spacing: 0;
+}
+/* 賞別附屬字：退到微標籤等級 */
+.tTierSm {
+  font-family: var(--font-body);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .08em;
+  opacity: .72;
+}
+
+.seal-tier {
+  font-family: var(--font-mono);
+  font-size: 16px; font-weight: 700; letter-spacing: .02em;
+}
 /* 縮圖時正面只算繪到約 62px 寬，viewBox 卻是 300 單位 —— 縮放比約 0.21。
    28px 會變成螢幕上的 5.8px 根本讀不到；40px 才有約 8.8px。 */
 .seal-tier.solo { font-size: 40px; }
-.serial {
+/* 序號三層：№ 記號、主號、分母 */
+.sNo {
   font-family: var(--font-mono);
-  font-size: 13px; font-weight: 700;
-  fill: #14110e;
+  font-size: 8px; font-weight: 700;
+  letter-spacing: .2em; opacity: .6;
+}
+.sNum {
+  font-family: var(--font-mono);
+  font-size: 19px; font-weight: 700;
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+.sTotal {
+  font-family: var(--font-mono);
+  font-size: 11px; font-weight: 600;
+  opacity: .66;
+  font-variant-numeric: tabular-nums;
 }
 .label {
   font-family: var(--font-body);
@@ -1091,10 +1168,16 @@ const rays = computed(() =>
   /* 盒身回到深色，字也跟著翻回亮色 */
   fill: #f4f1ec;
 }
-.brand {
+/* 品牌鎖版：同一個詞用兩種重量拆開 */
+.bMark {
   font-family: var(--font-mono);
-  font-size: 13px; font-weight: 700; letter-spacing: .2em;
-  fill: #efeae4;
+  font-size: 15px; font-weight: 700; letter-spacing: .16em;
+  fill: #f6f2ec;
+}
+.bMarkThin {
+  font-family: var(--font-mono);
+  font-size: 15px; font-weight: 400; letter-spacing: .22em;
+  fill: #f6f2ec; opacity: .82;
 }
 /* 印章字標：等寬字 + 大字距，做出壓印的莊重感。
    SVG 的 letter-spacing 會讓 text-anchor="middle" 的置中偏掉半個字距，
