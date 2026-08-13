@@ -2,18 +2,21 @@
 /**
  * 自製卡盒視覺 —— 完全不使用任何廠商素材。
  *
- * 從「平面卡包」改成「立體卡盒」的理由：
- *   平面袋只能用明暗『假裝』厚度，怎麼調都少一味。盒子有正面／側面／頂面
- *   三個真實的面，用 CSS transform-style: preserve-3d 疊起來就是真的立體 ——
- *   傾斜時側面與頂面會產生視差、面積真的改變，那是漸層模擬不出來的。
+ * 幾何：正面／側面／頂面 + 上方吊掛卡榫，全部用 CSS preserve-3d 疊成真實的
+ * 立體，不是用漸層假裝厚度。傾斜時各面的面積真的改變。
+ * 預設帶靜止傾角（rotateX 9° / rotateY -21°），不用互動也看得出是盒子。
  *
- * 預設就帶一個靜止傾角（rotateX 8° / rotateY -18°），所以不用互動、
- * 不用滑鼠，一眼就看得出是個盒子。游標移上去再疊加微幅傾斜。
+ * 吊掛卡榫（歐洲孔）是零售卡盒最好認的特徵之一 —— 它從盒頂突出、打一個
+ * 圓孔，而且因為薄，會在盒蓋上投下一小段陰影。這個細節比任何光影都更能
+ * 讓人第一眼認出「這是實體商品的包裝」。
  *
- * 品牌上維持「封存」：正面橫貼一條防拆封條，承諾雜湊直接印在上面 ——
- * 撕開就破壞，跟「開賣前就已封存、事後可驗算」是同一個語意。
+ * 正面美術刻意避開任何特定角色：屬性符號（火／水／葉／雷／晶／星）是通用
+ * 圖形，放射光芒與光球負責 TCG 的儀式感。用寶可夢角色剪影會把自製包裝
+ * 好不容易removed 的版權曝險放回來，而且剪影「一眼認得出是誰」，
+ * 比抽象圖案更難主張合理使用。
  *
- * 尺寸全部用 cqw（容器查詢單位），所以從 88px 縮圖到滿版都同一套幾何。
+ * 品牌上維持「封存」：正面橫貼防拆封條，承諾雜湊直接印在上面。
+ * 尺寸全部用 cqw，88px 縮圖到滿版共用同一套幾何。
  */
 import { computed } from 'vue'
 import type { Tier } from '@/types/models'
@@ -24,11 +27,11 @@ const props = withDefaults(defineProps<{
   label?: string
   serial?: string
   hash?: string
-  /** 已開封：封條斷開、盒蓋掀起一角 */
+  /** 已開封：封條褪色、盒蓋掀起 */
   opened?: boolean
   /** 縮圖模式：拿掉小字，只留封條與封緘 */
   compact?: boolean
-  /** 關掉游標傾斜（長列表裡不要整片一起晃），靜止傾角仍保留 */
+  /** 關掉游標傾斜，靜止傾角仍保留 */
   flat?: boolean
 }>(), {
   tier: 'D', label: '', serial: '', hash: '',
@@ -46,17 +49,47 @@ const tierLabel = computed(() =>
 )
 const uid = computed(() => `bx${props.tier}${(props.serial || props.label || 'vd').replace(/\W/g, '')}`)
 
-// 9 度 —— 疊在靜止傾角上，要的是「微」而不是甩
 const { el, rx, ry, gx, gy, active, onMove, reset } = useTilt(9)
 
 /** 靜止傾角：不互動也看得出立體 */
-const REST_X = 8, REST_Y = -18
+const REST_X = 9, REST_Y = -21
 
 const boxTransform = computed(() => {
   const x = REST_X + (props.flat ? 0 : rx.value)
   const y = REST_Y + (props.flat ? 0 : ry.value)
   return `rotateX(${x}deg) rotateY(${y}deg)`
 })
+
+const CY = computed(() => (props.compact ? 214 : 200))
+
+/**
+ * 屬性符號環。通用圖形，不對應任何特定角色 ——
+ * 火、水、葉、雷、晶、星，是這個品類共通的視覺語彙。
+ */
+const GLYPHS = [
+  'M0 -9 C4.5 -3 7 0 7 3.4 A7 7 0 0 1 -7 3.4 C-7 -0.4 -3 -2 0 -9 Z',            // 火
+  'M0 -9.5 C5.5 -3 7.5 0.6 7.5 3.6 A7.5 7.5 0 0 1 -7.5 3.6 C-7.5 0.6 -5.5 -3 0 -9.5 Z', // 水
+  'M0 -9 C7 -4.5 7.5 4 0 9 C-7.5 4 -7 -4.5 0 -9 Z',                              // 葉
+  'M-2.6 -9.5 L4.2 -1.6 L0.4 -0.9 L3.2 9.5 L-3.8 1 L0 0.2 Z',                    // 雷
+  'M0 -9.5 L6 -2.4 L3.2 8.6 L-3.2 8.6 L-6 -2.4 Z',                               // 晶
+  'M0 -9.5 Q1.5 -1.6 9.5 0 Q1.5 1.6 0 9.5 Q-1.5 1.6 -9.5 0 Q-1.5 -1.6 0 -9.5 Z'  // 星
+]
+
+/** 符號沿上方弧線排開，避開中央封緘 */
+const glyphRing = computed(() =>
+  GLYPHS.map((d, i) => {
+    const a = (-152 + i * 24.8) * (Math.PI / 180)
+    return { d, x: 150 + Math.cos(a) * 108, y: CY.value + Math.sin(a) * 108 }
+  })
+)
+
+/** 封緘後方的放射光芒 */
+const rays = computed(() =>
+  Array.from({ length: 16 }, (_, i) => ({
+    a: i * 22.5,
+    o: i % 2 ? 0.05 : 0.11
+  }))
+)
 </script>
 
 <template>
@@ -67,9 +100,39 @@ const boxTransform = computed(() => {
     @pointerleave="flat || reset()"
   >
     <div ref="el" class="box" :style="{ transform: boxTransform }">
-      <!-- 頂面（盒蓋上緣） -->
+      <!-- 吊掛卡榫：貼在盒背、從盒頂突出，中間打歐洲孔 -->
+      <div class="face tab">
+        <svg viewBox="0 0 200 62" aria-hidden="true">
+          <defs>
+            <linearGradient :id="`${uid}-tab`" x1="0" y1="0" x2="0.2" y2="1">
+              <stop offset="0%" stop-color="var(--surface-3)" />
+              <stop offset="100%" stop-color="var(--surface)" />
+            </linearGradient>
+          </defs>
+          <!-- 卡榫本體 + 歐洲孔（evenodd 打穿） -->
+          <path
+            fill-rule="evenodd" :fill="`url(#${uid}-tab)`"
+            d="M22 62 L22 20 Q22 6 42 6 L158 6 Q178 6 178 20 L178 62 Z
+               M100 22 m-7.5 6.5 a11 11 0 1 1 15 0 l-2 9 a5.5 5.5 0 0 1 -11 0 Z"
+          />
+          <path
+            fill="none" stroke="#fff" stroke-opacity=".16"
+            d="M22 62 L22 20 Q22 6 42 6 L158 6 Q178 6 178 20 L178 62"
+          />
+          <!-- 孔的內緣：上暗下亮，暗示紙板厚度 -->
+          <path fill="none" stroke="#000" stroke-opacity=".6" stroke-width="2"
+                d="M100 22 m-7.5 6.5 a11 11 0 1 1 15 0" />
+          <path fill="none" stroke="#fff" stroke-opacity=".16" stroke-width="1.5"
+                d="M92.5 28.5 l-2 9 a5.5 5.5 0 0 0 11 0" />
+          <rect x="22" y="48" width="156" height="14" :fill="foil" opacity=".2" />
+        </svg>
+      </div>
+
+      <!-- 頂面 -->
       <div class="face top">
         <span class="top-foil" :style="{ background: foil }"></span>
+        <!-- 卡榫在盒蓋上的落影，這道影子是「突出物」讀得出來的關鍵 -->
+        <span class="tab-shadow"></span>
       </div>
 
       <!-- 右側面 -->
@@ -89,7 +152,6 @@ const boxTransform = computed(() => {
               <stop offset="100%" stop-color="var(--bg)" />
             </linearGradient>
 
-            <!-- 防拆封條：賞別色箔面 -->
             <linearGradient :id="`${uid}-seal`" x1="0" y1="0" x2="1" y2="0.4">
               <stop offset="0%" :stop-color="foil" stop-opacity=".5" />
               <stop offset="32%" :stop-color="foil" stop-opacity="1" />
@@ -99,34 +161,56 @@ const boxTransform = computed(() => {
             </linearGradient>
 
             <radialGradient :id="`${uid}-orb`">
-              <stop offset="0%" :stop-color="foil" stop-opacity=".46" />
-              <stop offset="42%" :stop-color="foil" stop-opacity=".16" />
+              <stop offset="0%" :stop-color="foil" stop-opacity=".5" />
+              <stop offset="40%" :stop-color="foil" stop-opacity=".17" />
               <stop offset="100%" :stop-color="foil" stop-opacity="0" />
             </radialGradient>
 
-            <!-- 正面受光：左上亮、右下沉，配合盒子的靜止傾角 -->
             <linearGradient :id="`${uid}-lit`" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#fff" stop-opacity=".08" />
+              <stop offset="0%" stop-color="#fff" stop-opacity=".09" />
               <stop offset="42%" stop-color="#fff" stop-opacity="0" />
-              <stop offset="100%" stop-color="#000" stop-opacity=".35" />
+              <stop offset="100%" stop-color="#000" stop-opacity=".38" />
             </linearGradient>
+
+            <radialGradient :id="`${uid}-vig`" cx="0.5" cy="0.48" r="0.7">
+              <stop offset="52%" stop-color="#000" stop-opacity="0" />
+              <stop offset="100%" stop-color="#000" stop-opacity=".5" />
+            </radialGradient>
           </defs>
 
           <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-card)`" />
-          <circle cx="150" :cy="compact ? 210 : 196" r="112" :fill="`url(#${uid}-orb)`" />
+
+          <!-- 放射光芒：封緘後方的儀式感 -->
+          <g :transform="`translate(150 ${CY})`" :fill="foil">
+            <path
+              v-for="(r, i) in rays" :key="i"
+              :transform="`rotate(${r.a})`" :opacity="r.o"
+              d="M-7 -40 L7 -40 L2.5 -168 L-2.5 -168 Z"
+            />
+          </g>
+
+          <circle cx="150" :cy="CY" r="118" :fill="`url(#${uid}-orb)`" />
+
+          <!-- 屬性符號環 -->
+          <g :fill="foil" opacity=".5">
+            <path
+              v-for="(g, i) in glyphRing" :key="i"
+              :transform="`translate(${g.x.toFixed(1)} ${g.y.toFixed(1)})`" :d="g.d"
+            />
+          </g>
+
+          <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-vig)`" />
 
           <!-- 盒蓋接縫 -->
           <path d="M0 96 H300" stroke="#000" stroke-opacity=".5" stroke-width="2" />
-          <path d="M0 98.5 H300" stroke="#fff" stroke-opacity=".08" stroke-width="1" />
+          <path d="M0 98.5 H300" stroke="#fff" stroke-opacity=".08" />
 
-          <!-- 防拆封條，橫跨接縫 -->
+          <!-- 防拆封條 -->
           <g :opacity="opened ? .35 : 1">
             <rect x="0" y="72" width="300" height="48" :fill="`url(#${uid}-seal)`" />
             <path d="M0 72 H300" stroke="#fff" stroke-opacity=".5" />
             <path d="M0 120 H300" stroke="#000" stroke-opacity=".35" />
-            <!-- 封條上的細鋸齒撕線 -->
-            <path d="M0 96 H300" stroke="#000" stroke-opacity=".28"
-                  stroke-width="1" stroke-dasharray="3 4" />
+            <path d="M0 96 H300" stroke="#000" stroke-opacity=".28" stroke-dasharray="3 4" />
             <text v-if="hashChip && !compact" class="seal-text" x="20" y="102">封存 {{ hashChip }}</text>
             <text
               class="seal-tier" :class="{ solo: compact }"
@@ -136,10 +220,10 @@ const boxTransform = computed(() => {
           </g>
 
           <!-- 火漆封緘 -->
-          <g :transform="`translate(150 ${compact ? 210 : 196})${compact ? ' scale(1.35)' : ''}`"
+          <g :transform="`translate(150 ${CY})${compact ? ' scale(1.3)' : ''}`"
              :opacity="opened ? .3 : 1">
             <path d="M0 -48 L42 -24 L42 24 L0 48 L-42 24 L-42 -24 Z"
-                  fill="var(--bg)" fill-opacity=".5" :stroke="foil" stroke-width="2" />
+                  fill="var(--bg)" fill-opacity=".72" :stroke="foil" stroke-width="2" />
             <path d="M0 -35 L30 -17.5 L30 17.5 L0 35 L-30 17.5 L-30 -17.5 Z"
                   fill="none" stroke="#fff" stroke-opacity=".14" />
             <path d="M-14 -13 L0 18 L14 -13" fill="none" :stroke="foil"
@@ -147,11 +231,10 @@ const boxTransform = computed(() => {
           </g>
 
           <template v-if="!compact">
-            <text v-if="label" class="label" x="150" y="296" text-anchor="middle">{{ label }}</text>
-            <g transform="translate(0 322)">
+            <text v-if="label" class="label" x="150" y="308" text-anchor="middle">{{ label }}</text>
+            <g transform="translate(0 330)">
               <path d="M26 0 H182 L194 12 V34 H26 Z" fill="#0b0a0c" fill-opacity=".9" />
-              <path d="M26 0 H182 L194 12 V34 H26 Z" fill="none" :stroke="foil"
-                    stroke-opacity=".45" />
+              <path d="M26 0 H182 L194 12 V34 H26 Z" fill="none" :stroke="foil" stroke-opacity=".45" />
               <text class="brand" x="40" y="23">VAULTDRAW</text>
               <template v-if="serial">
                 <rect x="198" y="0" width="76" height="34" :fill="foil" opacity=".9" />
@@ -160,7 +243,6 @@ const boxTransform = computed(() => {
             </g>
           </template>
 
-          <!-- 受光疊在最上層 -->
           <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-lit)`" />
         </svg>
 
@@ -170,28 +252,27 @@ const boxTransform = computed(() => {
         ></span>
       </div>
 
-      <!-- 地面投影：跟著盒子一起轉，維持接地感 -->
       <div class="shadow"></div>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* cqw 讓整個幾何跟著容器寬度縮放 —— 88px 縮圖與滿版共用同一套數字 */
 .stage {
   container-type: inline-size;
   position: relative;
   width: 100%;
-  aspect-ratio: 1 / 1.24;
-  perspective: 90cqw;
-  perspective-origin: 50% 42%;
+  /* 上方要留給卡榫 */
+  aspect-ratio: 1 / 1.42;
+  /* 透視拉近 —— 距離越短，同樣的角度看起來越立體 */
+  perspective: 62cqw;
+  perspective-origin: 50% 44%;
 }
 
 .box {
   position: absolute;
-  /* 側面與頂面要佔空間，所以正面本身不能滿版 */
-  left: 6cqw; top: 9cqw;
-  width: 74cqw; height: 98cqw;
+  left: 5cqw; top: 26cqw;
+  width: 72cqw; height: 96cqw;
   transform-style: preserve-3d;
   transition: transform .5s cubic-bezier(.2, .7, .3, 1);
 }
@@ -199,23 +280,38 @@ const boxTransform = computed(() => {
 
 .face { position: absolute; backface-visibility: hidden; }
 
-/* 正面 */
+/* 正面。右緣與上緣各一道亮邊 —— 那是實體盒的稜線受光，
+   少了它三個面會糊在一起，看起來就「平」。 */
 .front {
   inset: 0;
   overflow: hidden;
   border-radius: 1.2cqw;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .09);
+  box-shadow:
+    inset -1px 0 0 rgba(255, 255, 255, .18),
+    inset 0 1px 0 rgba(255, 255, 255, .14),
+    inset 1px 0 0 rgba(0, 0, 0, .5);
 }
 .front svg { display: block; width: 100%; height: 100%; }
 
-/* 右側面：由正面右緣向後轉 90° */
+/* 吊掛卡榫：貼在盒背，向上突出 */
+.tab {
+  left: 18%; bottom: 100%;
+  width: 64%; height: 20cqw;
+  /* 與正面同一平面。放到盒深中段（translateZ(-9cqw)）雖然物理上更接近
+     真實的背板卡榫，但在 -21° 的視角下會跟盒頂錯開一段，看起來像浮著的
+     另一塊板子。齊平反而讀得出「長在盒子上」。 */
+  transform: translateZ(0);
+  transform-origin: 50% 100%;
+}
+.tab svg { display: block; width: 100%; height: 100%; }
+
+/* 右側面 */
 .side {
   left: 100%; top: 0;
-  width: 17cqw; height: 100%;
+  width: 20cqw; height: 100%;
   transform-origin: 0 50%;
   transform: rotateY(90deg);
-  background: linear-gradient(90deg, var(--surface-2), var(--bg) 70%);
-  box-shadow: inset 1px 0 0 rgba(255, 255, 255, .07);
+  background: linear-gradient(90deg, var(--surface-2), var(--bg) 78%);
   border-radius: 0 1.2cqw 1.2cqw 0;
   overflow: hidden;
 }
@@ -227,42 +323,47 @@ const boxTransform = computed(() => {
   opacity: .9;
 }
 .side-text {
-  position: absolute; left: 50%; top: 58%;
+  position: absolute; left: 50%; top: 60%;
   transform: translate(-50%, -50%) rotate(90deg);
   white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 3.2cqw; font-weight: 700; letter-spacing: .28em;
+  font-size: 3cqw; font-weight: 700; letter-spacing: .3em;
   color: var(--faint);
 }
 
-/* 頂面：由正面上緣向後轉 90° */
+/* 頂面 */
 .top {
   left: 0; bottom: 100%;
-  width: 100%; height: 17cqw;
+  width: 100%; height: 20cqw;
   transform-origin: 50% 100%;
   transform: rotateX(90deg);
   background: linear-gradient(180deg, var(--bg), var(--surface-2));
-  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, .08);
   border-radius: 1.2cqw 1.2cqw 0 0;
   overflow: hidden;
 }
 .top-foil {
   position: absolute; left: 0; right: 0; bottom: 0;
-  height: 34%;
+  height: 30%;
   opacity: .8;
 }
-/* 已開封：盒蓋掀起 */
-.opened .top { transform: rotateX(58deg); transform-origin: 50% 100%; }
+/* 卡榫落在盒蓋上的影子 —— 沒有它，卡榫會像貼紙而不是突出物 */
+/* 卡榫落在盒蓋上的影子。原本 62% 高、.62 濃度會把卡榫與盒身之間
+   整段糊成黑塊，反而讓卡榫看起來是浮在旁邊的另一塊板子。 */
+.tab-shadow {
+  position: absolute; left: 18%; width: 64%;
+  top: 0; height: 34%;
+  background: linear-gradient(180deg, rgba(0, 0, 0, .45), transparent);
+}
+.opened .top { transform: rotateX(58deg); }
 
-/* 投影躺在盒子底部，跟著 3D 一起轉 */
 .shadow {
   position: absolute;
-  left: -6%; right: -14%; top: 100%;
-  height: 26cqw;
+  left: -8%; right: -16%; top: 100%;
+  height: 30cqw;
   transform-origin: 50% 0;
-  transform: rotateX(90deg) translateZ(-8cqw);
-  background: radial-gradient(closest-side, rgba(0, 0, 0, .62), transparent 78%);
-  filter: blur(1.5cqw);
+  transform: rotateX(90deg) translateZ(-10cqw);
+  background: radial-gradient(closest-side, rgba(0, 0, 0, .7), transparent 76%);
+  filter: blur(1.6cqw);
   pointer-events: none;
 }
 
@@ -274,23 +375,20 @@ const boxTransform = computed(() => {
 }
 .tilting.active .gloss { opacity: 1; }
 
-/* 封條與序號塊都是亮色底，字必須近黑 */
 .seal-text, .seal-tier {
   font-family: var(--font-mono);
   font-size: 16px; font-weight: 700; letter-spacing: .05em;
   fill: #14110e;
 }
 .seal-tier { letter-spacing: .02em; }
-/* 縮圖時正面只算繪到約 62px 寬，而 viewBox 是 300 單位 —— 縮放比約 0.21。
-   28px 會變成螢幕上的 5.8px，根本讀不到；40px 才有約 8.8px，
-   剛好塞得進 10.5px 高的封條。 */
+/* 縮圖時正面只算繪到約 62px 寬，viewBox 卻是 300 單位 —— 縮放比約 0.21。
+   28px 會變成螢幕上的 5.8px 根本讀不到；40px 才有約 8.8px。 */
 .seal-tier.solo { font-size: 40px; }
 .serial {
   font-family: var(--font-mono);
   font-size: 13px; font-weight: 700;
   fill: #14110e;
 }
-/* 盒面在兩個主題下都是深色，所以字固定用亮色 */
 .label {
   font-family: var(--font-body);
   font-size: 21px; font-weight: 600; letter-spacing: -.01em;
