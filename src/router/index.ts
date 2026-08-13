@@ -14,6 +14,8 @@ export const router = createRouter({
     { path: '/sellers/:id', component: () => import('@/pages/SellerPage.vue') },
     { path: '/seller/new', component: () => import('@/pages/SellerNewPoolPage.vue') },
     { path: '/fairness', component: () => import('@/pages/FairnessPage.vue') },
+    // 未列在導覽的設計展示頁，改配色時用來一次比對所有變體
+    { path: '/design/pack', component: () => import('@/pages/DesignPackPage.vue') },
     { path: '/fairness/:poolId', component: () => import('@/pages/FairnessPoolPage.vue') },
     { path: '/me/cards', component: () => import('@/pages/MyCardsPage.vue') },
     { path: '/me/wallet', component: () => import('@/pages/WalletPage.vue') },
