@@ -17,7 +17,7 @@ import AppBottomNav from '@/components/AppBottomNav.vue'
         <a href="#">會員條款</a> ·
         <a href="#">隱私權政策</a>
       </span>
-      <span class="muted fine">碎片僅可兌換商品，不可兌換現金或轉讓。未滿 18 歲需監護人同意方可使用。</span>
+      <span class="muted fine">點數僅可用於站內抽選與兌換商品，不可提領現金或轉讓。未滿 18 歲需監護人同意方可使用。</span>
     </div>
   </footer>
 </template>

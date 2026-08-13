@@ -6,7 +6,6 @@ export const useWalletStore = defineStore('wallet', {
   state: () => ({
     // demo 用：給足點數讓所有玩法都能試（正式版由後端回傳真實餘額）
     points: 100_000_000,
-    shards: 320,
     ledger: [] as LedgerEntry[],
     ledgerLoaded: false
   }),
