@@ -125,6 +125,17 @@ const boxTransform = computed(() => {
 const CY = computed(() => (props.compact ? 214 : 200))
 
 /**
+ * 縮圖不掛亂流濾鏡。
+ *
+ * feTurbulence 是逐像素運算，是這個元件裡最貴的一項。而列表縮圖大約
+ * 88px 寬、正面實際只算繪到 ~62px，viewBox 卻是 300 單位 —— 縮放比約 0.21，
+ * scale=26 的位移換算到螢幕上不到 6px，再被縮圖本身的取樣抹平，
+ * 幾乎看不出差別。抽選列表一次可能出現二三十個盒子，這裡省下來最有感。
+ */
+const warpFilter = (kind: 'fire' | 'water') =>
+  props.compact ? undefined : `url(#${uid}-${kind}Warp)`
+
+/**
  * 屬性符號環。通用圖形，不對應任何特定角色 ——
  * 火、水、葉、雷、晶、星，是這個品類共通的視覺語彙。
  */
@@ -145,38 +156,87 @@ const glyphRing = computed(() =>
   })
 )
 
-/** 火焰：底部竄動的幾簇，各自不同相位 */
-const FLAMES = [
-  { x: 52,  s: 1.0, d: '0s'   },
-  { x: 104, s: 1.5, d: '-.7s' },
-  { x: 150, s: 2.1, d: '-1.4s' },
-  { x: 196, s: 1.4, d: '-.35s' },
-  { x: 248, s: 0.9, d: '-1.05s' }
+/* ---- 火：連續火牆 ----
+   關鍵是「一整片連續的火」而不是幾根分開的小火苗。真實的大火是連續的
+   質量、邊緣被亂流撕開；分開的水滴狀色塊不論怎麼縮放都像蠟燭。
+   三層由深到亮疊加，各自不同週期與漂移方向，讓它們永遠不同步 ——
+   同步的火焰會整片一起脹縮，那是最假的一種。
+   路徑左右都超出畫布（-30 → 330），橫向漂移時不會露出邊緣。 */
+const FIRE_LAYERS = [
+  {
+    d: 'M-30 415 C-10 330 10 360 30 270 C48 340 62 300 82 200 C100 300 118 260 140 160 '
+     + 'C158 270 175 230 196 280 C214 220 232 290 252 240 C268 300 290 330 330 415 Z',
+    dur: '3.1s', delay: '0s', op: .72, drift: 13
+  },
+  {
+    d: 'M-30 415 C-5 350 18 375 42 300 C62 360 80 320 104 240 C124 330 142 290 164 220 '
+     + 'C182 310 200 270 222 320 C240 280 262 340 330 415 Z',
+    dur: '2.3s', delay: '-.8s', op: .9, drift: -10
+  },
+  {
+    d: 'M-20 415 C5 370 30 390 56 340 C76 385 96 355 120 300 C140 370 158 340 180 290 '
+     + 'C198 355 218 330 240 360 C258 335 280 375 320 415 Z',
+    dur: '1.7s', delay: '-1.4s', op: .95, drift: 7
+  }
 ]
-/* 底寬、頂尖。原本頭尾都收成一點（杏仁形），配上「下亮上淡」的漸層，
-   看起來會變成倒三角的尖刺而不是火苗。 */
-const FLAME_D = 'M-10 0 C-11 -13 -5 -19 -1 -38 C1 -26 4 -24 6 -30 C9 -20 10 -11 10 0 Z'
-/** 內焰：更窄更亮，疊在外焰上做出層次 */
-const FLAME_CORE_D = 'M-4.5 0 C-5 -9 -2 -13 0 -23 C2 -13 4.5 -9 4.5 0 Z'
 
-/** 閃電：三道，錯開閃爍時間 */
-const BOLTS = [
-  { x: 74,  y: 108, s: 1.5, d: '0s'    },
-  { x: 226, y: 132, s: 1.1, d: '-1.9s' },
-  { x: 150, y: 96,  s: 0.8, d: '-3.3s' }
+/** 火星：被熱氣帶上去的餘燼，越高越淡 */
+const EMBERS = [
+  { x: 46, r: 2.2, d: '0s' }, { x: 88, r: 1.4, d: '-2.6s' }, { x: 126, r: 2.8, d: '-1.2s' },
+  { x: 168, r: 1.8, d: '-3.4s' }, { x: 208, r: 2.4, d: '-.7s' }, { x: 252, r: 1.6, d: '-2.1s' },
+  { x: 106, r: 1.2, d: '-4.2s' }, { x: 228, r: 2, d: '-3.8s' }
 ]
-const BOLT_D = 'M-7 -34 L9 -6 L1 -3 L11 30 L-9 -1 L-1 -4 Z'
+
+/* ---- 雷：分叉主幹 ----
+   真實閃電是一條有分叉的主幹，不是三根獨立的鋸齒。
+   主幹從上竄到下，沿途甩出短分支。 */
+const BOLT_MAIN = 'M138 40 L164 130 L146 136 L178 214 L156 220 L186 320'
+const BOLT_FORKS = [
+  'M164 130 L196 168 L182 172',
+  'M178 214 L142 250 L156 254',
+  'M146 136 L112 186'
+]
 
 /* ---- 其餘四種屬性特效的粒子 ----
    共通做法：外層 <g> 負責定位，內層元素跑 CSS 動畫。
    位置與延遲刻意錯開，避免整組同步跳動而讀成「圖案」。 */
 
-/** 水：底部升起的氣泡 + 擴散漣漪 */
-const BUBBLES = [
-  { x: 62, r: 5, d: '0s' }, { x: 108, r: 3, d: '-2.1s' }, { x: 152, r: 6.5, d: '-1.1s' },
-  { x: 196, r: 3.5, d: '-3.2s' }, { x: 242, r: 4.5, d: '-1.7s' }, { x: 132, r: 2.5, d: '-2.7s' }
+/* ---- 水：翻湧的水體 ----
+   從「地板上的漣漪」改成「淹上來的水」。漣漪只會讀成靜止水面，
+   洪水要的是有厚度、表面在翻的水體。
+   三層波浪各自不同波長與速度橫向捲動，疊出雜亂的水面。 */
+
+/**
+ * 產生一條正弦波輪廓，下方封成實心水體。
+ * 路徑寬度必須是波長的整數倍且左右各多出一個波長 ——
+ * 橫向平移剛好一個波長時才會無縫接回，否則捲動會看到接縫跳動。
+ */
+function wavePath(baseY: number, amp: number, len: number): string {
+  const x0 = -len * 2
+  const x1 = 300 + len * 2
+  let d = `M${x0} ${baseY}`
+  for (let x = x0; x < x1; x += len) {
+    d += ` Q${(x + len * 0.25).toFixed(1)} ${(baseY - amp).toFixed(1)} ${(x + len * 0.5).toFixed(1)} ${baseY}`
+    d += ` Q${(x + len * 0.75).toFixed(1)} ${(baseY + amp).toFixed(1)} ${(x + len).toFixed(1)} ${baseY}`
+  }
+  return `${d} L${x1} 420 L${x0} 420 Z`
+}
+
+const WAVES = [
+  { d: wavePath(286, 16, 150), len: 150, dur: '7s',   delay: '0s',    op: .34 },
+  { d: wavePath(312, 21, 110), len: 110, dur: '4.6s', delay: '-1.8s', op: .5 },
+  { d: wavePath(338, 13, 190), len: 190, dur: '9s',   delay: '-3.1s', op: .72 }
 ]
-const RIPPLES = [{ d: '0s' }, { d: '-1.6s' }, { d: '-3.2s' }]
+
+/** 浪尖的白沫線，跟著最前排的浪一起走 */
+const FOAM_D = wavePath(338, 13, 190)
+
+/** 水中氣泡與飛濺 */
+const BUBBLES = [
+  { x: 42, r: 4, d: '0s' }, { x: 96, r: 2.6, d: '-2.1s' }, { x: 148, r: 5.2, d: '-1.1s' },
+  { x: 194, r: 3, d: '-3.2s' }, { x: 246, r: 4.4, d: '-1.7s' }, { x: 122, r: 2.2, d: '-2.7s' },
+  { x: 272, r: 3.2, d: '-3.9s' }, { x: 68, r: 2.8, d: '-4.6s' }
+]
 
 /** 葉：飄落並左右搖擺 */
 const LEAVES = [
@@ -312,6 +372,53 @@ const rays = computed(() =>
               <stop offset="100%" stop-color="#000" stop-opacity=".38" />
             </linearGradient>
 
+            <!-- 亂流位移：讓火與水的邊緣被撕成不規則，這是「像真的」與
+                 「像圖案」的分界。seed 固定不動 —— 動 baseFrequency 或 seed
+                 會強迫瀏覽器每一幀重算整張雜訊圖，非常貴；讓底下的形狀
+                 移動穿過這張靜態雜訊場，一樣會得到不斷變化的扭曲，
+                 但雜訊只算一次。 -->
+            <filter v-if="!compact" :id="`${uid}-fireWarp`" x="-25%" y="-25%" width="150%" height="150%">
+              <feTurbulence type="fractalNoise" baseFrequency="0.013 0.032"
+                            numOctaves="2" seed="7" result="n" />
+              <feDisplacementMap in="SourceGraphic" in2="n" scale="26"
+                                 xChannelSelector="R" yChannelSelector="G" />
+              <feGaussianBlur stdDeviation="1.4" />
+            </filter>
+
+            <filter v-if="!compact" :id="`${uid}-waterWarp`" x="-25%" y="-25%" width="150%" height="150%">
+              <feTurbulence type="fractalNoise" baseFrequency="0.02 0.012"
+                            numOctaves="2" seed="3" result="n" />
+              <feDisplacementMap in="SourceGraphic" in2="n" scale="13"
+                                 xChannelSelector="R" yChannelSelector="G" />
+              <feGaussianBlur stdDeviation="0.7" />
+            </filter>
+
+            <!-- 火的縱向色階：底部白熱、中段主色、頂端散成煙 -->
+            <linearGradient :id="`${uid}-fireBody`" x1="0" y1="1" x2="0" y2="0">
+              <stop offset="0%" :stop-color="elem.core" />
+              <stop offset="14%" :stop-color="elem.mid" />
+              <stop offset="52%" :stop-color="elem.deep" />
+              <stop offset="82%" :stop-color="elem.deep" stop-opacity=".55" />
+              <stop offset="100%" :stop-color="elem.deep" stop-opacity="0" />
+            </linearGradient>
+
+            <!-- 火／水底下的暗場。
+                 象牙盒身讓橘色火焰的對比掉很多（深色盒身時橘色會自己跳出來）。
+                 真實的卡盒美術也是這樣處理 —— 火要有黑暗可以燒、深水本來就暗。
+                 這層同時解決對比問題，也讓效果讀起來是「盒面上印的場景」。 -->
+            <linearGradient :id="`${uid}-scrim`" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#0a0704" stop-opacity="0" />
+              <stop offset="45%" stop-color="#0a0704" stop-opacity=".55" />
+              <stop offset="100%" stop-color="#0a0704" stop-opacity=".92" />
+            </linearGradient>
+
+            <!-- 水體：越深越暗，表面偏亮 -->
+            <linearGradient :id="`${uid}-waterBody`" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" :stop-color="elem.core" stop-opacity=".9" />
+              <stop offset="18%" :stop-color="elem.mid" />
+              <stop offset="100%" :stop-color="elem.deep" />
+            </linearGradient>
+
             <radialGradient :id="`${uid}-vig`" cx="0.5" cy="0.48" r="0.7">
               <stop offset="52%" stop-color="#000" stop-opacity="0" />
               <!-- 象牙底下 .5 的黑色暗角會偏濁髒，收到 .4 維持乾淨 -->
@@ -332,47 +439,59 @@ const rays = computed(() =>
 
           <circle cx="150" :cy="CY" r="118" :fill="`url(#${uid}-orb)`" />
 
-          <!-- 火：底部竄動的火苗 + 餘燼光 -->
+          <!-- 火：連續火牆 + 餘燼 -->
           <g v-if="fx === 'fire' && !opened" class="fire">
-            <ellipse cx="150" cy="400" rx="150" ry="90" :fill="`url(#${uid}-emberglow)`" />
-            <!-- 定位在外層 <g>、動畫在內層 <path>：
-                 CSS animation 的 transform 會整個覆蓋 SVG 的 transform 屬性，
-                 兩者寫在同一個元素上，火苗會塌回畫布原點消失在畫面外。 -->
-            <g v-for="(f, i) in FLAMES" :key="i"
-               :transform="`translate(${f.x} 392) scale(${f.s})`">
+            <rect x="0" y="150" width="300" height="250" :fill="`url(#${uid}-scrim)`" />
+            <ellipse cx="150" cy="404" rx="168" ry="104" :fill="`url(#${uid}-emberglow)`" />
+            <!-- 整組套亂流位移，邊緣才會被撕開而不是平滑的曲線 -->
+            <g :filter="warpFilter('fire')">
               <path
-                class="flame" :d="FLAME_D"
-                :fill="`url(#${uid}-flame)`"
-                :style="{ animationDelay: f.d }"
+                v-for="(f, i) in FIRE_LAYERS" :key="i"
+                class="fireLayer" :d="f.d"
+                :fill="`url(#${uid}-fireBody)`" :opacity="f.op"
+                :style="{ animationDuration: f.dur, animationDelay: f.delay, '--drift': f.drift + 'px' }"
               />
-              <path
-                class="flame core" :d="FLAME_CORE_D"
-                :fill="elem.core" opacity=".9"
-                :style="{ animationDelay: f.d }"
+            </g>
+            <g class="embers">
+              <circle
+                v-for="(e, i) in EMBERS" :key="i"
+                class="ember" :cx="e.x" cy="400" :r="e.r"
+                :fill="elem.core" :style="{ animationDelay: e.d }"
               />
             </g>
           </g>
 
-          <!-- 雷：錯開閃爍的三道電光 -->
+          <!-- 雷：分叉主幹 + 全屏爆光 -->
           <g v-if="fx === 'bolt' && !opened" class="bolts">
-            <g v-for="(b, i) in BOLTS" :key="i"
-               :transform="`translate(${b.x} ${b.y}) scale(${b.s})`">
-              <path
-                class="bolt" :d="BOLT_D" :fill="elem.core" :stroke="elem.mid" stroke-width="2"
-                :style="{ animationDelay: b.d }"
-              />
+            <rect class="boltFlash" x="0" y="0" width="300" height="400" :fill="elem.mid" />
+            <g class="boltStrike" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <!-- 外層粗描邊做輝光，內層細白線做電芯 -->
+              <path :d="BOLT_MAIN" :stroke="elem.mid" stroke-width="9" opacity=".45" />
+              <path v-for="(f, i) in BOLT_FORKS" :key="i" :d="f"
+                    :stroke="elem.mid" stroke-width="5" opacity=".4" />
+              <path :d="BOLT_MAIN" :stroke="elem.core" stroke-width="3" />
+              <path v-for="(f, i) in BOLT_FORKS" :key="'f' + i" :d="f"
+                    :stroke="elem.core" stroke-width="1.8" />
             </g>
           </g>
 
-          <!-- 水：漣漪 + 上升氣泡 -->
+          <!-- 水：翻湧水體 + 白沫 + 氣泡 -->
           <g v-if="fx === 'water' && !opened" class="water">
-            <g v-for="(r, i) in RIPPLES" :key="'r' + i" transform="translate(150 386)">
-              <ellipse class="ripple" rx="52" ry="13" fill="none"
-                       :stroke="elem.core" stroke-width="2.5" :style="{ animationDelay: r.d }" />
+            <rect x="0" y="200" width="300" height="200" :fill="`url(#${uid}-scrim)`" />
+            <g :filter="warpFilter('water')">
+              <path
+                v-for="(w, i) in WAVES" :key="i"
+                class="wave" :d="w.d"
+                :fill="`url(#${uid}-waterBody)`" :opacity="w.op"
+                :style="{ animationDuration: w.dur, animationDelay: w.delay, '--len': `-${w.len}px` }"
+              />
+              <path class="wave foam" :d="FOAM_D" fill="none"
+                    :stroke="elem.core" stroke-width="2.5" opacity=".75"
+                    :style="{ animationDuration: '9s', animationDelay: '-3.1s', '--len': '-190px' }" />
             </g>
-            <g v-for="(b, i) in BUBBLES" :key="'b' + i" :transform="`translate(${b.x} 392)`">
-              <circle class="bubble" :r="b.r" :fill="elem.mid" fill-opacity=".18"
-                      :stroke="elem.core" stroke-width="1.8" :style="{ animationDelay: b.d }" />
+            <g v-for="(b, i) in BUBBLES" :key="'b' + i" :transform="`translate(${b.x} 396)`">
+              <circle class="bubble" :r="b.r" :fill="elem.core" fill-opacity=".22"
+                      :stroke="elem.core" stroke-width="1.5" :style="{ animationDelay: b.d }" />
             </g>
           </g>
 
@@ -620,50 +739,76 @@ const rays = computed(() =>
    全部走 CSS 動畫，沒有 JS 迴圈。transform-box: fill-box 是必要的：
    SVG 元素的 transform-origin 預設參照的是整個 viewBox 原點，
    不設的話火苗會繞著畫布左上角縮放而不是自己的底部。 */
-.flame, .bolt {
+.fireLayer, .ember, .wave, .bubble, .boltStrike, .boltFlash {
   transform-box: fill-box;
-  transform-origin: 50% 100%;
 }
-.ripple, .bubble, .leaf, .shard, .spark, .glyph {
+/* 火焰由底部往上長，縮放原點必須釘在底邊 */
+.fireLayer { transform-origin: 50% 100%; }
+.wave { transform-origin: 0 50%; }
+.bubble, .leaf, .shard, .spark, .glyph {
   transform-box: fill-box;
   transform-origin: 50% 50%;
 }
 @media (prefers-reduced-motion: no-preference) {
   /* 節奏整體加快、幅度加大 —— 先前太含蓄，在縮圖尺寸下幾乎看不出在動 */
-  .flame  { animation: flame-lick 1.1s ease-in-out infinite alternate; }
-  .bolt   { animation: bolt-strike 2.8s steps(1, end) infinite; }
-  .ripple { animation: ripple-out 3.2s ease-out infinite; }
-  .bubble { animation: bubble-rise 4.2s ease-in infinite; }
+  .fireLayer  { animation-name: fire-roar; animation-timing-function: ease-in-out;
+                animation-iteration-count: infinite; animation-direction: alternate; }
+  .ember      { animation: ember-rise 3.8s ease-out infinite; }
+  .wave       { animation-name: wave-roll; animation-timing-function: linear;
+                animation-iteration-count: infinite; }
+  .boltStrike { animation: bolt-strike 2.8s steps(1, end) infinite; }
+  .boltFlash  { animation: bolt-flash 2.8s steps(1, end) infinite; }
+  .bubble     { animation: bubble-rise 4.2s ease-in infinite; }
   .leaf   { animation: leaf-fall 5s linear infinite; }
   .shard  { animation: shard-float 3.6s ease-in-out infinite alternate; }
   .spark  { animation: spark-twinkle 2s ease-in-out infinite; }
   .glyph  { animation: glyph-pulse 2.2s ease-in-out infinite alternate; }
 }
-@keyframes flame-lick {
-  0%   { transform: scaleY(.7) scaleX(1.14) translateX(-2px); opacity: .6; }
-  40%  { transform: scaleY(1.5) scaleX(.82); opacity: 1; }
-  70%  { transform: scaleY(1.15) scaleX(1.02) translateX(2px); opacity: .9; }
-  100% { transform: scaleY(1.62) scaleX(.88); opacity: 1; }
+/* 火：縱向抽長 + 橫向漂移。--drift 每層不同方向，讓火舌互相穿插，
+   配合亂流位移就會churn 出「亂燒」的感覺，而不是整片一起呼吸。 */
+@keyframes fire-roar {
+  0%   { transform: scaleY(.86) scaleX(1.06) translateX(calc(var(--drift) * -1)); }
+  35%  { transform: scaleY(1.22) scaleX(.94) translateX(calc(var(--drift) * .4)); }
+  70%  { transform: scaleY(1.02) scaleX(1.03) translateX(var(--drift)); }
+  100% { transform: scaleY(1.34) scaleX(.9) translateX(calc(var(--drift) * -.5)); }
+}
+/* 火星：被熱氣帶上去，越高越小越淡，橫向被氣流吹偏 */
+@keyframes ember-rise {
+  0%   { transform: translate(0, 0) scale(1); opacity: 0; }
+  12%  { opacity: .95; }
+  100% { transform: translate(26px, -300px) scale(.25); opacity: 0; }
+}
+/* 水：橫向捲動剛好一個波長，接回原位時無縫 */
+@keyframes wave-roll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(var(--len)); }
+}
+/* 雷擊瞬間的全屏爆光，讓閃電有「照亮整個盒面」的存在感 */
+@keyframes bolt-flash {
+  0%, 100% { opacity: 0; }
+  2%  { opacity: .3; }
+  5%  { opacity: .04; }
+  8%  { opacity: .22; }
+  13% { opacity: 0; }
 }
 /* 閃電是「大部分時間不在」，偶爾爆閃兩下 —— 持續發亮就變成裝飾線條 */
+/* 閃電只改透明度、不碰 transform —— 主幹的位置是靠路徑座標定的，
+   一旦動 transform 就會覆蓋掉，整條電光會飛到畫布原點。 */
 @keyframes bolt-strike {
-  0%, 100% { opacity: 0; transform: scale(1); }
-  2%   { opacity: 1; transform: scale(1.12); }
-  5%    { opacity: .15; transform: scale(1); }
-  8%   { opacity: 1; transform: scale(1.06); }
-  12%  { opacity: .3; }
-  16%  { opacity: 0; }
+  0%, 100% { opacity: 0; }
+  2%  { opacity: 1; }
+  5%  { opacity: .12; }
+  8%  { opacity: 1; }
+  12% { opacity: .35; }
+  16% { opacity: 0; }
 }
-@keyframes ripple-out {
-  0%   { transform: scale(.2); opacity: .95; }
-  100% { transform: scale(2.1); opacity: 0; }
-}
+/* 氣泡在水體內上升。行程收在 ~100px —— 水面現在約在 y=290，
+   升太高氣泡會飄出水面外，反而穿幫。 */
 @keyframes bubble-rise {
-  0%   { transform: translateY(0) translateX(0) scale(.6); opacity: 0; }
-  10%  { opacity: .95; }
-  50%  { transform: translateY(-165px) translateX(14px) scale(1.15); }
-  85%  { opacity: .7; }
-  100% { transform: translateY(-330px) translateX(-11px) scale(1.3); opacity: 0; }
+  0%   { transform: translateY(0) translateX(0) scale(.5); opacity: 0; }
+  15%  { opacity: .9; }
+  70%  { transform: translateY(-64px) translateX(9px) scale(1.1); opacity: .7; }
+  100% { transform: translateY(-104px) translateX(-6px) scale(1.25); opacity: 0; }
 }
 /* --rot 讓每片葉子有不同的初始角度，否則五片會同角度同步落下 */
 @keyframes leaf-fall {
@@ -692,9 +837,11 @@ const rays = computed(() =>
 @media (prefers-reduced-motion: reduce) {
   .box { transition: none; }
   .gloss { display: none; }
-  .flame { opacity: .8; }
-  .bolt { opacity: .5; }
-  .ripple { opacity: .25; }
+  .fireLayer { opacity: .7; }
+  .ember { opacity: .5; }
+  .wave { opacity: .55; }
+  .boltStrike { opacity: .6; }
+  .boltFlash { opacity: 0; }
   .bubble { opacity: .4; }
   .leaf, .shard { opacity: .45; }
   .spark { opacity: .6; }
