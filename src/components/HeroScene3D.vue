@@ -20,18 +20,18 @@ import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
  * 以下 12 組皆已實測回 200 且確實有圖。
  */
 const CLASSIC_ART = [
-  'https://assets.tcgdex.net/zh-tw/SV/SVF/001/low.webp',  // 光輝噴火龍
-  'https://assets.tcgdex.net/zh-tw/SV/SVC/001/low.webp',  // 皮卡丘
-  'https://assets.tcgdex.net/zh-tw/S/S8a/002/low.webp',   // 夢幻
-  'https://assets.tcgdex.net/zh-tw/SV/SVEM/001/low.webp', // 超夢
-  'https://assets.tcgdex.net/zh-tw/S/SCB/001/low.webp',   // 妙蛙花
-  'https://assets.tcgdex.net/zh-tw/SV/SV2a/009/low.webp', // 水箭龜
-  'https://assets.tcgdex.net/zh-tw/S/SDL/005/low.webp',   // 風速狗
-  'https://assets.tcgdex.net/zh-tw/S/S8a/004/low.webp',   // 鳳王
-  'https://assets.tcgdex.net/zh-tw/S/S8a/005/low.webp',   // 洛奇亞
-  'https://assets.tcgdex.net/zh-tw/S/SLL/004/low.webp',   // 路卡利歐
-  'https://assets.tcgdex.net/zh-tw/S/S6a/002/low.webp',   // 伊布
-  'https://assets.tcgdex.net/zh-tw/SV/SV3a/002/low.webp'  // 拉普拉斯
+  'https://assets.tcgdex.net/zh-tw/SV/SVF/001/high.webp',  // 光輝噴火龍
+  'https://assets.tcgdex.net/zh-tw/SV/SVC/001/high.webp',  // 皮卡丘
+  'https://assets.tcgdex.net/zh-tw/S/S8a/002/high.webp',   // 夢幻
+  'https://assets.tcgdex.net/zh-tw/SV/SVEM/001/high.webp', // 超夢
+  'https://assets.tcgdex.net/zh-tw/S/SCB/001/high.webp',   // 妙蛙花
+  'https://assets.tcgdex.net/zh-tw/SV/SV2a/009/high.webp', // 水箭龜
+  'https://assets.tcgdex.net/zh-tw/S/SDL/005/high.webp',   // 風速狗
+  'https://assets.tcgdex.net/zh-tw/S/S8a/004/high.webp',   // 鳳王
+  'https://assets.tcgdex.net/zh-tw/S/S8a/005/high.webp',   // 洛奇亞
+  'https://assets.tcgdex.net/zh-tw/S/SLL/004/high.webp',   // 路卡利歐
+  'https://assets.tcgdex.net/zh-tw/S/S6a/002/high.webp',   // 伊布
+  'https://assets.tcgdex.net/zh-tw/SV/SV3a/002/high.webp'  // 拉普拉斯
 ]
 
 const host = ref<HTMLDivElement | null>(null)
@@ -41,10 +41,44 @@ const failed = ref(false)
 // three 物件放 shallowRef —— 讓 Vue 不要遞迴代理整個場景圖（會嚴重拖慢）
 const ctx = shallowRef<{ dispose: () => void } | null>(null)
 
+/**
+ * 等瀏覽器閒置再啟動 3D。
+ *
+ * three.js 本身已經是動態 import（不進首屏 chunk），但元件一掛載就開始抓，
+ * 734 KB 的函式庫加上九張高解析卡圖約 1.4 MB 會直接跟頁面其餘資源搶頻寬。
+ * 排到 idle 之後，首屏內容先到位，banner 晚半秒出現無傷大雅。
+ * timeout 是保險：長時間沒有 idle 空檔也要啟動，不能讓 banner 永遠不出現。
+ */
+function whenIdle(): Promise<void> {
+  return new Promise(resolve => {
+    const ric = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void })
+      .requestIdleCallback
+    if (typeof ric === 'function') ric(() => resolve(), { timeout: 2500 })
+    else setTimeout(resolve, 800)
+  })
+}
+
+/** 弱裝置與省流量模式直接放棄 3D，退回靜態漸層 —— 硬跑只會卡頓又吃流量 */
+function tooWeakFor3D(): boolean {
+  const nav = navigator as Navigator & {
+    connection?: { saveData?: boolean }
+    deviceMemory?: number
+  }
+  if (nav.connection?.saveData) return true
+  if ((nav.deviceMemory ?? 8) <= 2) return true
+  if ((nav.hardwareConcurrency ?? 8) <= 2) return true
+  return false
+}
+
 onMounted(async () => {
   const el = host.value
   if (!el) return
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { failed.value = true; return }
+  if (tooWeakFor3D()) { failed.value = true; return }
+
+  await whenIdle()
+  // 等待期間元件可能已卸載
+  if (!host.value) return
 
   let THREE: typeof import('three')
   try { THREE = await import('three') } catch { failed.value = true; return }
@@ -56,8 +90,6 @@ onMounted(async () => {
 
   const root: HTMLDivElement = el
   const dpr = Math.min(window.devicePixelRatio, 2)
-  // 泛光很吃 fill rate，窄螢幕與低核心數裝置直接關掉
-  const rich = window.innerWidth >= 900 && (navigator.hardwareConcurrency ?? 4) >= 6
 
   renderer.setPixelRatio(dpr)
   // ACESFilmic 會把飽和色往白色帶（電影感但卡圖會變粉），Neutral 保留原始色相與
@@ -108,7 +140,6 @@ onMounted(async () => {
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
   }
 
-  // 比頁面 wash 色更飽和 —— 在環境反射與泛光之下，太淡的顏色會被洗成白色
   // 貼圖抓不到時（離線 / API 掛掉）就停在這個顏色，畫面仍然完整
   const palette = [0xff9d84, 0xa78bfa, 0x5fd8c4, 0xf58fd0, 0xffc76b, 0x7fb2f5]
   const disposables: { dispose(): void }[] = [geo]
@@ -154,9 +185,6 @@ onMounted(async () => {
             tex.colorSpace = THREE.SRGBColorSpace
             mat.map = tex
             mat.color.set(0xffffff)
-            // 原本為了「空白色塊」調校的高虹彩/高光澤/高反射，疊在真圖上會
-            // 把圖案整片洗成死白（清漆反射亮光 + 環境反射 + 虹彩色移三層疊加）。
-            // 貼圖後全部收斂，讓角色圖案讀得清楚，只留一點卡片該有的光澤。
             // 全霧面：不要任何高光，卡圖顏色完全不被反光干擾
             mat.roughness = 1
             mat.metalness = 0
@@ -241,7 +269,6 @@ onMounted(async () => {
     glows.push(mesh)
     disposables.push(tex, mat, pg)
   }
-  void rich
 
   // ---- 互動 ----
   const ptr = { x: 0, y: 0 }, tgt = { x: 0, y: 0 }
