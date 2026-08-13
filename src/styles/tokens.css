@@ -1,9 +1,94 @@
 /* ------------------------------------------------------------------
-   Design tokens — "Soft Vault"
-   參考 jeton.com 的視覺語言：柔和粉彩漸層底、超大細字、圓角膠囊、
-   鮮明的橘紅強調色。留白多、對比低、陰影柔。
+   Design tokens — "Vault Noir"（暗色高級感，目前預設）
+
+   骨架沿用 jeton.com 的語言：大圓角膠囊、超大細字、橘紅強調色。
+   只把明暗關係整個翻轉 —— 不動圓角、不動字體、不加霓虹描邊。
+
+   深色版的三個原則：
+    1. 底色帶一點暖紫（#0d0c0f 而非純黑）—— 純黑會讓暖橘強調色顯得髒
+    2. 層級靠「越上層越亮」堆疊，不靠邊線；邊線只做極淡的分隔
+    3. 陰影在深底上幾乎看不見，改用「頂部一道極淡內光」暗示凸起
+
+   淺色原版完整保留在下方 [data-theme="light"]，在 <html> 加上該屬性即可切回。
 ------------------------------------------------------------------- */
 :root {
+  /* surfaces —— 越上層越亮，不用邊線分層 */
+  --bg: #0d0c0f;
+  --surface: #17161a;
+  --surface-2: #1e1c22;
+  --surface-3: #272430;
+  --line: #302d38;
+  --line-soft: #222029;
+
+  /* text —— 暖白，純白在深底上會刺眼且與橘紅衝突 */
+  --ink: #f4f1ee;
+  --text: #f4f1ee;
+  --muted: #a49b96;
+  --faint: #6f6862;
+
+  /* brand —— 橘紅維持不變，這是品牌識別 */
+  --accent: #f73b20;
+  --accent-soft: #ff5236;
+  /* 深底上的 wash 不能是淡粉，要是「摻了橘的深色」 */
+  --accent-wash: #2c1512;
+
+  /* 漸層底（hero / 區塊底）—— 淺色版的粉彩對應到深色的濃郁版 */
+  --wash-peach: #2b1a17;
+  --wash-rose: #2a1620;
+  --wash-lilac: #1b1930;
+  --wash-mint: #10241f;
+  --wash-sand: #2a2116;
+
+  /* 全息箔光譜 —— 深底上不需要收斂，反而該更亮 */
+  --holo-a: #6ee4f5;
+  --holo-b: #ab8dff;
+  --holo-c: #ff9ede;
+  --holo: linear-gradient(115deg, var(--holo-a), var(--holo-b) 48%, var(--holo-c));
+
+  /* tiers —— 全數提亮，淺色版的深色調在暗底上會沉掉看不見 */
+  --tier-a: #f2b544;
+  --tier-b: #a98cff;
+  --tier-c: #4fc9ef;
+  --tier-d: #8f8880;
+  --tier-last: #ff5638;
+  --gold: #f0bb52;
+  /* 淺色版這個是「更深的金」當文字色；深底上必須反過來變更亮 */
+  --gold-deep: #ecc063;
+
+  /* state —— 同樣提亮以維持可讀性 */
+  --ok: #35c98a;
+  --warn: #f0a13a;
+  --danger: #ff5a4d;
+  /* 狀態色的「底」與「字」—— 元件過去直接寫死淺色 hex，換深色主題就變成
+     刺眼白塊或深字配深底。抽成權杖，兩套主題各自定義。 */
+  --ok-wash: #11251c;
+  --warn-wash: #2a2114;
+  --danger-wash: #2c1614;
+  --ok-ink: #4fd8a0;
+
+  /* type */
+  --font-body: "Inter", "Noto Sans TC", system-ui, sans-serif;
+  --font-display: "Inter", "Noto Sans TC", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* rhythm —— 與淺色版完全一致，這是刻意的：只換色不換骨架 */
+  --radius: 18px;
+  --radius-lg: 28px;
+  --radius-xl: 40px;
+  --pill: 999px;
+  --pad: 20px;
+  --maxw: 1180px;
+
+  /* 深底上的陰影要更深更散才看得出層次 */
+  --shadow-sm: 0 2px 10px rgba(0, 0, 0, .5);
+  --shadow: 0 10px 34px rgba(0, 0, 0, .58);
+  --shadow-lg: 0 28px 70px rgba(0, 0, 0, .66);
+}
+
+/* ------------------------------------------------------------------
+   淺色原版 "Soft Vault" —— 在 <html data-theme="light"> 時生效
+------------------------------------------------------------------- */
+:root[data-theme="light"] {
   /* surfaces —— 幾乎純白的暖底，區塊靠淡色與圓角區分而非邊線 */
   --bg: #fdfbfa;
   --surface: #ffffff;
@@ -49,6 +134,10 @@
   --ok: #23a06a;
   --warn: #d98324;
   --danger: #e0453a;
+  --ok-wash: #eaf7ee;
+  --warn-wash: #fdf4e3;
+  --danger-wash: #fdeceb;
+  --ok-ink: #1c7d68;
 
   /* type */
   --font-body: "Inter", "Noto Sans TC", system-ui, sans-serif;

@@ -51,7 +51,7 @@ const tierMeta: Record<Seller['tier'], { label: string }> = {
   color: var(--muted);
 }
 .tier.trusted { background: color-mix(in srgb, var(--gold) 22%, transparent); color: var(--gold-deep); }
-.tier.verified { background: var(--wash-mint); color: #1c7d68; }
+.tier.verified { background: var(--wash-mint); color: var(--ok-ink); }
 
 .md .avatar { width: 38px; height: 38px; font-size: 17px; }
 .md .name { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }

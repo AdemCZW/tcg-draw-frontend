@@ -261,9 +261,9 @@ input.missing { border-color: var(--danger); }
 
 .side { position: sticky; top: 76px; display: grid; gap: 14px; }
 .econ { padding: 16px; }
-.econ.ok { background: #eaf7ee; }
-.econ.thin { background: #fdf4e3; }
-.econ.loss, .econ.predatory { background: #fdeceb; }
+.econ.ok { background: var(--ok-wash); }
+.econ.thin { background: var(--warn-wash); }
+.econ.loss, .econ.predatory { background: var(--danger-wash); }
 .ratio { display: flex; align-items: baseline; gap: 8px; }
 .big-num { font-size: 34px; font-weight: 600; }
 .econ.ok .big-num { color: var(--ok); }

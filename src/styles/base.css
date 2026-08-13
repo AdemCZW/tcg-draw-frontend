@@ -84,13 +84,16 @@ input, select { font-family: inherit; }
   to   { background-position: 100% 100%; }
 }
 
-/* ---- 卡片：無邊線，靠柔和陰影與大圓角 ---- */
+/* ---- 卡片：靠大圓角與層次分區，不靠重邊線 ----
+   深色底上陰影幾乎看不出來（黑疊黑），所以額外加一道頂部內光模擬受光面，
+   這是深色介面表現「凸起」的主要手段。淺色主題不需要，故只在預設主題套用。 */
 .card {
   background: var(--surface);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, .04);
 }
+:root[data-theme="light"] .card { box-shadow: var(--shadow-sm); }
 
 /* ---- 按鈕：膠囊形，實心強調色 ---- */
 .btn {

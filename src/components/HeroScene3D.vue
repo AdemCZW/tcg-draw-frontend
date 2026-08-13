@@ -192,15 +192,15 @@ onMounted(async () => {
      decay=2 讓它們貼近卡面時強度暴增，每掃過一張就爆一次白斑、卡圖整片吃掉。
      染色效果改由後方的加法光暈面片負責，那個不會直接打在卡面上。
      卡面已改為全霧面，主光只負責塑形，強度不需要拉高。 */
-  const key = new THREE.DirectionalLight(0xffffff, 0.95)
+  const key = new THREE.DirectionalLight(0xffffff, 1.35)
   key.position.set(4, 6, 8)
   // 補一盞弱背光拉出卡片輪廓，避免只靠單一主光導致背面全黑
-  const rim = new THREE.DirectionalLight(0xffffff, 0.3)
+  const rim = new THREE.DirectionalLight(0xffffff, 0.32)
   rim.position.set(-5, -2, -6)
-  /* 沒有高光之後環境光可以放大：先前壓低是因為高光會疊白造成失彩，
-     純漫射下環境光只是等比放大貼圖顏色，不會讓卡圖褪色，
-     反而能讓背向鏡頭的卡片不至於整片沉入暗部。 */
-  scene.add(key, rim, new THREE.AmbientLight(0xffffff, 1.05))
+  /* 環境光在深色背景上要壓低：均勻打亮會讓卡片整片抬起亮度、與黑底之間
+     少了明暗落差，看起來像蒙了一層灰霧。主光拉高、環境光壓低，卡圖才會
+     從黑底上「跳」出來 —— 這是深色介面與淺色介面打光邏輯相反的地方。 */
+  scene.add(key, rim, new THREE.AmbientLight(0xffffff, 0.6))
 
   /* ---- 光暈：用場景內的加法混合面片，不用後製泛光 ----
      UnrealBloomPass 會把背景合成成不透明，在透明 canvas 上會露出一塊

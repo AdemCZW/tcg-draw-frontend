@@ -25,7 +25,7 @@ defineProps<{ pool: Pool }>()
 </template>
 
 <style scoped>
-.escrow { padding: 12px 14px; margin-top: 14px; background: #eef6f4; }
+.escrow { padding: 12px 14px; margin-top: 14px; background: var(--ok-wash); }
 .row { display: flex; gap: 10px; align-items: flex-start; }
 strong { font-size: 13.5px; }
 p { margin: 2px 0 0; font-size: 12px; line-height: 1.55; }
