@@ -6,6 +6,15 @@
 import PackArt from '@/components/PackArt.vue'
 import type { Tier } from '@/types/models'
 
+const effects = [
+  { k: 'fire'    as const, n: '火 · 竄動火苗',   m: 'gold'   as const, t: 'A' as Tier,    h: 'f3a91c04bb27de44' },
+  { k: 'water'   as const, n: '水 · 氣泡漣漪',   m: 'silver' as const, t: 'C' as Tier,    h: 'c0ffee9988776655' },
+  { k: 'leaf'    as const, n: '葉 · 飄落搖擺',   m: 'silver' as const, t: 'B' as Tier,    h: 'a1b2c3d4e5f60718' },
+  { k: 'bolt'    as const, n: '雷 · 間歇爆閃',   m: 'silver' as const, t: 'B' as Tier,    h: 'a0c7104ebeef55aa' },
+  { k: 'crystal' as const, n: '晶 · 浮沉轉動',   m: 'grey'   as const, t: 'D' as Tier,    h: 'c3f81a09bb27de44' },
+  { k: 'star'    as const, n: '星 · 散布閃爍',   m: 'gold'   as const, t: 'LAST' as Tier, h: 'a0c7104ebeef55aa' }
+]
+
 const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
   { tier: 'A', label: '朱紫 SAR 精選', serial: 'VD-0001/080', hash: 'f3a91c04bb27de44' },
   { tier: 'B', label: '經典促販卡', serial: 'VD-0014/040', hash: 'a1b2c3d4e5f60718' },
@@ -48,6 +57,18 @@ const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
     <p class="muted note">
       材質是獨立於賞別的一條等級軸。金屬感靠明暗交錯的多段漸層（lo→base→hi→rim），
       不是單色加白。特效預設跟著材質走，也可以用 <code>effect</code> 個別覆寫。
+    </p>
+
+    <h2>六種屬性特效</h2>
+    <div class="grid fx">
+      <figure v-for="e in effects" :key="e.k">
+        <PackArt :material="e.m" :effect="e.k" :tier="e.t" :label="e.n" :hash="e.h" />
+        <figcaption class="mono muted">{{ e.n }}</figcaption>
+      </figure>
+    </div>
+    <p class="muted note">
+      每種特效的粒子位置與延遲都刻意錯開 —— 同步跳動會讀成「圖案」而不是自然現象。
+      屬性符號環本身也各自脈動。全部走 CSS 動畫，沒有 JS 迴圈。
     </p>
 
     <h2>各賞別（材質自動對應）</h2>
@@ -93,6 +114,7 @@ h2 { font-size: 17px; margin: 34px 0 16px; font-weight: 600; }
 }
 .grid.pair { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); max-width: 620px; }
 .grid.pair.three { max-width: 760px; }
+.grid.fx { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
 figure { margin: 0; }
 figcaption { font-size: 11.5px; margin-top: 9px; }
 .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }

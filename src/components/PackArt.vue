@@ -35,8 +35,8 @@ const props = withDefaults(defineProps<{
   flat?: boolean
   /** 盒身材質。不給就依賞別自動選 */
   material?: 'grey' | 'silver' | 'gold'
-  /** 特效。不給就依材質自動選（金=火、銀=雷、灰=無） */
-  effect?: 'fire' | 'bolt' | 'none'
+  /** 特效。不給就依材質自動選（金=火、銀=雷、灰=晶） */
+  effect?: 'fire' | 'bolt' | 'water' | 'leaf' | 'crystal' | 'star' | 'none'
 }>(), {
   tier: 'D', label: '', serial: '', hash: '',
   opened: false, compact: false, flat: false,
@@ -61,8 +61,9 @@ const TIER_MATERIAL: Record<Tier, PackMaterial> = {
 }
 
 /** 特效預設：金配火、銀配雷、灰不動 */
-const MATERIAL_EFFECT: Record<PackMaterial, 'fire' | 'bolt' | 'none'> = {
-  gold: 'fire', silver: 'bolt', grey: 'none'
+export type PackEffect = 'fire' | 'bolt' | 'water' | 'leaf' | 'crystal' | 'star' | 'none'
+const MATERIAL_EFFECT: Record<PackMaterial, PackEffect> = {
+  gold: 'fire', silver: 'bolt', grey: 'crystal'
 }
 
 const mat = computed(() => MATERIALS[props.material ?? TIER_MATERIAL[props.tier]])
@@ -131,6 +132,41 @@ const BOLTS = [
   { x: 150, y: 96,  s: 0.8, d: '-3.3s' }
 ]
 const BOLT_D = 'M-7 -34 L9 -6 L1 -3 L11 30 L-9 -1 L-1 -4 Z'
+
+/* ---- 其餘四種屬性特效的粒子 ----
+   共通做法：外層 <g> 負責定位，內層元素跑 CSS 動畫。
+   位置與延遲刻意錯開，避免整組同步跳動而讀成「圖案」。 */
+
+/** 水：底部升起的氣泡 + 擴散漣漪 */
+const BUBBLES = [
+  { x: 62, r: 5, d: '0s' }, { x: 108, r: 3, d: '-2.1s' }, { x: 152, r: 6.5, d: '-1.1s' },
+  { x: 196, r: 3.5, d: '-3.2s' }, { x: 242, r: 4.5, d: '-1.7s' }, { x: 132, r: 2.5, d: '-2.7s' }
+]
+const RIPPLES = [{ d: '0s' }, { d: '-1.6s' }, { d: '-3.2s' }]
+
+/** 葉：飄落並左右搖擺 */
+const LEAVES = [
+  { x: 58, s: 1.1, rot: -20, d: '0s' }, { x: 118, s: .8, rot: 35, d: '-2.4s' },
+  { x: 176, s: 1.3, rot: -50, d: '-1.2s' }, { x: 232, s: .9, rot: 15, d: '-3.6s' },
+  { x: 148, s: .7, rot: 70, d: '-4.8s' }
+]
+const LEAF_D = 'M0 -11 C9 -6 9 6 0 11 C-9 6 -9 -6 0 -11 Z'
+
+/** 晶：緩慢浮沉並轉動的碎晶 */
+const SHARDS = [
+  { x: 66, y: 132, s: 1.2, d: '0s' }, { x: 236, y: 176, s: .9, d: '-2.2s' },
+  { x: 96, y: 300, s: .7, d: '-4.1s' }, { x: 214, y: 288, s: 1.05, d: '-1.3s' }
+]
+const SHARD_D = 'M0 -14 L9 -4 L5 13 L-5 13 L-9 -4 Z'
+
+/** 星：散布的閃爍星芒 */
+const SPARKS = [
+  { x: 54, y: 152, s: 1.1, d: '0s' }, { x: 246, y: 138, s: .8, d: '-.9s' },
+  { x: 88, y: 250, s: .6, d: '-1.8s' }, { x: 212, y: 262, s: 1, d: '-.4s' },
+  { x: 150, y: 138, s: .7, d: '-2.3s' }, { x: 40, y: 320, s: .9, d: '-1.4s' },
+  { x: 262, y: 330, s: .65, d: '-2.8s' }, { x: 150, y: 358, s: .8, d: '-.6s' }
+]
+const SPARK_D = 'M0 -13 Q1.8 -2 13 0 Q1.8 2 0 13 Q-1.8 2 -13 0 Q-1.8 -2 0 -13 Z'
 
 /** 封緘後方的放射光芒 */
 const rays = computed(() =>
@@ -289,12 +325,49 @@ const rays = computed(() =>
             </g>
           </g>
 
+          <!-- 水：漣漪 + 上升氣泡 -->
+          <g v-if="fx === 'water' && !opened" class="water">
+            <g v-for="(r, i) in RIPPLES" :key="'r' + i" transform="translate(150 386)">
+              <ellipse class="ripple" rx="52" ry="13" fill="none"
+                       :stroke="mat.hi" stroke-width="2" :style="{ animationDelay: r.d }" />
+            </g>
+            <g v-for="(b, i) in BUBBLES" :key="'b' + i" :transform="`translate(${b.x} 392)`">
+              <circle class="bubble" :r="b.r" fill="none" :stroke="mat.hi"
+                      stroke-width="1.6" :style="{ animationDelay: b.d }" />
+            </g>
+          </g>
+
+          <!-- 葉：飄落搖擺 -->
+          <g v-if="fx === 'leaf' && !opened" class="leaves">
+            <g v-for="(l, i) in LEAVES" :key="i" :transform="`translate(${l.x} 40) scale(${l.s})`">
+              <path class="leaf" :d="LEAF_D" :fill="mat.hi" opacity=".5"
+                    :style="{ animationDelay: l.d, '--rot': l.rot + 'deg' }" />
+            </g>
+          </g>
+
+          <!-- 晶：浮沉轉動的碎晶 -->
+          <g v-if="fx === 'crystal' && !opened" class="shards">
+            <g v-for="(c, i) in SHARDS" :key="i" :transform="`translate(${c.x} ${c.y}) scale(${c.s})`">
+              <path class="shard" :d="SHARD_D" :fill="mat.hi" opacity=".38"
+                    :style="{ animationDelay: c.d }" />
+              <path class="shard" :d="SHARD_D" fill="none" :stroke="mat.rim"
+                    stroke-width="1" opacity=".5" :style="{ animationDelay: c.d }" />
+            </g>
+          </g>
+
+          <!-- 星：散布閃爍 -->
+          <g v-if="fx === 'star' && !opened" class="sparks">
+            <g v-for="(p, i) in SPARKS" :key="i" :transform="`translate(${p.x} ${p.y}) scale(${p.s})`">
+              <path class="spark" :d="SPARK_D" :fill="mat.rim" :style="{ animationDelay: p.d }" />
+            </g>
+          </g>
+
           <!-- 屬性符號環 -->
           <g :fill="mat.hi" opacity=".42">
-            <path
-              v-for="(g, i) in glyphRing" :key="i"
-              :transform="`translate(${g.x.toFixed(1)} ${g.y.toFixed(1)})`" :d="g.d"
-            />
+            <g v-for="(g, i) in glyphRing" :key="i"
+               :transform="`translate(${g.x.toFixed(1)} ${g.y.toFixed(1)})`">
+              <path class="glyph" :d="g.d" :style="{ animationDelay: `${i * -0.45}s` }" />
+            </g>
           </g>
 
           <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-vig)`" />
@@ -508,9 +581,19 @@ const rays = computed(() =>
   transform-box: fill-box;
   transform-origin: 50% 100%;
 }
+.ripple, .bubble, .leaf, .shard, .spark, .glyph {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
 @media (prefers-reduced-motion: no-preference) {
-  .flame { animation: flame-lick 1.9s ease-in-out infinite alternate; }
-  .bolt { animation: bolt-strike 4.6s steps(1, end) infinite; }
+  .flame  { animation: flame-lick 1.9s ease-in-out infinite alternate; }
+  .bolt   { animation: bolt-strike 4.6s steps(1, end) infinite; }
+  .ripple { animation: ripple-out 4.8s ease-out infinite; }
+  .bubble { animation: bubble-rise 6.4s ease-in infinite; }
+  .leaf   { animation: leaf-fall 7.2s linear infinite; }
+  .shard  { animation: shard-float 6.8s ease-in-out infinite alternate; }
+  .spark  { animation: spark-twinkle 3.4s ease-in-out infinite; }
+  .glyph  { animation: glyph-pulse 3.6s ease-in-out infinite alternate; }
 }
 @keyframes flame-lick {
   0%   { transform: scaleY(.82) scaleX(1.05); opacity: .55; }
@@ -525,11 +608,48 @@ const rays = computed(() =>
   6%   { opacity: .85; }
   11%  { opacity: 0; }
 }
-/* 減少動態時特效靜止但保留，維持材質辨識度 */
+@keyframes ripple-out {
+  0%   { transform: scale(.25); opacity: .5; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+@keyframes bubble-rise {
+  0%   { transform: translateY(0) translateX(0); opacity: 0; }
+  12%  { opacity: .55; }
+  50%  { transform: translateY(-150px) translateX(7px); }
+  85%  { opacity: .35; }
+  100% { transform: translateY(-300px) translateX(-5px); opacity: 0; }
+}
+/* --rot 讓每片葉子有不同的初始角度，否則五片會同角度同步落下 */
+@keyframes leaf-fall {
+  0%   { transform: translateY(0) translateX(0) rotate(var(--rot, 0deg)); opacity: 0; }
+  10%  { opacity: .5; }
+  50%  { transform: translateY(180px) translateX(18px) rotate(calc(var(--rot, 0deg) + 180deg)); }
+  90%  { opacity: .4; }
+  100% { transform: translateY(350px) translateX(-10px) rotate(calc(var(--rot, 0deg) + 360deg)); opacity: 0; }
+}
+@keyframes shard-float {
+  0%   { transform: translateY(-8px) rotate(-14deg); opacity: .3; }
+  100% { transform: translateY(10px) rotate(16deg); opacity: .62; }
+}
+@keyframes spark-twinkle {
+  0%, 100% { transform: scale(.25); opacity: 0; }
+  45%      { transform: scale(1); opacity: .85; }
+  60%      { transform: scale(.8); opacity: .5; }
+}
+@keyframes glyph-pulse {
+  from { opacity: .55; transform: scale(.94); }
+  to   { opacity: 1;   transform: scale(1.06); }
+}
+
+/* 減少動態時特效靜止但保留，維持材質與屬性的辨識度 */
 @media (prefers-reduced-motion: reduce) {
   .box { transition: none; }
   .gloss { display: none; }
   .flame { opacity: .8; }
   .bolt { opacity: .5; }
+  .ripple { opacity: .25; }
+  .bubble { opacity: .4; }
+  .leaf, .shard { opacity: .45; }
+  .spark { opacity: .6; }
 }
 </style>
