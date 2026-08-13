@@ -13,11 +13,35 @@ const pools = usePoolStore()
 const result = pools.lastResult
 const revealed = ref(false)
 
+/* 開獎當下是使用者最會懷疑「這是不是喬過的」的時刻，
+   驗算入口放在這裡比藏在說明頁有意義得多。 */
+const pool = computed(() => (result ? pools.byId(result.poolId) : undefined))
+const shortHash = computed(() => {
+  const h = pool.value?.commitHash
+  return h ? `${h.slice(0, 12)}…${h.slice(-8)}` : ''
+})
+const copied = ref(false)
+async function copyHash() {
+  const h = pool.value?.commitHash
+  if (!h) return
+  try {
+    await navigator.clipboard.writeText(h)
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 1800)
+  } catch { /* 剪貼簿被拒也不影響驗算，使用者仍可從驗算頁複製 */ }
+}
+
 // 兩張並排往下排：舞台高度隨列數成長，讓每張卡維持可辨識的大小
 const rows = computed(() => Math.ceil((result?.items.length ?? 1) / 2))
 const stageHeight = computed(() => 300 + (rows.value - 1) * 250)
 
-onMounted(() => track('view_prize_result'))
+onMounted(() => {
+  track('view_prize_result')
+  /* 保險絲：明細清單原本只在 3D 演出發出 revealed 後才淡入，
+     但 WebGL 中途失敗、或分頁在背景導致 rAF 暫停時，那個事件永遠不會來，
+     使用者就再也看不到自己抽到什麼。時間到就強制顯示。 */
+  setTimeout(() => { revealed.value = true }, 4000)
+})
 </script>
 
 <template>
@@ -57,6 +81,30 @@ onMounted(() => track('view_prize_result'))
         </div>
       </li>
     </ul>
+
+    <!-- 公平性：不要求信任，直接給驗算材料 -->
+    <section v-if="pool" class="verify">
+      <p class="claim">這個結果<strong>不需要你信任我們</strong></p>
+      <p class="how">
+        籤序在開賣前就已洗好封存，當時公布的承諾雜湊如下。
+        完抽後我們公開種子，你可以自己重算一次，比對是否相符。
+      </p>
+      <dl class="facts">
+        <div>
+          <dt>承諾雜湊 SHA-256</dt>
+          <dd>
+            <button type="button" class="hash mono" @click="copyHash" :aria-label="copied ? '已複製' : '複製完整雜湊'">
+              {{ shortHash }}<span class="copy">{{ copied ? '已複製' : '複製' }}</span>
+            </button>
+          </dd>
+        </div>
+        <div>
+          <dt>隨機來源</dt>
+          <dd class="mono src">{{ pool.clientSeedSource }}</dd>
+        </div>
+      </dl>
+      <RouterLink :to="`/fairness/${result.poolId}`" class="btn verify-btn">自己驗算這一池 →</RouterLink>
+    </section>
 
     <div class="actions">
       <RouterLink to="/me/cards" class="btn primary">收進卡冊</RouterLink>
@@ -110,6 +158,50 @@ h1 { font-size: 26px; margin: 0; }
   padding: 2px 10px; border-radius: var(--pill);
   background: var(--accent-wash); color: var(--accent);
 }
+/* 公平性區塊 —— 刻意不做淡入、不依賴 3D 演出完成。
+   信任訊息如果會因為動畫沒跑完就消失，那它就不是可信的。 */
+.verify {
+  max-width: 620px; margin: 26px auto 0;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  text-align: left;
+}
+.claim { margin: 0; font-size: 15.5px; }
+.claim strong { color: var(--accent); }
+.how { margin: 7px 0 0; font-size: 13.5px; color: var(--muted); line-height: 1.62; }
+.facts {
+  display: grid; gap: 10px;
+  margin: 15px 0 0; padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+.facts div { display: grid; gap: 3px; }
+.facts dt { font-size: 11.5px; color: var(--faint); font-weight: 600; }
+.facts dd { margin: 0; min-width: 0; }
+.hash {
+  display: inline-flex; align-items: center; gap: 9px;
+  max-width: 100%;
+  padding: 5px 10px 5px 12px;
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 12.5px;
+  overflow: hidden;
+}
+.hash .copy {
+  flex: none;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
+  color: var(--accent);
+  padding-left: 9px;
+  border-left: 1px solid var(--line);
+}
+.hash:hover { border-color: var(--accent); }
+.hash:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.src { font-size: 12.5px; color: var(--muted); }
+.verify-btn { margin-top: 15px; width: 100%; }
+
 .actions { display: flex; gap: 12px; justify-content: center; margin-top: 30px; }
 
 @media (max-width: 720px) {
