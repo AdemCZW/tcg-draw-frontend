@@ -31,15 +31,15 @@ const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
     <h2>材質：灰 / 銀 / 金</h2>
     <div class="grid pair three">
       <figure>
-        <PackArt material="grey" tier="D" label="銅板入門賞" serial="VD-0062/080" hash="c3f81a09bb27de44" />
+        <PackArt material="grey" effect="none" tier="D" label="銅板入門賞" serial="VD-0062/080" hash="c3f81a09bb27de44" />
         <figcaption class="mono muted">灰</figcaption>
       </figure>
       <figure>
-        <PackArt material="silver" tier="B" label="經典促販卡" serial="VD-0014/040" hash="a1b2c3d4e5f60718" />
+        <PackArt material="silver" effect="none" tier="B" label="經典促販卡" serial="VD-0014/040" hash="a1b2c3d4e5f60718" />
         <figcaption class="mono muted">銀</figcaption>
       </figure>
       <figure>
-        <PackArt material="gold" tier="A" label="朱紫 SAR 精選" serial="VD-0001/080" hash="f3a91c04bb27de44" />
+        <PackArt material="gold" effect="none" tier="A" label="朱紫 SAR 精選" serial="VD-0001/080" hash="f3a91c04bb27de44" />
         <figcaption class="mono muted">金</figcaption>
       </figure>
     </div>

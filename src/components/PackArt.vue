@@ -79,13 +79,13 @@ export type PackEffect = 'fire' | 'bolt' | 'water' | 'leaf' | 'crystal' | 'star'
  * star 刻意做成紫white 而不是金色，否則會跟 bolt 的電黃撞在一起。
  */
 const ELEMENTS = {
-  fire:    { core: '#ffe0ac', mid: '#ff8a3d', deep: '#e0391a' },
-  water:   { core: '#d4f2ff', mid: '#43b4f7', deep: '#1668d4' },
-  leaf:    { core: '#e8ffd2', mid: '#63d84c', deep: '#1f9440' },
-  bolt:    { core: '#fffce0', mid: '#ffe14d', deep: '#f59e00' },
-  crystal: { core: '#e8faff', mid: '#6fd6ff', deep: '#3f7bff' },
-  star:    { core: '#ffffff', mid: '#f0a8ff', deep: '#a44cff' },
-  none:    { core: '#e9edf2', mid: '#aab3bd', deep: '#6b727c' }
+  fire:    { core: '#ffe0ac', mid: '#ff8a3d', deep: '#e0391a', bodyHi: '#3a1a12', bodyLo: '#160805' },
+  water:   { core: '#d4f2ff', mid: '#43b4f7', deep: '#1668d4', bodyHi: '#122b40', bodyLo: '#050e18' },
+  leaf:    { core: '#e8ffd2', mid: '#63d84c', deep: '#1f9440', bodyHi: '#182d14', bodyLo: '#070f06' },
+  bolt:    { core: '#fffce0', mid: '#ffe14d', deep: '#f59e00', bodyHi: '#332a10', bodyLo: '#120e04' },
+  crystal: { core: '#e8faff', mid: '#6fd6ff', deep: '#3f7bff', bodyHi: '#14283a', bodyLo: '#060f18' },
+  star:    { core: '#ffffff', mid: '#f0a8ff', deep: '#a44cff', bodyHi: '#251636', bodyLo: '#0d0616' },
+  none:    { core: '#e9edf2', mid: '#aab3bd', deep: '#6b727c', bodyHi: '#26272b', bodyLo: '#0e0f11' }
 } as const
 const MATERIAL_EFFECT: Record<PackMaterial, PackEffect> = {
   gold: 'fire', silver: 'bolt', grey: 'crystal'
@@ -202,7 +202,8 @@ const boxTransform = computed(() => {
   return `rotateX(${x}deg) rotateY(${y}deg)`
 })
 
-const CY = computed(() => (props.compact ? 214 : 200))
+// 500 單位高的新版面，封緘落在視覺中心略偏上
+const CY = computed(() => (props.compact ? 258 : 244))
 
 /**
  * 縮圖不掛亂流濾鏡。
@@ -300,17 +301,17 @@ function wavePath(baseY: number, amp: number, len: number): string {
     d += ` Q${(x + len * 0.25).toFixed(1)} ${(baseY - amp).toFixed(1)} ${(x + len * 0.5).toFixed(1)} ${baseY}`
     d += ` Q${(x + len * 0.75).toFixed(1)} ${(baseY + amp).toFixed(1)} ${(x + len).toFixed(1)} ${baseY}`
   }
-  return `${d} L${x1} 420 L${x0} 420 Z`
+  return `${d} L${x1} 520 L${x0} 520 Z`
 }
 
 const WAVES = [
-  { d: wavePath(286, 16, 150), len: 150, dur: '7s',   delay: '0s',    op: .34 },
-  { d: wavePath(312, 21, 110), len: 110, dur: '4.6s', delay: '-1.8s', op: .5 },
-  { d: wavePath(338, 13, 190), len: 190, dur: '9s',   delay: '-3.1s', op: .72 }
+  { d: wavePath(366, 16, 150), len: 150, dur: '7s',   delay: '0s',    op: .34 },
+  { d: wavePath(392, 21, 110), len: 110, dur: '4.6s', delay: '-1.8s', op: .5 },
+  { d: wavePath(418, 13, 190), len: 190, dur: '9s',   delay: '-3.1s', op: .72 }
 ]
 
 /** 浪尖的白沫線，跟著最前排的浪一起走 */
-const FOAM_D = wavePath(338, 13, 190)
+const FOAM_D = wavePath(418, 13, 190)
 
 /** 水中氣泡與飛濺 */
 const BUBBLES = [
@@ -373,7 +374,7 @@ const SHARDS = (() => {
     const depth = r()
     return {
       x: span(r, 24, 276),
-      y: span(r, 120, 330),
+      y: span(r, 150, 430),
       s: (0.5 + depth * 0.85),
       op: 0.35 + depth * 0.5,
       dur: `${span(r, 5.2, 2.8).toFixed(2)}s`,
@@ -392,7 +393,7 @@ const STAR_DUST = (() => {
   const r = mulberry32(57)
   return Array.from({ length: 34 }, () => ({
     x: span(r, 8, 292),
-    y: span(r, 110, 380),
+    y: span(r, 140, 470),
     rad: span(r, 0.5, 1.9),
     op: span(r, 0.25, 0.9),
     dur: `${span(r, 3.6, 1.4).toFixed(2)}s`,
@@ -401,11 +402,11 @@ const STAR_DUST = (() => {
 })()
 /** 十字星芒：只留 5 顆當視覺重點，太多會變雜訊 */
 const STAR_FLARES = [
-  { x: 62, y: 158, s: 1.15, d: '0s' },
-  { x: 238, y: 196, s: 0.85, d: '-1.3s' },
-  { x: 118, y: 300, s: 1, d: '-2.4s' },
-  { x: 206, y: 340, s: 0.7, d: '-0.8s' },
-  { x: 150, y: 132, s: 0.9, d: '-3.1s' }
+  { x: 62, y: 178, s: 1.15, d: '0s' },
+  { x: 238, y: 228, s: 0.85, d: '-1.3s' },
+  { x: 118, y: 372, s: 1, d: '-2.4s' },
+  { x: 206, y: 424, s: 0.7, d: '-0.8s' },
+  { x: 150, y: 148, s: 0.9, d: '-3.1s' }
 ]
 const SPARK_D = 'M0 -15 Q1.9 -2.2 15 0 Q1.9 2.2 0 15 Q-1.9 2.2 -15 0 Q-1.9 -2.2 0 -15 Z'
 /** 流星：斜劃過去，帶一條漸淡的尾巴 */
@@ -425,6 +426,7 @@ const rays = computed(() =>
     ref="stage"
     class="stage"
     :class="{ opened, tilting: !flat, active, paused: !visible }"
+    :style="{ '--pk-body-hi': elem.bodyHi, '--pk-body-lo': elem.bodyLo }"
     @pointermove="flat || onMove($event)"
     @pointerleave="flat || reset()"
   >
@@ -436,8 +438,8 @@ const rays = computed(() =>
             <!-- 盒身固定象牙色，不隨站台主題翻轉 —— 卡盒是獨立於頁面配色的
                  實體物件，深色頁面上要靠它自己跳出來，不是跟著背景變 -->
             <linearGradient :id="`${uid}-tab`" x1="0" y1="0" x2="0.2" y2="1">
-              <stop offset="0%" stop-color="#f6f1e6" />
-              <stop offset="100%" stop-color="#e6ddc8" />
+              <stop offset="0%" :stop-color="elem.bodyHi" />
+              <stop offset="100%" :stop-color="elem.bodyLo" />
             </linearGradient>
           </defs>
           <!-- 卡榫本體 + 歐洲孔（evenodd 打穿） -->
@@ -480,13 +482,15 @@ const rays = computed(() =>
 
       <!-- 正面 -->
       <div class="face front">
-        <svg viewBox="0 0 300 400" role="img"
+        <svg viewBox="0 0 300 500" role="img"
              :aria-label="label ? `${label} 卡盒` : '卡盒'">
           <defs>
+            <!-- 盒身用屬性色的「深色去飽和版」而不是飽和色 ——
+                 飽和的底色會把同色系的粒子整個吃掉，亮色粒子需要暗底才壓得出來。 -->
             <linearGradient :id="`${uid}-card`" x1="0" y1="0" x2="0.35" y2="1">
-              <stop offset="0%" stop-color="#f6f1e6" />
-              <stop offset="45%" stop-color="#ece4d2" />
-              <stop offset="100%" stop-color="#d8cdb2" />
+              <stop offset="0%" :stop-color="elem.bodyHi" />
+              <stop offset="52%" :stop-color="elem.bodyLo" />
+              <stop offset="100%" :stop-color="elem.bodyLo" />
             </linearGradient>
 
             <!-- 金屬感靠明暗交錯的多段漸層，不是單色加白 -->
@@ -550,16 +554,6 @@ const rays = computed(() =>
               <stop offset="100%" :stop-color="elem.deep" stop-opacity="0" />
             </linearGradient>
 
-            <!-- 火／水底下的暗場。
-                 象牙盒身讓橘色火焰的對比掉很多（深色盒身時橘色會自己跳出來）。
-                 真實的卡盒美術也是這樣處理 —— 火要有黑暗可以燒、深水本來就暗。
-                 這層同時解決對比問題，也讓效果讀起來是「盒面上印的場景」。 -->
-            <linearGradient :id="`${uid}-scrim`" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#0a0704" stop-opacity="0" />
-              <stop offset="45%" stop-color="#0a0704" stop-opacity=".55" />
-              <stop offset="100%" stop-color="#0a0704" stop-opacity=".92" />
-            </linearGradient>
-
             <!-- 水體：越深越暗，表面偏亮 -->
             <linearGradient :id="`${uid}-waterBody`" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" :stop-color="elem.core" stop-opacity=".9" />
@@ -599,7 +593,7 @@ const rays = computed(() =>
             </radialGradient>
           </defs>
 
-          <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-card)`" />
+          <rect x="0" y="0" width="300" height="500" :fill="`url(#${uid}-card)`" />
 
           <!-- 放射光芒：封緘後方的儀式感 -->
           <g :transform="`translate(150 ${CY})`" :fill="elem.mid">
@@ -614,8 +608,7 @@ const rays = computed(() =>
 
           <!-- 火：連續火牆 + 餘燼 -->
           <g v-if="fx === 'fire' && !opened" class="fire">
-            <rect x="0" y="150" width="300" height="250" :fill="`url(#${uid}-scrim)`" />
-            <ellipse cx="150" cy="404" rx="168" ry="104" :fill="`url(#${uid}-emberglow)`" />
+            <ellipse cx="150" cy="504" rx="168" ry="112" :fill="`url(#${uid}-emberglow)`" />
             <!-- 整組套亂流位移，邊緣才會被撕開而不是平滑的曲線 -->
             <g :filter="warpFilter('fire')">
               <path
@@ -628,7 +621,7 @@ const rays = computed(() =>
             <g class="embers">
               <circle
                 v-for="(e, i) in budget(EMBERS, 4)" :key="i"
-                class="ember" :cx="e.x" cy="400" :r="e.r"
+                class="ember" :cx="e.x" cy="500" :r="e.r"
                 :fill="elem.core" :style="{ animationDelay: e.d }"
               />
             </g>
@@ -636,7 +629,7 @@ const rays = computed(() =>
 
           <!-- 雷：分叉主幹 + 全屏爆光 -->
           <g v-if="fx === 'bolt' && !opened" class="bolts">
-            <rect class="boltFlash" x="0" y="0" width="300" height="400" :fill="elem.mid" />
+            <rect class="boltFlash" x="0" y="0" width="300" height="500" :fill="elem.mid" />
             <g class="boltStrike" fill="none" stroke-linecap="round" stroke-linejoin="round">
               <!-- 外層粗描邊做輝光，內層細白線做電芯 -->
               <path :d="BOLT_MAIN" :stroke="elem.mid" stroke-width="9" opacity=".45" />
@@ -650,7 +643,6 @@ const rays = computed(() =>
 
           <!-- 水：翻湧水體 + 白沫 + 氣泡 -->
           <g v-if="fx === 'water' && !opened" class="water">
-            <rect x="0" y="200" width="300" height="200" :fill="`url(#${uid}-scrim)`" />
             <g :filter="warpFilter('water')">
               <path
                 v-for="(w, i) in WAVES" :key="i"
@@ -662,7 +654,7 @@ const rays = computed(() =>
                     :stroke="elem.core" stroke-width="2.5" opacity=".75"
                     :style="{ animationDuration: '9s', animationDelay: '-3.1s', '--len': '-190px' }" />
             </g>
-            <g v-for="(b, i) in budget(BUBBLES, 4)" :key="'b' + i" :transform="`translate(${b.x} 396)`">
+            <g v-for="(b, i) in budget(BUBBLES, 4)" :key="'b' + i" :transform="`translate(${b.x} 496)`">
               <circle class="bubble" :r="b.r" :fill="elem.core" fill-opacity=".22"
                       :stroke="elem.core" stroke-width="1.5" :style="{ animationDelay: b.d }" />
             </g>
@@ -670,7 +662,6 @@ const rays = computed(() =>
 
           <!-- 葉：被風捲起的落葉，深度分層 -->
           <g v-if="fx === 'leaf' && !opened" class="leaves">
-            <rect x="0" y="190" width="300" height="210" :fill="`url(#${uid}-scrim)`" opacity=".7" />
             <g v-for="(l, i) in budget(LEAVES, 6)" :key="i"
                :transform="`translate(${l.x.toFixed(1)} -30) scale(${l.s.toFixed(2)})`">
               <!-- 外層 <g> 負責飄落路徑，內層負責翻面 —— 兩段動畫必須拆開，
@@ -688,15 +679,14 @@ const rays = computed(() =>
 
           <!-- 晶：地面晶簇 + 懸浮碎晶 -->
           <g v-if="fx === 'crystal' && !opened" class="crystals">
-            <rect x="0" y="170" width="300" height="230" :fill="`url(#${uid}-scrim)`" opacity=".8" />
             <!-- 地面長出的晶柱，每根拆亮暗兩面才有厚度 -->
             <g v-for="(c, i) in CRYSTAL_SPIKES" :key="'sp' + i" class="spike"
                :style="{ animationDelay: c.d }">
-              <path :d="`M${c.x} 400 L${c.x} ${400 - c.h} L${c.x + c.w / 2} ${400 - c.h * 0.72} L${c.x + c.w / 2} 400 Z`"
+              <path :d="`M${c.x} 500 L${c.x} ${500 - c.h} L${c.x + c.w / 2} ${500 - c.h * 0.72} L${c.x + c.w / 2} 500 Z`"
                     :fill="elem.mid" opacity=".55" />
-              <path :d="`M${c.x} 400 L${c.x} ${400 - c.h} L${c.x - c.w / 2} ${400 - c.h * 0.62} L${c.x - c.w / 2} 400 Z`"
+              <path :d="`M${c.x} 500 L${c.x} ${500 - c.h} L${c.x - c.w / 2} ${500 - c.h * 0.62} L${c.x - c.w / 2} 500 Z`"
                     :fill="elem.deep" opacity=".7" />
-              <path :d="`M${c.x} ${400 - c.h} L${c.x + c.w / 2} ${400 - c.h * 0.72}`"
+              <path :d="`M${c.x} ${500 - c.h} L${c.x + c.w / 2} ${500 - c.h * 0.72}`"
                     :stroke="elem.core" stroke-width="1.4" opacity=".9" fill="none" />
             </g>
             <!-- 懸浮碎晶 -->
@@ -711,7 +701,6 @@ const rays = computed(() =>
 
           <!-- 星：星塵 + 十字星芒 + 流星 -->
           <g v-if="fx === 'star' && !opened" class="starfield">
-            <rect x="0" y="120" width="300" height="280" :fill="`url(#${uid}-scrim)`" opacity=".85" />
             <circle
               v-for="(p, i) in budget(STAR_DUST, 14)" :key="'d' + i"
               class="starDust" :cx="p.x.toFixed(1)" :cy="p.y.toFixed(1)" :r="p.rad.toFixed(2)"
@@ -736,7 +725,7 @@ const rays = computed(() =>
             </g>
           </g>
 
-          <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-vig)`" />
+          <rect x="0" y="0" width="300" height="500" :fill="`url(#${uid}-vig)`" />
 
           <!-- 盒蓋接縫：暗帶（縫隙的環境遮蔽）+ 下緣受光的細亮線 -->
           <rect x="0" y="88" width="300" height="10" :fill="`url(#${uid}-aoUp)`" />
@@ -795,8 +784,8 @@ const rays = computed(() =>
           </g>
 
           <template v-if="!compact">
-            <text v-if="label" class="label" x="150" y="308" text-anchor="middle">{{ label }}</text>
-            <g transform="translate(0 330)">
+            <text v-if="label" class="label" x="150" y="392" text-anchor="middle">{{ label }}</text>
+            <g transform="translate(0 424)">
               <path d="M26 0 H182 L194 12 V34 H26 Z" fill="#0b0a0c" fill-opacity=".9" />
               <path d="M26 0 H182 L194 12 V34 H26 Z" fill="none" :stroke="foil" stroke-opacity=".45" />
               <text class="brand" x="40" y="23">VAULTDRAW</text>
@@ -809,16 +798,16 @@ const rays = computed(() =>
           </template>
 
           <!-- 盒底唇線：底蓋壓進去的那一道，同樣用暗帶而不是硬線 -->
-          <rect x="0" y="376" width="300" height="8" :fill="`url(#${uid}-aoUp)`" opacity=".8" />
-          <path d="M0 384 H300" stroke="#000" stroke-opacity=".34" stroke-width="1.4" />
-          <path d="M0 385.8 H300" stroke="#fff" stroke-opacity=".2" />
+          <rect x="0" y="474" width="300" height="8" :fill="`url(#${uid}-aoUp)`" opacity=".8" />
+          <path d="M0 482 H300" stroke="#000" stroke-opacity=".34" stroke-width="1.4" />
+          <path d="M0 483.8 H300" stroke="#fff" stroke-opacity=".2" />
 
-          <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-lit)`" />
+          <rect x="0" y="0" width="300" height="500" :fill="`url(#${uid}-lit)`" />
 
           <!-- 表面處理，順序有意義：先打光、再印刷網點、最後紙纖維。
                纖維要在最上層，因為它是「紙的表面」，不該被光罩住。 -->
-          <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-key)`" />
-          <rect v-if="heavyFx" x="0" y="0" width="300" height="400" :fill="`url(#${uid}-print)`" />
+          <rect x="0" y="0" width="300" height="500" :fill="`url(#${uid}-key)`" />
+          <rect v-if="heavyFx" x="0" y="0" width="300" height="500" :fill="`url(#${uid}-print)`" />
         </svg>
 
         <span
@@ -853,8 +842,15 @@ const rays = computed(() =>
 
 .box {
   position: absolute;
-  left: 5cqw; top: 19cqw;
-  width: 72cqw; height: 96cqw;
+  /*
+   * 窄而厚。先前 72cqw 寬、20cqw 厚（厚/寬 = 0.28）讀起來像面膜包 ——
+   * 寬又扁。改成 58 寬 / 30 厚（0.52）才有實體卡盒的份量。
+   * left 要把「正面 + 側面投影」一起算進去才置中：
+   * 側面在 rotateY(-17°) 下的投影約 30 × sin17° ≈ 8.8cqw，
+   * 所以視覺總寬約 66.8，left = (100 - 66.8) / 2 ≈ 17cqw。
+   */
+  left: 17cqw; top: 19cqw;
+  width: 58cqw; height: 96cqw;
   transform-style: preserve-3d;
   transition: transform .5s cubic-bezier(.2, .7, .3, 1);
 }
@@ -880,12 +876,12 @@ const rays = computed(() =>
   pointer-events: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
   background-size: 140px 140px;
-  opacity: .26;
+  opacity: .34;
   mix-blend-mode: overlay;
 }
 /* 側面與頂面受光較少，顆粒相對更明顯 —— 真實紙盒也是暗面看得到纖維 */
-.side::after { opacity: .34; }
-.top::after { opacity: .3; }
+.side::after { opacity: .4; }
+.top::after { opacity: .36; }
 
 /* 正面。稜線受光：右緣（朝向側面的摺角）打亮、左緣壓暗、上緣一道細光。
    實體紙盒的三個面就是靠這幾道稜線分開的，少了它們會糊成一片。
@@ -925,12 +921,15 @@ const rays = computed(() =>
 /* 右側面 */
 .side {
   left: 100%; top: 0;
-  width: 20cqw; height: 100%;
+  width: 30cqw; height: 100%;
   transform-origin: 0 50%;
   transform: rotateY(90deg);
   /* 側面是背光面，用同一組象牙色但整體壓暗，維持跟正面同一材質的錯覺。
      靠近摺角那側（左）留一點反光，遠離的一側收暗，讓側面自己也有弧度。 */
-  background: linear-gradient(90deg, #d6c8a6 0%, #c3b493 18%, #a9997a 100%);
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--pk-body-hi) 78%, #fff 22%) 0%,
+    var(--pk-body-hi) 20%,
+    var(--pk-body-lo) 100%);
   border-radius: 0 1.4cqw 1.4cqw 0;
   overflow: hidden;
   box-shadow:
@@ -966,17 +965,17 @@ const rays = computed(() =>
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 3cqw; font-weight: 700; letter-spacing: .3em;
-  /* 象牙盒身固定用暖灰字，不跟站台主題走 —— 主題字色在淺色側面上會消失 */
-  color: #7d7057;
+  /* 側面是深色，用偏亮的灰字 */
+  color: rgba(255, 255, 255, .42);
 }
 
 /* 頂面：由淺至深，呼應側面同一光源方向 */
 .top {
   left: 0; bottom: 100%;
-  width: 100%; height: 20cqw;
+  width: 100%; height: 30cqw;
   transform-origin: 50% 100%;
   transform: rotateX(90deg);
-  background: linear-gradient(180deg, #ac9d7c, #cabb98);
+  background: linear-gradient(180deg, var(--pk-body-lo), var(--pk-body-hi));
   border-radius: 1.2cqw 1.2cqw 0 0;
   overflow: hidden;
 }
@@ -1038,8 +1037,8 @@ const rays = computed(() =>
 .label {
   font-family: var(--font-body);
   font-size: 21px; font-weight: 600; letter-spacing: -.01em;
-  /* 卡身改象牙色後，原本假設深色卡身的白字會直接消失在背景裡 */
-  fill: #241d10;
+  /* 盒身回到深色，字也跟著翻回亮色 */
+  fill: #f4f1ec;
 }
 .brand {
   font-family: var(--font-mono);
