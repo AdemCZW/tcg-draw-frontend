@@ -51,7 +51,7 @@ h1 { font-size: 20px; margin: 0 0 18px; }
 .lbl { font-size: 13px; color: var(--muted); }
 textarea {
   width: 100%; resize: vertical;
-  background: #0d1420; color: var(--text);
+  background: var(--field); color: var(--text);
   border: 1px solid var(--line); border-radius: 8px;
   padding: 10px; font-size: 12.5px;
 }

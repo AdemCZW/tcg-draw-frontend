@@ -48,7 +48,7 @@ h1 { font-size: 22px; margin: 0 0 18px; }
 .btn.on { border-color: var(--gold); color: var(--gold); }
 .lbl { font-size: 13px; color: var(--muted); }
 input {
-  background: #0d1420; color: var(--text);
+  background: var(--field); color: var(--text);
   border: 1px solid var(--line); border-radius: 8px;
   padding: 11px 14px; font-size: 16px;
 }

@@ -66,6 +66,11 @@
   --danger-wash: #2c1614;
   --ok-ink: #4fd8a0;
 
+  /* 表單欄位：比 surface 更暗，讀起來像凹陷的輸入區。
+     這兩個頁面的 input 原本寫死 #0d1420（更早那版深色設計的殘留），
+     在淺色主題下其實一直是壞的 —— 乳白頁面上一塊深藍輸入框。 */
+  --field: #0f1115;
+
   /* type */
   --font-body: "Inter", "Noto Sans TC", system-ui, sans-serif;
   --font-display: "Inter", "Noto Sans TC", system-ui, sans-serif;
@@ -138,6 +143,7 @@
   --warn-wash: #fdf4e3;
   --danger-wash: #fdeceb;
   --ok-ink: #1c7d68;
+  --field: #f6f2f0;
 
   /* type */
   --font-body: "Inter", "Noto Sans TC", system-ui, sans-serif;

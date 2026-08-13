@@ -19,9 +19,43 @@ const host = ref<HTMLDivElement | null>(null)
 const fallback = ref(false)
 const ctx = shallowRef<{ dispose: () => void } | null>(null)
 
-const TIER_COLOR: Record<Tier, string> = {
-  A: '#e0961b', B: '#8b6ff0', C: '#3aa5c9', D: '#a49a92', LAST: '#f73b20', BUST: '#1a1614'
+/**
+ * canvas 沒辦法直接用 CSS 變數，但把顏色寫死就會在切換主題時整組失效
+ * （淺色卡面出現在深色介面上）。改成繪製當下即時讀取權杖值，
+ * 卡面就自動跟著主題走，也不必再維護第二組顏色常數。
+ */
+function token(name: string, fallback: string): string {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return v || fallback
 }
+
+const TIER_VAR: Record<Tier, [string, string]> = {
+  A: ['--tier-a', '#e0961b'],
+  B: ['--tier-b', '#8b6ff0'],
+  C: ['--tier-c', '#3aa5c9'],
+  D: ['--tier-d', '#a49a92'],
+  LAST: ['--tier-last', '#f73b20'],
+  BUST: ['--faint', '#8c94a1']
+}
+const tierColor = (t: Tier) => token(...TIER_VAR[t])
+
+/**
+ * 卡面底色要跟著主題明暗翻轉，否則深色介面上會出現一片刺眼白卡。
+ *
+ * 不去判斷 data-theme 或 prefers-color-scheme —— 那等於把主題規則抄第二份，
+ * 之後改 tokens.css 這裡就會不同步。直接量測 --surface 的亮度，
+ * 不論主題怎麼定義，結果永遠一致。
+ */
+function surfaceIsDark(): boolean {
+  const c = token('--surface', '#ffffff')
+  const m = c.match(/^#?([0-9a-f]{6})$/i)
+  if (!m) return false
+  const n = parseInt(m[1], 16)
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+  // 相對亮度（Rec. 709），0.5 以下視為深色
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5
+}
+
 const TIER_LABEL: Record<Tier, string> = {
   A: 'A 賞', B: 'B 賞', C: 'C 賞', D: 'D 賞', LAST: '最後賞', BUST: '爆賞'
 }
@@ -47,23 +81,26 @@ function faceCanvas(item: DrawResultItem, art?: HTMLImageElement) {
        改成：卡圖等比縮小置中，下方留一條純色資訊帶放賞別與籤號。 */
     const BAND = 132                      // 底部資訊帶高度
     const areaH = H - BAND
-    g.fillStyle = '#141210'
+    /* 襯底刻意固定深色、不跟隨主題：寶可夢卡圖本身多半是深色邊框，
+       淺色襯底會在卡緣切出一圈突兀的白邊。這是設計選擇不是漏掉的權杖。 */
+    const mat = '#141210'
+    g.fillStyle = mat
     g.fillRect(0, 0, W, H)
     const scale = Math.min(W / art.width, areaH / art.height)
     const dw = art.width * scale, dh = art.height * scale
     g.drawImage(art, (W - dw) / 2, (areaH - dh) / 2, dw, dh)
 
     // 資訊帶
-    g.fillStyle = '#141210'
+    g.fillStyle = mat
     g.fillRect(0, areaH, W, BAND)
 
     const label = TIER_LABEL[item.tier]
     g.font = '600 32px "Noto Sans TC", sans-serif'
     const tw = g.measureText(label).width
-    g.fillStyle = TIER_COLOR[item.tier]
+    g.fillStyle = tierColor(item.tier)
     const bw = tw + 40, bh = 52
     g.beginPath(); g.roundRect(40, areaH + 24, bw, bh, 26); g.fill()
-    g.fillStyle = item.tier === 'D' ? '#141210' : '#fff'
+    g.fillStyle = item.tier === 'D' ? mat : '#fff'
     g.textBaseline = 'middle'
     g.fillText(label, 40 + 20, areaH + 24 + bh / 2 + 1)
 
@@ -86,19 +123,26 @@ function faceCanvas(item: DrawResultItem, art?: HTMLImageElement) {
     return c
   } else {
     const h = hueOf(item.card.image)
-    g.fillStyle = `hsl(${h} 40% 93%)`
+    const dark = surfaceIsDark()
+    // 同一組色相，深色主題下把明度整組壓低、彩度略提，才不會變成灰霧
+    const base = dark ? `hsl(${h} 26% 13%)` : `hsl(${h} 40% 93%)`
+    const spot1 = dark ? `hsl(${h} 58% 26%)` : `hsl(${h} 82% 86%)`
+    const spot2 = dark ? `hsl(${(h + 55) % 360} 52% 24%)` : `hsl(${(h + 55) % 360} 72% 82%)`
+    const fade = dark ? 'rgba(0,0,0,0)' : 'rgba(255,255,255,0)'
+
+    g.fillStyle = base
     g.fillRect(0, 0, W, H)
     const g1 = g.createRadialGradient(W * 0.25, H * 0.1, 0, W * 0.25, H * 0.1, W * 1.05)
-    g1.addColorStop(0, `hsl(${h} 82% 86%)`)
-    g1.addColorStop(1, 'rgba(255,255,255,0)')
+    g1.addColorStop(0, spot1)
+    g1.addColorStop(1, fade)
     g.fillStyle = g1; g.fillRect(0, 0, W, H)
     const g2 = g.createRadialGradient(W * 0.85, H * 0.95, 0, W * 0.85, H * 0.95, W * 1.05)
-    g2.addColorStop(0, `hsl(${(h + 55) % 360} 72% 82%)`)
-    g2.addColorStop(1, 'rgba(255,255,255,0)')
+    g2.addColorStop(0, spot2)
+    g2.addColorStop(1, fade)
     g.fillStyle = g2; g.fillRect(0, 0, W, H)
 
     // 內框
-    g.strokeStyle = 'rgba(255,255,255,.8)'
+    g.strokeStyle = dark ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.8)'
     g.lineWidth = 6
     g.strokeRect(26, 26, W - 52, H - 52)
   }
@@ -107,16 +151,18 @@ function faceCanvas(item: DrawResultItem, art?: HTMLImageElement) {
   const label = TIER_LABEL[item.tier]
   g.font = '600 34px "Noto Sans TC", sans-serif'
   const tw = g.measureText(label).width
-  g.fillStyle = TIER_COLOR[item.tier]
+  g.fillStyle = tierColor(item.tier)
   const bx = 54, by = 56, bw = tw + 44, bh = 58
   g.beginPath(); g.roundRect(bx, by, bw, bh, 29); g.fill()
-  g.fillStyle = item.tier === 'D' ? '#1a1614' : '#fff'
+  const darkFace = surfaceIsDark()
+  const ink = darkFace ? '255,255,255' : '26,22,20'
+  g.fillStyle = item.tier === 'D' && !darkFace ? '#1a1614' : '#fff'
   g.textBaseline = 'middle'
   g.fillText(label, bx + 22, by + bh / 2 + 1)
 
   // 以下只走「無卡圖」的程序卡面（有圖的路徑已在上方 return）
   // 卡名（過長截斷）
-  g.fillStyle = 'rgba(26,22,20,.88)'
+  g.fillStyle = `rgba(${ink},.9)`
   g.font = '500 40px "Noto Sans TC", sans-serif'
   let name = item.card.name
   while (g.measureText(name).width > W - 108 && name.length > 2) name = name.slice(0, -1)
@@ -124,12 +170,12 @@ function faceCanvas(item: DrawResultItem, art?: HTMLImageElement) {
   g.fillText(name, 54, H - 116)
 
   // 籤號
-  g.fillStyle = 'rgba(26,22,20,.45)'
+  g.fillStyle = `rgba(${ink},.5)`
   g.font = '400 26px "IBM Plex Mono", monospace'
   g.fillText(item.bonus ? '加贈' : `籤 #${item.ticketSeq}`, 54, H - 66)
 
   // 浮水印
-  g.fillStyle = 'rgba(26,22,20,.22)'
+  g.fillStyle = `rgba(${ink},.24)`
   g.font = '600 24px sans-serif'
   g.fillText('VD', W - 84, H - 66)
 
@@ -141,13 +187,13 @@ function backCanvas() {
   const c = document.createElement('canvas')
   c.width = W; c.height = H
   const g = c.getContext('2d')!
-  g.fillStyle = '#f6f2f0'; g.fillRect(0, 0, W, H)
-  g.strokeStyle = 'rgba(26,22,20,.10)'
+  g.fillStyle = token('--surface-2', '#f6f2f0'); g.fillRect(0, 0, W, H)
+  g.strokeStyle = surfaceIsDark() ? 'rgba(255,255,255,.07)' : 'rgba(26,22,20,.10)'
   g.lineWidth = 3
   for (let i = -H; i < W; i += 26) {
     g.beginPath(); g.moveTo(i, 0); g.lineTo(i + H, H); g.stroke()
   }
-  g.fillStyle = 'rgba(247,59,32,.9)'
+  g.fillStyle = token('--accent', '#f73b20')
   g.font = '600 64px sans-serif'
   g.textAlign = 'center'; g.textBaseline = 'middle'
   g.fillText('VD', W / 2, H / 2)
