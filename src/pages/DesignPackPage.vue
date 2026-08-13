@@ -19,8 +19,10 @@ const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
   <div class="container page">
     <h1 class="display">卡包設計</h1>
     <p class="lede muted">
-      完全自製，不含任何廠商素材。走「封存的保管袋」而非糖果包裝 ——
-      撕口、防偽底紋、火漆封緘、序號，封條上直接印承諾雜湊。
+      完全自製，不含任何廠商素材。做成真實 booster pack 的樣子 ——
+      上下鋸齒熱封邊、中央鼓起的圓柱受光、鋁膜光澤與折痕，比例 1:1.8。
+      封條上直接印承諾雜湊，包裝與「開賣前就已封存」講同一件事。
+      滑鼠移上去有微幅傾斜與跟隨游標的反光。
     </p>
 
     <h2>各賞別</h2>
@@ -43,12 +45,13 @@ const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
       </figure>
     </div>
 
-    <h2>小尺寸（列表縮圖 88px）</h2>
+    <h2>小尺寸（列表縮圖 88px，關閉傾斜）</h2>
     <div class="row">
-      <PackArt v-for="t in tiers" :key="t.tier" :tier="t.tier" compact class="mini" />
+      <PackArt v-for="t in tiers" :key="t.tier" :tier="t.tier" compact flat class="mini" />
     </div>
     <p class="muted note">
-      縮到 88px 時序號與標題會糊，所以小尺寸只留封條與封緘 —— 賞別仍然一眼可辨。
+      縮到 88px 時序號與標題會糊，所以小尺寸只留封條與封緘，賞別字級放大。
+      列表裡通常會有幾十個，傾斜一併關掉（<code>flat</code>）避免整片一起晃。
     </p>
   </div>
 </template>
