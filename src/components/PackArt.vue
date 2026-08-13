@@ -1,19 +1,19 @@
 <script setup lang="ts">
 /**
- * 自製卡包視覺 —— 完全不使用任何廠商素材。
+ * 自製卡盒視覺 —— 完全不使用任何廠商素材。
  *
- * 精緻度的來源（拆解 gacha.game 的實體卡包版型後補上的）：
- *  1. 明亮的金屬熱封帶 —— 不是暗色，是會反光的鋁箔，帶橫向壓紋與兩端星芒
- *  2. 縱向皺褶高光    —— 鋁膜之所以讀起來像鋁膜，就是靠這幾道不規則的直向反光
- *  3. 中央發光體      —— 徽章後面襯一顆賞別色的光球，撐起構圖重心
- *  4. 設計過的品牌牌  —— 切角黑牌配反白序號塊，而不是一行裸字
- *  5. 圓柱受光        —— 裡面裝了卡會鼓起，左右壓暗給出體積
+ * 從「平面卡包」改成「立體卡盒」的理由：
+ *   平面袋只能用明暗『假裝』厚度，怎麼調都少一味。盒子有正面／側面／頂面
+ *   三個真實的面，用 CSS transform-style: preserve-3d 疊起來就是真的立體 ——
+ *   傾斜時側面與頂面會產生視差、面積真的改變，那是漸層模擬不出來的。
  *
- * 刻意沒有做 AI 繪製的星雲背景 —— 那是他們的視覺語言，不是 VaultDraw 的。
- * 這裡的豐富度全部由光學細節堆出來，主體維持「封存」的克制調性。
+ * 預設就帶一個靜止傾角（rotateX 8° / rotateY -18°），所以不用互動、
+ * 不用滑鼠，一眼就看得出是個盒子。游標移上去再疊加微幅傾斜。
  *
- * 微 3D：SVG 內的明暗給靜態體積，外層 perspective + rotate 隨游標傾斜。
- * 純 SVG，任何尺寸都不會糊。
+ * 品牌上維持「封存」：正面橫貼一條防拆封條，承諾雜湊直接印在上面 ——
+ * 撕開就破壞，跟「開賣前就已封存、事後可驗算」是同一個語意。
+ *
+ * 尺寸全部用 cqw（容器查詢單位），所以從 88px 縮圖到滿版都同一套幾何。
  */
 import { computed } from 'vue'
 import type { Tier } from '@/types/models'
@@ -24,9 +24,11 @@ const props = withDefaults(defineProps<{
   label?: string
   serial?: string
   hash?: string
+  /** 已開封：封條斷開、盒蓋掀起一角 */
   opened?: boolean
+  /** 縮圖模式：拿掉小字，只留封條與封緘 */
   compact?: boolean
-  /** 關掉游標傾斜（長列表裡不要整片一起晃） */
+  /** 關掉游標傾斜（長列表裡不要整片一起晃），靜止傾角仍保留 */
   flat?: boolean
 }>(), {
   tier: 'D', label: '', serial: '', hash: '',
@@ -42,231 +44,227 @@ const hashChip = computed(() => (props.hash ? props.hash.slice(0, 10).toUpperCas
 const tierLabel = computed(() =>
   props.tier === 'LAST' ? '最後賞' : props.tier === 'BUST' ? '爆賞' : `${props.tier} 賞`
 )
+const uid = computed(() => `bx${props.tier}${(props.serial || props.label || 'vd').replace(/\W/g, '')}`)
 
-const phase = computed(() => {
-  let h = 0
-  for (const ch of props.serial || props.label || 'VD') h = (h * 31 + ch.charCodeAt(0)) % 997
-  return h
-})
-const uid = computed(() => `pk${phase.value}${props.tier}`)
-
-// 9 度 —— 要的是「微」3D，角度大了會像在甩卡
+// 9 度 —— 疊在靜止傾角上，要的是「微」而不是甩
 const { el, rx, ry, gx, gy, active, onMove, reset } = useTilt(9)
 
-const W = 300, H = 540
-const X0 = 14, X1 = 286
-const TEETH = 26
-const TOOTH = (X1 - X0) / TEETH
+/** 靜止傾角：不互動也看得出立體 */
+const REST_X = 8, REST_Y = -18
 
-function zigzag(fromX: number, toX: number, valleyY: number, peakY: number) {
-  const step = TOOTH * (toX > fromX ? 1 : -1)
-  let d = ''
-  for (let i = 0; i < TEETH; i++) {
-    const x = fromX + step * i
-    d += ` L${(x + step / 2).toFixed(1)} ${peakY} L${(x + step).toFixed(1)} ${valleyY}`
-  }
-  return d
-}
-
-const outline = computed(() =>
-  `M${X0} 30` + zigzag(X0, X1, 30, 16) + ` L${X1} 510` + zigzag(X1, X0, 510, 524) + ' Z'
-)
-
-/**
- * 縱向皺褶。位置與寬度由 phase 決定 —— 每個包的皺法不同但可重現。
- * 寬度刻意不一致：等距等寬會讀成條紋圖案，而不是揉過的膜。
- */
-const wrinkles = computed(() => {
-  const seeded = (n: number) => ((phase.value * 7919 + n * 104729) % 1000) / 1000
-  // 只留 4 道。等距等寬會讀成「金色直條紋」而不是揉過的膜 ——
-  // 位置抖動要大於間距的一半，寬度差距要明顯，並各自輕微傾斜。
-  return [0, 1, 2, 3].map(i => {
-    const t = seeded(i)
-    const u = seeded(i + 11)
-    return {
-      x: 24 + i * 62 + (t - 0.5) * 54,
-      w: 4 + u * 16,
-      o: 0.04 + t * 0.07,
-      skew: (u - 0.5) * 5
-    }
-  })
+const boxTransform = computed(() => {
+  const x = REST_X + (props.flat ? 0 : rx.value)
+  const y = REST_Y + (props.flat ? 0 : ry.value)
+  return `rotateX(${x}deg) rotateY(${y}deg)`
 })
-
-/** 四角星芒：熱封帶兩端各一顆，是整個包反光最強的點 */
-const SPARK = 'M0 -7 Q1.2 -1.2 7 0 Q1.2 1.2 0 7 Q-1.2 1.2 -7 0 Q-1.2 -1.2 0 -7 Z'
-const BANDS = [16, 476]
 </script>
 
 <template>
   <div
-    class="pack3d"
+    class="stage"
     :class="{ opened, tilting: !flat, active }"
     @pointermove="flat || onMove($event)"
     @pointerleave="flat || reset()"
   >
-    <div
-      ref="el"
-      class="plane"
-      :style="flat ? undefined : { transform: `rotateX(${rx}deg) rotateY(${ry}deg)` }"
-    >
-      <svg class="pack" :viewBox="`0 0 ${W} ${H}`" role="img"
-           :aria-label="label ? `${label} 卡包` : '卡包'">
-        <defs>
-          <!-- 金屬壓紋：疊在賞別色上做出鋁箔的明暗條帶 -->
-          <linearGradient :id="`${uid}-metal`" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#000" stop-opacity=".45" />
-            <stop offset="14%" stop-color="#fff" stop-opacity=".75" />
-            <stop offset="30%" stop-color="#000" stop-opacity=".28" />
-            <stop offset="46%" stop-color="#fff" stop-opacity=".55" />
-            <stop offset="62%" stop-color="#000" stop-opacity=".3" />
-            <stop offset="78%" stop-color="#fff" stop-opacity=".42" />
-            <stop offset="100%" stop-color="#000" stop-opacity=".5" />
-          </linearGradient>
+    <div ref="el" class="box" :style="{ transform: boxTransform }">
+      <!-- 頂面（盒蓋上緣） -->
+      <div class="face top">
+        <span class="top-foil" :style="{ background: foil }"></span>
+      </div>
 
-          <linearGradient :id="`${uid}-seal`" x1="0" y1="0" x2="1" y2="0.35">
-            <stop offset="0%" :stop-color="foil" stop-opacity=".45" />
-            <stop offset="34%" :stop-color="foil" stop-opacity="1" />
-            <stop offset="52%" stop-color="#fff" stop-opacity=".95" />
-            <stop offset="68%" :stop-color="foil" stop-opacity="1" />
-            <stop offset="100%" :stop-color="foil" stop-opacity=".4" />
-          </linearGradient>
+      <!-- 右側面 -->
+      <div class="face side">
+        <span class="side-stripe" :style="{ background: foil }"></span>
+        <span class="side-text">VAULTDRAW</span>
+      </div>
 
-          <linearGradient :id="`${uid}-body`" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="var(--surface-3)" />
-            <stop offset="40%" stop-color="var(--surface)" />
-            <stop offset="100%" stop-color="var(--bg)" />
-          </linearGradient>
+      <!-- 正面 -->
+      <div class="face front">
+        <svg viewBox="0 0 300 400" role="img"
+             :aria-label="label ? `${label} 卡盒` : '卡盒'">
+          <defs>
+            <linearGradient :id="`${uid}-card`" x1="0" y1="0" x2="0.35" y2="1">
+              <stop offset="0%" stop-color="var(--surface-3)" />
+              <stop offset="45%" stop-color="var(--surface)" />
+              <stop offset="100%" stop-color="var(--bg)" />
+            </linearGradient>
 
-          <radialGradient :id="`${uid}-orb`">
-            <stop offset="0%" :stop-color="foil" stop-opacity=".5" />
-            <stop offset="38%" :stop-color="foil" stop-opacity=".2" />
-            <stop offset="72%" :stop-color="foil" stop-opacity=".05" />
-            <stop offset="100%" :stop-color="foil" stop-opacity="0" />
-          </radialGradient>
+            <!-- 防拆封條：賞別色箔面 -->
+            <linearGradient :id="`${uid}-seal`" x1="0" y1="0" x2="1" y2="0.4">
+              <stop offset="0%" :stop-color="foil" stop-opacity=".5" />
+              <stop offset="32%" :stop-color="foil" stop-opacity="1" />
+              <stop offset="50%" stop-color="#fff" stop-opacity=".95" />
+              <stop offset="68%" :stop-color="foil" stop-opacity="1" />
+              <stop offset="100%" :stop-color="foil" stop-opacity=".45" />
+            </linearGradient>
 
-          <!-- 單道皺褶的截面：偏一側亮、另一側收掉，像折起來的稜線 -->
-          <linearGradient :id="`${uid}-wr`" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stop-color="#fff" stop-opacity="0" />
-            <stop offset="45%" stop-color="#fff" stop-opacity="1" />
-            <stop offset="58%" stop-color="#fff" stop-opacity=".35" />
-            <stop offset="100%" stop-color="#fff" stop-opacity="0" />
-          </linearGradient>
+            <radialGradient :id="`${uid}-orb`">
+              <stop offset="0%" :stop-color="foil" stop-opacity=".46" />
+              <stop offset="42%" :stop-color="foil" stop-opacity=".16" />
+              <stop offset="100%" :stop-color="foil" stop-opacity="0" />
+            </radialGradient>
 
-          <linearGradient :id="`${uid}-round`" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stop-color="#000" stop-opacity=".5" />
-            <stop offset="10%" stop-color="#000" stop-opacity=".22" />
-            <stop offset="30%" stop-color="#fff" stop-opacity=".06" />
-            <stop offset="46%" stop-color="#fff" stop-opacity=".11" />
-            <stop offset="62%" stop-color="#fff" stop-opacity=".05" />
-            <stop offset="80%" stop-color="#000" stop-opacity=".2" />
-            <stop offset="100%" stop-color="#000" stop-opacity=".52" />
-          </linearGradient>
+            <!-- 正面受光：左上亮、右下沉，配合盒子的靜止傾角 -->
+            <linearGradient :id="`${uid}-lit`" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#fff" stop-opacity=".08" />
+              <stop offset="42%" stop-color="#fff" stop-opacity="0" />
+              <stop offset="100%" stop-color="#000" stop-opacity=".35" />
+            </linearGradient>
+          </defs>
 
-          <radialGradient :id="`${uid}-vig`" cx="0.5" cy="0.42" r="0.72">
-            <stop offset="55%" stop-color="#000" stop-opacity="0" />
-            <stop offset="100%" stop-color="#000" stop-opacity=".55" />
-          </radialGradient>
+          <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-card)`" />
+          <circle cx="150" :cy="compact ? 210 : 196" r="112" :fill="`url(#${uid}-orb)`" />
 
-          <clipPath :id="`${uid}-clip`"><path :d="outline" /></clipPath>
-        </defs>
+          <!-- 盒蓋接縫 -->
+          <path d="M0 96 H300" stroke="#000" stroke-opacity=".5" stroke-width="2" />
+          <path d="M0 98.5 H300" stroke="#fff" stroke-opacity=".08" stroke-width="1" />
 
-        <path :d="outline" :fill="`url(#${uid}-body)`" />
-
-        <g :clip-path="`url(#${uid}-clip)`">
-          <!-- 中央光球：構圖重心 -->
-          <circle cx="150" :cy="compact ? 300 : 286" r="130" :fill="`url(#${uid}-orb)`" />
-
-          <!-- 縱向皺褶高光 -->
-          <g class="wrinkles">
-            <rect
-              v-for="(w, i) in wrinkles" :key="i"
-              :x="w.x" y="-30" :width="w.w" height="600"
-              :fill="`url(#${uid}-wr)`" :opacity="w.o"
-              :transform="`skewX(${w.skew})`"
-            />
-          </g>
-
-          <rect x="0" y="0" :width="W" :height="H" :fill="`url(#${uid}-vig)`" />
-
-          <!-- 熱封帶：賞別色打底 + 金屬壓紋 + 兩端星芒 -->
-          <g v-for="y in BANDS" :key="y">
-            <rect :x="X0" :y="y" :width="X1 - X0" height="48" :fill="foil" opacity=".85" />
-            <rect :x="X0" :y="y" :width="X1 - X0" height="48" :fill="`url(#${uid}-metal)`" />
-            <g stroke="#000" stroke-opacity=".28" stroke-width="1">
-              <path v-for="n in 5" :key="n" :d="`M${X0} ${y + n * 8} H${X1}`" />
-            </g>
-            <g fill="#fff" fill-opacity=".85">
-              <path :transform="`translate(30 ${y + 24})`" :d="SPARK" />
-              <path :transform="`translate(270 ${y + 24})`" :d="SPARK" />
-            </g>
-          </g>
-
-          <!-- 封條 -->
-          <g :opacity="opened ? .4 : 1">
-            <rect :x="X0" y="104" :width="X1 - X0" height="46" :fill="`url(#${uid}-seal)`" />
-            <path :d="`M${X0} 104 H${X1}`" stroke="#fff" stroke-opacity=".5" stroke-width="1" />
-            <path :d="`M${X0} 150 H${X1}`" stroke="#000" stroke-opacity=".35" stroke-width="1" />
-            <text v-if="hashChip && !compact" class="seal-text" x="30" y="133">封存 {{ hashChip }}</text>
+          <!-- 防拆封條，橫跨接縫 -->
+          <g :opacity="opened ? .35 : 1">
+            <rect x="0" y="72" width="300" height="48" :fill="`url(#${uid}-seal)`" />
+            <path d="M0 72 H300" stroke="#fff" stroke-opacity=".5" />
+            <path d="M0 120 H300" stroke="#000" stroke-opacity=".35" />
+            <!-- 封條上的細鋸齒撕線 -->
+            <path d="M0 96 H300" stroke="#000" stroke-opacity=".28"
+                  stroke-width="1" stroke-dasharray="3 4" />
+            <text v-if="hashChip && !compact" class="seal-text" x="20" y="102">封存 {{ hashChip }}</text>
             <text
               class="seal-tier" :class="{ solo: compact }"
-              :x="compact ? 150 : 270" y="133"
+              :x="compact ? 150 : 280" y="102"
               :text-anchor="compact ? 'middle' : 'end'"
             >{{ tierLabel }}</text>
           </g>
 
           <!-- 火漆封緘 -->
-          <g :transform="`translate(150 ${compact ? 300 : 286})${compact ? ' scale(1.4)' : ''}`"
+          <g :transform="`translate(150 ${compact ? 210 : 196})${compact ? ' scale(1.35)' : ''}`"
              :opacity="opened ? .3 : 1">
-            <path d="M0 -52 L45 -26 L45 26 L0 52 L-45 26 L-45 -26 Z"
-                  fill="var(--bg)" fill-opacity=".55" :stroke="foil" stroke-width="2" />
-            <path d="M0 -38 L33 -19 L33 19 L0 38 L-33 19 L-33 -19 Z"
-                  fill="none" stroke="#fff" stroke-opacity=".16" stroke-width="1" />
-            <path d="M-15 -14 L0 19 L15 -14" fill="none" :stroke="foil"
-                  stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M0 -48 L42 -24 L42 24 L0 48 L-42 24 L-42 -24 Z"
+                  fill="var(--bg)" fill-opacity=".5" :stroke="foil" stroke-width="2" />
+            <path d="M0 -35 L30 -17.5 L30 17.5 L0 35 L-30 17.5 L-30 -17.5 Z"
+                  fill="none" stroke="#fff" stroke-opacity=".14" />
+            <path d="M-14 -13 L0 18 L14 -13" fill="none" :stroke="foil"
+                  stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
           </g>
 
           <template v-if="!compact">
-            <text v-if="label" class="label" x="150" y="398" text-anchor="middle">{{ label }}</text>
-
-            <!-- 品牌牌：右上切角黑牌 + 反白序號塊 -->
-            <g transform="translate(0 430)">
-              <path d="M40 0 H196 L208 12 V34 H40 Z" fill="#0b0a0c" fill-opacity=".92" />
-              <path d="M40 0 H196 L208 12 V34 H40 Z" fill="none" :stroke="foil"
-                    stroke-opacity=".45" stroke-width="1" />
-              <text class="brand" x="54" y="23">VAULTDRAW</text>
+            <text v-if="label" class="label" x="150" y="296" text-anchor="middle">{{ label }}</text>
+            <g transform="translate(0 322)">
+              <path d="M26 0 H182 L194 12 V34 H26 Z" fill="#0b0a0c" fill-opacity=".9" />
+              <path d="M26 0 H182 L194 12 V34 H26 Z" fill="none" :stroke="foil"
+                    stroke-opacity=".45" />
+              <text class="brand" x="40" y="23">VAULTDRAW</text>
               <template v-if="serial">
-                <rect x="212" y="0" width="64" height="34" :fill="foil" opacity=".9" />
-                <text class="serial" x="244" y="23" text-anchor="middle">{{ serial.slice(-7) }}</text>
+                <rect x="198" y="0" width="76" height="34" :fill="foil" opacity=".9" />
+                <text class="serial" x="236" y="23" text-anchor="middle">{{ serial.slice(-7) }}</text>
               </template>
             </g>
           </template>
 
-          <!-- 圓柱受光最後整片蓋上，印刷跟著袋身一起彎 -->
-          <rect x="0" y="0" :width="W" :height="H" :fill="`url(#${uid}-round)`" />
-        </g>
+          <!-- 受光疊在最上層 -->
+          <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-lit)`" />
+        </svg>
 
-        <!-- 外緣極細亮邊，把袋子從背景切出來 -->
-        <path :d="outline" fill="none" stroke="#fff" stroke-opacity=".1" stroke-width="1" />
-      </svg>
+        <span
+          v-if="!flat" class="gloss" aria-hidden="true"
+          :style="{ background: `radial-gradient(42% 32% at ${gx}% ${gy}%, rgba(255,255,255,.3), transparent 72%)` }"
+        ></span>
+      </div>
 
-      <span
-        v-if="!flat" class="gloss" aria-hidden="true"
-        :style="{ background: `radial-gradient(40% 30% at ${gx}% ${gy}%, rgba(255,255,255,.32), transparent 72%)` }"
-      ></span>
+      <!-- 地面投影：跟著盒子一起轉，維持接地感 -->
+      <div class="shadow"></div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.pack3d { perspective: 900px; }
-.plane {
+/* cqw 讓整個幾何跟著容器寬度縮放 —— 88px 縮圖與滿版共用同一套數字 */
+.stage {
+  container-type: inline-size;
   position: relative;
-  transform-style: preserve-3d;
-  transition: transform .45s cubic-bezier(.2, .7, .3, 1);
-  filter: drop-shadow(0 16px 26px rgba(0, 0, 0, .6));
+  width: 100%;
+  aspect-ratio: 1 / 1.24;
+  perspective: 90cqw;
+  perspective-origin: 50% 42%;
 }
-.tilting.active .plane { transition: transform .08s linear; }
-.pack { display: block; width: 100%; height: auto; }
+
+.box {
+  position: absolute;
+  /* 側面與頂面要佔空間，所以正面本身不能滿版 */
+  left: 6cqw; top: 9cqw;
+  width: 74cqw; height: 98cqw;
+  transform-style: preserve-3d;
+  transition: transform .5s cubic-bezier(.2, .7, .3, 1);
+}
+.tilting.active .box { transition: transform .08s linear; }
+
+.face { position: absolute; backface-visibility: hidden; }
+
+/* 正面 */
+.front {
+  inset: 0;
+  overflow: hidden;
+  border-radius: 1.2cqw;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .09);
+}
+.front svg { display: block; width: 100%; height: 100%; }
+
+/* 右側面：由正面右緣向後轉 90° */
+.side {
+  left: 100%; top: 0;
+  width: 17cqw; height: 100%;
+  transform-origin: 0 50%;
+  transform: rotateY(90deg);
+  background: linear-gradient(90deg, var(--surface-2), var(--bg) 70%);
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, .07);
+  border-radius: 0 1.2cqw 1.2cqw 0;
+  overflow: hidden;
+}
+/* 對齊正面封條（y 72→120 於 400 高 = 18%→30%）。
+   數字不一致的話，封條繞到側面就會錯開一截，立體感立刻破功。 */
+.side-stripe {
+  position: absolute; left: 0; right: 0; top: 18%;
+  height: 12%;
+  opacity: .9;
+}
+.side-text {
+  position: absolute; left: 50%; top: 58%;
+  transform: translate(-50%, -50%) rotate(90deg);
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 3.2cqw; font-weight: 700; letter-spacing: .28em;
+  color: var(--faint);
+}
+
+/* 頂面：由正面上緣向後轉 90° */
+.top {
+  left: 0; bottom: 100%;
+  width: 100%; height: 17cqw;
+  transform-origin: 50% 100%;
+  transform: rotateX(90deg);
+  background: linear-gradient(180deg, var(--bg), var(--surface-2));
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, .08);
+  border-radius: 1.2cqw 1.2cqw 0 0;
+  overflow: hidden;
+}
+.top-foil {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 34%;
+  opacity: .8;
+}
+/* 已開封：盒蓋掀起 */
+.opened .top { transform: rotateX(58deg); transform-origin: 50% 100%; }
+
+/* 投影躺在盒子底部，跟著 3D 一起轉 */
+.shadow {
+  position: absolute;
+  left: -6%; right: -14%; top: 100%;
+  height: 26cqw;
+  transform-origin: 50% 0;
+  transform: rotateX(90deg) translateZ(-8cqw);
+  background: radial-gradient(closest-side, rgba(0, 0, 0, .62), transparent 78%);
+  filter: blur(1.5cqw);
+  pointer-events: none;
+}
 
 .gloss {
   position: absolute; inset: 0;
@@ -276,44 +274,36 @@ const BANDS = [16, 476]
 }
 .tilting.active .gloss { opacity: 1; }
 
-/* 封條與序號塊都是亮色底，字必須用近黑 */
+/* 封條與序號塊都是亮色底，字必須近黑 */
 .seal-text, .seal-tier {
   font-family: var(--font-mono);
-  font-size: 15px; font-weight: 700; letter-spacing: .06em;
+  font-size: 16px; font-weight: 700; letter-spacing: .05em;
   fill: #14110e;
 }
-.seal-tier { font-size: 16px; letter-spacing: .02em; }
-.seal-tier.solo { font-size: 26px; letter-spacing: .04em; }
+.seal-tier { letter-spacing: .02em; }
+/* 縮圖時正面只算繪到約 62px 寬，而 viewBox 是 300 單位 —— 縮放比約 0.21。
+   28px 會變成螢幕上的 5.8px，根本讀不到；40px 才有約 8.8px，
+   剛好塞得進 10.5px 高的封條。 */
+.seal-tier.solo { font-size: 40px; }
 .serial {
   font-family: var(--font-mono);
-  font-size: 11.5px; font-weight: 700; letter-spacing: .02em;
+  font-size: 13px; font-weight: 700;
   fill: #14110e;
 }
-
-/* 袋面上的字固定用亮色 —— 袋身兩個主題下都是深的 */
+/* 盒面在兩個主題下都是深色，所以字固定用亮色 */
 .label {
   font-family: var(--font-body);
-  font-size: 20px; font-weight: 600; letter-spacing: -.01em;
+  font-size: 21px; font-weight: 600; letter-spacing: -.01em;
   fill: #fff;
 }
 .brand {
   font-family: var(--font-mono);
-  font-size: 12.5px; font-weight: 700; letter-spacing: .2em;
+  font-size: 13px; font-weight: 700; letter-spacing: .2em;
   fill: #efeae4;
 }
 
-/* 皺褶極緩慢橫向呼吸，只是讓膜面不死板 */
-@media (prefers-reduced-motion: no-preference) {
-  .wrinkles { animation: pack-breathe 9s ease-in-out infinite alternate; }
-}
-@keyframes pack-breathe {
-  from { transform: translateX(-5px); }
-  to   { transform: translateX(7px); }
-}
-.opened .wrinkles { animation: none; opacity: .45; }
-
 @media (prefers-reduced-motion: reduce) {
-  .plane { transition: none; transform: none !important; }
+  .box { transition: none; }
   .gloss { display: none; }
 }
 </style>

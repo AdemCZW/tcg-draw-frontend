@@ -19,10 +19,11 @@ const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
   <div class="container page">
     <h1 class="display">卡包設計</h1>
     <p class="lede muted">
-      完全自製，不含任何廠商素材。做成真實 booster pack 的樣子 ——
-      上下鋸齒熱封邊、中央鼓起的圓柱受光、鋁膜光澤與折痕，比例 1:1.8。
-      封條上直接印承諾雜湊，包裝與「開賣前就已封存」講同一件事。
-      滑鼠移上去有微幅傾斜與跟隨游標的反光。
+      完全自製，不含任何廠商素材。做成立體卡盒 —— 正面／側面／頂面是三個真實的面，
+      用 CSS <code>preserve-3d</code> 疊出來，傾斜時側面與頂面會產生視差，
+      不是用漸層假裝厚度。預設就帶靜止傾角，不用互動也看得出是盒子。
+      正面橫貼防拆封條，承諾雜湊直接印在上面 —— 撕開即破壞，
+      跟「開賣前就已封存、事後可驗算」是同一個語意。
     </p>
 
     <h2>各賞別</h2>
@@ -33,15 +34,15 @@ const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
       </figure>
     </div>
 
-    <h2>未開封 / 已開封</h2>
+    <h2>未開封 / 已開封（盒蓋掀起）</h2>
     <div class="grid pair">
       <figure>
         <PackArt tier="A" label="朱紫 SAR 精選" serial="VD-0001/080" hash="f3a91c04bb27de44" />
-        <figcaption class="mono muted">未開封 —— 封條完整、流光緩掃</figcaption>
+        <figcaption class="mono muted">未開封 —— 盒蓋閉合、封條完整</figcaption>
       </figure>
       <figure>
         <PackArt tier="A" label="朱紫 SAR 精選" serial="VD-0001/080" hash="f3a91c04bb27de44" opened />
-        <figcaption class="mono muted">已開封 —— 封條褪色、虛線斷開、流光停止</figcaption>
+        <figcaption class="mono muted">已開封 —— 盒蓋掀起 58°、封條與封緘褪色</figcaption>
       </figure>
     </div>
 
@@ -51,7 +52,9 @@ const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
     </div>
     <p class="muted note">
       縮到 88px 時序號與標題會糊，所以小尺寸只留封條與封緘，賞別字級放大。
-      列表裡通常會有幾十個，傾斜一併關掉（<code>flat</code>）避免整片一起晃。
+      列表裡通常會有幾十個，游標傾斜關掉（<code>flat</code>）避免整片一起晃，
+      但靜止傾角保留 —— 縮圖仍然是立體的。
+      幾何全部用 <code>cqw</code>，所以縮圖與滿版共用同一套數字。
     </p>
   </div>
 </template>
