@@ -49,9 +49,17 @@ const props = withDefaults(defineProps<{
  * 一組 lo/base/hi 三色，少了任何一段就會變成平塗的色塊。
  */
 const MATERIALS = {
-  grey:   { lo: '#2b2e34', base: '#6e757f', hi: '#c6ccd5', rim: '#d8dde3', ink: '#101216' },
-  silver: { lo: '#3b4148', base: '#939ba4', hi: '#f4f7fa', rim: '#ffffff', ink: '#14161a' },
-  gold:   { lo: '#4f3709', base: '#b9862a', hi: '#f9e6a8', rim: '#ffeab4', ink: '#201704' }
+  /*
+   * 灰是「霧面石墨」，不是「暗一點的銀」。
+   * 先前灰銀同色系、同一套金屬處理，只差亮度，所以怎麼看都像 ——
+   * 分級要靠材質本身的差異：霧面沒有鏡面反射，色階範圍窄；
+   * 金屬則是寬色階加上銳利的亮帶。matte 旗標會切換封條的漸層演算法。
+   *
+   * 灰的封條整條偏暗，所以 ink 反過來要用亮色，否則字讀不到。
+   */
+  grey:   { lo: '#43484f', base: '#5c626a', hi: '#727982', rim: '#727982', ink: '#eef0f3', matte: true },
+  silver: { lo: '#3b4148', base: '#939ba4', hi: '#f4f7fa', rim: '#ffffff', ink: '#14161a', matte: false },
+  gold:   { lo: '#4f3709', base: '#b9862a', hi: '#f9e6a8', rim: '#ffeab4', ink: '#201704', matte: false }
 } as const
 export type PackMaterial = keyof typeof MATERIALS
 
@@ -87,6 +95,27 @@ const mat = computed(() => MATERIALS[props.material ?? TIER_MATERIAL[props.tier]
 const matName = computed(() => props.material ?? TIER_MATERIAL[props.tier])
 const fx = computed(() => props.effect ?? MATERIAL_EFFECT[matName.value])
 const foil = computed(() => mat.value.base)
+
+/**
+ * 封條的色階。
+ *  金屬：明暗交錯的九段，模擬鋁箔被不同角度的光打到的亮帶。
+ *  霧面：三段極窄的落差，只有邊緣稍暗 —— 霧面材質沒有鏡面反射，
+ *        給它金屬亮帶就會又變回「亮一點的銀」。
+ */
+const sealStops = computed(() => {
+  const m = mat.value
+  if (m.matte) {
+    return [
+      { o: '0%', c: m.lo }, { o: '18%', c: m.base }, { o: '52%', c: m.hi },
+      { o: '84%', c: m.base }, { o: '100%', c: m.lo }
+    ]
+  }
+  return [
+    { o: '0%', c: m.lo }, { o: '10%', c: m.base }, { o: '24%', c: m.hi },
+    { o: '36%', c: m.base }, { o: '50%', c: m.rim }, { o: '62%', c: m.base },
+    { o: '78%', c: m.lo }, { o: '90%', c: m.hi }, { o: '100%', c: m.base }
+  ]
+})
 const elem = computed(() => ELEMENTS[fx.value])
 const hashChip = computed(() => (props.hash ? props.hash.slice(0, 10).toUpperCase() : ''))
 const tierLabel = computed(() =>
@@ -462,15 +491,7 @@ const rays = computed(() =>
 
             <!-- 金屬感靠明暗交錯的多段漸層，不是單色加白 -->
             <linearGradient :id="`${uid}-seal`" x1="0" y1="0" x2="1" y2="0.35">
-              <stop offset="0%" :stop-color="mat.lo" />
-              <stop offset="10%" :stop-color="mat.base" />
-              <stop offset="24%" :stop-color="mat.hi" />
-              <stop offset="36%" :stop-color="mat.base" />
-              <stop offset="50%" :stop-color="mat.rim" />
-              <stop offset="62%" :stop-color="mat.base" />
-              <stop offset="78%" :stop-color="mat.lo" />
-              <stop offset="90%" :stop-color="mat.hi" />
-              <stop offset="100%" :stop-color="mat.base" />
+              <stop v-for="(st, i) in sealStops" :key="i" :offset="st.o" :stop-color="st.c" />
             </linearGradient>
 
             <!-- 火焰漸層：底部亮心，往上收成材質色 -->
@@ -726,7 +747,8 @@ const rays = computed(() =>
           <!-- 防拆封條 -->
           <g :opacity="opened ? .35 : 1">
             <rect x="0" y="72" width="300" height="48" :fill="`url(#${uid}-seal)`" />
-            <path d="M0 72 H300" stroke="#fff" stroke-opacity=".5" />
+            <!-- 上緣高光是鏡面反射，霧面材質不該有；霧面只留極淡的一道邊 -->
+            <path d="M0 72 H300" stroke="#fff" :stroke-opacity="mat.matte ? .12 : .5" />
             <path d="M0 120 H300" stroke="#000" stroke-opacity=".35" />
             <path d="M0 96 H300" stroke="#000" stroke-opacity=".28" stroke-dasharray="3 4" />
             <text v-if="hashChip && !compact" class="seal-text" x="20" y="102"
