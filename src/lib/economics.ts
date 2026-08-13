@@ -74,14 +74,102 @@ function simulateStreak(prizes: PrizeSpec[], entry: number, bankAt: number, tria
   return revenue ? (paid / revenue) * 100 : 0
 }
 
+/**
+ * shitei（指定賞）模擬。
+ *
+ * 這個模式抽中指定賞就「加送最後賞並立刻結束整池」，後面的籤不再開出 ——
+ * 也就是說大部分獎品期望上根本不會發出去。用 flatRatio 直接除會嚴重高估支出：
+ * 實測 p4 會被算成 161%，但它真正的還元率在 84% 附近，護欄會誤擋合法的池。
+ *
+ * 指定賞平均落在第 (n+1)/2 支，所以期望上只有一半的池會被開完。
+ * 收入只算「實際賣出的籤」，支出只算「結束前已開出的獎品 + 最後賞」。
+ */
+function simulateShitei(prizes: PrizeSpec[], price: number, target: Tier, trials: number) {
+  // 最後賞是額外贈獎、不佔籤位，抽中指定賞時一併送出
+  const lastPrize = prizes.filter(p => p.tier === 'LAST')
+  const lastValue = lastPrize.reduce((s, p) => s + p.qty * p.unitValue, 0)
+
+  const bag: { tier: Tier; v: number }[] = []
+  for (const p of prizes) {
+    if (p.tier === 'LAST') continue
+    for (let i = 0; i < p.qty; i++) bag.push({ tier: p.tier, v: p.unitValue })
+  }
+  if (!bag.length) return { ratio: 0, soldSeats: 0 }
+
+  let revenue = 0
+  let paid = 0
+  let soldSeats = 0
+
+  for (let t = 0; t < trials; t++) {
+    const b = bag.slice()
+    for (let i = b.length - 1; i > 0; i--) {
+      const j = (Math.random() * (i + 1)) | 0
+      ;[b[i], b[j]] = [b[j], b[i]]
+    }
+    for (let i = 0; i < b.length; i++) {
+      revenue += price
+      soldSeats++
+      paid += b[i].v
+      if (b[i].tier === target) { paid += lastValue; break }  // 觸發：送最後賞並結束
+    }
+  }
+  return { ratio: revenue ? (paid / revenue) * 100 : 0, soldSeats: soldSeats / trials }
+}
+
+export interface EconomicsOptions {
+  trials?: number
+  /** shitei：哪一個賞別觸發結束 */
+  shiteiTier?: Tier
+  /** auction：末尾幾席改為競標 */
+  auctionSeats?: number
+}
+
 export function computeEconomics(
   mode: PoolMode,
   prizes: PrizeSpec[],
   price: number,
-  trials = 4000
+  opts: EconomicsOptions = {}
 ): PoolEconomics {
+  const { trials = 4000, shiteiTier = 'A', auctionSeats = 0 } = opts
   const seatCount = prizes.reduce((s, p) => s + p.qty, 0)
   const flat = flatRatio(prizes, seatCount, price)
+
+  /* auction：末尾席位不是用票價賣的，是喊標的。把它們一起丟進 flatRatio
+     會用「票價 × 全部席次」當分母、卻用「含頭獎的全部獎品」當分子，
+     算出來的數字毫無意義（實測會是 777%），合法的池會被護欄擋掉。
+     競標席的成交價會趨近該獎品的市值，也就是那幾席大致是 100% 還元、
+     對莊家損益中性。所以只評估「固定價格那一段」是否健康。 */
+  if (mode === 'auction' && auctionSeats > 0) {
+    const sorted = [...prizes].sort((a, b) => b.unitValue - a.unitValue)
+    let toDrop = auctionSeats
+    const fixed: PrizeSpec[] = []
+    for (const p of sorted) {
+      if (toDrop <= 0) { fixed.push(p); continue }
+      const take = Math.min(toDrop, p.qty)
+      toDrop -= take
+      if (p.qty - take > 0) fixed.push({ ...p, qty: p.qty - take })
+    }
+    const fixedSeats = fixed.reduce((s, p) => s + p.qty, 0)
+    const f = flatRatio(fixed, fixedSeats, price)
+    const v = verdictOf(f.ratio)
+    return {
+      ...f,
+      seatCount,
+      verdict: v.verdict,
+      message: `${v.message}（不含 ${auctionSeats} 席競標 —— 成交價由喊標決定，視為損益中性）`
+    }
+  }
+
+  if (mode === 'shitei') {
+    const sim = simulateShitei(prizes, price, shiteiTier, trials)
+    return {
+      ...flat,
+      seatCount,
+      ratio: sim.ratio,
+      revenue: Math.round(sim.soldSeats * price),
+      ...verdictOf(sim.ratio)
+    }
+  }
 
   if (mode !== 'streak') {
     return { ...flat, seatCount, ...verdictOf(flat.ratio) }

@@ -33,7 +33,16 @@ const cards: CardItem[] = [
   { id: 'c25', name: '卡比獸 促販卡', setCode: 'promo', cardNo: '143/S-P', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(205), refPrice: 95 },
   { id: 'c26', name: '波克比 AR', setCode: 'sv3a', cardNo: '196/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(40), refPrice: 220 },
   { id: 'c27', name: '迷唇姐 促販卡', setCode: 'promo', cardNo: '122/S-P', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(330), refPrice: 65 },
-  { id: 'c28', name: '鯉魚王 AR', setCode: 'sv1a', cardNo: '128/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(215), refPrice: 40 }
+  { id: 'c28', name: '鯉魚王 AR', setCode: 'sv1a', cardNo: '128/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(215), refPrice: 40 },
+
+  /* 低價入門池專用的普卡（c29–c31）。
+     一定要有這個價位帶：在「每支籤都保底給卡」的前提下，票價的下限被最便宜的
+     卡值綁死 —— 原本最低只有 40 元的鯉魚王，35 元的池還元率會直接超過 130%
+     必然賠本。有 16–18 元的普卡，低價漏斗才算得出來。
+     三張皆已確認 TCGdex 繁中庫有圖。 */
+  { id: 'c29', name: '綠毛蟲 普卡', setCode: 'sv9', cardNo: '001/098', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(110), refPrice: 17 },
+  { id: 'c30', name: '波波 普卡', setCode: 'sv2a', cardNo: '016/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(35), refPrice: 18 },
+  { id: 'c31', name: '小拉達 普卡', setCode: 'sv2a', cardNo: '019/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(275), refPrice: 16 }
 ]
 
 // 產生已抽籤位（mock 用固定步長跳位，讓籤牆看起來自然散落）
@@ -49,9 +58,17 @@ function seatsOf(total: number, taken: number, step = 7): number[] {
 }
 
 /**
- * 還元率設計（獎池總值 ÷ 票收）：
- *  p1 classic  84.3%   p2 battle 84.6%   p3 muteki 89%（已完抽）
- *  p4 shitei   83.9%   p5 niboichi 99%（行銷池，貼近 DOPA ニブイチ）
+ * 還元率設計，全部以 computeEconomics() 實際跑過驗證（不是手算）：
+ *
+ *  p1 classic  87.6%    p2 battle   87.5%    p3 muteki 72.6%（已完抽）
+ *  p4 shitei   83.8%    p5 niboichi 90.4%    p6 streak 84.4%（最佳策略 86.2%）
+ *  p7 auction  85.0%    p8 classic  84.6%（低價入門池）
+ *
+ * 三個模式不能用「獎池總值 ÷ 票收」直接算，各有專屬模型：
+ *  - streak  玩家爆掉時獎品不發出，蒙地卡羅模擬各種收手策略
+ *  - shitei  抽中指定賞就結束整池，期望只賣出約一半的籤
+ *  - auction 末尾席位由喊標決定成交價，只評估固定價格那一段
+ *
  * 各池 prizes 加總 = totalTickets；classic/shitei 的 LAST 為額外贈獎不佔籤位。
  */
 export const sellers: Seller[] = [
@@ -174,7 +191,13 @@ export const pools: Pool[] = [
     cover: ph(48),
     mode: 'shitei',
     shiteiTier: 'A',
-    ticketPrice: 280,
+    /* 指定賞的經濟結構跟定量池完全不同，先前這池的數字是錯的：
+       D 賞放了 420 與 380 元的卡，票價卻只有 280 —— 每抽必賠，跟提前結束無關。
+       而且抽中 A 賞就結束整池，期望上只賣出約一半的籤（(n+1)/2 ≈ 25.5 支），
+       但 A 賞與最後賞一定會發出去，等於用半池的收入扛全額的頭獎。
+       重算後：票價 320、A 賞 5,200、最後賞改為 220（原本 3,600 扛不住），
+       D 賞平均 55 元，還元率約 83%。 */
+    ticketPrice: 320,
     totalTickets: 50,
     remainingTickets: 41,
     takenSeats: seatsOf(50, 9, 5),
@@ -182,13 +205,13 @@ export const pools: Pool[] = [
     commitHash: 'c0ffee9988776655443322110000ffeeddccbbaa99887766554433221100aabb',
     clientSeedSource: 'BTC block #920302 hash',
     openedAt: '2026-08-10T12:00:00+08:00',
-    escrow: escrowOf(9, 280),
+    escrow: escrowOf(9, 320),
     prizes: [
       { id: 'pr13', tier: 'A', card: cards[1], total: 1, remaining: 1 },
-      { id: 'pr14a', tier: 'D', card: cards[8], total: 17, remaining: 14 },
-      { id: 'pr14b', tier: 'D', card: cards[10], total: 16, remaining: 13 },
-      { id: 'pr14c', tier: 'D', card: cards[11], total: 16, remaining: 13 },
-      { id: 'pr15', tier: 'LAST', card: cards[2], total: 1, remaining: 1 }
+      { id: 'pr14a', tier: 'D', card: cards[8], total: 20, remaining: 17 },
+      { id: 'pr14b', tier: 'D', card: cards[27], total: 15, remaining: 12 },
+      { id: 'pr14c', tier: 'D', card: cards[26], total: 14, remaining: 11 },
+      { id: 'pr15', tier: 'LAST', card: cards[25], total: 1, remaining: 1 }
     ]
   },
   {
@@ -245,7 +268,11 @@ export const pools: Pool[] = [
     ]
   },
   {
-    // 77 支正常販售 + 最後 3 支競標。還元率約 90%（競標段以均價 1,500 估算）
+    /* 77 支正常販售 + 最後 3 支競標。
+       原本這池的 D 賞被錯放成 暴鯉龍 SAR（7,600）×20 與 傑尼龜 AR（420）×25，
+       獎品總值 186,550 對上固定席票收 23,100 —— 卡片索引寫錯造成的資料錯誤。
+       重組後：三個大獎（莉莉艾 9,800 / 快龍 6,800 / 夢幻 3,600）留給競標席，
+       固定 77 席獎品總值 19,640，還元率 85.0%。 */
     sellerId: 's1',
     id: 'p7',
     title: '噴火龍 尾籤競標',
@@ -262,14 +289,47 @@ export const pools: Pool[] = [
     openedAt: '2026-08-09T12:00:00+08:00',
     escrow: escrowOf(77, 300),
     prizes: [
+      // 三個大獎留在最後 3 席競標，因此仍是 remaining: 1
       { id: 'pr23', tier: 'A', card: cards[3], total: 1, remaining: 1 },
-      { id: 'pr24a', tier: 'B', card: cards[2], total: 1, remaining: 1 },
-      { id: 'pr24b', tier: 'B', card: cards[14], total: 1, remaining: 0 },
-      { id: 'pr25a', tier: 'C', card: cards[6], total: 4, remaining: 1 },
-      { id: 'pr25b', tier: 'C', card: cards[13], total: 3, remaining: 0 },
-      { id: 'pr26a', tier: 'D', card: cards[8], total: 25, remaining: 0 },
-      { id: 'pr26b', tier: 'D', card: cards[10], total: 25, remaining: 0 },
-      { id: 'pr26c', tier: 'D', card: cards[21], total: 20, remaining: 0 }
+      { id: 'pr24a', tier: 'B', card: cards[14], total: 1, remaining: 1 },
+      { id: 'pr24b', tier: 'B', card: cards[2], total: 1, remaining: 1 },
+      // 固定價格的 77 席已全數售出
+      { id: 'pr25a', tier: 'C', card: cards[6], total: 3, remaining: 0 },
+      { id: 'pr25b', tier: 'C', card: cards[10], total: 4, remaining: 0 },
+      { id: 'pr25c', tier: 'C', card: cards[5], total: 5, remaining: 0 },
+      { id: 'pr26a', tier: 'D', card: cards[15], total: 15, remaining: 0 },
+      { id: 'pr26b', tier: 'D', card: cards[18], total: 20, remaining: 0 },
+      { id: 'pr26c', tier: 'D', card: cards[25], total: 15, remaining: 0 },
+      { id: 'pr26d', tier: 'D', card: cards[8], total: 15, remaining: 0 }
+    ]
+  },
+  {
+    /* 低價入門池 —— 漏斗上緣。
+       競品最低入手價：cc1kuji NT$25、gacha.game US$0.5，本站原本最低 NT$120，
+       等於沒有給新使用者一個「先試一次」的價位。
+       80 席 × 35 元 = 2,800 收入；獎品總值 2,370；還元率 84.6%（已試算驗證）。
+       每支籤都保底給卡，最低的普卡值 16 元，仍佔票價的 46%。 */
+    sellerId: 's2',
+    id: 'p8',
+    title: '銅板入門賞 · 銅板價開一張',
+    cover: ph(110),
+    mode: 'classic',
+    ticketPrice: 35,
+    totalTickets: 80,
+    remainingTickets: 62,
+    takenSeats: Array.from({ length: 18 }, (_, i) => i + 1),
+    status: 'open',
+    commitHash: 'c3f81a09bb27de4455ff6611aa88cc7733dd0099eeff2244aa66bb88cc00dd11',
+    clientSeedSource: 'BTC block #920418 hash',
+    openedAt: '2026-08-12T09:00:00+08:00',
+    escrow: escrowOf(18, 35),
+    prizes: [
+      { id: 'pr27', tier: 'A', card: cards[18], total: 1, remaining: 1 },
+      { id: 'pr28', tier: 'B', card: cards[22], total: 3, remaining: 2 },
+      { id: 'pr29', tier: 'C', card: cards[27], total: 16, remaining: 13 },
+      { id: 'pr30a', tier: 'D', card: cards[28], total: 20, remaining: 16 },
+      { id: 'pr30b', tier: 'D', card: cards[29], total: 20, remaining: 15 },
+      { id: 'pr30c', tier: 'D', card: cards[30], total: 20, remaining: 15 }
     ]
   }
 ]

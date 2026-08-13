@@ -37,7 +37,12 @@ const busy = ref(false)
 const error = ref('')
 
 const econ = computed(() =>
-  computeEconomics(form.mode, form.prizes.map(p => ({ tier: p.tier, qty: p.qty, unitValue: p.unitValue })), form.ticketPrice)
+  computeEconomics(
+    form.mode,
+    form.prizes.map(p => ({ tier: p.tier, qty: p.qty, unitValue: p.unitValue })),
+    form.ticketPrice,
+    { shiteiTier: form.shiteiTier, auctionSeats: form.auctionSeats }
+  )
 )
 const blocked = computed(() => econ.value.verdict === 'loss' || econ.value.verdict === 'predatory')
 const nameMissing = computed(() => form.prizes.some(p => p.tier !== 'BUST' && !p.name.trim()))
