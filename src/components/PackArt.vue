@@ -18,7 +18,7 @@
  * 品牌上維持「封存」：正面橫貼防拆封條，承諾雜湊直接印在上面。
  * 尺寸全部用 cqw，88px 縮圖到滿版共用同一套幾何。
  */
-import { computed, useId } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import type { Tier } from '@/types/models'
 import { useTilt } from '@/composables/useTilt'
 
@@ -113,6 +113,50 @@ const uid = `bx${useId().replace(/:/g, '')}`
 
 const { el, rx, ry, gx, gy, active, onMove, reset } = useTilt(9)
 
+/**
+ * 離屏暫停。
+ *
+ * 這是效能上最划算的一項：抽選列表捲到一半時，畫面外可能還有十幾個盒子，
+ * 每個都在跑十幾個 SVG 動畫（實測整頁 343 個動畫元素、但視窗內只有 4 個盒子）。
+ * 瀏覽器不會自己停掉看不見的 CSS 動畫，得自己用 IntersectionObserver 關。
+ * 停掉動畫後，套在火／水上的濾鏡結果也能被快取，不必每幀重算。
+ */
+const visible = ref(true)
+let io: IntersectionObserver | undefined
+const stage = ref<HTMLElement | null>(null)
+
+onMounted(() => {
+  if (!stage.value || typeof IntersectionObserver === 'undefined') return
+  io = new IntersectionObserver(
+    ([entry]) => { visible.value = entry.isIntersecting },
+    { rootMargin: '120px' }   // 提早一點恢復，捲到時已經在動
+  )
+  io.observe(stage.value)
+})
+onBeforeUnmount(() => io?.disconnect())
+
+/**
+ * 低效能裝置分級。
+ *
+ * 不用「是不是觸控裝置」一刀切 —— 那會讓所有手機都失去火水的亂流質感，
+ * 而那正是最有價值的部分。只在真的跑不動的條件下降級：
+ * 省流量模式、記憶體 4GB 以下、核心數 4 以下。
+ */
+const lowPower = (() => {
+  if (typeof navigator === 'undefined') return false
+  const nav = navigator as Navigator & {
+    deviceMemory?: number
+    connection?: { saveData?: boolean }
+  }
+  if (nav.connection?.saveData) return true
+  if ((nav.deviceMemory ?? 8) <= 4) return true
+  if ((nav.hardwareConcurrency ?? 8) <= 4) return true
+  return false
+})()
+
+/** 低階裝置砍粒子數量 —— 密度降低但構圖不變，比整個關掉好 */
+const budget = <T,>(arr: T[], lowCount: number) => (lowPower ? arr.slice(0, lowCount) : arr)
+
 /** 靜止傾角：不互動也看得出立體 */
 const REST_X = 9, REST_Y = -21
 
@@ -132,8 +176,9 @@ const CY = computed(() => (props.compact ? 214 : 200))
  * scale=26 的位移換算到螢幕上不到 6px，再被縮圖本身的取樣抹平，
  * 幾乎看不出差別。抽選列表一次可能出現二三十個盒子，這裡省下來最有感。
  */
+const heavyFx = computed(() => !props.compact && !lowPower)
 const warpFilter = (kind: 'fire' | 'water') =>
-  props.compact ? undefined : `url(#${uid}-${kind}Warp)`
+  heavyFx.value ? `url(#${uid}-${kind}Warp)` : undefined
 
 /**
  * 屬性符號環。通用圖形，不對應任何特定角色 ——
@@ -341,8 +386,9 @@ const rays = computed(() =>
 
 <template>
   <div
+    ref="stage"
     class="stage"
-    :class="{ opened, tilting: !flat, active }"
+    :class="{ opened, tilting: !flat, active, paused: !visible }"
     @pointermove="flat || onMove($event)"
     @pointerleave="flat || reset()"
   >
@@ -445,7 +491,7 @@ const rays = computed(() =>
                  會強迫瀏覽器每一幀重算整張雜訊圖，非常貴；讓底下的形狀
                  移動穿過這張靜態雜訊場，一樣會得到不斷變化的扭曲，
                  但雜訊只算一次。 -->
-            <filter v-if="!compact" :id="`${uid}-fireWarp`" x="-25%" y="-25%" width="150%" height="150%">
+            <filter v-if="heavyFx" :id="`${uid}-fireWarp`" x="-25%" y="-25%" width="150%" height="150%">
               <feTurbulence type="fractalNoise" baseFrequency="0.013 0.032"
                             numOctaves="2" seed="7" result="n" />
               <feDisplacementMap in="SourceGraphic" in2="n" scale="26"
@@ -453,7 +499,7 @@ const rays = computed(() =>
               <feGaussianBlur stdDeviation="1.4" />
             </filter>
 
-            <filter v-if="!compact" :id="`${uid}-waterWarp`" x="-25%" y="-25%" width="150%" height="150%">
+            <filter v-if="heavyFx" :id="`${uid}-waterWarp`" x="-25%" y="-25%" width="150%" height="150%">
               <feTurbulence type="fractalNoise" baseFrequency="0.02 0.012"
                             numOctaves="2" seed="3" result="n" />
               <feDisplacementMap in="SourceGraphic" in2="n" scale="13"
@@ -522,7 +568,7 @@ const rays = computed(() =>
             </g>
             <g class="embers">
               <circle
-                v-for="(e, i) in EMBERS" :key="i"
+                v-for="(e, i) in budget(EMBERS, 4)" :key="i"
                 class="ember" :cx="e.x" cy="400" :r="e.r"
                 :fill="elem.core" :style="{ animationDelay: e.d }"
               />
@@ -557,7 +603,7 @@ const rays = computed(() =>
                     :stroke="elem.core" stroke-width="2.5" opacity=".75"
                     :style="{ animationDuration: '9s', animationDelay: '-3.1s', '--len': '-190px' }" />
             </g>
-            <g v-for="(b, i) in BUBBLES" :key="'b' + i" :transform="`translate(${b.x} 396)`">
+            <g v-for="(b, i) in budget(BUBBLES, 4)" :key="'b' + i" :transform="`translate(${b.x} 396)`">
               <circle class="bubble" :r="b.r" :fill="elem.core" fill-opacity=".22"
                       :stroke="elem.core" stroke-width="1.5" :style="{ animationDelay: b.d }" />
             </g>
@@ -566,7 +612,7 @@ const rays = computed(() =>
           <!-- 葉：被風捲起的落葉，深度分層 -->
           <g v-if="fx === 'leaf' && !opened" class="leaves">
             <rect x="0" y="190" width="300" height="210" :fill="`url(#${uid}-scrim)`" opacity=".7" />
-            <g v-for="(l, i) in LEAVES" :key="i"
+            <g v-for="(l, i) in budget(LEAVES, 6)" :key="i"
                :transform="`translate(${l.x.toFixed(1)} -30) scale(${l.s.toFixed(2)})`">
               <!-- 外層 <g> 負責飄落路徑，內層負責翻面 —— 兩段動畫必須拆開，
                    同一元素上的 transform 只會保留最後一個 -->
@@ -595,7 +641,7 @@ const rays = computed(() =>
                     :stroke="elem.core" stroke-width="1.4" opacity=".9" fill="none" />
             </g>
             <!-- 懸浮碎晶 -->
-            <g v-for="(c, i) in SHARDS" :key="'sh' + i"
+            <g v-for="(c, i) in budget(SHARDS, 3)" :key="'sh' + i"
                :transform="`translate(${c.x.toFixed(1)} ${c.y.toFixed(1)}) scale(${c.s.toFixed(2)})`">
               <g class="shard" :style="{ animationDuration: c.dur, animationDelay: c.d }">
                 <path :d="SHARD_LIT_D" :fill="elem.core" :opacity="c.op" />
@@ -608,7 +654,7 @@ const rays = computed(() =>
           <g v-if="fx === 'star' && !opened" class="starfield">
             <rect x="0" y="120" width="300" height="280" :fill="`url(#${uid}-scrim)`" opacity=".85" />
             <circle
-              v-for="(p, i) in STAR_DUST" :key="'d' + i"
+              v-for="(p, i) in budget(STAR_DUST, 14)" :key="'d' + i"
               class="starDust" :cx="p.x.toFixed(1)" :cy="p.y.toFixed(1)" :r="p.rad.toFixed(2)"
               :fill="elem.core" :opacity="p.op"
               :style="{ animationDuration: p.dur, animationDelay: p.d }"
@@ -801,6 +847,13 @@ const rays = computed(() =>
   background: radial-gradient(closest-side, rgba(0, 0, 0, .7), transparent 76%);
   filter: blur(1.6cqw);
   pointer-events: none;
+}
+
+/* 離屏時把整棵子樹的動畫停住。用 play-state 而不是 display:none ——
+   後者會讓捲回來時重新 layout，而且動畫會從頭開始跳一下。 */
+.paused *,
+.paused {
+  animation-play-state: paused !important;
 }
 
 .gloss {
