@@ -238,29 +238,97 @@ const BUBBLES = [
   { x: 272, r: 3.2, d: '-3.9s' }, { x: 68, r: 2.8, d: '-4.6s' }
 ]
 
-/** 葉：飄落並左右搖擺 */
-const LEAVES = [
-  { x: 58, s: 1.1, rot: -20, d: '0s' }, { x: 118, s: .8, rot: 35, d: '-2.4s' },
-  { x: 176, s: 1.3, rot: -50, d: '-1.2s' }, { x: 232, s: .9, rot: 15, d: '-3.6s' },
-  { x: 148, s: .7, rot: 70, d: '-4.8s' }
-]
-const LEAF_D = 'M0 -11 C9 -6 9 6 0 11 C-9 6 -9 -6 0 -11 Z'
+/**
+ * 可重現的亂數。粒子要「多而有變化」才細緻，手刻幾顆一定看得出規律；
+ * 但又不能用 Math.random —— 每次 render 位置都跳掉。固定種子的 PRNG
+ * 兩者兼顧：分布夠亂，重繪後完全一致。
+ */
+function mulberry32(seed: number) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+/** 讓數值落在 [a,b) */
+const span = (r: () => number, a: number, b: number) => a + r() * (b - a)
 
-/** 晶：緩慢浮沉並轉動的碎晶 */
-const SHARDS = [
-  { x: 66, y: 132, s: 1.2, d: '0s' }, { x: 236, y: 176, s: .9, d: '-2.2s' },
-  { x: 96, y: 300, s: .7, d: '-4.1s' }, { x: 214, y: 288, s: 1.05, d: '-1.3s' }
-]
-const SHARD_D = 'M0 -14 L9 -4 L5 13 L-5 13 L-9 -4 Z'
+/* ---- 葉：被風捲起的落葉 ----
+   14 片、深度分層：遠的小而淡且慢，近的大而實且快。
+   單一尺寸的葉子飄下來會像貼紙，深度差才有空間感。 */
+const LEAVES = (() => {
+  const r = mulberry32(91)
+  return Array.from({ length: 14 }, () => {
+    const depth = r()                       // 0 = 遠, 1 = 近
+    return {
+      x: span(r, -20, 320),
+      s: span(r, 0.42, 1.25) * (0.55 + depth * 0.6),
+      op: 0.3 + depth * 0.6,
+      rot: span(r, -80, 80),
+      dur: `${span(r, 8.5, 4.2).toFixed(2)}s`,
+      d: `-${span(r, 0, 9).toFixed(2)}s`,
+      sway: `${span(r, 24, 64).toFixed(0)}px`
+    }
+  })
+})()
+/** 帶中肋的葉形 —— 純色橢圓讀不出是葉子 */
+const LEAF_D = 'M0 -12 C10 -7 10 7 0 12 C-10 7 -10 -7 0 -12 Z'
+const LEAF_VEIN_D = 'M0 -9 L0 9'
 
-/** 星：散布的閃爍星芒 */
-const SPARKS = [
-  { x: 54, y: 152, s: 1.1, d: '0s' }, { x: 246, y: 138, s: .8, d: '-.9s' },
-  { x: 88, y: 250, s: .6, d: '-1.8s' }, { x: 212, y: 262, s: 1, d: '-.4s' },
-  { x: 150, y: 138, s: .7, d: '-2.3s' }, { x: 40, y: 320, s: .9, d: '-1.4s' },
-  { x: 262, y: 330, s: .65, d: '-2.8s' }, { x: 150, y: 358, s: .8, d: '-.6s' }
+/* ---- 晶：地面長出的晶簇 + 懸浮碎晶 ----
+   每塊都拆成亮面與暗面兩個多邊形 —— 單色填充的多邊形讀起來是紙片，
+   有明暗分面才像有厚度的結晶。 */
+const CRYSTAL_SPIKES = [
+  { x: 44, h: 96, w: 20, d: '0s' },
+  { x: 88, h: 148, w: 26, d: '-1.4s' },
+  { x: 150, h: 210, w: 32, d: '-2.6s' },
+  { x: 214, h: 132, w: 24, d: '-0.7s' },
+  { x: 262, h: 78, w: 18, d: '-3.1s' }
 ]
-const SPARK_D = 'M0 -13 Q1.8 -2 13 0 Q1.8 2 0 13 Q-1.8 2 -13 0 Q-1.8 -2 0 -13 Z'
+const SHARDS = (() => {
+  const r = mulberry32(23)
+  return Array.from({ length: 7 }, () => {
+    const depth = r()
+    return {
+      x: span(r, 24, 276),
+      y: span(r, 120, 330),
+      s: (0.5 + depth * 0.85),
+      op: 0.35 + depth * 0.5,
+      dur: `${span(r, 5.2, 2.8).toFixed(2)}s`,
+      d: `-${span(r, 0, 5).toFixed(2)}s`
+    }
+  })
+})()
+/** 拆成左右兩面，中線是稜 */
+const SHARD_LIT_D = 'M0 -15 L9 -4 L5 14 L0 14 Z'
+const SHARD_DARK_D = 'M0 -15 L-9 -4 L-5 14 L0 14 Z'
+
+/* ---- 星：有深度的星場 ----
+   分三種尺度：大量細碎星點（背景）、少數十字星芒（前景）、偶爾一顆流星。
+   全部同尺寸的星星會讀成點陣圖案，尺度差才有宇宙的縱深。 */
+const STAR_DUST = (() => {
+  const r = mulberry32(57)
+  return Array.from({ length: 34 }, () => ({
+    x: span(r, 8, 292),
+    y: span(r, 110, 380),
+    rad: span(r, 0.5, 1.9),
+    op: span(r, 0.25, 0.9),
+    dur: `${span(r, 3.6, 1.4).toFixed(2)}s`,
+    d: `-${span(r, 0, 4).toFixed(2)}s`
+  }))
+})()
+/** 十字星芒：只留 5 顆當視覺重點，太多會變雜訊 */
+const STAR_FLARES = [
+  { x: 62, y: 158, s: 1.15, d: '0s' },
+  { x: 238, y: 196, s: 0.85, d: '-1.3s' },
+  { x: 118, y: 300, s: 1, d: '-2.4s' },
+  { x: 206, y: 340, s: 0.7, d: '-0.8s' },
+  { x: 150, y: 132, s: 0.9, d: '-3.1s' }
+]
+const SPARK_D = 'M0 -15 Q1.9 -2.2 15 0 Q1.9 2.2 0 15 Q-1.9 2.2 -15 0 Q-1.9 -2.2 0 -15 Z'
+/** 流星：斜劃過去，帶一條漸淡的尾巴 */
+const METEOR_D = 'M0 0 L-46 26'
 
 /** 封緘後方的放射光芒 */
 const rays = computed(() =>
@@ -495,29 +563,63 @@ const rays = computed(() =>
             </g>
           </g>
 
-          <!-- 葉：飄落搖擺 -->
+          <!-- 葉：被風捲起的落葉，深度分層 -->
           <g v-if="fx === 'leaf' && !opened" class="leaves">
-            <g v-for="(l, i) in LEAVES" :key="i" :transform="`translate(${l.x} 40) scale(${l.s})`">
-              <path class="leaf" :d="LEAF_D" :fill="elem.mid" opacity=".85"
-                    :stroke="elem.core" stroke-width="1"
-                    :style="{ animationDelay: l.d, '--rot': l.rot + 'deg' }" />
+            <rect x="0" y="190" width="300" height="210" :fill="`url(#${uid}-scrim)`" opacity=".7" />
+            <g v-for="(l, i) in LEAVES" :key="i"
+               :transform="`translate(${l.x.toFixed(1)} -30) scale(${l.s.toFixed(2)})`">
+              <!-- 外層 <g> 負責飄落路徑，內層負責翻面 —— 兩段動畫必須拆開，
+                   同一元素上的 transform 只會保留最後一個 -->
+              <g class="leafFall"
+                 :style="{ animationDuration: l.dur, animationDelay: l.d, '--sway': l.sway, '--rot': l.rot + 'deg' }">
+                <g class="leafFlip" :style="{ animationDuration: l.dur, animationDelay: l.d }">
+                  <path :d="LEAF_D" :fill="elem.mid" :opacity="l.op" />
+                  <path :d="LEAF_VEIN_D" :stroke="elem.core" stroke-width="1.1"
+                        :opacity="l.op * 0.8" fill="none" />
+                </g>
+              </g>
             </g>
           </g>
 
-          <!-- 晶：浮沉轉動的碎晶 -->
-          <g v-if="fx === 'crystal' && !opened" class="shards">
-            <g v-for="(c, i) in SHARDS" :key="i" :transform="`translate(${c.x} ${c.y}) scale(${c.s})`">
-              <path class="shard" :d="SHARD_D" :fill="elem.mid" opacity=".6"
-                    :style="{ animationDelay: c.d }" />
-              <path class="shard" :d="SHARD_D" fill="none" :stroke="elem.core"
-                    stroke-width="1.4" opacity=".85" :style="{ animationDelay: c.d }" />
+          <!-- 晶：地面晶簇 + 懸浮碎晶 -->
+          <g v-if="fx === 'crystal' && !opened" class="crystals">
+            <rect x="0" y="170" width="300" height="230" :fill="`url(#${uid}-scrim)`" opacity=".8" />
+            <!-- 地面長出的晶柱，每根拆亮暗兩面才有厚度 -->
+            <g v-for="(c, i) in CRYSTAL_SPIKES" :key="'sp' + i" class="spike"
+               :style="{ animationDelay: c.d }">
+              <path :d="`M${c.x} 400 L${c.x} ${400 - c.h} L${c.x + c.w / 2} ${400 - c.h * 0.72} L${c.x + c.w / 2} 400 Z`"
+                    :fill="elem.mid" opacity=".55" />
+              <path :d="`M${c.x} 400 L${c.x} ${400 - c.h} L${c.x - c.w / 2} ${400 - c.h * 0.62} L${c.x - c.w / 2} 400 Z`"
+                    :fill="elem.deep" opacity=".7" />
+              <path :d="`M${c.x} ${400 - c.h} L${c.x + c.w / 2} ${400 - c.h * 0.72}`"
+                    :stroke="elem.core" stroke-width="1.4" opacity=".9" fill="none" />
+            </g>
+            <!-- 懸浮碎晶 -->
+            <g v-for="(c, i) in SHARDS" :key="'sh' + i"
+               :transform="`translate(${c.x.toFixed(1)} ${c.y.toFixed(1)}) scale(${c.s.toFixed(2)})`">
+              <g class="shard" :style="{ animationDuration: c.dur, animationDelay: c.d }">
+                <path :d="SHARD_LIT_D" :fill="elem.core" :opacity="c.op" />
+                <path :d="SHARD_DARK_D" :fill="elem.deep" :opacity="c.op * 0.85" />
+              </g>
             </g>
           </g>
 
-          <!-- 星：散布閃爍 -->
-          <g v-if="fx === 'star' && !opened" class="sparks">
-            <g v-for="(p, i) in SPARKS" :key="i" :transform="`translate(${p.x} ${p.y}) scale(${p.s})`">
+          <!-- 星：星塵 + 十字星芒 + 流星 -->
+          <g v-if="fx === 'star' && !opened" class="starfield">
+            <rect x="0" y="120" width="300" height="280" :fill="`url(#${uid}-scrim)`" opacity=".85" />
+            <circle
+              v-for="(p, i) in STAR_DUST" :key="'d' + i"
+              class="starDust" :cx="p.x.toFixed(1)" :cy="p.y.toFixed(1)" :r="p.rad.toFixed(2)"
+              :fill="elem.core" :opacity="p.op"
+              :style="{ animationDuration: p.dur, animationDelay: p.d }"
+            />
+            <g v-for="(p, i) in STAR_FLARES" :key="'f' + i"
+               :transform="`translate(${p.x} ${p.y}) scale(${p.s})`">
               <path class="spark" :d="SPARK_D" :fill="elem.core" :style="{ animationDelay: p.d }" />
+            </g>
+            <g class="meteor">
+              <path :d="METEOR_D" :stroke="elem.core" stroke-width="2"
+                    stroke-linecap="round" fill="none" />
             </g>
           </g>
 
@@ -745,10 +847,12 @@ const rays = computed(() =>
 /* 火焰由底部往上長，縮放原點必須釘在底邊 */
 .fireLayer { transform-origin: 50% 100%; }
 .wave { transform-origin: 0 50%; }
-.bubble, .leaf, .shard, .spark, .glyph {
+.bubble, .spark, .glyph, .shard, .starDust, .spike {
   transform-box: fill-box;
   transform-origin: 50% 50%;
 }
+/* 晶柱從地面長出來，原點釘在底邊 */
+.spike { transform-origin: 50% 100%; }
 @media (prefers-reduced-motion: no-preference) {
   /* 節奏整體加快、幅度加大 —— 先前太含蓄，在縮圖尺寸下幾乎看不出在動 */
   .fireLayer  { animation-name: fire-roar; animation-timing-function: ease-in-out;
@@ -759,10 +863,18 @@ const rays = computed(() =>
   .boltStrike { animation: bolt-strike 2.8s steps(1, end) infinite; }
   .boltFlash  { animation: bolt-flash 2.8s steps(1, end) infinite; }
   .bubble     { animation: bubble-rise 4.2s ease-in infinite; }
-  .leaf   { animation: leaf-fall 5s linear infinite; }
-  .shard  { animation: shard-float 3.6s ease-in-out infinite alternate; }
-  .spark  { animation: spark-twinkle 2s ease-in-out infinite; }
-  .glyph  { animation: glyph-pulse 2.2s ease-in-out infinite alternate; }
+  .leafFall   { animation-name: leaf-fall; animation-timing-function: linear;
+                animation-iteration-count: infinite; }
+  .leafFlip   { animation-name: leaf-flip; animation-timing-function: ease-in-out;
+                animation-iteration-count: infinite; }
+  .spike      { animation: spike-grow 4.4s ease-in-out infinite alternate; }
+  .shard      { animation-name: shard-float; animation-timing-function: ease-in-out;
+                animation-iteration-count: infinite; animation-direction: alternate; }
+  .starDust   { animation-name: dust-twinkle; animation-timing-function: ease-in-out;
+                animation-iteration-count: infinite; animation-direction: alternate; }
+  .meteor     { animation: meteor-streak 7s ease-in infinite; }
+  .spark      { animation: spark-twinkle 2s ease-in-out infinite; }
+  .glyph      { animation: glyph-pulse 2.2s ease-in-out infinite alternate; }
 }
 /* 火：縱向抽長 + 橫向漂移。--drift 每層不同方向，讓火舌互相穿插，
    配合亂流位移就會churn 出「亂燒」的感覺，而不是整片一起呼吸。 */
@@ -810,18 +922,44 @@ const rays = computed(() =>
   70%  { transform: translateY(-64px) translateX(9px) scale(1.1); opacity: .7; }
   100% { transform: translateY(-104px) translateX(-6px) scale(1.25); opacity: 0; }
 }
-/* --rot 讓每片葉子有不同的初始角度，否則五片會同角度同步落下 */
+/* 葉子飄落。--sway 每片不同的橫向擺幅、--rot 不同的初始角度，
+   讓 14 片各走各的路徑而不是排隊落下。 */
 @keyframes leaf-fall {
   0%   { transform: translateY(0) translateX(0) rotate(var(--rot, 0deg)); opacity: 0; }
-  8%   { opacity: .95; }
-  35%  { transform: translateY(120px) translateX(30px) rotate(calc(var(--rot, 0deg) + 160deg)); }
-  70%  { transform: translateY(250px) translateX(-26px) rotate(calc(var(--rot, 0deg) + 400deg)); }
-  92%  { opacity: .8; }
-  100% { transform: translateY(360px) translateX(12px) rotate(calc(var(--rot, 0deg) + 620deg)); opacity: 0; }
+  6%   { opacity: 1; }
+  30%  { transform: translateY(140px) translateX(var(--sway)) rotate(calc(var(--rot, 0deg) + 150deg)); }
+  62%  { transform: translateY(280px) translateX(calc(var(--sway) * -0.8)) rotate(calc(var(--rot, 0deg) + 340deg)); }
+  90%  { opacity: .9; }
+  100% { transform: translateY(450px) translateX(calc(var(--sway) * 0.5)) rotate(calc(var(--rot, 0deg) + 560deg)); opacity: 0; }
+}
+/* 翻面：用 scaleX 壓扁模擬葉片轉到側面，這是落葉最有辨識度的動作。
+   單純平面旋轉只會像轉盤子。 */
+@keyframes leaf-flip {
+  0%, 100% { transform: scaleX(1); }
+  25%      { transform: scaleX(.15); }
+  50%      { transform: scaleX(-1); }
+  75%      { transform: scaleX(.4); }
+}
+/* 晶柱：緩慢長高再收回，像結霜的節奏 */
+@keyframes spike-grow {
+  from { transform: scaleY(.72) scaleX(1.04); opacity: .55; }
+  to   { transform: scaleY(1.06) scaleX(.98); opacity: 1; }
 }
 @keyframes shard-float {
-  0%   { transform: translateY(-18px) rotate(-32deg) scale(.85); opacity: .35; }
-  100% { transform: translateY(20px) rotate(38deg) scale(1.15); opacity: 1; }
+  0%   { transform: translateY(-16px) rotate(-28deg) scale(.88); opacity: .4; }
+  100% { transform: translateY(18px) rotate(34deg) scale(1.12); opacity: 1; }
+}
+/* 星塵只做亮度呼吸，不縮放 —— 1px 的點縮放只會閃爍成雜訊 */
+@keyframes dust-twinkle {
+  from { opacity: .15; }
+  to   { opacity: 1; }
+}
+/* 流星：大部分時間不在，偶爾劃過一次 */
+@keyframes meteor-streak {
+  0%, 100% { transform: translate(250px, 90px); opacity: 0; }
+  4%       { opacity: 0; }
+  8%       { opacity: .95; }
+  20%      { transform: translate(70px, 250px); opacity: 0; }
 }
 @keyframes spark-twinkle {
   0%, 100% { transform: scale(.15) rotate(0deg); opacity: 0; }
@@ -843,6 +981,9 @@ const rays = computed(() =>
   .boltStrike { opacity: .6; }
   .boltFlash { opacity: 0; }
   .bubble { opacity: .4; }
+  .leafFall, .leafFlip { opacity: .75; }
+  .spike, .shard, .starDust { opacity: .7; }
+  .meteor { opacity: 0; }
   .leaf, .shard { opacity: .45; }
   .spark { opacity: .6; }
 }
