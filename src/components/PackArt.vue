@@ -18,7 +18,7 @@
  * 品牌上維持「封存」：正面橫貼防拆封條，承諾雜湊直接印在上面。
  * 尺寸全部用 cqw，88px 縮圖到滿版共用同一套幾何。
  */
-import { computed } from 'vue'
+import { computed, useId } from 'vue'
 import type { Tier } from '@/types/models'
 import { useTilt } from '@/composables/useTilt'
 
@@ -92,8 +92,24 @@ const hashChip = computed(() => (props.hash ? props.hash.slice(0, 10).toUpperCas
 const tierLabel = computed(() =>
   props.tier === 'LAST' ? '最後賞' : props.tier === 'BUST' ? '爆賞' : `${props.tier} 賞`
 )
-// uid 必須含材質 —— 否則同一頁不同材質的盒子會共用漸層 id 而互相覆蓋
-const uid = computed(() => `bx${props.tier}${matName.value}${(props.serial || props.label || 'vd').replace(/\W/g, '')}`)
+/**
+ * uid 必須在同一頁面的所有盒子之間保證唯一 —— SVG 的 <linearGradient>／
+ * <clipPath> 用 id 全域查找，不受個別 <svg> 樹的邊界限制。兩個盒子若 id
+ * 相撞，後面那個會直接借用前一個的 <defs>（顏色、裁切路徑全部跑掉）。
+ *
+ * 舊版從 tier/material/label 等 props 組字串再清掉符號當 id，先踩到兩個坑：
+ *  1. `.replace(/\W/g, '')` 只認 ASCII，中文字全被當非字元清空，
+ *     不同盒子的標籤清空後可能變成同一個空字串
+ *  2. 即使改成雜湊涵蓋所有欄位，只要兩個盒子的 props 剛好完全相同
+ *     （這個展示頁就有 —— 同一個賞別在「材質」列、「各賞別」格、
+ *     「未開封/已開封」對照三處重複出現），還是會撞出內容相同但
+ *     仍然重複的 id，不合法。
+ * 用 Vue 3.5 的 useId() 直接拿元件實例的唯一 id，跟 props 內容無關，
+ * 徹底避免這整類問題。useId() 必須在 setup 階段同步呼叫（它讀取的是
+ * setup context，包進 computed 的 getter 裡會在 context 之外延遲執行），
+ * 所以宣告成一般常數，不是 computed —— 反正實例 id 本來就不會變。
+ */
+const uid = `bx${useId().replace(/:/g, '')}`
 
 const { el, rx, ry, gx, gy, active, onMove, reset } = useTilt(9)
 
@@ -207,9 +223,11 @@ const rays = computed(() =>
       <div class="face tab">
         <svg viewBox="0 0 200 62" aria-hidden="true">
           <defs>
+            <!-- 盒身固定象牙色，不隨站台主題翻轉 —— 卡盒是獨立於頁面配色的
+                 實體物件，深色頁面上要靠它自己跳出來，不是跟著背景變 -->
             <linearGradient :id="`${uid}-tab`" x1="0" y1="0" x2="0.2" y2="1">
-              <stop offset="0%" stop-color="var(--surface-3)" />
-              <stop offset="100%" stop-color="var(--surface)" />
+              <stop offset="0%" stop-color="#f6f1e6" />
+              <stop offset="100%" stop-color="#e6ddc8" />
             </linearGradient>
           </defs>
           <!-- 卡榫本體 + 歐洲孔（evenodd 打穿） -->
@@ -250,9 +268,9 @@ const rays = computed(() =>
              :aria-label="label ? `${label} 卡盒` : '卡盒'">
           <defs>
             <linearGradient :id="`${uid}-card`" x1="0" y1="0" x2="0.35" y2="1">
-              <stop offset="0%" stop-color="var(--surface-3)" />
-              <stop offset="45%" stop-color="var(--surface)" />
-              <stop offset="100%" stop-color="var(--bg)" />
+              <stop offset="0%" stop-color="#f6f1e6" />
+              <stop offset="45%" stop-color="#ece4d2" />
+              <stop offset="100%" stop-color="#d8cdb2" />
             </linearGradient>
 
             <!-- 金屬感靠明暗交錯的多段漸層，不是單色加白 -->
@@ -296,7 +314,8 @@ const rays = computed(() =>
 
             <radialGradient :id="`${uid}-vig`" cx="0.5" cy="0.48" r="0.7">
               <stop offset="52%" stop-color="#000" stop-opacity="0" />
-              <stop offset="100%" stop-color="#000" stop-opacity=".5" />
+              <!-- 象牙底下 .5 的黑色暗角會偏濁髒，收到 .4 維持乾淨 -->
+              <stop offset="100%" stop-color="#000" stop-opacity=".4" />
             </radialGradient>
           </defs>
 
@@ -416,7 +435,7 @@ const rays = computed(() =>
           <g :transform="`translate(150 ${CY})${compact ? ' scale(1.3)' : ''}`"
              :opacity="opened ? .3 : 1">
             <path d="M0 -48 L42 -24 L42 24 L0 48 L-42 24 L-42 -24 Z"
-                  fill="var(--bg)" fill-opacity=".72" :stroke="foil" stroke-width="2" />
+                  fill="#1c1610" fill-opacity=".82" :stroke="foil" stroke-width="2" />
             <path d="M0 -35 L30 -17.5 L30 17.5 L0 35 L-30 17.5 L-30 -17.5 Z"
                   fill="none" stroke="#fff" stroke-opacity=".14" />
             <path d="M-14 -13 L0 18 L14 -13" fill="none" :stroke="foil"
@@ -505,7 +524,8 @@ const rays = computed(() =>
   width: 20cqw; height: 100%;
   transform-origin: 0 50%;
   transform: rotateY(90deg);
-  background: linear-gradient(90deg, var(--surface-2), var(--bg) 78%);
+  /* 側面是背光面，用同一組象牙色但整體壓暗，維持跟正面同一材質的錯覺 */
+  background: linear-gradient(90deg, #cabb98, #ac9d7c 78%);
   border-radius: 0 1.2cqw 1.2cqw 0;
   overflow: hidden;
 }
@@ -522,16 +542,17 @@ const rays = computed(() =>
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 3cqw; font-weight: 700; letter-spacing: .3em;
-  color: var(--faint);
+  /* 象牙盒身固定用暖灰字，不跟站台主題走 —— 主題字色在淺色側面上會消失 */
+  color: #7d7057;
 }
 
-/* 頂面 */
+/* 頂面：由淺至深，呼應側面同一光源方向 */
 .top {
   left: 0; bottom: 100%;
   width: 100%; height: 20cqw;
   transform-origin: 50% 100%;
   transform: rotateX(90deg);
-  background: linear-gradient(180deg, var(--bg), var(--surface-2));
+  background: linear-gradient(180deg, #ac9d7c, #cabb98);
   border-radius: 1.2cqw 1.2cqw 0 0;
   overflow: hidden;
 }
@@ -586,7 +607,8 @@ const rays = computed(() =>
 .label {
   font-family: var(--font-body);
   font-size: 21px; font-weight: 600; letter-spacing: -.01em;
-  fill: #fff;
+  /* 卡身改象牙色後，原本假設深色卡身的白字會直接消失在背景裡 */
+  fill: #241d10;
 }
 .brand {
   font-family: var(--font-mono);
