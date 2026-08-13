@@ -970,6 +970,14 @@ const rays = computed(() =>
           <span class="side-crease top"></span>
         </div>
 
+        <!--
+          蓋子的內襯。翻開後正面／側面／頂面全部背對觀眾，
+          而 .face 統一設了 backface-visibility: hidden —— 沒有這一面的話
+          蓋子會整片消失，只剩邊緣薄片，那就是「掀蓋很奇怪」的真正原因。
+          rotateY(180deg) 讓它朝向 -z，蓋子翻過去時剛好轉向觀眾。
+        -->
+        <div class="face lidInner"></div>
+
         <!-- 蓋子的正面：只露出上緣 24%，但內部 svg 撐滿整個盒高 ——
              這樣漸層座標系跟盒身完全一致，闔上時接縫處才不會有色差。 -->
         <div class="face lidFront">
@@ -1249,7 +1257,13 @@ const rays = computed(() =>
   transform-origin: 50% 100% calc(-1 * var(--pk-depth));
   transition: transform .8s cubic-bezier(.3, 1.3, .5, 1);
 }
-.opened .lid { transform: rotateX(-122deg); }
+/*
+ * 角度必須是正值。蓋子正面下緣相對鉸鏈的位移是 dz = +盒深，
+ * 經 rotateX(θ) 後 Δy = -depth·sin(θ)：
+ *   θ = -122° → Δy = +0.85·depth（往下）→ 蓋子往下插進盒身，就是先前的怪異感
+ *   θ = +112° → Δy = -0.93·depth（往上）、Δz = -0.37·depth（往後）→ 才是掀開
+ */
+.opened .lid { transform: rotateX(112deg); }
 
 /* 蓋子的正面：容器只有 24% 高，內部 svg 撐滿整個盒高後被裁切。
    100 / 24 ≈ 416.67% —— 這樣 svg 的 0–500 座標系跟盒身那張完全對齊。 */
@@ -1263,6 +1277,22 @@ const rays = computed(() =>
     inset 2px 0 0 rgba(0, 0, 0, .42);
 }
 .lidArt { position: absolute; left: 0; top: 0; width: 100%; height: 416.667%; }
+
+/* 蓋子內襯：素面紙板，比盒身更暗一階。壓一道由鉸鏈往外的漸層，
+   模擬翻開後內側接收到的光比外側少。 */
+.lidInner {
+  inset: 0;
+  transform: rotateY(180deg);
+  background:
+    linear-gradient(0deg, rgba(0, 0, 0, .55), rgba(0, 0, 0, .1)),
+    var(--pk-body-lo);
+  border-radius: 1.4cqw 1.4cqw 0 0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .07);
+}
+
+/* 頂面與蓋側翻過去之後看到的是背面，但它們只是漸層色塊，
+   鏡像看不出差別 —— 直接讓背面可見即可，不必再各做一片內襯。 */
+.top, .lidSide { backface-visibility: visible; }
 
 .lidSide {
   left: 100%; top: 0;
