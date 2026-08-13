@@ -157,8 +157,15 @@ const lowPower = (() => {
 /** 低階裝置砍粒子數量 —— 密度降低但構圖不變，比整個關掉好 */
 const budget = <T,>(arr: T[], lowCount: number) => (lowPower ? arr.slice(0, lowCount) : arr)
 
-/** 靜止傾角：不互動也看得出立體 */
-const REST_X = 9, REST_Y = -21
+/**
+ * 靜止傾角。
+ *
+ * rotateX 從 9° 收到 3°：原本仰角太重，配上過短的透視距離會讓盒子
+ * 底部誇張外擴成梯形，讀起來像從下往上看。產品照的相機大致與物件等高，
+ * 只留一點點俯角交代頂面的存在就好。
+ * rotateY 保留 -17°，側面還是要看得到 —— 那是立體感的來源。
+ */
+const REST_X = 3, REST_Y = -17
 
 const boxTransform = computed(() => {
   const x = REST_X + (props.flat ? 0 : rx.value)
@@ -433,6 +440,12 @@ const rays = computed(() =>
       <!-- 右側面 -->
       <div class="face side">
         <span class="side-stripe" :style="{ background: foil }"></span>
+        <!-- 盒蓋接縫必須繞過側面。正面 y=96/400 = 24%，數字不一致的話
+             轉角處會斷開一截，那是最容易被看出來的破綻。 -->
+        <span class="side-seam"></span>
+        <!-- 上下摺邊：紙盒的頂蓋與底蓋都會壓出一道摺線 -->
+        <span class="side-crease top"></span>
+        <span class="side-crease bottom"></span>
         <span class="side-text">VAULTDRAW</span>
       </div>
 
@@ -723,6 +736,10 @@ const rays = computed(() =>
             </g>
           </template>
 
+          <!-- 盒底唇線：紙盒底蓋壓進去的那一道，讓盒子有「底」而不是切平 -->
+          <path d="M0 384 H300" stroke="#000" stroke-opacity=".3" stroke-width="1.5" />
+          <path d="M0 386 H300" stroke="#fff" stroke-opacity=".14" />
+
           <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-lit)`" />
         </svg>
 
@@ -742,16 +759,23 @@ const rays = computed(() =>
   container-type: inline-size;
   position: relative;
   width: 100%;
-  /* 上方要留給卡榫 */
-  aspect-ratio: 1 / 1.42;
-  /* 透視拉近 —— 距離越短，同樣的角度看起來越立體 */
-  perspective: 62cqw;
-  perspective-origin: 50% 44%;
+  /* 上方留給卡榫（14.3cqw）、下方留給投影 */
+  aspect-ratio: 1 / 1.36;
+  /*
+   * 透視距離。先前是 62cqw —— 對一個高度約 142cqw 的盒子來說，
+   * 相機距離只有物件的 0.4 倍，等於魚眼鏡頭貼著拍：底部被放大成梯形、
+   * 垂直邊嚴重外擴，整個讀起來像仰角。
+   * 產品攝影一般用 2–4 倍物距，這裡取 200cqw（約 1.4 倍盒高）仍保留
+   * 足夠的立體感，但不再變形。
+   */
+  perspective: 200cqw;
+  /* 視點置中；偏移的原點會額外帶入斜切 */
+  perspective-origin: 50% 50%;
 }
 
 .box {
   position: absolute;
-  left: 5cqw; top: 26cqw;
+  left: 5cqw; top: 19cqw;
   width: 72cqw; height: 96cqw;
   transform-style: preserve-3d;
   transition: transform .5s cubic-bezier(.2, .7, .3, 1);
@@ -760,23 +784,33 @@ const rays = computed(() =>
 
 .face { position: absolute; backface-visibility: hidden; }
 
-/* 正面。右緣與上緣各一道亮邊 —— 那是實體盒的稜線受光，
-   少了它三個面會糊在一起，看起來就「平」。 */
+/* 正面。稜線受光：右緣（朝向側面的摺角）打亮、左緣壓暗、上緣一道細光。
+   實體紙盒的三個面就是靠這幾道稜線分開的，少了它們會糊成一片。
+   右緣用兩層 —— 外亮內暗，模擬摺痕本身的厚度。 */
 .front {
   inset: 0;
   overflow: hidden;
-  border-radius: 1.2cqw;
+  border-radius: 1.4cqw;
   box-shadow:
-    inset -1px 0 0 rgba(255, 255, 255, .18),
-    inset 0 1px 0 rgba(255, 255, 255, .14),
-    inset 1px 0 0 rgba(0, 0, 0, .5);
+    inset -1px 0 0 rgba(255, 255, 255, .5),
+    inset -2.5px 0 0 rgba(0, 0, 0, .16),
+    inset 0 1px 0 rgba(255, 255, 255, .3),
+    inset 0 -1px 0 rgba(0, 0, 0, .3),
+    inset 2px 0 0 rgba(0, 0, 0, .42);
 }
 .front svg { display: block; width: 100%; height: 100%; }
 
 /* 吊掛卡榫：貼在盒背，向上突出 */
 .tab {
   left: 18%; bottom: 100%;
-  width: 64%; height: 20cqw;
+  /*
+   * 高度必須讓容器的長寬比等於 SVG viewBox 的 200:62（= 3.226）。
+   * 寬度是盒寬 72cqw 的 64% = 46.08cqw，所以高度要 46.08 / 3.226 ≈ 14.3cqw。
+   * 先前給 20cqw，比例對不上，預設的 preserveAspectRatio="meet" 會等比
+   * 縮放後上下留白 —— 畫出來的卡榫底邊因此碰不到盒頂，中間露出一道縫，
+   * 看起來像浮在上方的另一塊板子。
+   */
+  width: 64%; height: 14.3cqw;
   /* 與正面同一平面。放到盒深中段（translateZ(-9cqw)）雖然物理上更接近
      真實的背板卡榫，但在 -21° 的視角下會跟盒頂錯開一段，看起來像浮著的
      另一塊板子。齊平反而讀得出「長在盒子上」。 */
@@ -791,11 +825,31 @@ const rays = computed(() =>
   width: 20cqw; height: 100%;
   transform-origin: 0 50%;
   transform: rotateY(90deg);
-  /* 側面是背光面，用同一組象牙色但整體壓暗，維持跟正面同一材質的錯覺 */
-  background: linear-gradient(90deg, #cabb98, #ac9d7c 78%);
-  border-radius: 0 1.2cqw 1.2cqw 0;
+  /* 側面是背光面，用同一組象牙色但整體壓暗，維持跟正面同一材質的錯覺。
+     靠近摺角那側（左）留一點反光，遠離的一側收暗，讓側面自己也有弧度。 */
+  background: linear-gradient(90deg, #d6c8a6 0%, #c3b493 18%, #a9997a 100%);
+  border-radius: 0 1.4cqw 1.4cqw 0;
   overflow: hidden;
+  box-shadow:
+    inset 1px 0 0 rgba(255, 255, 255, .3),
+    inset 0 1px 0 rgba(255, 255, 255, .18),
+    inset 0 -1px 0 rgba(0, 0, 0, .28);
 }
+/* 盒蓋接縫：對齊正面 y=96/400 = 24% */
+.side-seam {
+  position: absolute; left: 0; right: 0; top: 24%;
+  height: 2px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, .4), rgba(255, 255, 255, .16));
+}
+/* 頂蓋與底蓋的摺線 */
+.side-crease {
+  position: absolute; left: 0; right: 0;
+  height: 1px;
+  background: rgba(0, 0, 0, .26);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .14);
+}
+.side-crease.top { top: 5%; }
+.side-crease.bottom { bottom: 4%; }
 /* 對齊正面封條（y 72→120 於 400 高 = 18%→30%）。
    數字不一致的話，封條繞到側面就會錯開一截，立體感立刻破功。 */
 .side-stripe {
