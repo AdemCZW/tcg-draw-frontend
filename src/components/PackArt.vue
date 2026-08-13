@@ -546,6 +546,31 @@ const rays = computed(() =>
               <stop offset="100%" :stop-color="elem.deep" />
             </linearGradient>
 
+            <!-- 印刷網點：比纖維更粗一階的規律紋理，疊在一起才像印刷品 -->
+            <pattern :id="`${uid}-print`" width="3" height="3" patternUnits="userSpaceOnUse">
+              <rect width="3" height="3" fill="none" />
+              <circle cx="1" cy="1" r="0.42" fill="#000" fill-opacity=".055" />
+            </pattern>
+
+            <!-- 主光：偏左上的柔和熱點。單一線性漸層打光是 CG 感的來源之一，
+                 實際受光一定有一個方向性的亮區。 -->
+            <radialGradient :id="`${uid}-key`" cx="0.28" cy="0.18" r="0.85">
+              <stop offset="0%" stop-color="#fff" stop-opacity=".3" />
+              <stop offset="42%" stop-color="#fff" stop-opacity=".07" />
+              <stop offset="100%" stop-color="#fff" stop-opacity="0" />
+            </radialGradient>
+
+            <!-- 接縫的環境遮蔽。硬邊 1px 線讀起來是「畫上去的線」，
+                 真實的縫隙是有寬度的柔和暗帶。 -->
+            <linearGradient :id="`${uid}-aoDown`" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#000" stop-opacity=".34" />
+              <stop offset="100%" stop-color="#000" stop-opacity="0" />
+            </linearGradient>
+            <linearGradient :id="`${uid}-aoUp`" x1="0" y1="1" x2="0" y2="0">
+              <stop offset="0%" stop-color="#000" stop-opacity=".28" />
+              <stop offset="100%" stop-color="#000" stop-opacity="0" />
+            </linearGradient>
+
             <radialGradient :id="`${uid}-vig`" cx="0.5" cy="0.48" r="0.7">
               <stop offset="52%" stop-color="#000" stop-opacity="0" />
               <!-- 象牙底下 .5 的黑色暗角會偏濁髒，收到 .4 維持乾淨 -->
@@ -692,9 +717,11 @@ const rays = computed(() =>
 
           <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-vig)`" />
 
-          <!-- 盒蓋接縫 -->
-          <path d="M0 96 H300" stroke="#000" stroke-opacity=".5" stroke-width="2" />
-          <path d="M0 98.5 H300" stroke="#fff" stroke-opacity=".08" />
+          <!-- 盒蓋接縫：暗帶（縫隙的環境遮蔽）+ 下緣受光的細亮線 -->
+          <rect x="0" y="88" width="300" height="10" :fill="`url(#${uid}-aoUp)`" />
+          <path d="M0 96.5 H300" stroke="#000" stroke-opacity=".42" stroke-width="1.6" />
+          <path d="M0 98.5 H300" stroke="#fff" stroke-opacity=".22" />
+          <rect x="0" y="99" width="300" height="9" :fill="`url(#${uid}-aoDown)`" opacity=".6" />
 
           <!-- 防拆封條 -->
           <g :opacity="opened ? .35 : 1">
@@ -736,11 +763,17 @@ const rays = computed(() =>
             </g>
           </template>
 
-          <!-- 盒底唇線：紙盒底蓋壓進去的那一道，讓盒子有「底」而不是切平 -->
-          <path d="M0 384 H300" stroke="#000" stroke-opacity=".3" stroke-width="1.5" />
-          <path d="M0 386 H300" stroke="#fff" stroke-opacity=".14" />
+          <!-- 盒底唇線：底蓋壓進去的那一道，同樣用暗帶而不是硬線 -->
+          <rect x="0" y="376" width="300" height="8" :fill="`url(#${uid}-aoUp)`" opacity=".8" />
+          <path d="M0 384 H300" stroke="#000" stroke-opacity=".34" stroke-width="1.4" />
+          <path d="M0 385.8 H300" stroke="#fff" stroke-opacity=".2" />
 
           <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-lit)`" />
+
+          <!-- 表面處理，順序有意義：先打光、再印刷網點、最後紙纖維。
+               纖維要在最上層，因為它是「紙的表面」，不該被光罩住。 -->
+          <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-key)`" />
+          <rect v-if="heavyFx" x="0" y="0" width="300" height="400" :fill="`url(#${uid}-print)`" />
         </svg>
 
         <span
@@ -783,6 +816,31 @@ const rays = computed(() =>
 .tilting.active .box { transition: transform .08s linear; }
 
 .face { position: absolute; backface-visibility: hidden; }
+
+/*
+ * 紙纖維顆粒。這是「向量圖」與「實體物件」之間最大的一道分野 ——
+ * 完美平滑的漸層一定讀成塑膠 CG，真實材質在各種頻率上都有雜訊。
+ *
+ * 刻意放在 CSS 而不是 SVG 濾鏡裡：SVG 濾鏡在 300 單位的 viewBox 座標系
+ * 運算，整個 svg 再被縮放到實際尺寸，雜訊會跟著放大而糊掉。
+ * 用 background-size 指定 px 等於固定在螢幕座標系，盒子放多大顆粒都一樣細。
+ * stitchTiles='stitch' 讓噪點無縫平鋪，瀏覽器只解一次圖再重複用，很便宜。
+ */
+.front::after,
+.side::after,
+.top::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 140px 140px;
+  opacity: .26;
+  mix-blend-mode: overlay;
+}
+/* 側面與頂面受光較少，顆粒相對更明顯 —— 真實紙盒也是暗面看得到纖維 */
+.side::after { opacity: .34; }
+.top::after { opacity: .3; }
 
 /* 正面。稜線受光：右緣（朝向側面的摺角）打亮、左緣壓暗、上緣一道細光。
    實體紙盒的三個面就是靠這幾道稜線分開的，少了它們會糊成一片。
