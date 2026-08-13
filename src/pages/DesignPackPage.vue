@@ -30,7 +30,27 @@ const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
       而且剪影「一眼認得出是誰」，比抽象圖案更難主張合理使用。
     </p>
 
-    <h2>各賞別</h2>
+    <h2>材質：灰 / 銀 / 金</h2>
+    <div class="grid pair three">
+      <figure>
+        <PackArt material="grey" tier="D" label="銅板入門賞" serial="VD-0062/080" hash="c3f81a09bb27de44" />
+        <figcaption class="mono muted">灰 —— 錫灰霧面，無特效</figcaption>
+      </figure>
+      <figure>
+        <PackArt material="silver" tier="B" label="經典促販卡" serial="VD-0014/040" hash="a1b2c3d4e5f60718" />
+        <figcaption class="mono muted">銀 —— 冷白高光，雷擊特效</figcaption>
+      </figure>
+      <figure>
+        <PackArt material="gold" tier="A" label="朱紫 SAR 精選" serial="VD-0001/080" hash="f3a91c04bb27de44" />
+        <figcaption class="mono muted">金 —— 暖金箔面，火焰特效</figcaption>
+      </figure>
+    </div>
+    <p class="muted note">
+      材質是獨立於賞別的一條等級軸。金屬感靠明暗交錯的多段漸層（lo→base→hi→rim），
+      不是單色加白。特效預設跟著材質走，也可以用 <code>effect</code> 個別覆寫。
+    </p>
+
+    <h2>各賞別（材質自動對應）</h2>
     <div class="grid">
       <figure v-for="t in tiers" :key="t.tier">
         <PackArt :tier="t.tier" :label="t.label" :serial="t.serial" :hash="t.hash" />
@@ -72,6 +92,7 @@ h2 { font-size: 17px; margin: 34px 0 16px; font-weight: 600; }
   gap: 20px;
 }
 .grid.pair { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); max-width: 620px; }
+.grid.pair.three { max-width: 760px; }
 figure { margin: 0; }
 figcaption { font-size: 11.5px; margin-top: 9px; }
 .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }

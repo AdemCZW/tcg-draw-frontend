@@ -33,21 +33,48 @@ const props = withDefaults(defineProps<{
   compact?: boolean
   /** 關掉游標傾斜，靜止傾角仍保留 */
   flat?: boolean
+  /** 盒身材質。不給就依賞別自動選 */
+  material?: 'grey' | 'silver' | 'gold'
+  /** 特效。不給就依材質自動選（金=火、銀=雷、灰=無） */
+  effect?: 'fire' | 'bolt' | 'none'
 }>(), {
   tier: 'D', label: '', serial: '', hash: '',
-  opened: false, compact: false, flat: false
+  opened: false, compact: false, flat: false,
+  material: undefined, effect: undefined
 })
 
-const TIER_VAR: Record<Tier, string> = {
-  A: '--tier-a', B: '--tier-b', C: '--tier-c',
-  D: '--tier-d', LAST: '--tier-last', BUST: '--faint'
+/**
+ * 材質：灰／銀／金。這是獨立於賞別的一條「等級軸」——
+ * 金屬感靠的不是單一顏色，而是明暗交錯的多段漸層，所以每種材質都要
+ * 一組 lo/base/hi 三色，少了任何一段就會變成平塗的色塊。
+ */
+const MATERIALS = {
+  grey:   { lo: '#2b2e34', base: '#6e757f', hi: '#c6ccd5', rim: '#d8dde3', ink: '#101216' },
+  silver: { lo: '#3b4148', base: '#939ba4', hi: '#f4f7fa', rim: '#ffffff', ink: '#14161a' },
+  gold:   { lo: '#4f3709', base: '#b9862a', hi: '#f9e6a8', rim: '#ffeab4', ink: '#201704' }
+} as const
+export type PackMaterial = keyof typeof MATERIALS
+
+/** 賞別預設對應的材質，呼叫端可用 material 覆寫 */
+const TIER_MATERIAL: Record<Tier, PackMaterial> = {
+  A: 'gold', LAST: 'gold', B: 'silver', C: 'silver', D: 'grey', BUST: 'grey'
 }
-const foil = computed(() => `var(${TIER_VAR[props.tier]})`)
+
+/** 特效預設：金配火、銀配雷、灰不動 */
+const MATERIAL_EFFECT: Record<PackMaterial, 'fire' | 'bolt' | 'none'> = {
+  gold: 'fire', silver: 'bolt', grey: 'none'
+}
+
+const mat = computed(() => MATERIALS[props.material ?? TIER_MATERIAL[props.tier]])
+const matName = computed(() => props.material ?? TIER_MATERIAL[props.tier])
+const fx = computed(() => props.effect ?? MATERIAL_EFFECT[matName.value])
+const foil = computed(() => mat.value.base)
 const hashChip = computed(() => (props.hash ? props.hash.slice(0, 10).toUpperCase() : ''))
 const tierLabel = computed(() =>
   props.tier === 'LAST' ? '最後賞' : props.tier === 'BUST' ? '爆賞' : `${props.tier} 賞`
 )
-const uid = computed(() => `bx${props.tier}${(props.serial || props.label || 'vd').replace(/\W/g, '')}`)
+// uid 必須含材質 —— 否則同一頁不同材質的盒子會共用漸層 id 而互相覆蓋
+const uid = computed(() => `bx${props.tier}${matName.value}${(props.serial || props.label || 'vd').replace(/\W/g, '')}`)
 
 const { el, rx, ry, gx, gy, active, onMove, reset } = useTilt(9)
 
@@ -82,6 +109,28 @@ const glyphRing = computed(() =>
     return { d, x: 150 + Math.cos(a) * 108, y: CY.value + Math.sin(a) * 108 }
   })
 )
+
+/** 火焰：底部竄動的幾簇，各自不同相位 */
+const FLAMES = [
+  { x: 52,  s: 1.0, d: '0s'   },
+  { x: 104, s: 1.5, d: '-.7s' },
+  { x: 150, s: 2.1, d: '-1.4s' },
+  { x: 196, s: 1.4, d: '-.35s' },
+  { x: 248, s: 0.9, d: '-1.05s' }
+]
+/* 底寬、頂尖。原本頭尾都收成一點（杏仁形），配上「下亮上淡」的漸層，
+   看起來會變成倒三角的尖刺而不是火苗。 */
+const FLAME_D = 'M-10 0 C-11 -13 -5 -19 -1 -38 C1 -26 4 -24 6 -30 C9 -20 10 -11 10 0 Z'
+/** 內焰：更窄更亮，疊在外焰上做出層次 */
+const FLAME_CORE_D = 'M-4.5 0 C-5 -9 -2 -13 0 -23 C2 -13 4.5 -9 4.5 0 Z'
+
+/** 閃電：三道，錯開閃爍時間 */
+const BOLTS = [
+  { x: 74,  y: 108, s: 1.5, d: '0s'    },
+  { x: 226, y: 132, s: 1.1, d: '-1.9s' },
+  { x: 150, y: 96,  s: 0.8, d: '-3.3s' }
+]
+const BOLT_D = 'M-7 -34 L9 -6 L1 -3 L11 30 L-9 -1 L-1 -4 Z'
 
 /** 封緘後方的放射光芒 */
 const rays = computed(() =>
@@ -152,13 +201,30 @@ const rays = computed(() =>
               <stop offset="100%" stop-color="var(--bg)" />
             </linearGradient>
 
-            <linearGradient :id="`${uid}-seal`" x1="0" y1="0" x2="1" y2="0.4">
-              <stop offset="0%" :stop-color="foil" stop-opacity=".5" />
-              <stop offset="32%" :stop-color="foil" stop-opacity="1" />
-              <stop offset="50%" stop-color="#fff" stop-opacity=".95" />
-              <stop offset="68%" :stop-color="foil" stop-opacity="1" />
-              <stop offset="100%" :stop-color="foil" stop-opacity=".45" />
+            <!-- 金屬感靠明暗交錯的多段漸層，不是單色加白 -->
+            <linearGradient :id="`${uid}-seal`" x1="0" y1="0" x2="1" y2="0.35">
+              <stop offset="0%" :stop-color="mat.lo" />
+              <stop offset="10%" :stop-color="mat.base" />
+              <stop offset="24%" :stop-color="mat.hi" />
+              <stop offset="36%" :stop-color="mat.base" />
+              <stop offset="50%" :stop-color="mat.rim" />
+              <stop offset="62%" :stop-color="mat.base" />
+              <stop offset="78%" :stop-color="mat.lo" />
+              <stop offset="90%" :stop-color="mat.hi" />
+              <stop offset="100%" :stop-color="mat.base" />
             </linearGradient>
+
+            <!-- 火焰漸層：底部亮心，往上收成材質色 -->
+            <linearGradient :id="`${uid}-flame`" x1="0" y1="1" x2="0" y2="0">
+              <stop offset="0%" :stop-color="mat.rim" stop-opacity=".85" />
+              <stop offset="35%" :stop-color="mat.hi" stop-opacity=".5" />
+              <stop offset="100%" :stop-color="mat.base" stop-opacity="0" />
+            </linearGradient>
+
+            <radialGradient :id="`${uid}-emberglow`" cx="0.5" cy="1" r="0.7">
+              <stop offset="0%" :stop-color="mat.base" stop-opacity=".5" />
+              <stop offset="100%" :stop-color="mat.base" stop-opacity="0" />
+            </radialGradient>
 
             <radialGradient :id="`${uid}-orb`">
               <stop offset="0%" :stop-color="foil" stop-opacity=".5" />
@@ -181,7 +247,7 @@ const rays = computed(() =>
           <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-card)`" />
 
           <!-- 放射光芒：封緘後方的儀式感 -->
-          <g :transform="`translate(150 ${CY})`" :fill="foil">
+          <g :transform="`translate(150 ${CY})`" :fill="mat.hi">
             <path
               v-for="(r, i) in rays" :key="i"
               :transform="`rotate(${r.a})`" :opacity="r.o"
@@ -191,8 +257,40 @@ const rays = computed(() =>
 
           <circle cx="150" :cy="CY" r="118" :fill="`url(#${uid}-orb)`" />
 
+          <!-- 火：底部竄動的火苗 + 餘燼光 -->
+          <g v-if="fx === 'fire' && !opened" class="fire">
+            <ellipse cx="150" cy="400" rx="150" ry="90" :fill="`url(#${uid}-emberglow)`" />
+            <!-- 定位在外層 <g>、動畫在內層 <path>：
+                 CSS animation 的 transform 會整個覆蓋 SVG 的 transform 屬性，
+                 兩者寫在同一個元素上，火苗會塌回畫布原點消失在畫面外。 -->
+            <g v-for="(f, i) in FLAMES" :key="i"
+               :transform="`translate(${f.x} 392) scale(${f.s})`">
+              <path
+                class="flame" :d="FLAME_D"
+                :fill="`url(#${uid}-flame)`"
+                :style="{ animationDelay: f.d }"
+              />
+              <path
+                class="flame core" :d="FLAME_CORE_D"
+                :fill="mat.rim" opacity=".55"
+                :style="{ animationDelay: f.d }"
+              />
+            </g>
+          </g>
+
+          <!-- 雷：錯開閃爍的三道電光 -->
+          <g v-if="fx === 'bolt' && !opened" class="bolts">
+            <g v-for="(b, i) in BOLTS" :key="i"
+               :transform="`translate(${b.x} ${b.y}) scale(${b.s})`">
+              <path
+                class="bolt" :d="BOLT_D" :fill="mat.rim"
+                :style="{ animationDelay: b.d }"
+              />
+            </g>
+          </g>
+
           <!-- 屬性符號環 -->
-          <g :fill="foil" opacity=".5">
+          <g :fill="mat.hi" opacity=".42">
             <path
               v-for="(g, i) in glyphRing" :key="i"
               :transform="`translate(${g.x.toFixed(1)} ${g.y.toFixed(1)})`" :d="g.d"
@@ -211,11 +309,12 @@ const rays = computed(() =>
             <path d="M0 72 H300" stroke="#fff" stroke-opacity=".5" />
             <path d="M0 120 H300" stroke="#000" stroke-opacity=".35" />
             <path d="M0 96 H300" stroke="#000" stroke-opacity=".28" stroke-dasharray="3 4" />
-            <text v-if="hashChip && !compact" class="seal-text" x="20" y="102">封存 {{ hashChip }}</text>
+            <text v-if="hashChip && !compact" class="seal-text" x="20" y="102"
+                  :fill="mat.ink">封存 {{ hashChip }}</text>
             <text
               class="seal-tier" :class="{ solo: compact }"
               :x="compact ? 150 : 280" y="102"
-              :text-anchor="compact ? 'middle' : 'end'"
+              :text-anchor="compact ? 'middle' : 'end'" :fill="mat.ink"
             >{{ tierLabel }}</text>
           </g>
 
@@ -238,7 +337,8 @@ const rays = computed(() =>
               <text class="brand" x="40" y="23">VAULTDRAW</text>
               <template v-if="serial">
                 <rect x="198" y="0" width="76" height="34" :fill="foil" opacity=".9" />
-                <text class="serial" x="236" y="23" text-anchor="middle">{{ serial.slice(-7) }}</text>
+                <text class="serial" x="236" y="23" text-anchor="middle"
+                      :fill="mat.ink">{{ serial.slice(-7) }}</text>
               </template>
             </g>
           </template>
@@ -400,8 +500,36 @@ const rays = computed(() =>
   fill: #efeae4;
 }
 
+/* ---- 屬性特效 ----
+   全部走 CSS 動畫，沒有 JS 迴圈。transform-box: fill-box 是必要的：
+   SVG 元素的 transform-origin 預設參照的是整個 viewBox 原點，
+   不設的話火苗會繞著畫布左上角縮放而不是自己的底部。 */
+.flame, .bolt {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .flame { animation: flame-lick 1.9s ease-in-out infinite alternate; }
+  .bolt { animation: bolt-strike 4.6s steps(1, end) infinite; }
+}
+@keyframes flame-lick {
+  0%   { transform: scaleY(.82) scaleX(1.05); opacity: .55; }
+  45%  { transform: scaleY(1.18) scaleX(.92); opacity: .95; }
+  100% { transform: scaleY(.95) scaleX(1.08); opacity: .7; }
+}
+/* 閃電是「大部分時間不在」，偶爾爆閃兩下 —— 持續發亮就變成裝飾線條 */
+@keyframes bolt-strike {
+  0%, 100% { opacity: 0; }
+  2%   { opacity: .95; }
+  4%   { opacity: .12; }
+  6%   { opacity: .85; }
+  11%  { opacity: 0; }
+}
+/* 減少動態時特效靜止但保留，維持材質辨識度 */
 @media (prefers-reduced-motion: reduce) {
   .box { transition: none; }
   .gloss { display: none; }
+  .flame { opacity: .8; }
+  .bolt { opacity: .5; }
 }
 </style>
