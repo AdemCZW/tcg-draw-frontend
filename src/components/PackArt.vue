@@ -175,11 +175,11 @@ const TEAR_MAX = 300
 const TEAR_COMMIT = 232        // 過這個點就算撕開，不再彈回
 const tearX = ref(0)
 const tearing = ref(false)
+const tweening = ref(false)   // 點擊觸發的自動撕開期間，交給 CSS transition
 const torn = ref(false)
 let tearStartX = 0
 let tearStartVal = 0
 let tearSpanPx = 1
-let tearRaf = 0
 
 /** 盒蓋掀起 / 封條褪色，撕開與外部傳入的 opened 兩者其一都算 */
 const isOpen = computed(() => props.opened || torn.value)
@@ -191,24 +191,26 @@ function commitTear() {
   emit('torn')
 }
 
-/** 點一下（沒有拖）也要能撕 —— 用補間把進度推到底 */
+/**
+ * 點一下（沒有拖）也要能撕。
+ *
+ * 原本用 requestAnimationFrame 逐幀補間，但 rAF 在分頁不可見或被瀏覽器
+ * 節流時不會推進，撕開就永遠停在原地。改成一次把進度設到底、讓 CSS
+ * transition 負責過渡 —— 動畫由合成器跑，不依賴 JS 幀迴圈；
+ * 就算過渡被跳過，狀態也已經正確落在「已撕開」。
+ */
 function tweenTear() {
-  const from = tearX.value
-  const t0 = performance.now()
-  const step = (now: number) => {
-    const k = Math.min(1, (now - t0) / 520)
-    // easeOutCubic：撕開一開始快、末端收慢，像紙真的被扯斷
-    tearX.value = from + (TEAR_MAX - from) * (1 - Math.pow(1 - k, 3))
-    if (k < 1) tearRaf = requestAnimationFrame(step)
-    else commitTear()
-  }
-  tearRaf = requestAnimationFrame(step)
+  tweening.value = true
+  tearX.value = TEAR_MAX
+  window.setTimeout(() => {
+    tweening.value = false
+    commitTear()
+  }, 520)
 }
 
 function onTearDown(e: PointerEvent) {
   if (!props.tearable || torn.value) return
   e.stopPropagation()          // 別讓拖撕條同時觸發盒子傾斜
-  cancelAnimationFrame(tearRaf)
   // 先進入拖曳狀態，再嘗試指標捕捉。
   // setPointerCapture 會在指標非活躍時丟 NotFoundError，而 `?.` 只防
   // 「方法不存在」不防「方法丟例外」—— 放在前面的話一失敗就會中斷整個
@@ -238,8 +240,6 @@ function onTearUp(e: PointerEvent) {
   if (Math.abs(e.clientX - tearStartX) < 4) tweenTear()
   else if (!torn.value) tearX.value = 0
 }
-
-onBeforeUnmount(() => cancelAnimationFrame(tearRaf))
 
 /** 撕開處的鋸齒邊，隨進度長出來 */
 const tearEdge = computed(() => {
@@ -875,7 +875,7 @@ const rays = computed(() =>
 
           <!-- 已撕下的碎片：越撕越往下翻、越淡 -->
           <g
-            v-if="tearX > 0" class="tearPiece"
+            v-if="tearX > 0" class="tearPiece" :class="{ tweening }"
             :clip-path="`url(#${uid}-gone)`"
             :transform="`translate(${(-tearX * 0.06).toFixed(1)} ${(tearX * 0.16).toFixed(1)}) rotate(${(-tearX * 0.02).toFixed(2)} 0 96)`"
             :opacity="Math.max(0, 1 - tearX / 300)"
@@ -912,7 +912,7 @@ const rays = computed(() =>
           <!-- 鋸齒斷口 -->
           <path
             v-if="tearable && tearX > 0 && tearX < 300"
-            :d="tearEdge" fill="none" :stroke="mat.ink"
+            :d="tearEdge" fill="none" class="tearEdge" :class="{ tweening }" :stroke="mat.ink"
             stroke-opacity=".55" stroke-width="1.4"
           />
 
@@ -1240,7 +1240,17 @@ const rays = computed(() =>
 
 /* 拉環：cursor 與輕微的呼吸提示「這裡可以拖」。
    撕的時候停掉呼吸，避免跟拖曳的位移打架。 */
-.pullTabHit { cursor: grab; touch-action: none; }
+/*
+ * 盒面 SVG 整棵關掉指標事件，只有拉環例外。
+ *
+ * SVG 圖形預設會接收指標事件，而受光、暗角、印刷網點這幾層滿版 <rect>
+ * 都畫在拉環之後 —— 它們會把點擊全部吃掉，拉環永遠點不到。
+ * 逐一補 pointer-events="none" 很容易漏（之後再加裝飾層就會再壞一次），
+ * 所以反過來：預設全關，需要互動的元素自己打開。
+ */
+.front svg { pointer-events: none; }
+
+.pullTabHit { pointer-events: auto; cursor: grab; touch-action: none; }
 .pullTabHit.dragging { cursor: grabbing; }
 .pullTab { transform-box: fill-box; transform-origin: 50% 50%; }
 @media (prefers-reduced-motion: no-preference) {
@@ -1253,6 +1263,11 @@ const rays = computed(() =>
 }
 /* 撕下的碎片不吃指標，否則會擋住底下的拉環 */
 .tearPiece { pointer-events: none; }
+/* 點擊自動撕開時用過渡補動作；拖曳時不能有過渡，否則會跟不上手指 */
+.tearPiece.tweening,
+.tearEdge.tweening {
+  transition: transform .52s cubic-bezier(.25, .8, .35, 1), opacity .52s ease-out, d .52s linear;
+}
 
 .gloss {
   position: absolute; inset: 0;
