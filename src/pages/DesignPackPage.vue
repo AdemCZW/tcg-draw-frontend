@@ -28,6 +28,28 @@ const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
   <div class="container page">
     <h1 class="display">卡包設計</h1>
 
+    <h2>產品視窗</h2>
+    <div class="grid pair three">
+      <figure>
+        <PackArt material="gold" effect="fire" tier="A" serial="VD-0001/080"
+                 hash="f3a91c04bb27de44"
+                 card-image="https://assets.tcgdex.net/zh-tw/SV/SVF/001/high.webp" />
+        <figcaption class="mono muted">A · 光輝噴火龍</figcaption>
+      </figure>
+      <figure>
+        <PackArt material="silver" effect="water" tier="C" serial="VD-0027/050"
+                 hash="c0ffee9988776655"
+                 card-image="https://assets.tcgdex.net/zh-tw/SV/SV2a/009/high.webp" />
+        <figcaption class="mono muted">C · 水箭龜</figcaption>
+      </figure>
+      <figure>
+        <PackArt material="silver" effect="bolt" tier="B" serial="VD-0014/040"
+                 hash="a1b2c3d4e5f60718"
+                 card-image="https://assets.tcgdex.net/zh-tw/SV/SVC/001/high.webp" />
+        <figcaption class="mono muted">B · 皮卡丘</figcaption>
+      </figure>
+    </div>
+
     <h2>材質：灰 / 銀 / 金</h2>
     <div class="grid pair three">
       <figure>

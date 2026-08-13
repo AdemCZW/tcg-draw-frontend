@@ -37,10 +37,16 @@ const props = withDefaults(defineProps<{
   material?: 'grey' | 'silver' | 'gold'
   /** 特效。不給就依材質自動選（金=火、銀=雷、灰=晶） */
   effect?: 'fire' | 'bolt' | 'water' | 'leaf' | 'crystal' | 'star' | 'none'
+  /**
+   * 產品視窗要展示的卡圖網址。給了之後盒面會開一個斜擺的窗口把卡露出來 ——
+   * 實體卡盒本來就靠這個告訴人「裡面裝什麼」。
+   * 有卡圖時封緘會上移讓位，底部的文字標題也讓給卡片本身。
+   */
+  cardImage?: string
 }>(), {
   tier: 'D', label: '', serial: '', hash: '',
   opened: false, compact: false, flat: false,
-  material: undefined, effect: undefined
+  material: undefined, effect: undefined, cardImage: undefined
 })
 
 /**
@@ -202,8 +208,14 @@ const boxTransform = computed(() => {
   return `rotateX(${x}deg) rotateY(${y}deg)`
 })
 
-// 500 單位高的新版面，封緘落在視覺中心略偏上
-const CY = computed(() => (props.compact ? 258 : 244))
+/* 500 單位高的版面。有產品視窗時封緘要往上讓位，
+   否則會壓在卡片上，兩個視覺重心互相打架。 */
+const CY = computed(() => {
+  if (props.compact) return 258
+  return props.cardImage ? 196 : 244
+})
+/** 產品視窗只在正常尺寸顯示 —— 縮圖下卡圖只有十幾 px，糊成一團反而扣分 */
+const showWindow = computed(() => !!props.cardImage && !props.compact)
 
 /**
  * 縮圖不掛亂流濾鏡。
@@ -411,6 +423,21 @@ const STAR_FLARES = [
 const SPARK_D = 'M0 -15 Q1.9 -2.2 15 0 Q1.9 2.2 0 15 Q-1.9 2.2 -15 0 Q-1.9 -2.2 0 -15 Z'
 /** 流星：斜劃過去，帶一條漸淡的尾巴 */
 const METEOR_D = 'M0 0 L-46 26'
+
+/* ---- 體積光束 ----
+   從盒頂斜射進來的光。六種屬性共用，只換顏色。
+   加這個的理由：粒子全部集中在中段與底部，上半只有漸層，畫面是空的。
+   光束把上下串起來，也是實體卡盒美術很常見的構圖骨架。
+   角度統一偏右下，跟盒身左上的主光方向一致。 */
+const SHAFTS = [
+  { x1: 18,  w: 26, spread: 54, op: .17, dur: '11s', d: '0s' },
+  { x1: 74,  w: 44, spread: 88, op: .11, dur: '14s', d: '-4s' },
+  { x1: 152, w: 20, spread: 46, op: .2,  dur: '9s',  d: '-6.5s' },
+  { x1: 206, w: 36, spread: 74, op: .09, dur: '16s', d: '-2s' }
+]
+/** 上寬下擴的梯形，超出畫布下緣讓它看起來是「射出去」而不是一段線 */
+const shaftPath = (x1: number, w: number, spread: number) =>
+  `M${x1} -10 L${x1 + w} -10 L${x1 + w + spread} 520 L${x1 + spread - 14} 520 Z`
 
 /** 封緘後方的放射光芒 */
 const rays = computed(() =>
@@ -783,9 +810,33 @@ const rays = computed(() =>
             </template>
           </g>
 
+          <!-- 產品視窗：把真實卡圖斜擺露出來。
+               實體卡盒靠開窗告訴人「裡面裝什麼」，這也是整個盒面唯一
+               照片級的細節 —— 向量漸層畫不出卡面那種資訊密度。 -->
+          <g v-if="showWindow" transform="translate(150 352) rotate(-6)">
+            <!-- 窗口內縮的暗邊，讓卡片看起來是「陷進去」而不是貼上去 -->
+            <rect x="-86" y="-116" width="172" height="232" rx="7"
+                  fill="#000" fill-opacity=".55" />
+            <clipPath :id="`${uid}-win`">
+              <rect x="-79" y="-109" width="158" height="218" rx="5" />
+            </clipPath>
+            <image
+              :href="cardImage" x="-79" y="-109" width="158" height="218"
+              preserveAspectRatio="xMidYMid slice"
+              :clip-path="`url(#${uid}-win)`"
+            />
+            <!-- 窗膜反光：一道斜向高光，暗示上面蓋著一層透明片 -->
+            <path d="M-79 60 L79 -60 L79 -22 L-79 98 Z" fill="#fff" fill-opacity=".07"
+                  :clip-path="`url(#${uid}-win)`" />
+            <rect x="-79" y="-109" width="158" height="218" rx="5"
+                  fill="none" :stroke="foil" stroke-width="2" stroke-opacity=".85" />
+            <rect x="-83" y="-113" width="166" height="226" rx="6"
+                  fill="none" stroke="#fff" stroke-opacity=".14" />
+          </g>
+
           <template v-if="!compact">
-            <text v-if="label" class="label" x="150" y="392" text-anchor="middle">{{ label }}</text>
-            <g transform="translate(0 424)">
+            <text v-if="label && !showWindow" class="label" x="150" y="392" text-anchor="middle">{{ label }}</text>
+            <g :transform="`translate(0 ${showWindow ? 452 : 424})`">
               <path d="M26 0 H182 L194 12 V34 H26 Z" fill="#0b0a0c" fill-opacity=".9" />
               <path d="M26 0 H182 L194 12 V34 H26 Z" fill="none" :stroke="foil" stroke-opacity=".45" />
               <text class="brand" x="40" y="23">VAULTDRAW</text>
@@ -843,13 +894,13 @@ const rays = computed(() =>
 .box {
   position: absolute;
   /*
-   * 窄而厚。先前 72cqw 寬、20cqw 厚（厚/寬 = 0.28）讀起來像面膜包 ——
-   * 寬又扁。改成 58 寬 / 30 厚（0.52）才有實體卡盒的份量。
+   * 窄而厚。最早 72 寬 × 20 厚（0.28）像面膜包，現在 58 寬 × 38 厚（0.66），
+   * 接近實體卡盒的比例。
    * left 要把「正面 + 側面投影」一起算進去才置中：
-   * 側面在 rotateY(-17°) 下的投影約 30 × sin17° ≈ 8.8cqw，
-   * 所以視覺總寬約 66.8，left = (100 - 66.8) / 2 ≈ 17cqw。
+   * 側面在 rotateY(-17°) 下的投影約 38 × sin17° ≈ 11.1cqw，
+   * 視覺總寬約 69.1，left = (100 - 69.1) / 2 ≈ 15cqw。
    */
-  left: 17cqw; top: 19cqw;
+  left: 15cqw; top: 19cqw;
   width: 58cqw; height: 96cqw;
   transform-style: preserve-3d;
   transition: transform .5s cubic-bezier(.2, .7, .3, 1);
@@ -921,7 +972,7 @@ const rays = computed(() =>
 /* 右側面 */
 .side {
   left: 100%; top: 0;
-  width: 30cqw; height: 100%;
+  width: 38cqw; height: 100%;
   transform-origin: 0 50%;
   transform: rotateY(90deg);
   /* 側面是背光面，用同一組象牙色但整體壓暗，維持跟正面同一材質的錯覺。
@@ -972,7 +1023,7 @@ const rays = computed(() =>
 /* 頂面：由淺至深，呼應側面同一光源方向 */
 .top {
   left: 0; bottom: 100%;
-  width: 100%; height: 30cqw;
+  width: 100%; height: 38cqw;
   transform-origin: 50% 100%;
   transform: rotateX(90deg);
   background: linear-gradient(180deg, var(--pk-body-lo), var(--pk-body-hi));
