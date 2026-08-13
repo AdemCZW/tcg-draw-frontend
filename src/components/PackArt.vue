@@ -62,6 +62,23 @@ const TIER_MATERIAL: Record<Tier, PackMaterial> = {
 
 /** 特效預設：金配火、銀配雷、灰不動 */
 export type PackEffect = 'fire' | 'bolt' | 'water' | 'leaf' | 'crystal' | 'star' | 'none'
+
+/**
+ * 屬性色。兩條軸分工：材質（灰銀金）＝等級，屬性＝顏色。
+ * 先前特效沿用材質色，結果銀盒上的火是白色的 —— 屬性的識別力整個浪費掉。
+ *
+ * 每個屬性三階：core 亮心、mid 主色、deep 邊緣。
+ * star 刻意做成紫white 而不是金色，否則會跟 bolt 的電黃撞在一起。
+ */
+const ELEMENTS = {
+  fire:    { core: '#ffe0ac', mid: '#ff8a3d', deep: '#e0391a' },
+  water:   { core: '#d4f2ff', mid: '#43b4f7', deep: '#1668d4' },
+  leaf:    { core: '#e8ffd2', mid: '#63d84c', deep: '#1f9440' },
+  bolt:    { core: '#fffce0', mid: '#ffe14d', deep: '#f59e00' },
+  crystal: { core: '#e8faff', mid: '#6fd6ff', deep: '#3f7bff' },
+  star:    { core: '#ffffff', mid: '#f0a8ff', deep: '#a44cff' },
+  none:    { core: '#e9edf2', mid: '#aab3bd', deep: '#6b727c' }
+} as const
 const MATERIAL_EFFECT: Record<PackMaterial, PackEffect> = {
   gold: 'fire', silver: 'bolt', grey: 'crystal'
 }
@@ -70,6 +87,7 @@ const mat = computed(() => MATERIALS[props.material ?? TIER_MATERIAL[props.tier]
 const matName = computed(() => props.material ?? TIER_MATERIAL[props.tier])
 const fx = computed(() => props.effect ?? MATERIAL_EFFECT[matName.value])
 const foil = computed(() => mat.value.base)
+const elem = computed(() => ELEMENTS[fx.value])
 const hashChip = computed(() => (props.hash ? props.hash.slice(0, 10).toUpperCase() : ''))
 const tierLabel = computed(() =>
   props.tier === 'LAST' ? '最後賞' : props.tier === 'BUST' ? '爆賞' : `${props.tier} 賞`
@@ -252,20 +270,22 @@ const rays = computed(() =>
 
             <!-- 火焰漸層：底部亮心，往上收成材質色 -->
             <linearGradient :id="`${uid}-flame`" x1="0" y1="1" x2="0" y2="0">
-              <stop offset="0%" :stop-color="mat.rim" stop-opacity=".85" />
-              <stop offset="35%" :stop-color="mat.hi" stop-opacity=".5" />
-              <stop offset="100%" :stop-color="mat.base" stop-opacity="0" />
+              <stop offset="0%" :stop-color="elem.core" />
+              <stop offset="30%" :stop-color="elem.mid" stop-opacity=".92" />
+              <stop offset="72%" :stop-color="elem.deep" stop-opacity=".5" />
+              <stop offset="100%" :stop-color="elem.deep" stop-opacity="0" />
             </linearGradient>
 
-            <radialGradient :id="`${uid}-emberglow`" cx="0.5" cy="1" r="0.7">
-              <stop offset="0%" :stop-color="mat.base" stop-opacity=".5" />
-              <stop offset="100%" :stop-color="mat.base" stop-opacity="0" />
+            <radialGradient :id="`${uid}-emberglow`" cx="0.5" cy="1" r="0.75">
+              <stop offset="0%" :stop-color="elem.mid" stop-opacity=".55" />
+              <stop offset="55%" :stop-color="elem.deep" stop-opacity=".22" />
+              <stop offset="100%" :stop-color="elem.deep" stop-opacity="0" />
             </radialGradient>
 
             <radialGradient :id="`${uid}-orb`">
-              <stop offset="0%" :stop-color="foil" stop-opacity=".5" />
-              <stop offset="40%" :stop-color="foil" stop-opacity=".17" />
-              <stop offset="100%" :stop-color="foil" stop-opacity="0" />
+              <stop offset="0%" :stop-color="elem.mid" stop-opacity=".6" />
+              <stop offset="40%" :stop-color="elem.deep" stop-opacity=".26" />
+              <stop offset="100%" :stop-color="elem.deep" stop-opacity="0" />
             </radialGradient>
 
             <linearGradient :id="`${uid}-lit`" x1="0" y1="0" x2="1" y2="1">
@@ -283,7 +303,7 @@ const rays = computed(() =>
           <rect x="0" y="0" width="300" height="400" :fill="`url(#${uid}-card)`" />
 
           <!-- 放射光芒：封緘後方的儀式感 -->
-          <g :transform="`translate(150 ${CY})`" :fill="mat.hi">
+          <g :transform="`translate(150 ${CY})`" :fill="elem.mid">
             <path
               v-for="(r, i) in rays" :key="i"
               :transform="`rotate(${r.a})`" :opacity="r.o"
@@ -308,7 +328,7 @@ const rays = computed(() =>
               />
               <path
                 class="flame core" :d="FLAME_CORE_D"
-                :fill="mat.rim" opacity=".55"
+                :fill="elem.core" opacity=".9"
                 :style="{ animationDelay: f.d }"
               />
             </g>
@@ -319,7 +339,7 @@ const rays = computed(() =>
             <g v-for="(b, i) in BOLTS" :key="i"
                :transform="`translate(${b.x} ${b.y}) scale(${b.s})`">
               <path
-                class="bolt" :d="BOLT_D" :fill="mat.rim"
+                class="bolt" :d="BOLT_D" :fill="elem.core" :stroke="elem.mid" stroke-width="2"
                 :style="{ animationDelay: b.d }"
               />
             </g>
@@ -329,18 +349,19 @@ const rays = computed(() =>
           <g v-if="fx === 'water' && !opened" class="water">
             <g v-for="(r, i) in RIPPLES" :key="'r' + i" transform="translate(150 386)">
               <ellipse class="ripple" rx="52" ry="13" fill="none"
-                       :stroke="mat.hi" stroke-width="2" :style="{ animationDelay: r.d }" />
+                       :stroke="elem.core" stroke-width="2.5" :style="{ animationDelay: r.d }" />
             </g>
             <g v-for="(b, i) in BUBBLES" :key="'b' + i" :transform="`translate(${b.x} 392)`">
-              <circle class="bubble" :r="b.r" fill="none" :stroke="mat.hi"
-                      stroke-width="1.6" :style="{ animationDelay: b.d }" />
+              <circle class="bubble" :r="b.r" :fill="elem.mid" fill-opacity=".18"
+                      :stroke="elem.core" stroke-width="1.8" :style="{ animationDelay: b.d }" />
             </g>
           </g>
 
           <!-- 葉：飄落搖擺 -->
           <g v-if="fx === 'leaf' && !opened" class="leaves">
             <g v-for="(l, i) in LEAVES" :key="i" :transform="`translate(${l.x} 40) scale(${l.s})`">
-              <path class="leaf" :d="LEAF_D" :fill="mat.hi" opacity=".5"
+              <path class="leaf" :d="LEAF_D" :fill="elem.mid" opacity=".85"
+                    :stroke="elem.core" stroke-width="1"
                     :style="{ animationDelay: l.d, '--rot': l.rot + 'deg' }" />
             </g>
           </g>
@@ -348,22 +369,22 @@ const rays = computed(() =>
           <!-- 晶：浮沉轉動的碎晶 -->
           <g v-if="fx === 'crystal' && !opened" class="shards">
             <g v-for="(c, i) in SHARDS" :key="i" :transform="`translate(${c.x} ${c.y}) scale(${c.s})`">
-              <path class="shard" :d="SHARD_D" :fill="mat.hi" opacity=".38"
+              <path class="shard" :d="SHARD_D" :fill="elem.mid" opacity=".6"
                     :style="{ animationDelay: c.d }" />
-              <path class="shard" :d="SHARD_D" fill="none" :stroke="mat.rim"
-                    stroke-width="1" opacity=".5" :style="{ animationDelay: c.d }" />
+              <path class="shard" :d="SHARD_D" fill="none" :stroke="elem.core"
+                    stroke-width="1.4" opacity=".85" :style="{ animationDelay: c.d }" />
             </g>
           </g>
 
           <!-- 星：散布閃爍 -->
           <g v-if="fx === 'star' && !opened" class="sparks">
             <g v-for="(p, i) in SPARKS" :key="i" :transform="`translate(${p.x} ${p.y}) scale(${p.s})`">
-              <path class="spark" :d="SPARK_D" :fill="mat.rim" :style="{ animationDelay: p.d }" />
+              <path class="spark" :d="SPARK_D" :fill="elem.core" :style="{ animationDelay: p.d }" />
             </g>
           </g>
 
           <!-- 屬性符號環 -->
-          <g :fill="mat.hi" opacity=".42">
+          <g :fill="elem.mid" opacity=".72">
             <g v-for="(g, i) in glyphRing" :key="i"
                :transform="`translate(${g.x.toFixed(1)} ${g.y.toFixed(1)})`">
               <path class="glyph" :d="g.d" :style="{ animationDelay: `${i * -0.45}s` }" />
@@ -586,59 +607,63 @@ const rays = computed(() =>
   transform-origin: 50% 50%;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .flame  { animation: flame-lick 1.9s ease-in-out infinite alternate; }
-  .bolt   { animation: bolt-strike 4.6s steps(1, end) infinite; }
-  .ripple { animation: ripple-out 4.8s ease-out infinite; }
-  .bubble { animation: bubble-rise 6.4s ease-in infinite; }
-  .leaf   { animation: leaf-fall 7.2s linear infinite; }
-  .shard  { animation: shard-float 6.8s ease-in-out infinite alternate; }
-  .spark  { animation: spark-twinkle 3.4s ease-in-out infinite; }
-  .glyph  { animation: glyph-pulse 3.6s ease-in-out infinite alternate; }
+  /* 節奏整體加快、幅度加大 —— 先前太含蓄，在縮圖尺寸下幾乎看不出在動 */
+  .flame  { animation: flame-lick 1.1s ease-in-out infinite alternate; }
+  .bolt   { animation: bolt-strike 2.8s steps(1, end) infinite; }
+  .ripple { animation: ripple-out 3.2s ease-out infinite; }
+  .bubble { animation: bubble-rise 4.2s ease-in infinite; }
+  .leaf   { animation: leaf-fall 5s linear infinite; }
+  .shard  { animation: shard-float 3.6s ease-in-out infinite alternate; }
+  .spark  { animation: spark-twinkle 2s ease-in-out infinite; }
+  .glyph  { animation: glyph-pulse 2.2s ease-in-out infinite alternate; }
 }
 @keyframes flame-lick {
-  0%   { transform: scaleY(.82) scaleX(1.05); opacity: .55; }
-  45%  { transform: scaleY(1.18) scaleX(.92); opacity: .95; }
-  100% { transform: scaleY(.95) scaleX(1.08); opacity: .7; }
+  0%   { transform: scaleY(.7) scaleX(1.14) translateX(-2px); opacity: .6; }
+  40%  { transform: scaleY(1.5) scaleX(.82); opacity: 1; }
+  70%  { transform: scaleY(1.15) scaleX(1.02) translateX(2px); opacity: .9; }
+  100% { transform: scaleY(1.62) scaleX(.88); opacity: 1; }
 }
 /* 閃電是「大部分時間不在」，偶爾爆閃兩下 —— 持續發亮就變成裝飾線條 */
 @keyframes bolt-strike {
-  0%, 100% { opacity: 0; }
-  2%   { opacity: .95; }
-  4%   { opacity: .12; }
-  6%   { opacity: .85; }
-  11%  { opacity: 0; }
+  0%, 100% { opacity: 0; transform: scale(1); }
+  2%   { opacity: 1; transform: scale(1.12); }
+  5%    { opacity: .15; transform: scale(1); }
+  8%   { opacity: 1; transform: scale(1.06); }
+  12%  { opacity: .3; }
+  16%  { opacity: 0; }
 }
 @keyframes ripple-out {
-  0%   { transform: scale(.25); opacity: .5; }
-  100% { transform: scale(1.7); opacity: 0; }
+  0%   { transform: scale(.2); opacity: .95; }
+  100% { transform: scale(2.1); opacity: 0; }
 }
 @keyframes bubble-rise {
-  0%   { transform: translateY(0) translateX(0); opacity: 0; }
-  12%  { opacity: .55; }
-  50%  { transform: translateY(-150px) translateX(7px); }
-  85%  { opacity: .35; }
-  100% { transform: translateY(-300px) translateX(-5px); opacity: 0; }
+  0%   { transform: translateY(0) translateX(0) scale(.6); opacity: 0; }
+  10%  { opacity: .95; }
+  50%  { transform: translateY(-165px) translateX(14px) scale(1.15); }
+  85%  { opacity: .7; }
+  100% { transform: translateY(-330px) translateX(-11px) scale(1.3); opacity: 0; }
 }
 /* --rot 讓每片葉子有不同的初始角度，否則五片會同角度同步落下 */
 @keyframes leaf-fall {
   0%   { transform: translateY(0) translateX(0) rotate(var(--rot, 0deg)); opacity: 0; }
-  10%  { opacity: .5; }
-  50%  { transform: translateY(180px) translateX(18px) rotate(calc(var(--rot, 0deg) + 180deg)); }
-  90%  { opacity: .4; }
-  100% { transform: translateY(350px) translateX(-10px) rotate(calc(var(--rot, 0deg) + 360deg)); opacity: 0; }
+  8%   { opacity: .95; }
+  35%  { transform: translateY(120px) translateX(30px) rotate(calc(var(--rot, 0deg) + 160deg)); }
+  70%  { transform: translateY(250px) translateX(-26px) rotate(calc(var(--rot, 0deg) + 400deg)); }
+  92%  { opacity: .8; }
+  100% { transform: translateY(360px) translateX(12px) rotate(calc(var(--rot, 0deg) + 620deg)); opacity: 0; }
 }
 @keyframes shard-float {
-  0%   { transform: translateY(-8px) rotate(-14deg); opacity: .3; }
-  100% { transform: translateY(10px) rotate(16deg); opacity: .62; }
+  0%   { transform: translateY(-18px) rotate(-32deg) scale(.85); opacity: .35; }
+  100% { transform: translateY(20px) rotate(38deg) scale(1.15); opacity: 1; }
 }
 @keyframes spark-twinkle {
-  0%, 100% { transform: scale(.25); opacity: 0; }
-  45%      { transform: scale(1); opacity: .85; }
-  60%      { transform: scale(.8); opacity: .5; }
+  0%, 100% { transform: scale(.15) rotate(0deg); opacity: 0; }
+  40%      { transform: scale(1.5) rotate(45deg); opacity: 1; }
+  62%      { transform: scale(.9) rotate(70deg); opacity: .55; }
 }
 @keyframes glyph-pulse {
-  from { opacity: .55; transform: scale(.94); }
-  to   { opacity: 1;   transform: scale(1.06); }
+  from { opacity: .45; transform: scale(.85); }
+  to   { opacity: 1;   transform: scale(1.18); }
 }
 
 /* 減少動態時特效靜止但保留，維持材質與屬性的辨識度 */
