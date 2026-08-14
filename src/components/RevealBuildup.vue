@@ -52,7 +52,6 @@ const ladder = computed(() => TIER_LADDER[props.tier])
 /* ---- 節奏 ----
    蓄力 340ms → 碎裂 280ms，一輪 620ms。最後一輪碎完再 420ms 的白閃收尾。
    最低階約 1.0 秒，最後賞約 3.5 秒 —— 長度本身就是獎賞的一部分。 */
-const CHARGE = 340
 const BURST = 280
 const FINALE = 420
 
@@ -74,11 +73,16 @@ const isLastRound = computed(() => round.value >= ladder.value.length - 1)
    精靈球只有一段，它就該長得跟大師球的第一段一模一樣；
    用相對比例算的話精靈球會直接全開，等級遞進就毀了。 */
 const LEVELS = [
-  { shard: 0.30, spark: 0.24, ray: 0,    line: false, tint: false, rings: 1, flare: 0, sweep: false },
-  { shard: 0.50, spark: 0.44, ray: 0.50, line: true,  tint: true,  rings: 2, flare: 0, sweep: false },
-  { shard: 0.70, spark: 0.66, ray: 0.75, line: true,  tint: true,  rings: 3, flare: 2, sweep: false },
-  { shard: 0.88, spark: 0.86, ray: 1,    line: true,  tint: true,  rings: 3, flare: 2, sweep: false },
-  { shard: 1,    spark: 1,    ray: 1,    line: true,  tint: true,  rings: 3, flare: 4, sweep: true }
+  { shard: .26, spark: .20, ray: 0,   line: false, tint: false, rings: 1, flare: 0, sweep: false,
+    glint: 0,   dust: 0,   pillar: false, shock: .55, shake: 0,   chroma: false, charge: 260 },
+  { shard: .46, spark: .40, ray: .45, line: true,  tint: true,  rings: 2, flare: 0, sweep: false,
+    glint: 6,   dust: 0,   pillar: false, shock: .8,  shake: .35, chroma: false, charge: 300 },
+  { shard: .66, spark: .62, ray: .7,  line: true,  tint: true,  rings: 3, flare: 2, sweep: false,
+    glint: 14,  dust: 10,  pillar: false, shock: 1,   shake: .6,  chroma: true,  charge: 350 },
+  { shard: .86, spark: .84, ray: 1,   line: true,  tint: true,  rings: 3, flare: 2, sweep: false,
+    glint: 22,  dust: 20,  pillar: true,  shock: 1.25, shake: .8, chroma: true,  charge: 410 },
+  { shard: 1,   spark: 1,   ray: 1,   line: true,  tint: true,  rings: 3, flare: 4, sweep: true,
+    glint: 34,  dust: 34,  pillar: true,  shock: 1.6, shake: 1,   chroma: true,  charge: 480 }
 ]
 const lvl = computed(() => LEVELS[Math.min(round.value, LEVELS.length - 1)])
 /** 球體大小與輝光也跟著絕對段數走 */
@@ -94,6 +98,7 @@ function clear() {
 
 function runRound() {
   phase.value = 'charge'
+  // 蓄力長度隨段數拉長：越高段等越久，那個「還沒完？」就是期待感本身
   timers.push(window.setTimeout(() => {
     phase.value = 'burst'
     timers.push(window.setTimeout(() => {
@@ -108,7 +113,7 @@ function runRound() {
         runRound()
       }
     }, BURST))
-  }, CHARGE))
+  }, lvl.value.charge))
 }
 
 function start() {
@@ -192,18 +197,45 @@ const LINES = (() => {
 })()
 
 
+/** 金光閃爍：四角星芒，隨機閃現。這層固定用金色不吃屬性色 ——
+    「金光」本身就是一個獨立的獎賞訊號，混進屬性色就失去意義 */
+const GLINTS = (() => {
+  const r = mulberry32(88991)
+  return Array.from({ length: 34 }, () => ({
+    x: 8 + r() * 84,
+    y: 10 + r() * 80,
+    s: 16 + r() * 34,
+    dur: 480 + r() * 520,
+    delay: r() * 620
+  }))
+})()
+/** 金粉：爆開後緩緩上飄的碎金 */
+const DUST = (() => {
+  const r = mulberry32(4242)
+  return Array.from({ length: 34 }, () => ({
+    x: 6 + r() * 88,
+    s: 2 + r() * 4,
+    rise: 30 + r() * 46,
+    dur: 900 + r() * 900,
+    delay: r() * 400,
+    drift: (r() - 0.5) * 40
+  }))
+})()
+
 /* 每一段實際參與的粒子。切片而不是全開，是「越變越華麗」成立的前提 */
 const shardsNow = computed(() => take(SHARDS, lvl.value.shard, 10))
 const sparksNow = computed(() => take(SPARKS, lvl.value.spark, 14))
 const raysNow = computed(() => take(RAYS, lvl.value.ray, 6))
 const flaresNow = computed(() => FLARES.slice(0, lvl.value.flare))
+const glintsNow = computed(() => GLINTS.slice(0, lvl.value.glint))
+const dustNow = computed(() => DUST.slice(0, lvl.value.dust))
 </script>
 
 <template>
   <div
     class="buildup"
     :class="[`ph-${phase}`, { rainbow: isRainbow, last: isLastRound }]"
-    :style="{ '--c': isRainbow ? '#fff' : colour, '--k': intensity }"
+    :style="{ '--c': isRainbow ? '#fff' : colour, '--k': intensity, '--shake': lvl.shake }"
     aria-hidden="true"
   >
     <!-- 壓暗背景，讓球體成為畫面上唯一的光源 -->
@@ -278,6 +310,40 @@ const flaresNow = computed(() => FLARES.slice(0, lvl.value.flare))
 
     <!-- 全畫面掃光：只有最後一段（彩虹）才會出現 -->
     <div v-if="lvl.sweep" class="sweep"></div>
+
+    <!-- 爆裂衝擊：硬邊的擴張圓盤。跟細線衝擊環不同，這是「有質量的東西炸開」 -->
+    <div class="shock" :style="{ '--sk': lvl.shock }"></div>
+
+    <!-- 色差：撞擊瞬間的紅／青偏移，一格半的時間，讀起來是「鏡頭被震到」 -->
+    <template v-if="lvl.chroma">
+      <div class="chroma cr"></div>
+      <div class="chroma cb"></div>
+    </template>
+
+    <!-- 光柱：從球心直上直下的光束，高段限定 -->
+    <div v-if="lvl.pillar" class="pillar"></div>
+
+    <!-- 金光閃爍：四角星芒隨機閃現。固定金色，不吃屬性色 -->
+    <div v-if="glintsNow.length" class="glints">
+      <i
+        v-for="(g, i) in glintsNow" :key="`${round}-${i}`"
+        :style="{
+          left: g.x + '%', top: g.y + '%', '--s': g.s + 'px',
+          '--dur': g.dur + 'ms', '--dl': g.delay + 'ms'
+        }"
+      ></i>
+    </div>
+
+    <!-- 金粉：爆開後緩緩上飄 -->
+    <div v-if="dustNow.length" class="dust">
+      <i
+        v-for="(d, i) in dustNow" :key="`${round}-${i}`"
+        :style="{
+          left: d.x + '%', '--s': d.s + 'px', '--rise': d.rise + '%',
+          '--drift': d.drift + 'px', '--dur': d.dur + 'ms', '--dl': d.delay + 'ms'
+        }"
+      ></i>
+    </div>
 
     <!-- 收尾白閃 -->
     <div class="flash"></div>
@@ -566,6 +632,124 @@ const flaresNow = computed(() => FLARES.slice(0, lvl.value.flare))
 @keyframes ring-out {
   0%   { transform: scale(.3); opacity: .9; border-width: 3px; }
   100% { transform: scale(calc(2.4 + var(--k) * 1.6)); opacity: 0; border-width: 1px; }
+}
+
+/* ---- 爆裂衝擊 ----
+   硬邊的擴張圓盤，中心透明外圈實。細線衝擊環是「波」，這一層是「有質量的
+   東西炸開」—— 兩者疊在一起才有份量。 */
+.shock {
+  width: 26%; aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle,
+    transparent 52%, var(--c) 62%, rgba(255, 255, 255, .9) 72%, transparent 84%);
+  opacity: 0;
+  filter: blur(1px);
+}
+.rainbow .shock {
+  background: radial-gradient(circle, transparent 52%, #ffd0f0 62%, #fff 72%, transparent 84%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ph-burst .shock, .ph-finale .shock { animation: shock-out 440ms cubic-bezier(.05, .85, .25, 1) forwards; }
+}
+@keyframes shock-out {
+  0%   { transform: scale(.2); opacity: 0; }
+  10%  { opacity: 1; }
+  100% { transform: scale(calc(2.2 + var(--sk) * 2.4)); opacity: 0; }
+}
+
+/* ---- 色差 ----
+   紅與青各偏一邊。真正的 RGB split 要 filter，成本高；
+   兩層低不透明度的純色圓在 screen 混色下就夠像了。 */
+.chroma { width: 34%; aspect-ratio: 1; border-radius: 50%; mix-blend-mode: screen; opacity: 0; }
+.cr { background: radial-gradient(circle, #ff2d55, transparent 62%); }
+.cb { background: radial-gradient(circle, #2dd6ff, transparent 62%); }
+@media (prefers-reduced-motion: no-preference) {
+  .ph-burst .cr, .ph-finale .cr { animation: chroma-r 240ms ease-out forwards; }
+  .ph-burst .cb, .ph-finale .cb { animation: chroma-b 240ms ease-out forwards; }
+}
+@keyframes chroma-r {
+  0% { transform: translateX(0) scale(.6); opacity: 0; }
+  18% { transform: translateX(-9px) scale(1); opacity: .55; }
+  100% { transform: translateX(-20px) scale(1.5); opacity: 0; }
+}
+@keyframes chroma-b {
+  0% { transform: translateX(0) scale(.6); opacity: 0; }
+  18% { transform: translateX(9px) scale(1); opacity: .55; }
+  100% { transform: translateX(20px) scale(1.5); opacity: 0; }
+}
+
+/* ---- 光柱 ---- */
+.pillar {
+  width: 16%; height: 220%;
+  background: linear-gradient(to bottom, transparent, var(--c) 22%, #fff 50%, var(--c) 78%, transparent);
+  mix-blend-mode: screen;
+  filter: blur(6px);
+  opacity: 0;
+}
+.rainbow .pillar {
+  background: linear-gradient(to bottom, transparent, #b98cff 20%, #fff 50%, #ffd75e 80%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ph-burst .pillar, .ph-finale .pillar { animation: pillar-up 520ms cubic-bezier(.1, .9, .3, 1) forwards; }
+}
+@keyframes pillar-up {
+  0%   { transform: scaleY(0) scaleX(.4); opacity: 0; }
+  20%  { transform: scaleY(1) scaleX(1); opacity: .85; }
+  100% { transform: scaleY(1) scaleX(.3); opacity: 0; }
+}
+
+/* ---- 金光閃爍 ----
+   四角星芒。固定金色不吃屬性色 —— 「金光」本身就是一個獨立的獎賞訊號，
+   混進屬性色就變成單純的裝飾亮點，失去意義。 */
+.glints { width: 100%; height: 100%; }
+.glints i { position: absolute; width: 0; height: 0; opacity: 0; }
+.glints i::before, .glints i::after {
+  content: '';
+  position: absolute; left: 0; top: 0;
+  background: linear-gradient(var(--dir), transparent, #ffe9a8 34%, #fff 50%, #ffe9a8 66%, transparent);
+}
+.glints i::before { --dir: 90deg; width: var(--s); height: 2px; margin: -1px 0 0 calc(var(--s) / -2); }
+.glints i::after  { --dir: 180deg; width: 2px; height: var(--s); margin: calc(var(--s) / -2) 0 0 -1px; }
+@media (prefers-reduced-motion: no-preference) {
+  .ph-burst .glints i, .ph-finale .glints i { animation: glint-twinkle var(--dur) ease-out var(--dl) forwards; }
+}
+@keyframes glint-twinkle {
+  0%   { transform: scale(0) rotate(0deg); opacity: 0; }
+  28%  { transform: scale(1) rotate(45deg); opacity: 1; }
+  60%  { transform: scale(.7) rotate(70deg); opacity: .8; }
+  100% { transform: scale(0) rotate(110deg); opacity: 0; }
+}
+
+/* ---- 金粉 ---- */
+.dust { width: 100%; height: 100%; }
+.dust i {
+  position: absolute; top: 62%;
+  width: var(--s); height: var(--s);
+  border-radius: 50%;
+  background: #ffe9a8;
+  box-shadow: 0 0 6px #ffd75e;
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ph-burst .dust i, .ph-finale .dust i { animation: dust-rise var(--dur) ease-out var(--dl) forwards; }
+}
+@keyframes dust-rise {
+  0%   { transform: translate(0, 0) scale(.4); opacity: 0; }
+  20%  { opacity: 1; }
+  100% { transform: translate(var(--drift), calc(var(--rise) * -1)) scale(1); opacity: 0; }
+}
+
+/* ---- 整格震動 ----
+   撞擊感最便宜也最有效的一招。振幅吃段數，第一段完全不震。 */
+@media (prefers-reduced-motion: no-preference) {
+  .ph-burst, .ph-finale { animation: hit-shake 240ms cubic-bezier(.36, .07, .19, .97); }
+}
+@keyframes hit-shake {
+  0%, 100% { transform: translate(0, 0); }
+  14% { transform: translate(calc(var(--shake) * -7px), calc(var(--shake) * 4px)); }
+  32% { transform: translate(calc(var(--shake) * 6px), calc(var(--shake) * -3px)); }
+  52% { transform: translate(calc(var(--shake) * -4px), calc(var(--shake) * -2px)); }
+  74% { transform: translate(calc(var(--shake) * 2px), calc(var(--shake) * 2px)); }
 }
 
 /* ---- 白閃 ----
