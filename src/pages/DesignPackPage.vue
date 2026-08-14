@@ -3,7 +3,7 @@
  * 收藏艙設計展示頁（未列在導覽，網址直達：/design/pack）
  * 把各等級、各屬性、各狀態一次攤開比對，改配色時能立刻看出哪裡不對。
  */
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import CapsuleArt from '@/components/CapsuleArt.vue'
 import type { Tier } from '@/types/models'
 
@@ -25,6 +25,78 @@ const effects = [
   { k: 'crystal' as const, n: '晶' },
   { k: 'star' as const, n: '星' }
 ]
+
+/* ---- 五階可開啟範本 ----
+   等級階梯那一區是靜態的，只能比外觀；這一區是五顆都能實際按開的樣本，
+   要看的是「同一套開球序列在五個球階跑起來差多少」——
+   微粒數、環繞軌道、光爆強度全部綁在 grade.glow 上，不並排跑一次看不出來。
+
+   卡圖刻意照稀有度往上疊，讓開出來的東西跟球階對得上：
+     普卡 → Rare → Double Rare ex → SAR → UR 金卡
+   屬性特效則跟著卡片的寶可夢屬性走，開蓋前後的顏色才是同一件事。 */
+type OpenFx = 'fire' | 'water' | 'bolt' | 'crystal' | 'star'
+interface Openable {
+  tier: Tier
+  /** 球階名稱 */
+  ball: string
+  hash: string
+  effect: OpenFx
+  /** 卡圖網址（TCGdex 官方示意圖） */
+  card: string
+  cardName: string
+  /** 稀有度標示，用來說明「為什麼這張配這階」 */
+  rarity: string
+  /** Tier 徽章用的權杖色 */
+  ink: string
+}
+const openables: Openable[] = [
+  {
+    tier: 'D', ball: '精靈球', hash: 'c3f81a09bb27de44', effect: 'fire',
+    card: 'https://assets.tcgdex.net/zh-tw/SV/SV7/016/high.webp',
+    cardName: '炎兔兒', rarity: '普卡 C', ink: 'var(--tier-d)'
+  },
+  {
+    tier: 'C', ball: '超級球', hash: 'c0ffee9988776655', effect: 'water',
+    card: 'https://assets.tcgdex.net/zh-tw/SV/SV7/026/high.webp',
+    cardName: '暴噬龜', rarity: '閃卡 R', ink: 'var(--tier-c)'
+  },
+  {
+    tier: 'B', ball: '高級球', hash: 'a1b2c3d4e5f60718', effect: 'bolt',
+    card: 'https://assets.tcgdex.net/zh-tw/SV/SV7/033/high.webp',
+    cardName: '電蜘蛛 ex', rarity: '雙閃 RR', ink: 'var(--tier-b)'
+  },
+  {
+    tier: 'A', ball: '豪華球', hash: 'f3a91c04bb27de44', effect: 'crystal',
+    card: 'https://assets.tcgdex.net/zh-tw/SV/SV7/130/high.webp',
+    cardName: '太樂巴戈斯 ex', rarity: '特別異圖 SAR', ink: 'var(--tier-a)'
+  },
+  {
+    tier: 'LAST', ball: '大師球', hash: 'a0c7104ebeef55aa', effect: 'star',
+    card: 'https://assets.tcgdex.net/zh-tw/SV/SV8a/236/high.webp',
+    cardName: '皮卡丘 ex', rarity: '金卡 UR', ink: 'var(--tier-last)'
+  }
+]
+
+/* CapsuleArt 的 phase machine 是單向的（idle → … → reveal 之後就停住），
+   元件本身沒有回到 idle 的路。要重開只能整顆重新掛載 ——
+   所以每顆綁一個會遞增的 run 計數當 :key，按重置就換 key、Vue 丟掉舊實例重建。
+   比在外面硬改元件內部狀態可靠：計時器、IntersectionObserver、SVG 的 uid
+   全部跟著新實例重來，不會留下上一輪的殘留。 */
+const runs = ref<Record<string, number>>({ D: 0, C: 0, B: 0, A: 0, LAST: 0 })
+/** 哪幾顆已經開完（reveal）—— 只有開完才讓「再開一次」可按 */
+const done = ref<Record<string, boolean>>({ D: false, C: false, B: false, A: false, LAST: false })
+const doneCount = computed(() => Object.values(done.value).filter(Boolean).length)
+
+function markOpened(tier: string) {
+  done.value[tier] = true
+}
+function reopen(tier: string) {
+  runs.value[tier]++
+  done.value[tier] = false
+}
+function reopenAll() {
+  for (const o of openables) reopen(o.tier)
+}
 </script>
 
 <template>
@@ -41,6 +113,39 @@ const effects = [
           @opened="openedCount++"
         />
         <figcaption class="mono muted">按中央按鈕開球（已開 {{ openedCount }} 次）</figcaption>
+      </figure>
+    </div>
+
+    <h2 class="withAside">
+      五階全開範本
+      <span class="aside mono muted">已開 {{ doneCount }} / {{ openables.length }}</span>
+      <button
+        class="btn ghost sm" type="button"
+        :disabled="doneCount === 0" @click="reopenAll"
+      >全部重置</button>
+    </h2>
+    <p class="lede muted">
+      五個球階各一顆，按中央按鈕就會跑完整段開球序列。卡圖依稀有度往上疊，屬性特效跟著卡片的寶可夢屬性走。
+    </p>
+    <div class="grid openable">
+      <figure v-for="o in openables" :key="o.tier">
+        <!-- :key 換掉就整顆重新掛載 —— 這是讓單向 phase machine 能重跑的唯一乾淨作法 -->
+        <CapsuleArt
+          :key="`${o.tier}-${runs[o.tier]}`"
+          :tier="o.tier" :label="o.ball" :hash="o.hash"
+          interactive :effect="o.effect"
+          :card-image="o.card"
+          @opened="markOpened(o.tier)"
+        />
+        <figcaption>
+          <span class="tierTag mono" :style="{ color: o.ink, borderColor: o.ink }">{{ o.tier }}</span>
+          <span class="ballName">{{ o.ball }}</span>
+          <span class="mono muted cardMeta">{{ o.cardName }} · {{ o.rarity }}</span>
+          <button
+            class="btn ghost sm reopen" type="button"
+            :disabled="!done[o.tier]" @click="reopen(o.tier)"
+          >再開一次</button>
+        </figcaption>
       </figure>
     </div>
 
@@ -96,7 +201,33 @@ figure { margin: 0; }
 figcaption { font-size: 11.5px; margin-top: 9px; }
 .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
 .mini { width: 96px; }
+
+/* ---- 五階全開範本 ---- */
+.withAside { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.aside { font-size: 12px; font-weight: 400; }
+.lede { font-size: 13px; line-height: 1.6; margin: -6px 0 18px; max-width: 60ch; }
+.btn.sm { padding: 6px 13px; font-size: 12px; }
+
+/* 每顆球要留得夠大，中央按鈕才按得到 —— 它的直徑只有版位寬度的 8.7%，
+   版位一窄就變成一顆點不到的點。所以這一區的最小欄寬比其他區大一截。 */
+.grid.openable { grid-template-columns: repeat(auto-fit, minmax(216px, 1fr)); }
+.grid.openable figcaption {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 10px;
+}
+.tierTag {
+  font-size: 10.5px; letter-spacing: .06em;
+  border: 1px solid; border-radius: var(--pill);
+  padding: 2px 8px; opacity: .9;
+}
+.ballName { font-size: 12.5px; }
+.cardMeta { font-size: 11px; flex: 1 1 100%; }
+.reopen { flex: 1 1 100%; margin-top: 2px; }
+
 @media (max-width: 720px) {
   .grid { grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  /* 兩欄下版位剩不到 160px，中央按鈕會縮到 14px 左右 —— 手指按不到。
+     這一區改單欄，讓球維持在可以確實點開的尺寸。 */
+  .grid.openable { grid-template-columns: 1fr; max-width: 340px; gap: 26px; }
 }
 </style>
