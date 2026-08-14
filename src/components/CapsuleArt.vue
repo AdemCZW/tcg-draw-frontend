@@ -200,7 +200,7 @@ onBeforeUnmount(() => timers.forEach(clearTimeout))
 
 /* ---- 3D 傾斜 ---- */
 const { el, rx, ry, gx, gy, active, onMove, reset } = useTilt(10)
-const REST_X = 3, REST_Y = -8
+const REST_X = 18, REST_Y = -8
 const shellTransform = computed(() => {
   const x = REST_X + (props.flat ? 0 : rx.value)
   const y = REST_Y + (props.flat ? 0 : ry.value)
@@ -582,7 +582,7 @@ const KNURL = Array.from({ length: 26 }, (_, i) => {
   width: 100%;
   aspect-ratio: 1 / 1.18;
   /* 球半徑。鉸鏈的 z 位移要靠它把軸心推到球背 */
-  --pk-r: 43cqw;
+  --pk-r: 33cqw;
 }
 .rig {
   position: absolute; inset: 0;
@@ -591,16 +591,16 @@ const KNURL = Array.from({ length: 26 }, (_, i) => {
 }
 .ball {
   position: absolute;
-  left: 7cqw; top: 3cqw;
-  width: 86cqw; height: 86cqw;
+  left: 17cqw; top: 20cqw;
+  width: 66cqw; height: 66cqw;
   transform-style: preserve-3d;
   transition: transform .5s cubic-bezier(.2, .7, .3, 1);
 }
 .tilting.active .ball { transition: transform .08s linear; }
 
 .aura {
-  position: absolute; left: -6cqw; top: -10cqw;
-  width: 112cqw; height: 112cqw;
+  position: absolute; left: 7cqw; top: 10cqw;
+  width: 86cqw; height: 86cqw;
   pointer-events: none;
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -618,8 +618,8 @@ const KNURL = Array.from({ length: 26 }, (_, i) => {
   border-radius: 50%;
   background: #000;
 }
-.shadowCore { top: 87cqw; width: 34cqw; height: 6cqw; opacity: .5; filter: blur(2.4cqw); }
-.shadowSoft { top: 83cqw; width: 84cqw; height: 13cqw; opacity: .3; filter: blur(6cqw); }
+.shadowCore { top: 84cqw; width: 26cqw; height: 5cqw; opacity: .5; filter: blur(2cqw); }
+.shadowSoft { top: 80cqw; width: 64cqw; height: 10cqw; opacity: .3; filter: blur(5cqw); }
 
 .half { position: absolute; left: 0; width: 100%; height: 50%; }
 .half svg { display: block; width: 100%; height: 100%; }
@@ -753,8 +753,8 @@ const KNURL = Array.from({ length: 26 }, (_, i) => {
 /* ---- 彈卡 ---- */
 .ejected {
   position: absolute;
-  left: 50%; top: 4%;
-  width: 34%;
+  left: 50%; top: 0%;
+  width: 50%;
   transform: translate(-50%, 60%) scale(.55);
   opacity: 0;
   pointer-events: none;
