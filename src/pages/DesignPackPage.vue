@@ -3,11 +3,29 @@
  * 收藏艙設計展示頁（未列在導覽，網址直達：/design/pack）
  * 把各等級、各屬性、各狀態一次攤開比對，改配色時能立刻看出哪裡不對。
  */
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import CapsuleArt from '@/components/CapsuleArt.vue'
+import RevealBuildup from '@/components/RevealBuildup.vue'
 import type { Tier } from '@/types/models'
 
 const openedCount = ref(0)
+
+/* 蓄勢演出的展示控制。每個 tier 一個實例，按鈕呼叫它 expose 出來的 start() */
+const buildups = new Map<string, { start: () => void; reset: () => void }>()
+function setBuildup(tier: string, el: unknown) {
+  if (el && typeof el === 'object' && 'start' in el) {
+    buildups.set(tier, el as { start: () => void; reset: () => void })
+  }
+}
+function playBuildup(tier: string) {
+  const b = buildups.get(tier)
+  if (!b) return
+  b.reset()
+  // reset 之後要等 Vue 把 class 換回 ph-idle，動畫才會重新播
+  nextTick(() => b.start())
+}
+const LADDER_LEN: Record<string, number> = { D: 1, C: 2, B: 3, A: 4, LAST: 5 }
+const ladderLen = (t: string) => LADDER_LEN[t] ?? 1
 
 const grades: { tier: Tier; label: string; hash: string }[] = [
   { tier: 'D', label: '精靈球', hash: 'c3f81a09bb27de44' },
@@ -149,6 +167,25 @@ function reopenAll() {
       </figure>
     </div>
 
+    <h2>開卡前蓄勢演出</h2>
+    <p class="note muted">
+      球體碎幾次、最後停在什麼顏色，就是稀有度的暗號：藍 → 青 → 金 → 橙 → 虹。
+      升級是誠實的，不會先閃大獎再降回去。
+    </p>
+    <div class="buildRow">
+      <figure v-for="g in grades" :key="`bu-${g.tier}`" class="buildCell">
+        <div class="buildStage">
+          <RevealBuildup :ref="el => setBuildup(g.tier, el)" :tier="g.tier" />
+        </div>
+        <figcaption>
+          <button type="button" class="btn ghost sm" @click="playBuildup(g.tier)">
+            {{ g.label }}
+          </button>
+          <span class="mono muted steps">{{ ladderLen(g.tier) }} 段</span>
+        </figcaption>
+      </figure>
+    </div>
+
     <h2>等級階梯</h2>
     <div class="grid">
       <figure v-for="g in grades" :key="g.tier">
@@ -188,6 +225,29 @@ function reopenAll() {
 </template>
 
 <style scoped>
+.note { font-size: 13px; margin: -6px 0 16px; max-width: 60ch; }
+.buildRow {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 16px;
+}
+.buildCell { margin: 0; }
+.buildStage {
+  position: relative;
+  aspect-ratio: 1 / 1.1;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.buildCell figcaption {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-top: 9px;
+}
+.btn.sm { padding: 6px 13px; font-size: 13px; }
+.steps { font-size: 11.5px; }
+@media (max-width: 720px) {
+  .buildRow { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+}
 .page { padding-top: 32px; padding-bottom: 80px; }
 h1 { margin-bottom: 30px; }
 h2 { font-size: 17px; margin: 40px 0 16px; font-weight: 600; }
