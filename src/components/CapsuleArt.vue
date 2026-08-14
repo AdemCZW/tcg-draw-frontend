@@ -321,6 +321,90 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
   len: 120 + ((i * 37) % 70),
   w: i % 2 ? 3 : 6
 }))
+
+/* ---- 蓋子內襯的球面座標 ----
+   ψ=0 是近側，lat 是緯度。用的是內殼半徑（外殼扣掉一個壁厚），
+   所以肋條與觀景窗背面都會貼在內壁上，不會浮在殼外。
+   投影公式跟 ring()/nearArc() 同一套：
+     x = CX + Ri·cos(lat)·sin(ψ)
+     y = CY − Ri·sin(lat)·cos(TILT) + Ri·sin(TILT)·cos(ψ) */
+function innerPt(lat: number, psi: number) {
+  const la = (lat * Math.PI) / 180
+  const c = Math.cos(la), s = Math.sin(la)
+  return {
+    x: n(CX + LID_IN_R * c * Math.sin(psi)),
+    y: n(CY - LID_IN_R * s * Math.cos(TH) + LID_IN_RY * c * Math.cos(psi))
+  }
+}
+/** 內壁補強肋。沿經線走 —— 直線畫上去就是貼紙，跟著球面收斂才讀成模出來的肋。
+    注意內襯被 rotateY(180) 再 rotateX(>90°) 轉了整整 180°，
+    所以 svg 的「右下」對應畫面的「左上」＝光源方向，受光係數照那個方向算。 */
+const RIB_LATS = [82, 66, 50, 34, 18, 3]
+const LID_RIBS = Array.from({ length: 10 }, (_, i) => {
+  const psi = (i / 10) * Math.PI * 2
+  const d = RIB_LATS.map((l, k) => {
+    const p = innerPt(l, psi)
+    return `${k ? 'L' : 'M'}${p.x} ${p.y}`
+  }).join(' ')
+  return { d, lit: n(Math.max(0, Math.sin(psi) * 0.72 + Math.cos(psi) * 0.7)) }
+})
+/** 觀景窗背面的凸起。窗心在外殼 lat≈45°、ψ=0，換算到內壁就是這個點。 */
+const BOSS = innerPt(45, 0)
+/** 內壁的緯線圈。從殼裡往外看是看得到整圈的，所以是完整橢圓不是近弧。 */
+function innerRing(lat: number) {
+  const la = (lat * Math.PI) / 180
+  const rx = LID_IN_R * Math.cos(la)
+  return { rx: n(rx), ry: n(rx * Math.sin(TH)), cy: n(CY - LID_IN_R * Math.sin(la) * Math.cos(TH)) }
+}
+/** 靠殼口的密封槽。一圈同心的凹線，跟放射狀的肋一起把內壁撐成模出來的件 */
+const LID_SEAL = innerRing(9)
+
+/* ---- 球體周圍的環繞微粒 ----
+   座標落在赤道平面的橢圓軌道上（ry = rx·sin(TILT)），跟球面幾何共用同一個俯角，
+   所以微粒讀起來是「繞著球轉」而不是「灑在畫面上的雪」。
+   ψ 在近半圈的畫在球前面、遠半圈的畫在球後面 —— 那個前後遮擋就是立體感的來源。
+   固定種子，重繪後位置一致。 */
+const ORB_POOL = (() => {
+  const r = mulberry32(907)
+  return Array.from({ length: 20 }, (_, i) => {
+    // 前後交錯配額，這樣不管取幾顆，前景背景都不會偏掉一邊
+    const front = i % 2 === 0
+    const psi = (front ? 0 : Math.PI) + (r() - 0.5) * Math.PI * 0.94
+    const rx = R * (1.05 + r() * 0.37)
+    const x = CX + Math.sin(psi) * rx
+    const y = CY + Math.cos(psi) * rx * Math.sin(TH) + (r() - 0.5) * rx * 0.44
+    const s = 2 + r() * 4.2
+    const ang = r() * Math.PI * 2
+    const amp = 3 + r() * 6
+    return {
+      i, front,
+      x: n(x), y: n(y),
+      // 收束／爆散用的位移向量（相對球心）
+      dx: `${n(x - CX)}px`, dy: `${n(y - CY)}px`,
+      halo: n(s * 3.2), core: n(s * 0.72),
+      o: n(0.42 + r() * 0.4),
+      dur: `${(3.6 + r() * 3.8).toFixed(2)}s`,
+      delay: `-${(r() * 7).toFixed(2)}s`,
+      drx: `${n(Math.cos(ang) * amp)}px`,
+      dry: `${n(Math.sin(ang) * amp)}px`
+    }
+  })
+})()
+/** 微粒數量綁等級：精靈球 7 顆、大師球 17 顆。compact 不上特效，96px 縮圖跑不動。 */
+const orbCount = computed(() => (props.compact ? 0 : Math.round(4 + grade.value.glow * 15)))
+const orbsBack = computed(() => ORB_POOL.slice(0, orbCount.value).filter(o => !o.front))
+const orbsFront = computed(() => ORB_POOL.slice(0, orbCount.value).filter(o => o.front))
+/** 特效總強度。0.3 打底，剩下 0.7 由 glow 決定 —— 高階球才有滿版特效。 */
+const fxPower = computed(() => n(0.3 + grade.value.glow * 0.7))
+
+/* ---- 環繞軌道 ----
+   同樣是赤道平面的橢圓，拆成遠半圈與近半圈分別畫在球後／球前。
+   兩段的行進方向接得上（遠圈右→左、近圈左→右），
+   所以 stroke-dashoffset 一起跑時，光點看起來是繞著球連續轉。 */
+const ORB_RX = n(R * 1.2)
+const ORB_RY = n(R * 1.2 * Math.sin(TH))
+const ORBIT_FAR = `M${n(CX + ORB_RX)} ${CY} A${ORB_RX} ${ORB_RY} 0 0 0 ${n(CX - ORB_RX)} ${CY}`
+const ORBIT_NEAR = `M${n(CX - ORB_RX)} ${CY} A${ORB_RX} ${ORB_RY} 0 0 0 ${n(CX + ORB_RX)} ${CY}`
 </script>
 
 <template>
@@ -343,6 +427,44 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
 
     <div ref="el" class="ball">
 
+      <!-- ===== 球後的環繞特效 =====
+           畫在所有球體圖層之前，凡是跟球身重疊的都會被擋住。
+           跟後面 .fxFront 那一層是同一套軌道的兩個半圈，
+           「一半被擋住、一半蓋在球上」才會讀成繞著球轉而不是貼在畫面上。 -->
+      <div v-if="!compact" class="fx fxBack" aria-hidden="true">
+        <svg viewBox="0 0 400 400">
+          <defs>
+            <!-- 遠側微粒：偏冷、偏暗。空氣透視 —— 遠的東西對比低 -->
+            <radialGradient :id="`${uid}-orbB`">
+              <stop offset="0%" :stop-color="elem.mid" />
+              <stop offset="40%" :stop-color="elem.mid" stop-opacity=".5" />
+              <stop offset="100%" :stop-color="elem.deep" stop-opacity="0" />
+            </radialGradient>
+            <!-- 衝擊環的遠半圈：地平線固定在球心高度，所以裁切框套在不動的父層上 -->
+            <clipPath :id="`${uid}-far`"><rect x="-600" y="-600" width="1600" height="800" /></clipPath>
+          </defs>
+          <g :opacity="fxPower">
+            <g v-if="grade.glow > 0.28" class="orbitRing">
+              <path :d="ORBIT_FAR" fill="none" :stroke="elem.mid" stroke-opacity=".13" stroke-width="1.5" />
+              <path class="pip" :d="ORBIT_FAR" fill="none" :stroke="elem.core" stroke-opacity=".55"
+                    stroke-width="3.6" stroke-linecap="round" pathLength="100" stroke-dasharray="2.5 47.5" />
+            </g>
+            <g v-for="o in orbsBack" :key="o.i" class="orb" :style="{ '--dx': o.dx, '--dy': o.dy }">
+              <g class="orbDot"
+                 :style="{ animationDuration: o.dur, animationDelay: o.delay, '--drx': o.drx, '--dry': o.dry }">
+                <circle :cx="o.x" :cy="o.y" :r="o.halo" :fill="`url(#${uid}-orbB)`" :fill-opacity="o.o * 0.7" />
+              </g>
+            </g>
+            <g :clip-path="`url(#${uid}-far)`">
+              <ellipse v-for="k in 2" :key="k" class="shock" :style="{ animationDelay: `${(k - 1) * 0.14}s` }"
+                       :cx="CX" :cy="CY" :rx="R" :ry="n(EQ.ry)" fill="none"
+                       :stroke="elem.core" :stroke-width="k === 1 ? 5 : 12"
+                       :stroke-opacity="k === 1 ? 1 : .3" />
+            </g>
+          </g>
+        </svg>
+      </div>
+
       <!-- ===== 上半殼：繞赤道遠緣往後翻的蚌殼蓋 =====
            畫在最底層。翻開後它整片在碗口後面，靠繪製順序就能排對，
            不必依賴 3D 深度排序。 -->
@@ -364,6 +486,25 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
                 <stop offset="42%" :stop-color="grade.shellHi" />
                 <stop offset="100%" :stop-color="darken(grade.shellLo, .35)" />
               </linearGradient>
+              <!-- 內壁的鏡面掃光。內襯在畫面上被轉了 180°，
+                   焦點要放在 svg 的右下角才會落在畫面的左上（光源方向）。 -->
+              <radialGradient :id="`${uid}-spec`" gradientUnits="userSpaceOnUse" cx="266" cy="216" r="158">
+                <stop offset="0%" stop-color="#fff" stop-opacity=".26" />
+                <stop offset="44%" stop-color="#fff" stop-opacity=".085" />
+                <stop offset="100%" stop-color="#fff" stop-opacity="0" />
+              </radialGradient>
+              <!-- 觀景窗背面透出來的能量 -->
+              <radialGradient :id="`${uid}-boss`">
+                <stop offset="0%" :stop-color="elem.core" />
+                <stop offset="42%" :stop-color="elem.mid" stop-opacity=".7" />
+                <stop offset="100%" :stop-color="elem.deep" stop-opacity="0" />
+              </radialGradient>
+              <!-- 通用的柔邊投影 -->
+              <radialGradient :id="`${uid}-drop`">
+                <stop offset="0%" stop-color="#000" stop-opacity=".62" />
+                <stop offset="62%" stop-color="#000" stop-opacity=".3" />
+                <stop offset="100%" stop-color="#000" stop-opacity="0" />
+              </radialGradient>
               <clipPath :id="`${uid}-li`"><path :d="LID_INNER_PATH" /></clipPath>
             </defs>
             <!-- 先鋪滿斷面色，再用內壁蓋掉中間 —— 露出來的那一圈就是殼的厚度 -->
@@ -374,6 +515,53 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
               <path :d="nearArc(-1.5)" fill="none" :stroke="lighten(grade.baseHi, .25)"
                     stroke-opacity=".4" stroke-width="26" />
               <ellipse :cx="CX" cy="250" rx="140" ry="52" :fill="elem.deep" fill-opacity=".22" />
+
+              <!-- 補強肋。每條都是一暗一亮兩筆：暗筆是溝、亮筆是溝旁邊被打亮的稜。
+                   只有一筆的話讀成畫上去的線，兩筆才有「模出來的高低差」。 -->
+              <g v-if="!compact" fill="none" stroke-linecap="round">
+                <template v-for="(rb, i) in LID_RIBS" :key="i">
+                  <path :d="rb.d" stroke="#000" :stroke-opacity="n(.32 - rb.lit * .17)" stroke-width="6" />
+                  <path :d="rb.d" :stroke="lighten(grade.baseHi, .45)"
+                        :stroke-opacity="n(.05 + rb.lit * .24)" stroke-width="2.4"
+                        transform="translate(2.6 2.6)" />
+                </template>
+              </g>
+
+              <!-- 密封槽：靠殼口的一圈同心凹線。一暗一亮，亮筆偏 svg 右下（受光側） -->
+              <g v-if="!compact" fill="none">
+                <ellipse :cx="CX" :cy="LID_SEAL.cy" :rx="LID_SEAL.rx" :ry="LID_SEAL.ry"
+                         stroke="#000" stroke-opacity=".42" stroke-width="5" />
+                <ellipse :cx="n(CX + 2)" :cy="n(LID_SEAL.cy + 2.4)" :rx="LID_SEAL.rx" :ry="LID_SEAL.ry"
+                         :stroke="lighten(grade.baseHi, .45)" stroke-opacity=".2" stroke-width="2" />
+              </g>
+
+              <!-- 觀景窗背面的凸起。從內側看得到窗座是「凸出來的」，
+                   蓋子內側就不再是一個扁平的碟子。投影往 svg 左上 = 畫面右下。 -->
+              <g v-if="!compact">
+                <ellipse :cx="n(BOSS.x - 12)" :cy="n(BOSS.y - 10)" rx="68" ry="47"
+                         :fill="`url(#${uid}-drop)`" />
+                <!-- 窗心透出來的能量在座圈外圍暈開 -->
+                <ellipse :cx="BOSS.x" :cy="BOSS.y" rx="88" ry="60" :fill="`url(#${uid}-boss)`"
+                         :opacity="n(.14 + grade.glow * .26)" />
+                <ellipse :cx="BOSS.x" :cy="BOSS.y" rx="46" ry="31"
+                         :fill="mix(grade.baseHi, grade.baseLo, .58)" />
+                <!-- 背光側先壓一圈暗邊，凸起才有厚度 -->
+                <path :d="`M${n(BOSS.x - 45)} ${n(BOSS.y - 6)} A46 31 0 0 1 ${n(BOSS.x + 45)} ${n(BOSS.y - 6)}`"
+                      fill="none" stroke="#000" stroke-opacity=".5" stroke-width="5" stroke-linecap="round" />
+                <ellipse :cx="BOSS.x" :cy="BOSS.y" rx="46" ry="31" fill="none"
+                         stroke="#000" stroke-opacity=".45" stroke-width="2" />
+                <!-- 凸起受光的那一側：svg 下緣 = 畫面上緣 -->
+                <path :d="`M${n(BOSS.x - 41)} ${n(BOSS.y + 11)} A46 31 0 0 0 ${n(BOSS.x + 41)} ${n(BOSS.y + 9)}`"
+                      fill="none" :stroke="lighten(grade.baseHi, .6)" stroke-opacity=".7"
+                      stroke-width="3.4" stroke-linecap="round" />
+                <ellipse :cx="BOSS.x" :cy="BOSS.y" rx="32" ry="20" :fill="darken(grade.shellLo, .55)" />
+                <ellipse :cx="BOSS.x" :cy="BOSS.y" rx="30" ry="18" :fill="`url(#${uid}-boss)`"
+                         :opacity="n(.4 + grade.glow * .55)" />
+              </g>
+
+              <!-- 鏡面掃光。硬料的內殼是拋光面，一道長掃光比整片提亮更像實體，
+                   而且只在蓋子翻過去之後才亮起來 —— 高光本來就該隨角度變。 -->
+              <path class="lidSpec" :d="LID_INNER_PATH" :fill="`url(#${uid}-spec)`" />
             </g>
             <!-- 內緣暗溝：斷面與內壁的交界，這一筆讓厚度讀得出來 -->
             <path :d="LID_INNER_PATH" fill="none" stroke="#000" stroke-opacity=".62" stroke-width="3" />
@@ -524,8 +712,23 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
               <stop offset="30%" :stop-color="elem.mid" stop-opacity=".72" />
               <stop offset="100%" :stop-color="elem.deep" stop-opacity="0" />
             </radialGradient>
+            <!-- 內壁邊緣的環境遮蔽：越靠殼口越暗。這一圈是「一只碗」跟「一張黑色貼紙」的分界 -->
+            <radialGradient :id="`${uid}-ao`">
+              <stop offset="50%" stop-color="#000" stop-opacity="0" />
+              <stop offset="84%" stop-color="#000" stop-opacity=".34" />
+              <stop offset="100%" stop-color="#000" stop-opacity=".7" />
+            </radialGradient>
+            <!-- 蓋子打在碗裡的投影 -->
+            <radialGradient :id="`${uid}-cast`">
+              <stop offset="0%" stop-color="#04030a" stop-opacity=".74" />
+              <stop offset="56%" stop-color="#04030a" stop-opacity=".46" />
+              <stop offset="100%" stop-color="#04030a" stop-opacity="0" />
+            </radialGradient>
             <clipPath :id="`${uid}-wc`">
               <ellipse :cx="CX" :cy="CY" :rx="WALL.rx" :ry="WALL.ry" />
+            </clipPath>
+            <clipPath :id="`${uid}-mo`">
+              <ellipse :cx="CX" :cy="CY" :rx="R" :ry="n(EQ.ry)" />
             </clipPath>
           </defs>
           <!-- 殼口斷面。先鋪外圈，再用內壁蓋掉中間，露出來的一圈就是殼的厚度 -->
@@ -533,6 +736,7 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
           <ellipse :cx="CX" :cy="CY" :rx="WALL.rx" :ry="WALL.ry" :fill="`url(#${uid}-wall)`" />
           <g :clip-path="`url(#${uid}-wc)`">
             <ellipse :cx="CX" cy="262" rx="138" ry="48" :fill="`url(#${uid}-chamber)`" />
+            <ellipse :cx="CX" :cy="CY" :rx="WALL.rx" :ry="WALL.ry" :fill="`url(#${uid}-ao)`" />
           </g>
           <!-- 內緣暗溝：斷面與內壁的交界 -->
           <ellipse :cx="CX" :cy="CY" :rx="WALL.rx" :ry="WALL.ry" fill="none"
@@ -540,6 +744,36 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
           <!-- 外緣亮邊 -->
           <ellipse :cx="CX" :cy="CY" :rx="R" :ry="n(EQ.ry)" fill="none"
                    :stroke="grade.trim" stroke-opacity=".38" stroke-width="1.5" />
+          <!-- 蓋子的投影。蓋子翻在球的後上方，光源在左上，
+               所以影子壓在遠側內壁偏右那一塊，連斷面一起吃掉。
+               投影是最強的立體線索 —— 少了它，掀開的蓋子跟碗口只是兩個疊在一起的形狀。 -->
+          <g :clip-path="`url(#${uid}-mo)`">
+            <ellipse cx="228" cy="140" rx="188" ry="82" :fill="`url(#${uid}-cast)`"
+                     transform="rotate(-7 228 140)" />
+          </g>
+        </svg>
+      </div>
+
+      <!-- ===== 卡片投在碗內壁上的影子 =====
+           畫在碗口之後、卡片之前，所以影子在內壁上、卡片在影子上。
+           光源在左上，影子往右偏；右側那道暗帶就是「卡片真的插在碗裡」的證據。 -->
+      <div v-if="cardImage && !compact" class="cardCast" aria-hidden="true">
+        <svg viewBox="0 0 400 400">
+          <defs>
+            <clipPath :id="`${uid}-cc`">
+              <ellipse :cx="CX" :cy="CY" :rx="WALL.rx" :ry="WALL.ry" />
+            </clipPath>
+            <filter :id="`${uid}-cb`" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="11" />
+            </filter>
+          </defs>
+          <g :clip-path="`url(#${uid}-cc)`" :filter="`url(#${uid}-cb)`">
+            <!-- 卡片擋掉的環境光：整片內壁先壓暗一階 -->
+            <rect x="84" y="112" width="232" height="210" fill="#000" opacity=".3" />
+            <!-- 卡片本體投上去的影子，往右下偏出卡片邊界才看得到 -->
+            <rect x="140" y="126" width="212" height="196" fill="#000" opacity=".55"
+                  transform="skewX(3)" />
+          </g>
         </svg>
       </div>
 
@@ -602,10 +836,46 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
         </svg>
       </div>
 
+      <!-- ===== 球前的環繞特效 =====
+           畫在下半殼之後，所以會蓋在球身上。跟 .fxBack 是同一條軌道的近半圈。 -->
+      <div v-if="!compact" class="fx fxFront" aria-hidden="true">
+        <svg viewBox="0 0 400 400">
+          <defs>
+            <!-- 近側微粒：比遠側亮一階，中心再補一顆實心核 -->
+            <radialGradient :id="`${uid}-orbF`">
+              <stop offset="0%" :stop-color="elem.core" />
+              <stop offset="34%" :stop-color="elem.mid" stop-opacity=".62" />
+              <stop offset="100%" :stop-color="elem.deep" stop-opacity="0" />
+            </radialGradient>
+            <clipPath :id="`${uid}-near`"><rect x="-600" y="200" width="1600" height="800" /></clipPath>
+          </defs>
+          <g :opacity="fxPower">
+            <g v-if="grade.glow > 0.28" class="orbitRing">
+              <path :d="ORBIT_NEAR" fill="none" :stroke="elem.mid" stroke-opacity=".16" stroke-width="1.5" />
+              <path class="pip" :d="ORBIT_NEAR" fill="none" :stroke="elem.core" stroke-opacity=".9"
+                    stroke-width="4.2" stroke-linecap="round" pathLength="100" stroke-dasharray="2.5 47.5" />
+            </g>
+            <g v-for="o in orbsFront" :key="o.i" class="orb" :style="{ '--dx': o.dx, '--dy': o.dy }">
+              <g class="orbDot"
+                 :style="{ animationDuration: o.dur, animationDelay: o.delay, '--drx': o.drx, '--dry': o.dry }">
+                <circle :cx="o.x" :cy="o.y" :r="o.halo" :fill="`url(#${uid}-orbF)`" :fill-opacity="o.o" />
+                <circle :cx="o.x" :cy="o.y" :r="o.core" :fill="elem.core" :fill-opacity="n(o.o * .9)" />
+              </g>
+            </g>
+            <g :clip-path="`url(#${uid}-near)`">
+              <ellipse v-for="k in 2" :key="k" class="shock" :style="{ animationDelay: `${(k - 1) * 0.14}s` }"
+                       :cx="CX" :cy="CY" :rx="R" :ry="n(EQ.ry)" fill="none"
+                       :stroke="elem.core" :stroke-width="k === 1 ? 5 : 12"
+                       :stroke-opacity="k === 1 ? 1 : .3" />
+            </g>
+          </g>
+        </svg>
+      </div>
+
       <!-- 光爆 -->
       <div class="burst">
         <svg viewBox="0 0 400 400" aria-hidden="true">
-          <g :fill="elem.core">
+          <g :fill="elem.core" :opacity="n(.5 + grade.glow * .5)">
             <path v-for="(r, i) in BURST_RAYS" :key="i"
                   :transform="`translate(200 200) rotate(${r.a})`"
                   :d="`M${-r.w} 0 L${r.w} 0 L2 ${-r.len} L-2 ${-r.len} Z`" />
@@ -690,9 +960,12 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
   position: absolute; left: 50%; pointer-events: none;
   transform: translateX(-50%);
   border-radius: 50%; background: #000;
+  transition: width .6s ease, opacity .6s ease;
 }
 .shadowCore { top: 96cqw; width: 24cqw; height: 4.5cqw; opacity: .5; filter: blur(1.8cqw); }
 .shadowSoft { top: 92cqw; width: 58cqw; height: 9cqw; opacity: .3; filter: blur(4.5cqw); }
+/* 掀開後多出一整片蓋子擋光，地上的影子跟著攤開變濃 */
+.open .shadowSoft { width: 72cqw; opacity: .38; }
 
 /* ---- 掀蓋 ----
    鉸鏈設在赤道遠緣（--hinge）。那條線是旋轉軸，所以不管開多大，
@@ -706,8 +979,15 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
 .lidInner { transform: rotateY(180deg); backface-visibility: hidden; }
 
 /* 碗口只在開啟後出現 */
-.mouth { opacity: 0; pointer-events: none; transition: opacity .22s ease .1s; }
-.open .mouth { opacity: 1; }
+.mouth, .cardCast {
+  position: absolute; inset: 0;
+  opacity: 0; pointer-events: none; transition: opacity .22s ease .1s;
+}
+.cardCast svg { display: block; width: 100%; height: 100%; }
+.open .mouth, .open .cardCast { opacity: 1; }
+/* 內殼的鏡面掃光只在蓋子翻過去之後亮起來 —— 高光本來就該隨角度變 */
+.lidSpec { opacity: 0; transition: opacity .5s ease .18s; }
+.open .lidSpec { opacity: 1; }
 
 /* 縫隙漏光：沿著赤道近緣那一條 */
 .leak {
@@ -803,7 +1083,10 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
    看起來就是浮在殼裡而不是貼在球前面。 */
 .ejected {
   position: absolute;
-  left: 50%; bottom: 19%;
+  /* 24% 是「還會被殼口切到」的上限。近弧在中央是球高的 78.8%、在卡片
+     左右緣是 74.8%，卡片下緣落在 76% —— 中央那段浮出弧線之上，左右下角
+     仍被上翹的弧線切掉。那道橫過下面兩角的弧線就是「立在碗裡」的讀法。 */
+  left: 50%; bottom: 24%;
   width: 50%;
   transform: translate(-50%, 34%) scale(.6);
   opacity: 0;
@@ -830,6 +1113,71 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
 @keyframes mote-drift {
   from { transform: translate(-3px, 2px) scale(.6); opacity: .35; }
   to   { transform: translate(4px, -4px) scale(1.3); opacity: 1; }
+}
+
+/* ---- 球體周圍的環繞特效 ----
+   .fxBack 在所有球體圖層之前、.fxFront 在下半殼之後，
+   同一條軌道被球身切成「擋住的那半」跟「蓋住球的那半」。
+   svg overflow 開著，微粒才能飄出球的外框。 */
+.fx {
+  position: absolute; inset: 0;
+  pointer-events: none;
+}
+.fx svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.orb, .orbDot, .shock {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+/* 軌道光點：開啟後轉成滿亮，當作 reveal 的持續環繞光暈 */
+.orbitRing { opacity: .5; transition: opacity .45s ease; }
+.open .orbitRing { opacity: 1; }
+.pip { stroke-dashoffset: 0; }
+.shock { opacity: 0; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .orbDot {
+    animation-name: orb-drift;
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+    animation-direction: alternate;
+  }
+  /* 光點沿著軌道跑。遠圈與近圈的行進方向接得上，看起來是同一圈能量在繞 */
+  .pip { animation: pip-flow 3.8s linear infinite; }
+  /* 蓄能：微粒往球心收束。「往內收」比「單純變亮」更像在充能 */
+  .ph-charge .orb, .ph-hold .orb, .ph-crack .orb {
+    animation: orb-suck .62s cubic-bezier(.4, 0, .7, .2) both;
+  }
+  /* 光爆：一口氣甩出去。0.3s 收尾，剛好接上 reveal */
+  .ph-burst .orb { animation: orb-blast .3s cubic-bezier(.1, .75, .3, 1) both; }
+  .ph-reveal .orb { animation: orb-return .9s ease .18s both; }
+  .ph-burst .shock, .ph-reveal .shock {
+    animation: shock .85s cubic-bezier(.15, .85, .35, 1) both;
+  }
+}
+@keyframes orb-drift {
+  from { transform: translate(0, 0) scale(.8); opacity: .45; }
+  to   { transform: translate(var(--drx), var(--dry)) scale(1.16); opacity: 1; }
+}
+@keyframes pip-flow { to { stroke-dashoffset: -50; } }
+@keyframes orb-suck {
+  0%   { transform: translate(0, 0) scale(1); opacity: 1; }
+  /* 先漲一下再往內鑽。直接一路縮進去會讀成「消失」，漲一下才讀成「被吸走」 */
+  26%  { transform: translate(calc(var(--dx) * -.12), calc(var(--dy) * -.12)) scale(1.55); opacity: 1; }
+  74%  { opacity: 1; }
+  100% { transform: translate(calc(var(--dx) * -.84), calc(var(--dy) * -.84)) scale(.28); opacity: 0; }
+}
+@keyframes orb-blast {
+  0%   { transform: translate(calc(var(--dx) * -.84), calc(var(--dy) * -.84)) scale(.28); opacity: 1; }
+  55%  { opacity: 1; }
+  100% { transform: translate(calc(var(--dx) * .55), calc(var(--dy) * .55)) scale(1.6); opacity: 0; }
+}
+@keyframes orb-return { from { opacity: 0; } to { opacity: 1; } }
+/* 衝擊環走的是赤道平面的橢圓，不是正圓 —— 跟球面幾何同一個俯角，
+   所以它讀起來是從球裡「橫著」擴出去，而不是貼在畫面上的圈 */
+@keyframes shock {
+  0%   { transform: scale(.34); opacity: 0; }
+  12%  { opacity: .9; }
+  100% { transform: scale(2.1); opacity: 0; }
 }
 
 .gloss {
@@ -859,5 +1207,9 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
 @media (prefers-reduced-motion: reduce) {
   .lidGroup { transition: none; }
   .gloss { display: none; }
+  /* 環繞特效整組定格：微粒停在原位、光點不跑、衝擊環不出現 */
+  .orb, .orbDot, .pip, .shock { animation: none !important; }
+  .shock { display: none; }
+  .shadowCore, .shadowSoft, .orbitRing, .lidSpec { transition: none; }
 }
 </style>
