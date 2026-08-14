@@ -5,6 +5,7 @@
 // ------------------------------------------------------------------
 
 type GaEvent =
+  | 'view_play'
   | 'view_pool_list'
   | 'view_pool_detail'
   | 'click_draw_1'

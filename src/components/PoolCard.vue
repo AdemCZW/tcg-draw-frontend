@@ -6,7 +6,11 @@ import PoolModeBadge from './PoolModeBadge.vue'
 import SellerChip from './SellerChip.vue'
 import { useSellerStore } from '@/stores/sellers'
 
-const props = defineProps<{ pool: Pool }>()
+const props = withDefaults(defineProps<{
+  pool: Pool
+  /** grid = 清單裡的一格；stage = 選池台上的主角，字級放大、資訊更好讀 */
+  variant?: 'grid' | 'stage'
+}>(), { variant: 'grid' })
 const sellers = useSellerStore()
 sellers.ensureLoaded()
 const seller = computed(() => sellers.byId(props.pool.sellerId))
@@ -44,8 +48,9 @@ function onLeave() {
 
 <template>
   <RouterLink
-    :to="`/pools/${pool.id}`"
+    :to="{ name: 'pool', params: { id: pool.id } }"
     class="pool"
+    :class="variant"
     @pointermove="onMove"
     @pointerleave="onLeave"
   >
@@ -98,7 +103,12 @@ function onLeave() {
   box-shadow: var(--shadow-sm);
   transition: transform .28s cubic-bezier(.2,.7,.3,1), box-shadow .28s;
 }
-.pool:hover { transform: translateY(-6px); box-shadow: var(--shadow-lg); }
+/* hover 包在能力偵測裡，不是斷點。觸控裝置點完之後 :hover 會「黏住」，
+   卡片就一直浮著回不來 —— 觸控筆電用斷點判斷會漏掉。 */
+@media (hover: hover) {
+  .pool:hover { transform: translateY(-6px); box-shadow: var(--shadow-lg); }
+    }
+.pool:active { transform: scale(.985); transition-duration: 70ms; }
 .pool:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .art-scene { position: relative; perspective: 900px; }
@@ -109,14 +119,12 @@ function onLeave() {
   border-radius: 14px;
   overflow: hidden;
 }
-.pool:hover .art-tilt { transition: transform .08s linear; }
 .glare {
   position: absolute; inset: 0;
   pointer-events: none;
   mix-blend-mode: soft-light;
   opacity: 0; transition: opacity .3s;
 }
-.pool:hover .glare { opacity: 1; }
 .mode-tag { position: absolute; top: 10px; left: 10px; }
 
 .body { padding: 14px 6px 4px; display: flex; flex-direction: column; flex: 1; }
@@ -141,9 +149,21 @@ h3 {
 .rest { font-size: 13px; }
 .seller { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line-soft); }
 
+/* ---- stage：選池台上一次只看一張，字可以放大、資訊排得開 ---- */
+.pool.stage { padding: 14px; border-radius: var(--radius-lg); }
+.pool.stage h3 { font-size: 19px; }
+.pool.stage .top { font-size: 14px; margin: 8px 0 14px; }
+.pool.stage .price { font-size: 20px; }
+.pool.stage .per, .pool.stage .rest { font-size: 14px; }
+.pool.stage .body { padding: 16px 8px 6px; }
+
 @media (max-width: 720px) {
   .pool { padding: 9px; border-radius: var(--radius); }
-  .pool:hover { transform: none; box-shadow: var(--shadow-sm); }
+  .pool.stage { padding: 12px; }
+  .pool.stage h3 { font-size: 17px; }
+  .pool.stage .top { font-size: 13px; }
+  .pool.stage .price { font-size: 18px; }
+  .pool.stage .foot { flex-direction: row; align-items: baseline; }
   .mode-tag { top: 7px; left: 7px; transform: scale(.9); transform-origin: top left; }
   .body { padding: 11px 4px 2px; }
   h3 { font-size: 14px; line-height: 1.35; }

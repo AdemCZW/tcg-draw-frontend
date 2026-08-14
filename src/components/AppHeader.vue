@@ -8,18 +8,19 @@ const auth = useAuthStore()
 <template>
   <header class="hdr">
     <div class="container row">
-      <RouterLink to="/" class="brand display">Vault<span>Draw</span></RouterLink>
+      <RouterLink :to="{ name: 'home' }" class="brand display">Vault<span>Draw</span></RouterLink>
       <nav class="nav">
-        <RouterLink to="/pools">抽選中</RouterLink>
-        <RouterLink to="/fairness">公平性驗證</RouterLink>
-        <RouterLink to="/me/cards">我的卡冊</RouterLink>
-        <RouterLink to="/seller/new" class="sell">＋ 我要開池</RouterLink>
+        <RouterLink :to="{ name: 'play' }">抽選台</RouterLink>
+        <RouterLink :to="{ name: 'pool-index' }">全部池</RouterLink>
+        <RouterLink :to="{ name: 'fairness' }">公平性驗證</RouterLink>
+        <RouterLink :to="{ name: 'cards' }">我的卡冊</RouterLink>
+        <RouterLink :to="{ name: 'seller-new' }" class="sell">＋ 我要開池</RouterLink>
       </nav>
       <div class="right">
-        <RouterLink to="/topup" class="wallet mono" aria-label="點數餘額，前往儲值">
+        <RouterLink :to="{ name: 'topup' }" class="wallet mono" aria-label="點數餘額，前往儲值">
           <span class="dot" aria-hidden="true"></span>{{ wallet.points.toLocaleString() }} 點
         </RouterLink>
-        <RouterLink to="/me/wallet" class="user">{{ auth.user?.name ?? '登入' }}</RouterLink>
+        <RouterLink :to="{ name: 'wallet' }" class="user">{{ auth.user?.name ?? '登入' }}</RouterLink>
       </div>
     </div>
   </header>
@@ -37,7 +38,7 @@ const auth = useAuthStore()
 .row { display: flex; align-items: center; gap: 30px; height: 66px; }
 .brand { font-size: 21px; font-weight: 600; letter-spacing: -0.03em; }
 .brand span { color: var(--accent); }
-.nav { display: flex; gap: 24px; font-size: 15px; color: var(--muted); font-weight: 500; }
+.nav { display: flex; gap: 20px; font-size: 15px; color: var(--muted); font-weight: 500; }
 .nav a { transition: color .15s; }
 .nav a:hover { color: var(--ink); }
 .nav a.router-link-active { color: var(--ink); font-weight: 600; }

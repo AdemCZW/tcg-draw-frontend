@@ -34,6 +34,11 @@ export const router = createRouter({
       meta: { depth: 0, title: '鑑定卡線上抽選' }
     },
     {
+      path: '/play', name: 'play',
+      component: () => import('@/pages/PlayPage.vue'),
+      meta: { depth: 1, title: '挑池' }
+    },
+    {
       path: '/pools', name: 'pool-index',
       component: () => import('@/pages/PoolListPage.vue'),
       meta: { depth: 1, title: '抽選中' }

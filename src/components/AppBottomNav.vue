@@ -3,7 +3,7 @@
 // 圖示用線條 SVG 而非 emoji：emoji 在各平台字面差異大、也偏卡通
 const items = [
   { to: '/', label: '首頁', icon: 'home', exact: true },
-  { to: '/pools', label: '抽選中', icon: 'grid', exact: false },
+  { to: '/play', label: '抽選', icon: 'grid', exact: false },
   { to: '/seller/new', label: '開池', icon: 'plus', exact: false },
   { to: '/me/cards', label: '卡冊', icon: 'book', exact: false },
   { to: '/me/wallet', label: '錢包', icon: 'wallet', exact: false }

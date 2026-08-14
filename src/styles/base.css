@@ -132,3 +132,15 @@ input, select { font-family: inherit; }
 /* ---- 3D 場景通用 ---- */
 .scene { perspective: 1200px; }
 .tilt { transform-style: preserve-3d; will-change: transform; }
+
+/* 只給螢幕閱讀器的文字。carousel 的「第 3 個，共 8 個」這種位置提示
+   不該畫在畫面上，但沒有它，用讀屏的人完全不知道自己滑到哪了。 */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
