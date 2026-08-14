@@ -64,9 +64,28 @@ const timers: number[] = []
 
 const colour = computed(() => ladder.value[Math.min(round.value, ladder.value.length - 1)])
 const isRainbow = computed(() => colour.value === RAINBOW)
-/** 越後面的輪次球越大、火花越多 */
-const intensity = computed(() => (round.value + 1) / ladder.value.length)
 const isLastRound = computed(() => round.value >= ladder.value.length - 1)
+
+/* ---- 逐段升級表 ----
+   「越來越華麗」不能只靠顏色跟亮度 —— 那樣第五段跟第一段的骨架長得一樣。
+   真正有效的是**每一段多開一種特效、多放一批粒子**。
+
+   關鍵：等級吃的是「絕對段數」而不是「這一段佔該 tier 的幾成」。
+   精靈球只有一段，它就該長得跟大師球的第一段一模一樣；
+   用相對比例算的話精靈球會直接全開，等級遞進就毀了。 */
+const LEVELS = [
+  { shard: 0.30, spark: 0.24, ray: 0,    line: false, tint: false, rings: 1, flare: 0, sweep: false },
+  { shard: 0.50, spark: 0.44, ray: 0.50, line: true,  tint: true,  rings: 2, flare: 0, sweep: false },
+  { shard: 0.70, spark: 0.66, ray: 0.75, line: true,  tint: true,  rings: 3, flare: 2, sweep: false },
+  { shard: 0.88, spark: 0.86, ray: 1,    line: true,  tint: true,  rings: 3, flare: 2, sweep: false },
+  { shard: 1,    spark: 1,    ray: 1,    line: true,  tint: true,  rings: 3, flare: 4, sweep: true }
+]
+const lvl = computed(() => LEVELS[Math.min(round.value, LEVELS.length - 1)])
+/** 球體大小與輝光也跟著絕對段數走 */
+const intensity = computed(() => (Math.min(round.value, 4) + 1) / 5)
+
+const take = <T,>(arr: T[], frac: number, min: number) =>
+  frac <= 0 ? [] : arr.slice(0, Math.max(min, Math.round(arr.length * frac)))
 
 function clear() {
   timers.forEach(clearTimeout)
@@ -158,6 +177,10 @@ const RAYS = (() => {
     delay: r() * 50
   }))
 })()
+/** 十字光芒：高段才出現的巨大星芒，橫跨整個畫面。
+    這是「這一發不一樣」最直接的宣告 —— 前面幾段完全沒有這層。 */
+const FLARES = [0, 90, 45, 135]
+
 /** 速度線：蓄力後段往中心拉的細長白線，撐住「快要炸了」的張力 */
 const LINES = (() => {
   const r = mulberry32(919)
@@ -168,6 +191,12 @@ const LINES = (() => {
   }))
 })()
 
+
+/* 每一段實際參與的粒子。切片而不是全開，是「越變越華麗」成立的前提 */
+const shardsNow = computed(() => take(SHARDS, lvl.value.shard, 10))
+const sparksNow = computed(() => take(SPARKS, lvl.value.spark, 14))
+const raysNow = computed(() => take(RAYS, lvl.value.ray, 6))
+const flaresNow = computed(() => FLARES.slice(0, lvl.value.flare))
 </script>
 
 <template>
@@ -198,7 +227,7 @@ const LINES = (() => {
     <!-- 碎裂的殼片 -->
     <div class="shards">
       <i
-        v-for="(s, i) in SHARDS" :key="`${round}-${i}`"
+        v-for="(s, i) in shardsNow" :key="`${round}-${i}`"
         :style="{
           '--a': s.a + 'deg', '--d': s.d + '%',
           '--w': s.w + 'px', '--h': s.h + 'px',
@@ -210,7 +239,7 @@ const LINES = (() => {
     <!-- 火花 -->
     <div class="sparks">
       <i
-        v-for="(s, i) in SPARKS" :key="`${round}-${i}`"
+        v-for="(s, i) in sparksNow" :key="`${round}-${i}`"
         :style="{
           '--a': s.a + 'deg', '--d': s.d + '%', '--s': s.s + 'px',
           '--dur': s.dur + 'ms', '--dl': s.delay + 'ms'
@@ -221,13 +250,13 @@ const LINES = (() => {
     <!-- 神光：碎裂瞬間從球心射出的長光束。這層是「絢麗」感的主要來源 -->
     <div class="rays">
       <i
-        v-for="(r, i) in RAYS" :key="`${round}-${i}`"
+        v-for="(r, i) in raysNow" :key="`${round}-${i}`"
         :style="{ '--a': r.a + 'deg', '--w': r.w + 'px', '--len': r.len + '%', '--dl': r.delay + 'ms' }"
       ></i>
     </div>
 
     <!-- 速度線：蓄力後段往中心拉，撐住「快要炸了」的張力 -->
-    <div class="lines">
+    <div v-if="lvl.line" class="lines">
       <i
         v-for="(l, i) in LINES" :key="i"
         :style="{ '--a': l.a + 'deg', '--len': l.len + '%', '--dl': l.delay + 'ms' }"
@@ -236,11 +265,19 @@ const LINES = (() => {
 
     <!-- 衝擊環 -->
     <div class="ring r1"></div>
-    <div class="ring r2"></div>
-    <div class="ring r3"></div>
+    <div v-if="lvl.rings > 1" class="ring r2"></div>
+    <div v-if="lvl.rings > 2" class="ring r3"></div>
 
     <!-- 每次碎裂時整格閃一下屬性色 -->
-    <div class="tint"></div>
+    <div v-if="lvl.tint" class="tint"></div>
+
+    <!-- 十字光芒：只有高段才有的巨大星芒 -->
+    <div v-if="flaresNow.length" class="flare">
+      <i v-for="(a, i) in flaresNow" :key="`${round}-${i}`" :style="{ '--a': a + 'deg' }"></i>
+    </div>
+
+    <!-- 全畫面掃光：只有最後一段（彩虹）才會出現 -->
+    <div v-if="lvl.sweep" class="sweep"></div>
 
     <!-- 收尾白閃 -->
     <div class="flash"></div>
@@ -449,6 +486,49 @@ const LINES = (() => {
   0%   { transform: rotate(var(--a)) translateY(230%) scaleY(1.6); opacity: 0; }
   50%  { opacity: .85; }
   100% { transform: rotate(var(--a)) translateY(20%) scaleY(.4); opacity: 0; }
+}
+
+/* ---- 十字光芒 ----
+   橫跨整個畫面的星芒。第三段才開始出現、第五段補到四道 ——
+   「多一種特效」比「同一種特效變亮」更能讀出等級差。 */
+.flare { width: 100%; height: 100%; mix-blend-mode: screen; }
+.flare i {
+  position: absolute; left: 50%; top: 50%;
+  width: 200%; height: 4px;
+  margin: -2px 0 0 -100%;
+  background: linear-gradient(90deg, transparent 6%, var(--c) 34%, #fff 50%, var(--c) 66%, transparent 94%);
+  filter: blur(1.5px);
+  transform: rotate(var(--a)) scaleX(0);
+  opacity: 0;
+}
+.rainbow .flare i {
+  background: linear-gradient(90deg, transparent 6%, #b98cff 28%, #fff 50%, #ffd75e 72%, transparent 94%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ph-burst .flare i, .ph-finale .flare i {
+    animation: flare-open 480ms cubic-bezier(.1, .9, .25, 1) forwards;
+  }
+}
+@keyframes flare-open {
+  0%   { transform: rotate(var(--a)) scaleX(0); opacity: 0; }
+  16%  { transform: rotate(var(--a)) scaleX(1); opacity: 1; }
+  100% { transform: rotate(var(--a)) scaleX(1.2); opacity: 0; }
+}
+
+/* ---- 全畫面掃光：只有最後一段有 ---- */
+.sweep {
+  width: 220%; height: 100%;
+  background: linear-gradient(102deg, transparent 42%, rgba(255, 255, 255, .8) 50%, transparent 58%);
+  mix-blend-mode: screen;
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ph-burst .sweep, .ph-finale .sweep { animation: sweep 560ms ease-out forwards; }
+}
+@keyframes sweep {
+  0%   { transform: translateX(-58%); opacity: 0; }
+  22%  { opacity: 1; }
+  100% { transform: translateX(32%); opacity: 0; }
 }
 
 /* ---- 整格色閃 ---- */
