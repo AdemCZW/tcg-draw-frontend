@@ -1,118 +1,83 @@
 <script setup lang="ts">
 /**
- * 卡包設計展示頁（未列在導覽，網址直達：/design/pack）
- * 用途是把各賞別、各狀態一次攤開比對，改配色時能立刻看出哪裡不對。
+ * 收藏艙設計展示頁（未列在導覽，網址直達：/design/pack）
+ * 把各等級、各屬性、各狀態一次攤開比對，改配色時能立刻看出哪裡不對。
  */
 import { ref } from 'vue'
-import PackArt from '@/components/PackArt.vue'
+import CapsuleArt from '@/components/CapsuleArt.vue'
 import type { Tier } from '@/types/models'
 
-const tornCount = ref(0)
+const openedCount = ref(0)
 
-const effects = [
-  { k: 'fire'    as const, n: '火 · 竄動火苗',   m: 'gold'   as const, t: 'A' as Tier,    h: 'f3a91c04bb27de44' },
-  { k: 'water'   as const, n: '水 · 氣泡漣漪',   m: 'silver' as const, t: 'C' as Tier,    h: 'c0ffee9988776655' },
-  { k: 'leaf'    as const, n: '葉 · 飄落搖擺',   m: 'silver' as const, t: 'B' as Tier,    h: 'a1b2c3d4e5f60718' },
-  { k: 'bolt'    as const, n: '雷 · 間歇爆閃',   m: 'silver' as const, t: 'B' as Tier,    h: 'a0c7104ebeef55aa' },
-  { k: 'crystal' as const, n: '晶 · 浮沉轉動',   m: 'grey'   as const, t: 'D' as Tier,    h: 'c3f81a09bb27de44' },
-  { k: 'star'    as const, n: '星 · 散布閃爍',   m: 'gold'   as const, t: 'LAST' as Tier, h: 'a0c7104ebeef55aa' }
+const grades: { tier: Tier; label: string; hash: string }[] = [
+  { tier: 'D', label: '精靈球', hash: 'c3f81a09bb27de44' },
+  { tier: 'C', label: '超級球', hash: 'c0ffee9988776655' },
+  { tier: 'B', label: '高級球', hash: 'a1b2c3d4e5f60718' },
+  { tier: 'A', label: '豪華球', hash: 'f3a91c04bb27de44' },
+  { tier: 'LAST', label: '大師球', hash: 'a0c7104ebeef55aa' }
 ]
 
-const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
-  { tier: 'A', label: '朱紫 SAR 精選', serial: 'VD-0001/080', hash: 'f3a91c04bb27de44' },
-  { tier: 'B', label: '經典促販卡', serial: 'VD-0014/040', hash: 'a1b2c3d4e5f60718' },
-  { tier: 'C', label: '皮卡丘 指定賞', serial: 'VD-0027/050', hash: 'c0ffee9988776655' },
-  { tier: 'D', label: '銅板入門賞', serial: 'VD-0062/080', hash: 'c3f81a09bb27de44' },
-  { tier: 'LAST', label: '尾籤競標', serial: 'VD-0080/080', hash: 'a0c7104ebeef55aa' }
+const effects = [
+  { k: 'fire' as const, n: '火' },
+  { k: 'water' as const, n: '水' },
+  { k: 'leaf' as const, n: '葉' },
+  { k: 'bolt' as const, n: '雷' },
+  { k: 'crystal' as const, n: '晶' },
+  { k: 'star' as const, n: '星' }
 ]
 </script>
 
 <template>
   <div class="container page">
-    <h1 class="display">卡包設計</h1>
+    <h1 class="display">寶貝球設計</h1>
 
-    <h2>撕條互動</h2>
-    <div class="grid pair">
+    <h2>開球互動</h2>
+    <div class="grid solo">
       <figure>
-        <PackArt
-          material="gold" effect="fire" tier="A" serial="VD-0001/080"
-          hash="f3a91c04bb27de44" tearable
+        <CapsuleArt
+          tier="LAST" label="朱紫 SAR 精選" hash="a0c7104ebeef55aa"
+          interactive effect="star"
           card-image="https://assets.tcgdex.net/zh-tw/SV/SVF/001/high.webp"
-          @torn="tornCount++"
+          @opened="openedCount++"
         />
-        <figcaption class="mono muted">拖動左側拉環撕開（已撕 {{ tornCount }} 次）</figcaption>
+        <figcaption class="mono muted">按中央按鈕開球（已開 {{ openedCount }} 次）</figcaption>
       </figure>
     </div>
 
-    <h2>產品視窗</h2>
-    <div class="grid pair three">
-      <figure>
-        <PackArt material="gold" effect="fire" tier="A" serial="VD-0001/080"
-                 hash="f3a91c04bb27de44"
-                 card-image="https://assets.tcgdex.net/zh-tw/SV/SVF/001/high.webp" />
-        <figcaption class="mono muted">A · 光輝噴火龍</figcaption>
-      </figure>
-      <figure>
-        <PackArt material="silver" effect="water" tier="C" serial="VD-0027/050"
-                 hash="c0ffee9988776655"
-                 card-image="https://assets.tcgdex.net/zh-tw/SV/SV2a/009/high.webp" />
-        <figcaption class="mono muted">C · 水箭龜</figcaption>
-      </figure>
-      <figure>
-        <PackArt material="silver" effect="bolt" tier="B" serial="VD-0014/040"
-                 hash="a1b2c3d4e5f60718"
-                 card-image="https://assets.tcgdex.net/zh-tw/SV/SVC/001/high.webp" />
-        <figcaption class="mono muted">B · 皮卡丘</figcaption>
+    <h2>等級階梯</h2>
+    <div class="grid">
+      <figure v-for="g in grades" :key="g.tier">
+        <CapsuleArt :tier="g.tier" :hash="g.hash" />
+        <figcaption class="mono muted">{{ g.tier }} · {{ g.label }}</figcaption>
       </figure>
     </div>
 
-    <h2>材質：灰 / 銀 / 金</h2>
-    <div class="grid pair three">
-      <figure>
-        <PackArt material="grey" effect="none" tier="D" label="銅板入門賞" serial="VD-0062/080" hash="c3f81a09bb27de44" />
-        <figcaption class="mono muted">灰</figcaption>
-      </figure>
-      <figure>
-        <PackArt material="silver" effect="none" tier="B" label="經典促販卡" serial="VD-0014/040" hash="a1b2c3d4e5f60718" />
-        <figcaption class="mono muted">銀</figcaption>
-      </figure>
-      <figure>
-        <PackArt material="gold" effect="none" tier="A" label="朱紫 SAR 精選" serial="VD-0001/080" hash="f3a91c04bb27de44" />
-        <figcaption class="mono muted">金</figcaption>
-      </figure>
-    </div>
-
-    <h2>六種屬性特效</h2>
-    <div class="grid fx">
+    <h2>六種屬性</h2>
+    <div class="grid">
       <figure v-for="e in effects" :key="e.k">
-        <PackArt :material="e.m" :effect="e.k" :tier="e.t" :label="e.n" :hash="e.h" />
+        <CapsuleArt tier="B" :effect="e.k" hash="a1b2c3d4e5f60718" />
         <figcaption class="mono muted">{{ e.n }}</figcaption>
       </figure>
     </div>
 
-    <h2>各賞別</h2>
-    <div class="grid">
-      <figure v-for="t in tiers" :key="t.tier">
-        <PackArt :tier="t.tier" :label="t.label" :serial="t.serial" :hash="t.hash" />
-        <figcaption class="mono muted">{{ t.tier }}</figcaption>
-      </figure>
-    </div>
-
-    <h2>未開封 / 已開封</h2>
+    <h2>已開啟</h2>
     <div class="grid pair">
       <figure>
-        <PackArt tier="A" label="朱紫 SAR 精選" serial="VD-0001/080" hash="f3a91c04bb27de44" />
-        <figcaption class="mono muted">未開封</figcaption>
+        <CapsuleArt tier="LAST" hash="a0c7104ebeef55aa" />
+        <figcaption class="mono muted">閉合</figcaption>
       </figure>
       <figure>
-        <PackArt tier="A" label="朱紫 SAR 精選" serial="VD-0001/080" hash="f3a91c04bb27de44" opened />
-        <figcaption class="mono muted">已開封</figcaption>
+        <CapsuleArt
+          tier="LAST" hash="a0c7104ebeef55aa" opened
+          card-image="https://assets.tcgdex.net/zh-tw/SV/SVC/001/high.webp"
+        />
+        <figcaption class="mono muted">開啟</figcaption>
       </figure>
     </div>
 
-    <h2>小尺寸 88px</h2>
+    <h2>小尺寸 96px</h2>
     <div class="row">
-      <PackArt v-for="t in tiers" :key="t.tier" :tier="t.tier" compact flat class="mini" />
+      <CapsuleArt v-for="g in grades" :key="g.tier" :tier="g.tier" compact flat class="mini" />
     </div>
   </div>
 </template>
@@ -120,18 +85,17 @@ const tiers: { tier: Tier; label: string; serial: string; hash: string }[] = [
 <style scoped>
 .page { padding-top: 32px; padding-bottom: 80px; }
 h1 { margin-bottom: 30px; }
-h2 { font-size: 17px; margin: 34px 0 16px; font-weight: 600; }
+h2 { font-size: 17px; margin: 40px 0 16px; font-weight: 600; }
 .grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 20px;
 }
+.grid.solo { grid-template-columns: 1fr; max-width: 340px; }
 .grid.pair { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); max-width: 620px; }
-.grid.pair.three { max-width: 760px; }
-.grid.fx { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
 figure { margin: 0; }
 figcaption { font-size: 11.5px; margin-top: 9px; }
 .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
-.mini { width: 88px; }
+.mini { width: 96px; }
 @media (max-width: 720px) {
   .grid { grid-template-columns: repeat(2, 1fr); gap: 14px; }
 }
