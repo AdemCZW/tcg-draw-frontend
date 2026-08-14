@@ -31,6 +31,8 @@ const auth = useAuthStore()
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: saturate(180%) blur(14px);
   border-bottom: 1px solid var(--line-soft);
+  /* 瀏海機的狀態列會吃掉這一條，之前完全沒讓位 */
+  padding-top: var(--safe-t);
 }
 .row { display: flex; align-items: center; gap: 30px; height: 66px; }
 .brand { font-size: 21px; font-weight: 600; letter-spacing: -0.03em; }

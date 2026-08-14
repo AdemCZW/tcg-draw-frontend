@@ -71,7 +71,7 @@ async function submit() {
       auctionSeats: form.mode === 'auction' ? form.auctionSeats : undefined,
       prizes: form.prizes.map(p => ({ tier: p.tier, name: p.name.trim() || '爆賞', qty: p.qty, unitValue: p.unitValue }))
     })
-    router.push(`/pools/${pool.id}`)
+    router.push({ name: 'pool', params: { id: pool.id } })
   } catch {
     error.value = '開池失敗，請稍後再試'
   } finally { busy.value = false }

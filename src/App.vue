@@ -1,19 +1,33 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AppBottomNav from '@/components/AppBottomNav.vue'
+
+const route = useRoute()
+
+/**
+ * 沉浸模式的頁面不掛全域外框。
+ *
+ * 開卡演出頁掛著頁尾的「會員條款 · 隱私權政策」與未滿 18 歲警語，
+ * 是這個介面最違和的一處；底部導覽也會跟頁面自己的固定操作列打架。
+ * 由 route meta 宣告，不要在 App.vue 裡比對路徑 —— 那會隨著拆頁一直改。
+ */
+const chrome = computed(() => route.meta.chrome ?? 'full')
+const showChrome = computed(() => chrome.value !== 'none')
 </script>
 
 <template>
-  <AppHeader />
+  <AppHeader v-if="showChrome" />
   <main>
     <RouterView />
   </main>
-  <AppBottomNav />
-  <footer class="foot">
+  <AppBottomNav v-if="showChrome" />
+  <footer v-if="showChrome" class="foot">
     <div class="container">
       <span class="mono muted">VaultDraw · 定量池鑑定卡抽選</span>
       <span class="muted links">
-        <RouterLink to="/fairness">公平性</RouterLink> ·
+        <RouterLink :to="{ name: 'fairness' }">公平性</RouterLink> ·
         <a href="#">會員條款</a> ·
         <a href="#">隱私權政策</a>
       </span>
@@ -27,8 +41,6 @@ import AppBottomNav from '@/components/AppBottomNav.vue'
 .foot .container { display: grid; gap: 6px; }
 .links a { color: var(--muted); }
 .fine { font-size: 11.5px; color: var(--faint); }
-/* 讓底部導覽不遮住頁尾 */
-@media (max-width: 720px) {
-  .foot { padding-bottom: calc(40px + 56px + env(safe-area-inset-bottom, 0px)); }
-}
+/* 讓底部導覽不遮住頁尾。--nav-total 在桌機是 0，不需要再包一層斷點 */
+.foot { padding-bottom: calc(40px + var(--nav-total)); }
 </style>

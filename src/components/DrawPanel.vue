@@ -31,7 +31,7 @@ function goPick() {
       error.value = '點數不足，請先儲值'
       return
     }
-    router.push(`/pools/${props.pool.id}/streak`)
+    router.push({ name: 'streak', params: { id: props.pool.id } })
     return
   }
 
@@ -45,7 +45,7 @@ function goPick() {
     error.value = '點數不足，請先儲值'
     return
   }
-  router.push(`/pools/${props.pool.id}/pick?count=${selected.value}`)
+  router.push({ name: 'pool-pick', params: { id: props.pool.id }, query: { count: selected.value } })
 }
 </script>
 

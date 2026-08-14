@@ -41,7 +41,7 @@ async function confirm() {
     wallet.spend(cost.value)
     const result = await pools.draw(pool.value.id, [...picked.value])
     track('draw_success')
-    router.push(`/draw/${result.drawId}`)
+    router.push({ name: 'draw-result', params: { drawId: result.drawId } })
   } catch {
     error.value = '抽選失敗，點數已退回'
     wallet.topup(cost.value)
@@ -157,8 +157,9 @@ h1 { font-size: 30px; margin: 0; }
 .err { flex-basis: 100%; color: var(--danger); font-size: 13.5px; margin: 0; font-weight: 600; }
 
 @media (max-width: 720px) {
-  /* 底部要同時容納 sticky 結算列與 AppBottomNav */
-  .page { padding-top: 20px; padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+  /* 底部要同時容納 sticky 結算列與 AppBottomNav。
+     導覽高度吃 --nav-total，不再自己抄一份數字 */
+  .page { padding-top: 20px; padding-bottom: calc(94px + var(--nav-total)); }
   h1 { font-size: 23px; }
   .head { gap: 10px; }
   .sub { font-size: 13px; margin: 8px 0 16px; }
@@ -168,7 +169,7 @@ h1 { font-size: 30px; margin: 0; }
   .gone { font-size: 9px; bottom: 4px; }
   .bar {
     position: fixed; left: 10px; right: 10px;
-    bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+    bottom: var(--nav-total);
     z-index: 55;
     display: grid; grid-template-columns: 1fr auto; gap: 6px 12px;
     padding: 10px 14px;

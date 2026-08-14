@@ -2,7 +2,9 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover 是 env(safe-area-inset-*) 生效的前提。
+         少了它，iOS 上那些 env() 一律回傳 0，全站的瀏海／Home 指示器讓位都是白寫的。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>VAULT DRAW — 鑑定卡線上抽選</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

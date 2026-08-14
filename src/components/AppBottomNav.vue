@@ -41,7 +41,9 @@ const paths: Record<string, string> = {
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   backdrop-filter: saturate(180%) blur(16px);
   border-top: 1px solid var(--line-soft);
-  padding-bottom: env(safe-area-inset-bottom, 0);
+  padding-bottom: var(--safe-b);
+  padding-left: var(--safe-l);
+  padding-right: var(--safe-r);
   overflow: hidden; /* 5 等分的次像素進位會多撐出 1px */
 }
 .item {
@@ -51,7 +53,7 @@ const paths: Record<string, string> = {
   padding: 9px 2px 8px;
   font-size: 11px; font-weight: 500;
   color: var(--muted);
-  min-height: 56px;
+  min-height: var(--nav-h);
   justify-content: center;
 }
 .ic { width: 21px; height: 21px; }

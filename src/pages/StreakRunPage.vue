@@ -84,7 +84,7 @@ async function bank() {
   try {
     const result = await pools.bankStreak(run.value.runId)
     track('draw_success')
-    router.push(`/draw/${result.drawId}`)
+    router.push({ name: 'draw-result', params: { drawId: result.drawId } })
   } finally { busy.value = false }
 }
 

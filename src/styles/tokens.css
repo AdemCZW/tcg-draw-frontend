@@ -91,6 +91,29 @@
 }
 
 /* ------------------------------------------------------------------
+   裝置讓位與固定框高度
+
+   這幾個值以前散在各元件裡寫死（footer 的 56px、選籤結算列的 58px、
+   頁面下緣的 150px），只要動一次底部導覽就會全部對不上。抽成權杖之後，
+   要調高度只改 --nav-h 一處。
+
+   --nav-total 在桌機是 0：底部導覽只在 720px 以下出現，
+   桌機還留著它的高度會在頁尾多出一塊空白。
+------------------------------------------------------------------- */
+:root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+
+  --nav-h: 56px;
+  --nav-total: 0px;
+}
+@media (max-width: 720px) {
+  :root { --nav-total: calc(var(--nav-h) + var(--safe-b)); }
+}
+
+/* ------------------------------------------------------------------
    淺色原版 "Soft Vault" —— 在 <html data-theme="light"> 時生效
 ------------------------------------------------------------------- */
 :root[data-theme="light"] {
