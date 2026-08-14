@@ -120,34 +120,54 @@ function mulberry32(seed: number) {
 }
 const SHARDS = (() => {
   const r = mulberry32(20260814)
-  return Array.from({ length: 18 }, (_, i) => ({
-    a: (i * 360) / 18 + (r() - 0.5) * 14,
-    d: 34 + r() * 26,
-    w: 5 + r() * 9,
-    h: 12 + r() * 20,
-    spin: (r() - 0.5) * 220,
-    delay: r() * 60
+  return Array.from({ length: 40 }, (_, i) => ({
+    a: (i * 360) / 40 + (r() - 0.5) * 16,
+    d: 40 + r() * 42,
+    w: 5 + r() * 12,
+    h: 14 + r() * 30,
+    spin: (r() - 0.5) * 300,
+    delay: r() * 70
   }))
 })()
 const SPARKS = (() => {
   const r = mulberry32(77)
-  return Array.from({ length: 26 }, () => ({
+  return Array.from({ length: 72 }, () => ({
     a: r() * 360,
-    d: 30 + r() * 46,
-    s: 2 + r() * 4,
-    dur: 420 + r() * 380,
-    delay: r() * 180
+    d: 34 + r() * 62,
+    s: 2 + r() * 5,
+    dur: 420 + r() * 520,
+    delay: r() * 220
   }))
 })()
 /** 收束線：蓄力時從外往內收，是「正在充能」最直接的語言 */
 const STREAKS = (() => {
   const r = mulberry32(5150)
-  return Array.from({ length: 14 }, (_, i) => ({
-    a: (i * 360) / 14 + (r() - 0.5) * 18,
-    len: 18 + r() * 26,
-    delay: r() * 220
+  return Array.from({ length: 30 }, (_, i) => ({
+    a: (i * 360) / 30 + (r() - 0.5) * 16,
+    len: 22 + r() * 34,
+    delay: r() * 240
   }))
 })()
+/** 神光：碎裂瞬間從球心射出的長光束，這是「絢麗」感的主要來源 */
+const RAYS = (() => {
+  const r = mulberry32(3131)
+  return Array.from({ length: 20 }, (_, i) => ({
+    a: (i * 360) / 20 + (r() - 0.5) * 10,
+    w: 2 + r() * 9,
+    len: 46 + r() * 34,
+    delay: r() * 50
+  }))
+})()
+/** 速度線：蓄力後段往中心拉的細長白線，撐住「快要炸了」的張力 */
+const LINES = (() => {
+  const r = mulberry32(919)
+  return Array.from({ length: 24 }, (_, i) => ({
+    a: (i * 360) / 24 + (r() - 0.5) * 12,
+    len: 30 + r() * 40,
+    delay: r() * 160
+  }))
+})()
+
 </script>
 
 <template>
@@ -198,9 +218,29 @@ const STREAKS = (() => {
       ></i>
     </div>
 
+    <!-- 神光：碎裂瞬間從球心射出的長光束。這層是「絢麗」感的主要來源 -->
+    <div class="rays">
+      <i
+        v-for="(r, i) in RAYS" :key="`${round}-${i}`"
+        :style="{ '--a': r.a + 'deg', '--w': r.w + 'px', '--len': r.len + '%', '--dl': r.delay + 'ms' }"
+      ></i>
+    </div>
+
+    <!-- 速度線：蓄力後段往中心拉，撐住「快要炸了」的張力 -->
+    <div class="lines">
+      <i
+        v-for="(l, i) in LINES" :key="i"
+        :style="{ '--a': l.a + 'deg', '--len': l.len + '%', '--dl': l.delay + 'ms' }"
+      ></i>
+    </div>
+
     <!-- 衝擊環 -->
     <div class="ring r1"></div>
     <div class="ring r2"></div>
+    <div class="ring r3"></div>
+
+    <!-- 每次碎裂時整格閃一下屬性色 -->
+    <div class="tint"></div>
 
     <!-- 收尾白閃 -->
     <div class="flash"></div>
@@ -241,17 +281,21 @@ const STREAKS = (() => {
 }
 .orb > * { grid-area: 1 / 1; border-radius: 50%; }
 .orbGlow {
-  width: 260%; height: 260%;
-  background: radial-gradient(circle, var(--c) 0%, transparent 62%);
-  opacity: calc(.28 + var(--k) * .4);
-  filter: blur(6px);
+  width: 320%; height: 320%;
+  background: radial-gradient(circle, var(--c) 0%, transparent 58%);
+  opacity: calc(.4 + var(--k) * .5);
+  filter: blur(10px);
 }
 .orbBody {
   width: 100%; height: 100%;
   background:
     radial-gradient(circle at 36% 30%, #fff 0%, var(--c) 42%, transparent 72%),
     radial-gradient(circle, var(--c) 40%, transparent 70%);
-  box-shadow: 0 0 40px var(--c), inset 0 0 24px rgba(255, 255, 255, .7);
+  box-shadow:
+    0 0 30px var(--c),
+    0 0 80px var(--c),
+    0 0 140px var(--c),
+    inset 0 0 26px rgba(255, 255, 255, .8);
 }
 .orbRim {
   width: 116%; height: 116%;
@@ -263,7 +307,8 @@ const STREAKS = (() => {
   background:
     radial-gradient(circle at 36% 30%, #fff 0%, transparent 46%),
     conic-gradient(#ff5f6d, #ffd75e, #7dff9b, #5fe0ff, #b98cff, #ff5f6d);
-  box-shadow: 0 0 54px #ffb0e8, inset 0 0 26px rgba(255, 255, 255, .85);
+  box-shadow: 0 0 40px #ffb0e8, 0 0 110px #ff9ee0, 0 0 180px #b98cff,
+              inset 0 0 30px rgba(255, 255, 255, .9);
 }
 .rainbow .orbGlow {
   background: conic-gradient(#ff5f6d55, #ffd75e55, #7dff9b55, #5fe0ff55, #b98cff55, #ff5f6d55);
@@ -345,7 +390,7 @@ const STREAKS = (() => {
   margin: calc(var(--s) / -2) 0 0 calc(var(--s) / -2);
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 8px var(--c);
+  box-shadow: 0 0 10px var(--c), 0 0 22px var(--c);
   opacity: 0;
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -359,6 +404,72 @@ const STREAKS = (() => {
   100% { transform: rotate(var(--a)) translateY(calc(var(--d) * -1)) scale(.2); opacity: 0; }
 }
 
+/* ---- 神光 ----
+   從球心射出的長光束。用 screen 混色疊在一起，交界處自然變白，
+   這是單靠不透明度堆不出來的亮度層次。 */
+.rays { width: 100%; height: 100%; mix-blend-mode: screen; }
+.rays i {
+  position: absolute; left: 50%; top: 50%;
+  width: var(--w); height: var(--len);
+  margin-left: calc(var(--w) / -2);
+  background: linear-gradient(to top, var(--c), rgba(255, 255, 255, .9) 30%, transparent);
+  transform-origin: 50% 0;
+  transform: rotate(var(--a)) scaleY(0);
+  opacity: 0;
+  filter: blur(.5px);
+}
+.rainbow .rays i {
+  background: linear-gradient(to top, #ffd0f0, #fff 28%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ph-burst .rays i, .ph-finale .rays i {
+    animation: ray-shoot 520ms cubic-bezier(.1, .85, .25, 1) var(--dl) forwards;
+  }
+}
+@keyframes ray-shoot {
+  0%   { transform: rotate(var(--a)) scaleY(0); opacity: 0; }
+  18%  { transform: rotate(var(--a)) scaleY(1); opacity: 1; }
+  100% { transform: rotate(var(--a)) scaleY(1.5); opacity: 0; }
+}
+
+/* ---- 速度線 ---- */
+.lines { width: 100%; height: 100%; }
+.lines i {
+  position: absolute; left: 50%; top: 50%;
+  width: 1.5px; height: var(--len);
+  margin-left: -.75px;
+  background: linear-gradient(to bottom, transparent, #fff);
+  transform-origin: 50% 0;
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ph-charge .lines i { animation: line-in 300ms ease-in var(--dl) forwards; }
+}
+@keyframes line-in {
+  0%   { transform: rotate(var(--a)) translateY(230%) scaleY(1.6); opacity: 0; }
+  50%  { opacity: .85; }
+  100% { transform: rotate(var(--a)) translateY(20%) scaleY(.4); opacity: 0; }
+}
+
+/* ---- 整格色閃 ---- */
+.tint {
+  width: 100%; height: 100%;
+  background: var(--c);
+  mix-blend-mode: screen;
+  opacity: 0;
+}
+.rainbow .tint {
+  background: conic-gradient(#ff5f6d, #ffd75e, #7dff9b, #5fe0ff, #b98cff, #ff5f6d);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ph-burst .tint, .ph-finale .tint { animation: tint-pop 340ms ease-out forwards; }
+}
+@keyframes tint-pop {
+  0%   { opacity: 0; }
+  10%  { opacity: calc(.16 + var(--k) * .22); }
+  100% { opacity: 0; }
+}
+
 /* ---- 衝擊環 ---- */
 .ring {
   width: 30%; aspect-ratio: 1;
@@ -370,6 +481,7 @@ const STREAKS = (() => {
 @media (prefers-reduced-motion: no-preference) {
   .ph-burst .r1, .ph-finale .r1 { animation: ring-out 520ms cubic-bezier(.1, .8, .3, 1) forwards; }
   .ph-burst .r2, .ph-finale .r2 { animation: ring-out 620ms cubic-bezier(.1, .8, .3, 1) 90ms forwards; }
+  .ph-burst .r3, .ph-finale .r3 { animation: ring-out 760ms cubic-bezier(.1, .8, .3, 1) 190ms forwards; }
 }
 @keyframes ring-out {
   0%   { transform: scale(.3); opacity: .9; border-width: 3px; }

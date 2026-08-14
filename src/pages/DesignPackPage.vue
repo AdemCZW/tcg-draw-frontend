@@ -3,27 +3,31 @@
  * 收藏艙設計展示頁（未列在導覽，網址直達：/design/pack）
  * 把各等級、各屬性、各狀態一次攤開比對，改配色時能立刻看出哪裡不對。
  */
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import CapsuleArt from '@/components/CapsuleArt.vue'
 import RevealBuildup from '@/components/RevealBuildup.vue'
 import type { Tier } from '@/types/models'
 
 const openedCount = ref(0)
 
-/* 蓄勢演出的展示控制。每個 tier 一個實例，按鈕呼叫它 expose 出來的 start() */
-const buildups = new Map<string, { start: () => void; reset: () => void }>()
-function setBuildup(tier: string, el: unknown) {
-  if (el && typeof el === 'object' && 'start' in el) {
-    buildups.set(tier, el as { start: () => void; reset: () => void })
-  }
-}
-function playBuildup(tier: string) {
-  const b = buildups.get(tier)
-  if (!b) return
-  b.reset()
+/* 蓄勢演出的展示控制。改成單一大舞台 —— 縮圖尺寸下這個特效根本讀不出來，
+   它本來就是設計給接近滿版的畫面用的。 */
+const bigBuildup = ref<{ start: () => void; reset: () => void } | null>(null)
+const bigTier = ref<Tier>('LAST')
+const bigPlaying = ref(false)
+const bigLoop = ref(false)
+
+function playBig(tier: Tier) {
+  bigTier.value = tier
+  bigPlaying.value = true
+  bigBuildup.value?.reset()
   // reset 之後要等 Vue 把 class 換回 ph-idle，動畫才會重新播
-  nextTick(() => b.start())
+  nextTick(() => bigBuildup.value?.start())
 }
+watch(bigPlaying, v => {
+  if (!v && bigLoop.value) setTimeout(() => playBig(bigTier.value), 500)
+})
+
 const LADDER_LEN: Record<string, number> = { D: 1, C: 2, B: 3, A: 4, LAST: 5 }
 const ladderLen = (t: string) => LADDER_LEN[t] ?? 1
 
@@ -170,20 +174,25 @@ function reopenAll() {
     <h2>開卡前蓄勢演出</h2>
     <p class="note muted">
       球體碎幾次、最後停在什麼顏色，就是稀有度的暗號：藍 → 青 → 金 → 橙 → 虹。
-      升級是誠實的，不會先閃大獎再降回去。
+      升級是誠實的，不會先閃大獎再降回去。建議從精靈球依序按到大師球 ——
+      單看一顆感覺不出差別，連著看才知道「等越久＝獎越大」。
     </p>
-    <div class="buildRow">
-      <figure v-for="g in grades" :key="`bu-${g.tier}`" class="buildCell">
-        <div class="buildStage">
-          <RevealBuildup :ref="el => setBuildup(g.tier, el)" :tier="g.tier" />
-        </div>
-        <figcaption>
-          <button type="button" class="btn ghost sm" @click="playBuildup(g.tier)">
-            {{ g.label }}
-          </button>
-          <span class="mono muted steps">{{ ladderLen(g.tier) }} 段</span>
-        </figcaption>
-      </figure>
+    <div class="buildBig">
+      <div class="bigStage">
+        <RevealBuildup ref="bigBuildup" :tier="bigTier" @done="bigPlaying = false" />
+        <p v-if="!bigPlaying" class="hint muted mono">選一個球階播放</p>
+      </div>
+      <div class="bigBar">
+        <button
+          v-for="g in grades" :key="`big-${g.tier}`"
+          type="button" class="btn ghost sm"
+          :class="{ act: bigTier === g.tier && bigPlaying }"
+          @click="playBig(g.tier)"
+        >{{ g.label }}<span class="mono steps">{{ ladderLen(g.tier) }}</span></button>
+        <label class="loop">
+          <input v-model="bigLoop" type="checkbox" />循環
+        </label>
+      </div>
     </div>
 
     <h2>等級階梯</h2>
@@ -225,28 +234,37 @@ function reopenAll() {
 </template>
 
 <style scoped>
-.note { font-size: 13px; margin: -6px 0 16px; max-width: 60ch; }
-.buildRow {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 16px;
-}
-.buildCell { margin: 0; }
-.buildStage {
+.note { font-size: 13px; margin: -6px 0 16px; max-width: 62ch; }
+.buildBig { max-width: 720px; }
+.bigStage {
   position: relative;
-  aspect-ratio: 1 / 1.1;
-  border-radius: var(--radius);
-  background: var(--surface);
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-lg);
+  background: #06050a;
   border: 1px solid var(--line);
   overflow: hidden;
+  display: grid; place-items: center;
 }
-.buildCell figcaption {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; margin-top: 9px;
+.hint { font-size: 12px; letter-spacing: .1em; }
+.bigBar {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 8px; margin-top: 12px;
 }
-.btn.sm { padding: 6px 13px; font-size: 13px; }
-.steps { font-size: 11.5px; }
+.btn.sm { padding: 7px 14px; font-size: 13px; display: inline-flex; align-items: center; gap: 7px; }
+.btn.act { background: var(--accent-wash); color: var(--accent); }
+.steps {
+  font-size: 10.5px; opacity: .6;
+  border: 1px solid currentColor; border-radius: var(--pill);
+  padding: 0 5px;
+}
+.loop {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; color: var(--muted); cursor: pointer;
+}
 @media (max-width: 720px) {
-  .buildRow { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .bigStage { aspect-ratio: 4 / 5; }
+  .btn.sm { padding: 6px 11px; font-size: 12px; }
+  .loop { margin-left: 0; }
 }
 .page { padding-top: 32px; padding-bottom: 80px; }
 h1 { margin-bottom: 30px; }
