@@ -115,6 +115,15 @@ const KNURL = Array.from({ length: 30 }, (_, i) => {
   return { x: n(x), y1: n(t.cy + t.ry * k), y2: n(b.cy + b.ry * k) }
 })
 
+/** 殼的材料厚度。開蓋後真正讓畫面立體的不是漸層，是「看得到殼是有厚度的」——
+    少了這一圈斷面，開口就只是一張貼在球上的黑色橢圓。 */
+const WALL = { rx: n(R - 13), ry: n(EQ.ry - 7.5) }
+const LID_IN_R = R - 12
+const LID_IN_RY = n(EQ.ry - 7)
+const LID_INNER_PATH =
+  `M${n(CX - LID_IN_R)} ${CY} A${LID_IN_R} ${LID_IN_R} 0 0 1 ${n(CX + LID_IN_R)} ${CY}`
+  + ` A${LID_IN_R} ${LID_IN_RY} 0 0 1 ${n(CX - LID_IN_R)} ${CY} Z`
+
 /** 中央按鈕落在赤道最前面。那裡的球面正對水平方向，被俯角壓扁 cos(TILT) */
 const BTN = { cx: CX, cy: n(EQ_NEAR - R * Math.sin((BAND * Math.PI) / 180) * Math.cos(TH) * 0.1), rx: 30, ry: n(30 * Math.cos(TH)) }
 /** 鉸鏈在畫面上的高度，CSS transform-origin 要用 */
@@ -342,24 +351,34 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
         <div class="face lidInner">
           <svg viewBox="0 0 400 400" aria-hidden="true">
             <defs>
-              <!-- 凹面：碗底最暗、往唇緣提亮。反過來畫會讀成一片凸出的圓盤 -->
-              <radialGradient :id="`${uid}-in`" gradientUnits="userSpaceOnUse" :cx="CX" cy="120" r="230">
-                <stop offset="0%" stop-color="#000" />
-                <stop offset="56%" :stop-color="darken(grade.band, .3)" />
-                <stop offset="100%" :stop-color="lighten(grade.band, .26)" />
+              <!-- 凹面：碗底（圓頂內側最深處）最暗，往殼口提亮。
+                   方向反過來畫會讀成一片凸出的圓盤而不是凹進去的殼。 -->
+              <radialGradient :id="`${uid}-in`" gradientUnits="userSpaceOnUse" :cx="CX" cy="52" r="292">
+                <stop offset="0%" stop-color="#04030a" />
+                <stop offset="42%" :stop-color="darken(grade.baseLo, .5)" />
+                <stop offset="100%" :stop-color="mix(grade.baseHi, grade.baseLo, .45)" />
               </radialGradient>
+              <!-- 斷面：被切開的材料厚度，朝上受光 -->
+              <linearGradient :id="`${uid}-lipT`" x1="0.14" y1="0" x2="0.86" y2="1">
+                <stop offset="0%" :stop-color="lighten(grade.shellRim, .5)" />
+                <stop offset="42%" :stop-color="grade.shellHi" />
+                <stop offset="100%" :stop-color="darken(grade.shellLo, .35)" />
+              </linearGradient>
+              <clipPath :id="`${uid}-li`"><path :d="LID_INNER_PATH" /></clipPath>
             </defs>
-            <path :d="LID_PATH" :fill="`url(#${uid}-in)`" />
-            <ellipse :cx="CX" cy="250" rx="150" ry="56" :fill="elem.deep" fill-opacity=".2" />
-            <!-- 內壁的環狀結構。翻開後看得到的其實只有靠近殼口那一圈，
-                 一片死黑會讀成貼紙，有兩三道環才讀得出是「蓋子的裡面」。 -->
-            <path :d="nearArc(9)" fill="none" :stroke="lighten(grade.band, .32)"
-                  stroke-opacity=".55" stroke-width="5" />
-            <path :d="nearArc(4.5)" fill="none" stroke="#000" stroke-opacity=".45" stroke-width="7" />
-            <!-- 殼口內緣：翻開後這一圈正對觀眾，是蓋子最亮的一條，
-                 也是它跟球身相連的那條邊 -->
-            <path :d="nearArc(0)" fill="none" :stroke="grade.trim" stroke-opacity=".95" stroke-width="9" />
-            <path :d="LID_PATH" fill="none" :stroke="grade.trim" stroke-opacity=".6" stroke-width="4" />
+            <!-- 先鋪滿斷面色，再用內壁蓋掉中間 —— 露出來的那一圈就是殼的厚度 -->
+            <path :d="LID_PATH" :fill="`url(#${uid}-lipT)`" />
+            <path :d="LID_INNER_PATH" :fill="`url(#${uid}-in)`" />
+            <g :clip-path="`url(#${uid}-li)`">
+              <!-- 內壁靠殼口那一段離鏡頭最近也最受光 -->
+              <path :d="nearArc(-1.5)" fill="none" :stroke="lighten(grade.baseHi, .25)"
+                    stroke-opacity=".4" stroke-width="26" />
+              <ellipse :cx="CX" cy="250" rx="140" ry="52" :fill="elem.deep" fill-opacity=".22" />
+            </g>
+            <!-- 內緣暗溝：斷面與內壁的交界，這一筆讓厚度讀得出來 -->
+            <path :d="LID_INNER_PATH" fill="none" stroke="#000" stroke-opacity=".62" stroke-width="3" />
+            <path :d="LID_PATH" fill="none" :stroke="grade.trim"
+                  stroke-opacity=".4" stroke-width="1.5" />
           </svg>
         </div>
 
@@ -485,24 +504,42 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
       <div class="mouth" aria-hidden="true">
         <svg viewBox="0 0 400 400">
           <defs>
+            <!-- 內壁：遠側（上緣）同時朝著鏡頭與光源，最亮；近側內壁背光，最暗。
+                 這道上下明暗差就是「一只碗」跟「一個黑洞」的差別。 -->
+            <linearGradient :id="`${uid}-wall`" x1="0.18" y1="0" x2="0.5" y2="1">
+              <stop offset="0%" :stop-color="lighten(grade.baseHi, .22)" />
+              <stop offset="26%" :stop-color="grade.baseLo" />
+              <stop offset="62%" :stop-color="darken(grade.baseLo, .72)" />
+              <stop offset="100%" stop-color="#05040a" />
+            </linearGradient>
+            <!-- 斷面：殼被切開的厚度，朝上受光 -->
+            <linearGradient :id="`${uid}-lipB`" x1="0.14" y1="0" x2="0.86" y2="1">
+              <stop offset="0%" :stop-color="lighten(grade.baseHi, .42)" />
+              <stop offset="40%" :stop-color="grade.baseHi" />
+              <stop offset="100%" :stop-color="darken(grade.baseLo, .45)" />
+            </linearGradient>
             <radialGradient :id="`${uid}-chamber`" gradientUnits="userSpaceOnUse"
-                            :cx="CX" cy="250" r="180">
+                            :cx="CX" cy="262" r="168">
               <stop offset="0%" :stop-color="elem.core" />
-              <stop offset="32%" :stop-color="elem.mid" stop-opacity=".7" />
+              <stop offset="30%" :stop-color="elem.mid" stop-opacity=".72" />
               <stop offset="100%" :stop-color="elem.deep" stop-opacity="0" />
             </radialGradient>
+            <clipPath :id="`${uid}-wc`">
+              <ellipse :cx="CX" :cy="CY" :rx="WALL.rx" :ry="WALL.ry" />
+            </clipPath>
           </defs>
-          <!-- 暗腔 -->
-          <ellipse :cx="CX" :cy="CY" :rx="R" :ry="n(EQ.ry)" fill="#05040a" />
-          <!-- 內壁：後壁受光比前壁亮，這一層決定它讀不讀得出是「碗」 -->
-          <path :d="nearArc(0, true) + ` A${R} ${n(EQ.ry)} 0 0 1 ${n(CX + R)} ${CY} Z`"
-                :fill="lighten(grade.baseHi, .06)" fill-opacity=".2" />
-          <ellipse :cx="CX" cy="238" rx="150" ry="56" :fill="`url(#${uid}-chamber)`" />
-          <!-- 唇緣：金屬圈 + 內側暗溝，兩筆才有厚度 -->
+          <!-- 殼口斷面。先鋪外圈，再用內壁蓋掉中間，露出來的一圈就是殼的厚度 -->
+          <ellipse :cx="CX" :cy="CY" :rx="R" :ry="n(EQ.ry)" :fill="`url(#${uid}-lipB)`" />
+          <ellipse :cx="CX" :cy="CY" :rx="WALL.rx" :ry="WALL.ry" :fill="`url(#${uid}-wall)`" />
+          <g :clip-path="`url(#${uid}-wc)`">
+            <ellipse :cx="CX" cy="262" rx="138" ry="48" :fill="`url(#${uid}-chamber)`" />
+          </g>
+          <!-- 內緣暗溝：斷面與內壁的交界 -->
+          <ellipse :cx="CX" :cy="CY" :rx="WALL.rx" :ry="WALL.ry" fill="none"
+                   stroke="#000" stroke-opacity=".62" stroke-width="3" />
+          <!-- 外緣亮邊 -->
           <ellipse :cx="CX" :cy="CY" :rx="R" :ry="n(EQ.ry)" fill="none"
-                   :stroke="grade.trim" stroke-opacity=".65" stroke-width="3.5" />
-          <ellipse :cx="CX" :cy="CY" rx="188" :ry="n(EQ.ry - 7)" fill="none"
-                   stroke="#000" stroke-opacity=".5" stroke-width="4" />
+                   :stroke="grade.trim" stroke-opacity=".38" stroke-width="1.5" />
         </svg>
       </div>
 
@@ -766,7 +803,7 @@ const BURST_RAYS = Array.from({ length: 14 }, (_, i) => ({
    看起來就是浮在殼裡而不是貼在球前面。 */
 .ejected {
   position: absolute;
-  left: 50%; bottom: 10%;
+  left: 50%; bottom: 19%;
   width: 50%;
   transform: translate(-50%, 34%) scale(.6);
   opacity: 0;
