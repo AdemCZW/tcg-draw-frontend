@@ -7,11 +7,29 @@ import TierBadge from '@/components/TierBadge.vue'
 import CertTag from '@/components/CertTag.vue'
 import CardReveal3D from '@/components/CardReveal3D.vue'
 import Tilt3D from '@/components/Tilt3D.vue'
+import RevealBuildup from '@/components/RevealBuildup.vue'
+import type { Tier } from '@/types/models'
 import { track } from '@/lib/ga'
 
 const pools = usePoolStore()
 const result = pools.lastResult
 const revealed = ref(false)
+
+/* ---- 開卡前的蓄勢演出 ----
+   整批抽選用「最高賞」的那支編排：一抽裡有 A 賞，就播豪華球的戲。
+   這是誠實的 —— 演出等級對應真的開出來的東西，不是先假裝再降級。
+   演出蓋在全畫面上，播完（或被跳過）才露出 3D 開卡。 */
+const TIER_RANK: Record<Tier, number> = { BUST: 0, D: 1, C: 2, B: 3, A: 4, LAST: 5 }
+const bestTier = computed<Tier>(() => {
+  if (!result?.items.length) return 'D'
+  return result.items.reduce<Tier>((best, it) =>
+    TIER_RANK[it.tier] > TIER_RANK[best] ? it.tier : best, 'D')
+})
+/* 動態偏好關動效的人直接看結果，不必先等一支動畫 */
+const reduceMotion = typeof matchMedia !== 'undefined'
+  && matchMedia('(prefers-reduced-motion: reduce)').matches
+const buildupDone = ref(reduceMotion || !result)
+function skipBuildup() { buildupDone.value = true }
 
 /* 開獎當下是使用者最會懷疑「這是不是喬過的」的時刻，
    驗算入口放在這裡比藏在說明頁有意義得多。 */
@@ -40,17 +58,30 @@ onMounted(() => {
   /* 保險絲：明細清單原本只在 3D 演出發出 revealed 後才淡入，
      但 WebGL 中途失敗、或分頁在背景導致 rAF 暫停時，那個事件永遠不會來，
      使用者就再也看不到自己抽到什麼。時間到就強制顯示。 */
-  setTimeout(() => { revealed.value = true }, 4000)
+  setTimeout(() => { revealed.value = true; buildupDone.value = true }, 14000)
 })
 </script>
 
 <template>
   <div class="container page" v-if="result">
+    <!-- 蓄勢演出：全畫面覆蓋，播完自動退場；點一下任何地方直接跳到結果。
+         按鈕而不是 div：鍵盤 Enter/Space 也要能跳過。 -->
+    <button
+      v-if="!buildupDone"
+      type="button"
+      class="buildupWrap"
+      aria-label="跳過開卡演出"
+      @click="skipBuildup"
+    >
+      <RevealBuildup :tier="bestTier" auto @done="skipBuildup" />
+      <span class="skipHint mono">點一下跳過</span>
+    </button>
+
     <h1 class="display">抽選結果</h1>
     <p class="muted sub mono">draw {{ result.drawId }} · 共 {{ result.items.length }} 抽 · {{ result.cost.toLocaleString() }} 點</p>
     <!-- 3D 開卡舞台 -->
     <div class="stage" :style="{ height: stageHeight + 'px' }">
-      <CardReveal3D :items="result.items" @revealed="revealed = true">
+      <CardReveal3D v-if="buildupDone" :items="result.items" @revealed="revealed = true">
         <template #fallback>
           <div class="grid flat">
             <div v-for="(item, i) in result.items" :key="i" class="slot">
@@ -118,6 +149,29 @@ onMounted(() => {
 
 <style scoped>
 .page { padding-top: 40px; padding-bottom: 72px; text-align: center; }
+
+/* 蓄勢演出的全畫面舞台 */
+.buildupWrap {
+  position: fixed; inset: 0; z-index: 80;
+  display: block; padding: 0; margin: 0;
+  border: none; cursor: pointer;
+  background: #05040a;
+  /* 演出元件是 position:absolute; inset:0，這裡要有定位上下文 */
+  contain: layout;
+}
+.buildupWrap:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+.skipHint {
+  position: absolute; left: 50%; bottom: calc(22px + var(--safe-b));
+  transform: translateX(-50%);
+  font-size: 11.5px; letter-spacing: .14em;
+  color: rgba(255, 255, 255, .42);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* 提示遲一點才浮出：第一秒不打擾，讓人先看演出 */
+  .skipHint { opacity: 0; animation: hint-in .6s ease 1.4s forwards; }
+}
+@keyframes hint-in { to { opacity: 1; } }
 h1 { font-size: 26px; margin: 0; }
 .sub { font-size: 12.5px; margin: 6px 0 30px; }
 /* 兩欄直向排列。舞台寬度要貼近「2 卡寬 : N 列高」的比例 ——
