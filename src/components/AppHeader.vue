@@ -20,7 +20,7 @@ const auth = useAuthStore()
         <RouterLink :to="{ name: 'topup' }" class="wallet mono" aria-label="點數餘額，前往儲值">
           <span class="dot" aria-hidden="true"></span>{{ wallet.points.toLocaleString() }} 點
         </RouterLink>
-        <RouterLink :to="{ name: 'wallet' }" class="user">{{ auth.user?.name ?? '登入' }}</RouterLink>
+        <RouterLink :to="{ name: 'me' }" class="user">{{ auth.user?.name ?? '登入' }}</RouterLink>
       </div>
     </div>
   </header>

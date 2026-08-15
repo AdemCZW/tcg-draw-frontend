@@ -1,31 +1,69 @@
 <script setup lang="ts">
-// 手機底部導覽 —— 桌機隱藏（桌機用 AppHeader 的橫向 nav）
-// 圖示用線條 SVG 而非 emoji：emoji 在各平台字面差異大、也偏卡通
+/**
+ * 手機底部導覽 —— 4 + 1 中央凸起鍵。桌機隱藏（桌機用 AppHeader 的橫向 nav）。
+ *
+ * 中央那顆是「抽選」：整個產品唯一的主動作，所以它是畫面上唯一凸出來、
+ * 唯一有實色的按鈕。原本 5 個等寬 tab 沒有重心，什麼都一樣重＝什麼都不重。
+ * 「開池」拿掉 —— 那是賣家功能，一般玩家不會用，收進「我的」。
+ *
+ * active 判定用 route name 前綴，不用 path.startsWith：
+ * /me 與 /me/cards 用 path 會同時亮兩格。
+ *
+ * 圖示用線條 SVG 而非 emoji：emoji 在各平台字面差異大、也偏卡通。
+ */
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+
+const route = useRoute()
+
+/* 左二 + 中央 + 右二。「全部池」回來當左二 —— 它是清單模式，
+   跟中央鍵的挑選台是同一批內容的兩種看法，各佔一格合理。 */
 const items = [
-  { to: '/', label: '首頁', icon: 'home', exact: true },
-  { to: '/play', label: '抽選', icon: 'grid', exact: false },
-  { to: '/seller/new', label: '開池', icon: 'plus', exact: false },
-  { to: '/me/cards', label: '卡冊', icon: 'book', exact: false },
-  { to: '/me/wallet', label: '錢包', icon: 'wallet', exact: false }
-]
+  { name: 'home', label: '大廳', icon: 'home', match: ['home'] },
+  { name: 'pool-index', label: '全部池', icon: 'grid', match: ['pool-index'] },
+  { name: 'cards', label: '卡冊', icon: 'book', match: ['cards'] },
+  { name: 'me', label: '我的', icon: 'user', match: ['me', 'wallet', 'topup', 'seller-new'] }
+] as const
 
 const paths: Record<string, string> = {
   home: 'M3 10.5 12 3l9 7.5M5.5 9.5V20h13V9.5',
   grid: 'M4 5h6v6H4zM14 5h6v6h-6zM4 13h6v6H4zM14 13h6v6h-6z',
-  plus: 'M12 5v14M5 12h14',
   book: 'M5 4h11a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2zM18 16H7a2 2 0 0 0-2 2',
-  wallet: 'M4 8a2 2 0 0 1 2-2h11a1 1 0 0 1 1 1v1M4 8v9a2 2 0 0 0 2 2h12a1 1 0 0 0 1-1v-3M4 8h14M20 11v4h-4a2 2 0 0 1 0-4z'
+  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 20a8 8 0 0 1 16 0'
 }
+
+const current = computed(() => String(route.name ?? ''))
+const isOn = (match: readonly string[]) => match.includes(current.value)
+/** 中央鍵：抽選相關的頁面都算 */
+const playOn = computed(() => ['play', 'pool', 'pool-pick', 'streak'].includes(current.value))
 </script>
 
 <template>
   <nav class="bnav" aria-label="主導覽">
-    <RouterLink
-      v-for="it in items" :key="it.to"
-      :to="it.to"
-      class="item"
-      :class="{ on: it.exact ? $route.path === it.to : $route.path.startsWith(it.to) }"
-    >
+    <!-- 左兩格 -->
+    <RouterLink v-for="it in items.slice(0, 2)" :key="it.name" :to="{ name: it.name }" class="item" :class="{ on: isOn(it.match) }">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path :d="paths[it.icon]" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+      <span class="lb">{{ it.label }}</span>
+    </RouterLink>
+
+    <!-- 中央凸起：抽選 -->
+    <RouterLink :to="{ name: 'play' }" class="item center" :class="{ on: playOn }" aria-label="抽選">
+      <span class="orb">
+        <!-- 寶貝球剪影：上半有色、下半留白、中央按鈕 -->
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3 12a9 9 0 0 1 18 0" fill="currentColor" opacity=".95" />
+          <path d="M3 12a9 9 0 0 0 18 0" fill="#fff" opacity=".92" />
+          <path d="M3 12h18" stroke="#1a1216" stroke-width="2.2" />
+          <circle cx="12" cy="12" r="3.1" fill="#fff" stroke="#1a1216" stroke-width="2" />
+        </svg>
+      </span>
+      <span class="lb">抽選</span>
+    </RouterLink>
+
+    <!-- 右兩格 -->
+    <RouterLink v-for="it in items.slice(2)" :key="it.name" :to="{ name: it.name }" class="item" :class="{ on: isOn(it.match) }">
       <svg class="ic" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path :d="paths[it.icon]" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
@@ -44,7 +82,7 @@ const paths: Record<string, string> = {
   padding-bottom: var(--safe-b);
   padding-left: var(--safe-l);
   padding-right: var(--safe-r);
-  overflow: hidden; /* 5 等分的次像素進位會多撐出 1px */
+  /* 中央鍵要凸出頂邊，所以這裡不能 overflow:hidden */
 }
 .item {
   flex: 1 1 0;
@@ -55,11 +93,47 @@ const paths: Record<string, string> = {
   color: var(--muted);
   min-height: var(--nav-h);
   justify-content: center;
+  transition: color .15s;
 }
-.ic { width: 21px; height: 21px; }
+.ic { width: 21px; height: 21px; transition: transform .25s cubic-bezier(.34, 1.56, .64, 1); }
 .item.on { color: var(--accent); }
 .item.on .lb { font-weight: 600; }
+/* 選中時圖示彈一下：有彈跳的回饋才有「按到了」的手感 */
+.item.on .ic { transform: scale(1.1); }
+.item:active .ic { transform: scale(.9); }
 .item:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+
+/* ---- 中央凸起鍵 ---- */
+.center { position: relative; }
+.center .orb {
+  display: grid; place-items: center;
+  width: 54px; height: 54px;
+  margin-top: -22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 45%, transparent),
+              0 0 0 5px var(--bg);
+  transition: transform .25s cubic-bezier(.34, 1.56, .64, 1), box-shadow .25s;
+}
+.center .orb svg { width: 30px; height: 30px; }
+.center.on .orb {
+  transform: translateY(-3px) scale(1.06);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--accent) 60%, transparent),
+              0 0 0 5px var(--bg);
+}
+.center:active .orb { transform: scale(.94); }
+.center .lb { color: var(--muted); }
+.center.on .lb { color: var(--accent); }
+/* 待機呼吸：中央鍵是唯一會呼吸的東西 */
+@media (prefers-reduced-motion: no-preference) {
+  .center:not(.on) .orb { animation: orb-breathe 3s ease-in-out infinite; }
+}
+@keyframes orb-breathe {
+  0%, 100% { box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 0 5px var(--bg); }
+  50%      { box-shadow: 0 10px 30px color-mix(in srgb, var(--accent) 65%, transparent), 0 0 0 5px var(--bg); }
+}
+
 @media (max-width: 720px) {
   .bnav { display: flex; }
 }

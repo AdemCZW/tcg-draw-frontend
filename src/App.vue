@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AppBottomNav from '@/components/AppBottomNav.vue'
@@ -8,22 +8,40 @@ const route = useRoute()
 
 /**
  * 沉浸模式的頁面不掛全域外框。
- *
- * 開卡演出頁掛著頁尾的「會員條款 · 隱私權政策」與未滿 18 歲警語，
- * 是這個介面最違和的一處；底部導覽也會跟頁面自己的固定操作列打架。
  * 由 route meta 宣告，不要在 App.vue 裡比對路徑 —— 那會隨著拆頁一直改。
  */
 const chrome = computed(() => route.meta.chrome ?? 'full')
 const showChrome = computed(() => chrome.value !== 'none')
+
+/**
+ * 頁面轉場方向。
+ * 往深層（depth 變大）從右滑入，返回（depth 變小）從左滑入，同層淡入淡出。
+ * 進開卡結果頁另有一支「白閃放大」—— 那是儀式的入口，不該跟一般換頁一樣。
+ * 方向要在 route 變的那一刻決定並凍住，不能在 transition 進行中再變。
+ */
+const transitionName = ref('fade')
+watch(
+  () => route.meta.depth ?? 0,
+  (to, from) => {
+    if (route.name === 'draw-result') transitionName.value = 'flash'
+    else if (to > from) transitionName.value = 'push'
+    else if (to < from) transitionName.value = 'pop'
+    else transitionName.value = 'fade'
+  }
+)
 </script>
 
 <template>
   <AppHeader v-if="showChrome" />
   <main>
-    <RouterView />
+    <RouterView v-slot="{ Component }">
+      <Transition :name="transitionName" mode="out-in">
+        <component :is="Component" :key="route.fullPath" />
+      </Transition>
+    </RouterView>
   </main>
   <AppBottomNav v-if="showChrome" />
-  <footer v-if="showChrome" class="foot">
+  <footer v-if="showChrome && route.name !== 'home'" class="foot">
     <div class="container">
       <span class="mono muted">VaultDraw · 定量池鑑定卡抽選</span>
       <span class="muted links">
@@ -43,4 +61,27 @@ const showChrome = computed(() => chrome.value !== 'none')
 .fine { font-size: 11.5px; color: var(--faint); }
 /* 讓底部導覽不遮住頁尾。--nav-total 在桌機是 0，不需要再包一層斷點 */
 .foot { padding-bottom: calc(40px + var(--nav-total)); }
+
+/* ---- 頁面轉場 ----
+   全部很短（180–260ms）：轉場是「換頁的手感」不是動畫秀，
+   太長會讓人覺得網站慢。 */
+@media (prefers-reduced-motion: no-preference) {
+  .fade-enter-active, .fade-leave-active { transition: opacity .18s ease; }
+  .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+  .push-enter-active, .push-leave-active,
+  .pop-enter-active, .pop-leave-active {
+    transition: opacity .22s ease, transform .26s cubic-bezier(.2, .8, .3, 1);
+  }
+  .push-enter-from { opacity: 0; transform: translateX(28px); }
+  .push-leave-to   { opacity: 0; transform: translateX(-16px); }
+  .pop-enter-from  { opacity: 0; transform: translateX(-28px); }
+  .pop-leave-to    { opacity: 0; transform: translateX(16px); }
+
+  /* 進開卡頁：從 94% 放大到 100%，帶一層白閃 —— 儀式的門 */
+  .flash-enter-active { transition: opacity .3s ease, transform .42s cubic-bezier(.2, .9, .3, 1); }
+  .flash-enter-from { opacity: 0; transform: scale(.94); }
+  .flash-leave-active { transition: opacity .16s ease; }
+  .flash-leave-to { opacity: 0; }
+}
 </style>

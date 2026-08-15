@@ -14,6 +14,13 @@ body {
   line-height: 1.6;
   letter-spacing: -0.011em;
   -webkit-font-smoothing: antialiased;
+  /* 寶貝球花紋底：一顆圓環 + 中央鈕，週期性重複，極淡。這是「寶可夢感」的
+     底層訊號 —— 不靠商標，靠形狀語彙（圓 + 中央鈕）。用兩層 radial-gradient 疊。 */
+  background-image:
+    radial-gradient(circle at 50% 50%, transparent 17px, color-mix(in srgb, var(--line-soft) 45%, transparent) 17.6px, color-mix(in srgb, var(--line-soft) 45%, transparent) 18.3px, transparent 19px),
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--line-soft) 55%, transparent) 0 2.6px, transparent 3.2px);
+  background-size: 128px 128px, 128px 128px;
+  background-attachment: fixed;
 }
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
@@ -107,17 +114,21 @@ input, select { font-family: inherit; }
   letter-spacing: -0.01em;
   transition: transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .18s, background .18s, border-color .18s;
 }
-.btn:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: var(--line); }
-.btn:active { transform: translateY(0); }
+/* hover 包在能力偵測裡：觸控裝置點完 :hover 會黏住，按鈕就一直浮著。
+   :active 是「按下去凹陷」—— 桌機語彙是 hover 上浮，手遊語彙是按壓下沉。 */
+@media (hover: hover) {
+  .btn:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: var(--line); }
+  .btn.primary:hover { background: var(--accent-soft); box-shadow: 0 10px 26px rgba(247, 59, 32, .28); }
+  .btn.ghost:hover { background: var(--accent-wash); box-shadow: none; }
+}
+.btn:active { transform: scale(.96); transition-duration: 60ms; }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .btn.primary {
   background: var(--accent);
   border-color: transparent;
   color: #fff;
 }
-.btn.primary:hover { background: var(--accent-soft); box-shadow: 0 10px 26px rgba(247, 59, 32, .28); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--accent); }
-.btn.ghost:hover { background: var(--accent-wash); box-shadow: none; }
 .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
 
 .chip {

@@ -84,6 +84,11 @@ export const router = createRouter({
       meta: { depth: 2, title: '驗算' }
     },
     {
+      path: '/me', name: 'me',
+      component: () => import('@/pages/MePage.vue'),
+      meta: { depth: 1, title: '我的' }
+    },
+    {
       path: '/me/cards', name: 'cards',
       component: () => import('@/pages/MyCardsPage.vue'),
       meta: { depth: 1, title: '我的卡冊' }
