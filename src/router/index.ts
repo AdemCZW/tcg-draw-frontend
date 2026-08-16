@@ -99,10 +99,13 @@ export const router = createRouter({
       meta: { depth: 1, title: '錢包' }
     },
     {
-      path: '/topup', name: 'topup',
+      path: '/me/wallet/topup', name: 'topup',
       component: () => import('@/pages/TopupPage.vue'),
       meta: { depth: 2, title: '儲值' }
     },
+    // 儲值原本在頂層 /topup。它是錢包的子功能，搬進 /me/wallet 底下；
+    // 舊路徑留一版 redirect，避免使用者的書籤壞掉
+    { path: '/topup', redirect: { name: 'topup' } },
     // 未列在導覽的設計展示頁，改配色時用來一次比對所有變體
     {
       path: '/design/pack', name: 'design-pack',

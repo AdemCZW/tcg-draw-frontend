@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 抽選結果：Three.js 立體開卡演出，下方保留明細清單
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { usePoolStore } from '@/stores/pools'
 import CardArt from '@/components/CardArt.vue'
 import TierBadge from '@/components/TierBadge.vue'
@@ -11,8 +12,12 @@ import RevealBuildup from '@/components/RevealBuildup.vue'
 import type { Tier } from '@/types/models'
 import { track } from '@/lib/ga'
 
+const route = useRoute()
 const pools = usePoolStore()
-const result = pools.lastResult
+/* 依網址的 drawId 取，不是拿 store 裡「最後一筆」——
+   reload 後 store 是空的，但 sessionStorage 還有；
+   而且兩個分頁各抽一次時，網址才是唯一可靠的鍵。 */
+const result = pools.resultById(String(route.params.drawId))
 const revealed = ref(false)
 
 /* ---- 開卡前的蓄勢演出 ----

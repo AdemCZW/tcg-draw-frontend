@@ -84,7 +84,8 @@ async function bank() {
   try {
     const result = await pools.bankStreak(run.value.runId)
     track('draw_success')
-    router.push({ name: 'draw-result', params: { drawId: result.drawId } })
+    // replace 而不是 push：抽選是不可逆的，返回鍵若能回到選籤牆會讓人以為能重抽
+    router.replace({ name: 'draw-result', params: { drawId: result.drawId } })
   } finally { busy.value = false }
 }
 

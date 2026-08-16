@@ -41,7 +41,8 @@ async function confirm() {
     wallet.spend(cost.value)
     const result = await pools.draw(pool.value.id, [...picked.value])
     track('draw_success')
-    router.push({ name: 'draw-result', params: { drawId: result.drawId } })
+    // replace 而不是 push：抽選是不可逆的，返回鍵若能回到選籤牆會讓人以為能重抽
+    router.replace({ name: 'draw-result', params: { drawId: result.drawId } })
   } catch {
     error.value = '抽選失敗，點數已退回'
     wallet.topup(cost.value)

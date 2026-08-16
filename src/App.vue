@@ -35,7 +35,10 @@ watch(
   <AppHeader v-if="showChrome" />
   <main>
     <RouterView v-slot="{ Component }">
-      <Transition :name="transitionName" mode="out-in">
+      <!-- :duration 明寫：mode="out-in" 靠 transitionend 事件切頁，
+           在被節流的分頁裡那個事件可能永遠不來，新頁就永遠進不來。
+           給明確時長後 Vue 改用計時器，時間到一定切。 -->
+      <Transition :name="transitionName" mode="out-in" :duration="{ enter: 420, leave: 220 }">
         <component :is="Component" :key="route.fullPath" />
       </Transition>
     </RouterView>

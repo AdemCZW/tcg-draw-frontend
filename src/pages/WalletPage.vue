@@ -17,7 +17,7 @@ const typeLabel: Record<string, string> = {
       <div class="bal card">
         <span class="muted">點數</span>
         <strong class="mono gold">{{ wallet.points.toLocaleString() }}</strong>
-        <RouterLink to="/topup" class="btn primary sm">儲值</RouterLink>
+        <RouterLink :to="{ name: 'topup' }" class="btn primary sm">儲值</RouterLink>
       </div>
     </div>
     <h2>交易紀錄</h2>
