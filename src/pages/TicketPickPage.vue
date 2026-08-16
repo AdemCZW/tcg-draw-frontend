@@ -6,6 +6,7 @@ import { usePoolStore } from '@/stores/pools'
 import { useWalletStore } from '@/stores/wallet'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import ImmersiveBar from '@/components/ImmersiveBar.vue'
+import { haptic } from '@/lib/haptics'
 import { track } from '@/lib/ga'
 
 const route = useRoute()
@@ -27,6 +28,7 @@ const ready = computed(() => picked.value.length === count.value)
 
 function toggle(seat: number) {
   if (taken.value.has(seat) || busy.value) return
+  haptic('select')
   const i = picked.value.indexOf(seat)
   if (i >= 0) { picked.value.splice(i, 1); return }
   if (picked.value.length >= count.value) picked.value.shift()

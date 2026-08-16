@@ -12,6 +12,7 @@ import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import ImmersiveBar from '@/components/ImmersiveBar.vue'
 import CapsuleArt from '@/components/CapsuleArt.vue'
 import RollingNumber from '@/components/RollingNumber.vue'
+import { haptic } from '@/lib/haptics'
 import { track } from '@/lib/ga'
 
 type Phase = 'idle' | 'picking' | 'revealing' | 'decide' | 'busted'
@@ -41,6 +42,11 @@ const lastItem = ref<DrawResultItem | null>(null)
    因為 CapsuleArt 的相位機是單向的。 */
 const ballOpened = ref(false)
 const ballKey = ref(0)
+function onBallOpened() {
+  ballOpened.value = true
+  const t = lastItem.value?.tier
+  if (t === 'A' || t === 'LAST') haptic('success')
+}
 const busy = ref(false)
 const error = ref('')
 
@@ -77,6 +83,7 @@ async function start() {
 
 async function pick(seat: number) {
   if (!run.value || taken.value.has(seat) || busy.value) return
+  haptic('select')
   busy.value = true
   phase.value = 'revealing'
   ballOpened.value = false
@@ -88,11 +95,13 @@ async function pick(seat: number) {
     if (updated.status === 'busted') {
       lastItem.value = null
       phase.value = 'busted'
+      haptic('warn')
       track('draw_failed_soldout')
     } else {
       lastItem.value = updated.items[before] ?? updated.items[updated.items.length - 1]
       // 結果已到手，但先不切 decide —— 球還沒開。玩家按開球鈕才揭曉
       phase.value = 'decide'
+      // A / 最後賞在球開的那一拍才震（見 CapsuleArt opened），這裡不搶先劇透
     }
   } finally { busy.value = false }
 }
@@ -181,7 +190,7 @@ function pushOn() {
             :tier="lastItem.tier"
             :card-image="lastItem.card.image"
             interactive
-            @opened="ballOpened = true"
+            @opened="onBallOpened"
           />
         </div>
         <p v-if="!ballOpened" class="muted hintOpen">按球中央開啟</p>

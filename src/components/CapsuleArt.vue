@@ -19,6 +19,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import type { Tier } from '@/types/models'
 import { useTilt } from '@/composables/useTilt'
+import { haptic } from '@/lib/haptics'
 
 const props = withDefaults(defineProps<{
   tier?: Tier
@@ -263,10 +264,11 @@ const isOpen = computed(() => lidAngle.value !== 0)
 
 function openCapsule() {
   if (!props.interactive || phase.value !== 'idle') return
+  haptic('tap')
   phase.value = 'charge'
   timers.push(window.setTimeout(() => { phase.value = 'hold' }, 420))
   timers.push(window.setTimeout(() => { phase.value = 'crack' }, 520))
-  timers.push(window.setTimeout(() => { phase.value = 'burst' }, 700))
+  timers.push(window.setTimeout(() => { phase.value = 'burst'; haptic('burst') }, 700))
   timers.push(window.setTimeout(() => {
     phase.value = 'reveal'
     emit('opened')

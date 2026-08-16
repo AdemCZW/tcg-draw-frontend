@@ -11,8 +11,14 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useWalletStore } from '@/stores/wallet'
 import RollingNumber from '@/components/RollingNumber.vue'
+import { hapticsEnabled, hapticsSupported, setHaptics } from '@/lib/haptics'
+import { ref } from 'vue'
 
 const router = useRouter()
+
+/* 觸覺開關只在裝置支援時出現：iOS Safari 沒有 vibrate，顯示一個沒作用的開關是欺騙 */
+const hapticsOn = ref(hapticsEnabled())
+function toggleHaptics() { hapticsOn.value = !hapticsOn.value; setHaptics(hapticsOn.value) }
 const auth = useAuthStore()
 const wallet = useWalletStore()
 onMounted(() => wallet.loadLedger())
@@ -70,6 +76,18 @@ const paths: Record<string, string> = {
         </RouterLink>
       </li>
     </ul>
+
+    <div v-if="hapticsSupported" class="pref card">
+      <div class="txt">
+        <strong>觸覺回饋</strong>
+        <span class="muted">選籤、開球、開出大獎時輕震</span>
+      </div>
+      <button
+        type="button" class="switch" :class="{ on: hapticsOn }"
+        role="switch" :aria-checked="hapticsOn" aria-label="觸覺回饋"
+        @click="toggleHaptics"
+      ><span class="knob"></span></button>
+    </div>
 
     <button type="button" class="btn ghost logout" @click="logout">登出</button>
 
@@ -137,6 +155,22 @@ h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
 .txt span { font-size: 12.5px; }
 .chev { margin-left: auto; color: var(--faint); font-size: 22px; line-height: 1; }
 
+.pref { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; margin-top: 8px; }
+.switch {
+  position: relative; width: 46px; height: 28px; flex: none;
+  border-radius: var(--pill); border: none; cursor: pointer;
+  background: var(--surface-3);
+  transition: background .2s;
+}
+.switch .knob {
+  position: absolute; top: 3px; left: 3px;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #fff;
+  transition: transform .2s cubic-bezier(.34, 1.4, .64, 1);
+}
+.switch.on { background: var(--accent); }
+.switch.on .knob { transform: translateX(18px); }
+.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .logout { margin-top: 18px; width: 100%; }
 .fine { font-size: 11.5px; line-height: 1.6; margin: 18px 0 0; }
 .fine a { color: var(--muted); text-decoration: underline; }
