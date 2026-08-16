@@ -418,9 +418,12 @@ const ORBIT_NEAR = `M${n(CX - ORB_RX)} ${CY} A${ORB_RX} ${ORB_RY} 0 0 0 ${n(CX +
     @pointermove="flat || onMove($event)"
     @pointerleave="flat || reset()"
   >
+    <!-- 光暈。closest-side 不能省：預設的 farthest-corner 會讓 100% 落在方框
+         對角線上，四個邊的中點處光暈還有約 25% 不透明度就被元素邊界硬切掉 ——
+         深色背景上會看到一個發光的方框。closest-side 讓它剛好在邊界歸零。 -->
     <div
       class="aura"
-      :style="{ background: `radial-gradient(circle, ${elem.mid}00 44%, ${elem.mid}4d 66%, ${elem.deep}00 100%)` }"
+      :style="{ background: `radial-gradient(circle closest-side, ${elem.mid}00 44%, ${elem.mid}4d 66%, ${elem.deep}00 100%)` }"
     ></div>
 
     <!-- 兩段式接地陰影：緊實核心 + 大範圍環境。只給一段物件會像浮在半空 -->

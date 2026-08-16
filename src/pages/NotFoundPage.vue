@@ -19,7 +19,7 @@ const route = useRoute()
     <p class="mono path">{{ route.fullPath }}</p>
 
     <div class="acts">
-      <RouterLink :to="{ name: 'pool-index' }" class="btn primary">看抽選中的池</RouterLink>
+      <RouterLink :to="{ name: 'home' }" class="btn primary">看抽選中的池</RouterLink>
       <RouterLink :to="{ name: 'home' }" class="btn">回首頁</RouterLink>
     </div>
   </div>

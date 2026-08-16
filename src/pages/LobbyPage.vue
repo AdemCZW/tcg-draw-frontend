@@ -1,236 +1,188 @@
 <script setup lang="ts">
 /**
- * 大廳 —— 一屏內就能開始玩。
+ * 大廳 —— 今日推薦 + 全部抽選池。
  *
- * 之前是 SaaS landing page 的骨架：hero 文案 + 三步流程 + 池 grid，
- * 手機要捲 1.6 屏才看得到第一張池卡。手遊大廳的定義是相反的：
- * 主角在中央、最大；一屏不捲動；底部導覽永遠在手指旁。
+ * 原本「大廳」與「全部池」是兩頁，但它們回答的是同一個問題：
+ * 「現在有什麼可以開」。差別只是一個挑重點、一個列全部 —— 那是同一頁的
+ * 上半跟下半，不是兩個目的地。合併後導覽也空出一格給市場。
  *
- * 版面三帶：狀態列（sticky） / 主舞台（flex:1） / 動態帶。
- * 主舞台是「今日推薦池」—— 用一顆寶貝球當它的視覺錨，球階對應該池
- * 目前還沒出的最高賞。CTA 只有一個。
- *
- * 搬走的內容：三步流程併進 /fairness（那裡本來就有更完整的版本），
- * 池 grid 是 /pools 的工作，hero 的 three.js 舞台整個拿掉（734 KB）。
+ * 分類刻意做成極簡的橫向膠囊：不是多層篩選器，是「我現在想找哪一種」
+ * 的一次點擊。條件都算得出來，不需要後端支援。
  */
 import { computed, onMounted, ref } from 'vue'
 import { usePoolStore } from '@/stores/pools'
 import { useSellerStore } from '@/stores/sellers'
 import type { Pool, Tier } from '@/types/models'
 import CapsuleArt from '@/components/CapsuleArt.vue'
+import PoolCard from '@/components/PoolCard.vue'
 import WinnerTicker from '@/components/WinnerTicker.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import SellerChip from '@/components/SellerChip.vue'
+import { track } from '@/lib/ga'
 
 const pools = usePoolStore()
 const sellers = useSellerStore()
-onMounted(() => { pools.ensureLoaded(); sellers.ensureLoaded() })
+onMounted(() => {
+  pools.ensureLoaded()
+  sellers.ensureLoaded()
+  track('view_lobby')
+})
 
 const RANK: Record<Tier, number> = { BUST: 0, D: 1, C: 2, B: 3, A: 4, LAST: 5 }
 
-/** 一池目前還沒出的最高賞。這決定寶貝球的球階與推薦排序 */
+/** 一池目前還沒出的最高賞 */
 function topLiveTier(p: Pool): Tier {
   return p.prizes
     .filter(x => x.remaining > 0)
     .reduce<Tier>((best, x) => (RANK[x.tier] > RANK[best] ? x.tier : best), 'D')
 }
+const leftPct = (p: Pool) => (p.remainingTickets / p.totalTickets) * 100
+/** 池裡還沒被抽走的最貴一張的市值 */
+const topLiveValue = (p: Pool) =>
+  p.prizes.filter(x => x.remaining > 0).reduce((m, x) => Math.max(m, x.card.refPrice), 0)
 
-/* 今日推薦：開放中、最高賞還沒出的池優先；同級比剩餘率（越接近完抽越緊張）。
-   用日期當種子輪替第一名，同一天進站看到的是同一池，隔天會換。 */
+/* 今日推薦：開放中、最高賞還沒出的優先；同級比剩餘率（越接近完抽越緊張）。
+   用日期輪替前三名，同一天進站看到同一池，隔天會換。 */
 const featured = computed<Pool | undefined>(() => {
   const open = pools.openPools
   if (!open.length) return undefined
   const ranked = [...open].sort((a, b) => {
     const t = RANK[topLiveTier(b)] - RANK[topLiveTier(a)]
-    if (t) return t
-    return a.remainingTickets / a.totalTickets - b.remainingTickets / b.totalTickets
+    return t || leftPct(a) - leftPct(b)
   })
   const top = ranked.slice(0, Math.min(3, ranked.length))
-  const day = Math.floor(Date.now() / 86_400_000)
-  return top[day % top.length]
+  return top[Math.floor(Date.now() / 86_400_000) % top.length]
 })
 const featuredTier = computed(() => (featured.value ? topLiveTier(featured.value) : 'D'))
 const featuredPrize = computed(() =>
   featured.value?.prizes.find(p => p.tier === featuredTier.value && p.remaining > 0))
 const seller = computed(() => (featured.value ? sellers.byId(featured.value.sellerId) : undefined))
-const pct = computed(() =>
-  featured.value ? Math.round((featured.value.remainingTickets / featured.value.totalTickets) * 100) : 0)
+const pct = computed(() => (featured.value ? Math.round(leftPct(featured.value)) : 0))
 
-/** 其他進行中的池，給桌機右欄 */
-const others = computed(() =>
-  pools.openPools.filter(p => p.id !== featured.value?.id).slice(0, 3))
-
-/* 寶貝球的環境色跟著球階走：這一片能量場就是大廳的「主題色」 */
+/* 能量場色相跟著推薦池的球階走 */
 const TIER_HUE: Record<Tier, string> = {
   D: '#ef4040', C: '#3f7fd8', B: '#f5c400', A: '#d8b25a', LAST: '#8b4fd0', BUST: '#ef4040'
 }
 const hue = computed(() => TIER_HUE[featuredTier.value])
 
-/* 首次進站的簡短引導：三張 swipe 卡，取代原本首頁那三個教育區塊 */
-const ONBOARD_KEY = 'vd.onboarded'
-const showOnboard = ref(false)
-onMounted(() => {
-  try { showOnboard.value = !localStorage.getItem(ONBOARD_KEY) } catch { showOnboard.value = false }
-})
-function dismissOnboard() {
-  showOnboard.value = false
-  try { localStorage.setItem(ONBOARD_KEY, '1') } catch { /* 無痕模式也沒關係 */ }
+/* ---- 分類 ---- */
+type Cat = 'all' | 'hot' | 'cheap' | 'big' | 'special' | 'done'
+const cat = ref<Cat>('all')
+
+const MATCH: Record<Cat, (p: Pool) => boolean> = {
+  all: p => p.status === 'open',
+  // 快完抽：剩不到三成。這是最有張力的狀態，排第一個
+  hot: p => p.status === 'open' && leftPct(p) <= 30,
+  cheap: p => p.status === 'open' && p.ticketPrice <= 300,
+  /* 高額賞：池裡還沒被抽走的最貴一張市值 >= 5000。
+     原本這格寫「A 賞或最後賞還在池裡」，但每個開放中的池都符合 ——
+     永遠篩不掉東西的分類等於沒有分類，只是多一個要掃過的按鈕。
+     改看金額才真的有選擇性，也才是玩家實際在找的訊號。 */
+  big: p => p.status === 'open' && topLiveValue(p) >= 5000,
+  // 特殊玩法：連莊、競標、二選一這些不是一般抽
+  special: p => p.status === 'open' && ['streak', 'auction', 'niboichi', 'battle', 'muteki'].includes(p.mode),
+  done: p => p.status !== 'open'
 }
-const ONBOARD = [
-  { t: '每支籤開賣前就封存', d: '籤序先洗好、公布 SHA-256 承諾雜湊。之後改不了。' },
-  { t: '你自己挑要開哪一支', d: '不是系統代抽 —— 選籤牆上親手點。' },
-  { t: '完抽後任何人都能驗算', d: '公開種子，你可以自己重算一次比對。' }
+const CATS: { k: Cat; label: string }[] = [
+  { k: 'all', label: '全部' },
+  { k: 'hot', label: '快完抽' },
+  { k: 'big', label: '高額賞' },
+  { k: 'cheap', label: '銅板價' },
+  { k: 'special', label: '特殊玩法' },
+  { k: 'done', label: '已完抽' }
 ]
+/** 空的分類不顯示 —— 點進去看到空白比少一個選項糟 */
+const cats = computed(() => CATS.filter(c => pools.pools.some(MATCH[c.k])))
+const list = computed(() => pools.pools.filter(MATCH[cat.value]))
 </script>
 
 <template>
   <div class="lobby" :style="{ '--hue': hue }">
-    <!-- 能量場：兩層很慢的徑向漸層互相漂移，加上寶貝球分模線的暗紋。
-         這是「大廳」跟「網頁」的差別 —— 背景是活的。 -->
     <div class="field" aria-hidden="true">
       <div class="glow g1"></div>
       <div class="glow g2"></div>
-      <div class="seam"></div>
     </div>
 
-    <!-- ===== 主舞台 ===== -->
-    <main class="stage container">
-      <template v-if="featured">
-        <p class="lbl">今日推薦池</p>
+    <!-- ===== 今日推薦 ===== -->
+    <section v-if="featured" class="stage container">
+      <p class="lbl">今日推薦池</p>
+      <div class="duo">
+        <RouterLink
+          :to="{ name: 'pool', params: { id: featured.id } }"
+          class="ballWrap"
+          :aria-label="`${featured.title}，前往池詳情`"
+        >
+          <CapsuleArt :tier="featuredTier" :hash="featured.commitHash" />
+        </RouterLink>
 
-        <div class="duo">
-          <!-- 左：寶貝球，球階＝這一池還沒出的最高賞 -->
-          <RouterLink
-            :to="{ name: 'pool', params: { id: featured.id } }"
-            class="ballWrap"
-            :aria-label="`${featured.title}，前往池詳情`"
-          >
-            <CapsuleArt :tier="featuredTier" :hash="featured.commitHash" />
-          </RouterLink>
-
-          <!-- 右：池的關鍵資訊 -->
-          <div class="info">
-            <div class="badges">
-              <PoolModeBadge :mode="featured.mode" />
-              <span v-if="featuredPrize" class="live mono">最高賞未出</span>
-            </div>
-            <h1>{{ featured.title }}</h1>
-            <p v-if="featuredPrize" class="prize">
-              <span class="muted">{{ featuredTier === 'LAST' ? '最後賞' : featuredTier + ' 賞' }}</span>
-              {{ featuredPrize.card.name }}
-            </p>
-
-            <div class="meter" role="progressbar" :aria-valuenow="pct" aria-valuemin="0" aria-valuemax="100"
-                 :aria-label="`剩餘 ${pct}%`">
-              <div class="fill" :style="{ width: pct + '%' }"></div>
-            </div>
-            <div class="nums">
-              <strong class="price">{{ featured.ticketPrice.toLocaleString() }} 點<span class="per muted"> / 抽</span></strong>
-              <span class="mono muted rest">剩 {{ featured.remainingTickets }} / {{ featured.totalTickets }}</span>
-            </div>
-
-            <div class="ctas">
-              <RouterLink :to="{ name: 'pool', params: { id: featured.id } }" class="btn primary go">
-                開這一池
-              </RouterLink>
-              <RouterLink :to="{ name: 'play' }" class="btn ghost">挑別池 →</RouterLink>
-            </div>
-            <div v-if="seller" class="sellerRow"><SellerChip :seller="seller" :link="false" /></div>
+        <div class="info">
+          <div class="badges">
+            <PoolModeBadge :mode="featured.mode" />
+            <span v-if="featuredPrize" class="live mono">最高賞未出</span>
           </div>
-        </div>
-
-        <!-- 桌機右欄：其他進行中的池 -->
-        <aside v-if="others.length" class="others">
-          <p class="lbl">也在抽選中</p>
-          <RouterLink
-            v-for="p in others" :key="p.id"
-            :to="{ name: 'pool', params: { id: p.id } }"
-            class="mini"
-          >
-            <span class="miniBall"><CapsuleArt :tier="topLiveTier(p)" compact flat /></span>
-            <span class="miniText">
-              <strong>{{ p.title }}</strong>
-              <span class="mono muted">{{ p.ticketPrice.toLocaleString() }} 點 · 剩 {{ p.remainingTickets }}</span>
-            </span>
-          </RouterLink>
-        </aside>
-      </template>
-
-      <div v-else-if="pools.loading" class="skel" aria-hidden="true">
-        <div class="skBall"></div>
-        <div class="skLines"><i></i><i></i><i></i></div>
-      </div>
-
-      <p v-else class="muted empty">目前沒有進行中的抽選池。</p>
-    </main>
-
-    <!-- ===== 動態帶 ===== -->
-    <div class="strip container">
-      <WinnerTicker />
-    </div>
-
-    <!-- ===== 首次進站引導 ===== -->
-    <div v-if="showOnboard" class="onboard" role="dialog" aria-label="怎麼玩">
-      <div class="onboardCard">
-        <div class="obSlides">
-          <div v-for="(o, i) in ONBOARD" :key="i" class="obSlide">
-            <span class="obN mono">{{ i + 1 }}</span>
-            <h2>{{ o.t }}</h2>
-            <p class="muted">{{ o.d }}</p>
+          <h1>{{ featured.title }}</h1>
+          <p v-if="featuredPrize" class="prize">
+            <span class="muted">{{ featuredTier === 'LAST' ? '最後賞' : featuredTier + ' 賞' }}</span>
+            {{ featuredPrize.card.name }}
+          </p>
+          <div class="meter" role="progressbar" :aria-valuenow="pct" aria-valuemin="0" aria-valuemax="100" :aria-label="`剩餘 ${pct}%`">
+            <div class="fill" :style="{ width: pct + '%' }"></div>
           </div>
-        </div>
-        <div class="obActs">
-          <RouterLink :to="{ name: 'fairness' }" class="btn ghost sm" @click="dismissOnboard">看完整說明</RouterLink>
-          <button type="button" class="btn primary sm" @click="dismissOnboard">開始</button>
+          <div class="nums">
+            <strong class="price">{{ featured.ticketPrice.toLocaleString() }} 點<span class="per muted"> / 抽</span></strong>
+            <span class="mono muted rest">剩 {{ featured.remainingTickets }} / {{ featured.totalTickets }}</span>
+          </div>
+          <div class="ctas">
+            <RouterLink :to="{ name: 'pool', params: { id: featured.id } }" class="btn primary go">開這一池</RouterLink>
+            <RouterLink :to="{ name: 'play' }" class="btn ghost">滑動挑池 →</RouterLink>
+          </div>
+          <div v-if="seller" class="sellerRow"><SellerChip :seller="seller" :link="false" /></div>
         </div>
       </div>
-    </div>
+    </section>
+
+    <div class="strip container"><WinnerTicker /></div>
+
+    <!-- ===== 全部池 ===== -->
+    <section class="all container">
+      <header class="allHead">
+        <h2>抽選池</h2>
+        <span class="muted count mono">{{ list.length }}</span>
+      </header>
+
+      <div class="cats" role="tablist" aria-label="分類">
+        <button
+          v-for="c in cats" :key="c.k"
+          type="button" role="tab" :aria-selected="cat === c.k"
+          class="chip" :class="{ on: cat === c.k }"
+          @click="cat = c.k"
+        >{{ c.label }}</button>
+      </div>
+
+      <div v-if="pools.loading && !pools.pools.length" class="grid" aria-hidden="true">
+        <div v-for="i in 4" :key="i" class="sk"></div>
+      </div>
+      <div v-else-if="list.length" class="grid">
+        <PoolCard v-for="p in list" :key="p.id" :pool="p" />
+      </div>
+      <p v-else class="muted none">這個分類目前沒有池。</p>
+    </section>
   </div>
 </template>
 
 <style scoped>
-/* 一屏：header 66px + nav（手機）之外的高度全給大廳。
-   100dvh 而不是 100vh —— iOS 的網址列會吃掉 vh，dvh 才是實際看得到的高度 */
-.lobby {
-  position: relative;
-  min-height: calc(100dvh - 66px - var(--nav-total));
-  display: grid;
-  grid-template-rows: 1fr auto;
-  overflow: hidden;
-  isolation: isolate;
-}
-@media (max-width: 720px) {
-  .lobby { min-height: calc(100dvh - 56px - var(--nav-total)); }
-}
+.lobby { position: relative; padding-bottom: calc(40px + var(--nav-total)); isolation: isolate; overflow: hidden; }
 
-/* ---- 能量場 ---- */
-.field { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
-.glow {
-  position: absolute; border-radius: 50%;
-  filter: blur(70px);
-  opacity: .32;
-}
+/* ---- 能量場：只鋪在推薦區那一屏，不要跟著整頁捲 ---- */
+.field { position: absolute; inset: 0 0 auto; height: 720px; z-index: -1; pointer-events: none; }
+.glow { position: absolute; border-radius: 50%; filter: blur(70px); }
 .g1 {
-  width: 62vmax; height: 62vmax; left: -14vmax; top: -22vmax;
+  width: 60vmax; height: 60vmax; left: -14vmax; top: -24vmax; opacity: .3;
   background: radial-gradient(circle, var(--hue), transparent 62%);
 }
 .g2 {
-  width: 54vmax; height: 54vmax; right: -18vmax; bottom: -20vmax;
+  width: 50vmax; height: 50vmax; right: -18vmax; top: 6vmax; opacity: .2;
   background: radial-gradient(circle, color-mix(in srgb, var(--hue) 55%, #ff5236), transparent 62%);
-  opacity: .22;
-}
-/* 寶貝球分模線：一條橫過畫面的暗帶，中間一顆環。很淡，是背景的骨架不是主角 */
-.seam {
-  position: absolute; left: -10%; right: -10%; top: 50%;
-  height: 2px; translate: 0 -50%;
-  background: linear-gradient(90deg, transparent, var(--line) 30%, var(--line) 70%, transparent);
-  opacity: .5;
-}
-.seam::after {
-  content: ''; position: absolute; left: 50%; top: 50%;
-  width: 20vmin; height: 20vmin; translate: -50% -50%;
-  border: 1.5px solid var(--line); border-radius: 50%;
-  opacity: .5;
 }
 @media (prefers-reduced-motion: no-preference) {
   .g1 { animation: drift1 18s ease-in-out infinite alternate; }
@@ -239,39 +191,18 @@ const ONBOARD = [
 @keyframes drift1 { to { transform: translate(6vmax, 5vmax) scale(1.08); } }
 @keyframes drift2 { to { transform: translate(-7vmax, -4vmax) scale(1.06); } }
 
-/* ---- 主舞台 ---- */
-.stage {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  grid-template-areas: "eyebrow eyebrow" "duo others";
-  gap: 6px 40px;
-  align-content: center;
-  padding-top: 26px; padding-bottom: 20px;
-}
-.stage > .lbl { grid-area: eyebrow; }
-/* 區塊標籤：小字、字距寬、前面一顆屬性色的小點 —— 手遊 HUD 的語彙 */
+/* ---- 推薦 ---- */
+.stage { padding-top: 22px; }
 .lbl {
-  display: flex; align-items: center; gap: 8px;
-  margin: 0 0 6px;
-  font-family: var(--font-mono);
-  font-size: 11.5px; letter-spacing: .18em;
-  color: var(--muted);
+  display: flex; align-items: center; gap: 8px; margin: 0 0 10px;
+  font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .18em; color: var(--muted);
 }
-.lbl::before {
-  content: ''; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--hue); box-shadow: 0 0 8px var(--hue);
-}
-.duo { grid-area: duo; display: grid; grid-template-columns: minmax(240px, 380px) minmax(0, 1fr); gap: 34px; align-items: center; }
-.others { grid-area: others; }
+.lbl::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--hue); box-shadow: 0 0 8px var(--hue); }
 
-.ballWrap {
-  display: block;
-  border-radius: 50%;
-  transition: transform .4s cubic-bezier(.2, .8, .3, 1);
-}
+.duo { display: grid; grid-template-columns: minmax(220px, 340px) minmax(0, 1fr); gap: 34px; align-items: center; }
+.ballWrap { display: block; border-radius: 50%; transition: transform .4s cubic-bezier(.2, .8, .3, 1); }
 @media (hover: hover) { .ballWrap:hover { transform: translateY(-6px) scale(1.02); } }
 .ballWrap:focus-visible { outline: 3px solid var(--accent); outline-offset: 8px; }
-/* 球慢慢上下浮：靜止的球是商品照，會浮的球是活的 */
 @media (prefers-reduced-motion: no-preference) {
   .ballWrap { animation: bob 5.2s ease-in-out infinite alternate; }
 }
@@ -279,17 +210,8 @@ const ONBOARD = [
 
 .info { display: grid; gap: 12px; justify-items: start; }
 .badges { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.live {
-  font-size: 11.5px; letter-spacing: .12em; font-weight: 600;
-  padding: 4px 11px; border-radius: var(--pill);
-  color: var(--ok); background: var(--ok-wash);
-}
-h1 {
-  font-size: clamp(26px, 3.6vw, 40px);
-  line-height: 1.12; letter-spacing: -.02em;
-  margin: 0; font-weight: 700;
-  text-wrap: balance;
-}
+.live { font-size: 11.5px; letter-spacing: .12em; font-weight: 600; padding: 4px 11px; border-radius: var(--pill); color: var(--ok); background: var(--ok-wash); }
+h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.02em; margin: 0; font-weight: 700; text-wrap: balance; }
 .prize { margin: -4px 0 0; font-size: 16px; }
 .prize .muted { margin-right: 8px; }
 .meter { width: 100%; max-width: 380px; height: 7px; border-radius: var(--pill); background: var(--surface-2); overflow: hidden; }
@@ -298,9 +220,8 @@ h1 {
 .price { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
 .per { font-size: 13px; font-weight: 400; }
 .rest { font-size: 13px; }
-.ctas { display: flex; gap: 12px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.ctas { display: flex; gap: 12px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 .go { padding: 14px 30px; font-size: 16px; }
-/* 主 CTA 呼吸光暈：這是畫面上唯一會呼吸的按鈕，所以它是「主」 */
 @media (prefers-reduced-motion: no-preference) {
   .go { animation: breathe 2.6s ease-in-out infinite; }
 }
@@ -308,96 +229,53 @@ h1 {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
   50%      { box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent) 0%, transparent); }
 }
-.sellerRow { margin-top: 2px; }
 
-/* ---- 桌機右欄 ---- */
-.others { display: grid; gap: 10px; align-content: start; }
-.others .lbl { margin: 0 0 4px; }
-.mini {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 12px;
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
-  border: 1px solid var(--line-soft);
-  transition: background .15s, transform .2s;
-}
-@media (hover: hover) { .mini:hover { background: var(--surface-2); transform: translateX(3px); } }
-.mini:active { transform: scale(.98); }
-.miniBall { width: 46px; flex: none; }
-.miniText { display: grid; gap: 2px; min-width: 0; }
-.miniText strong { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.miniText span { font-size: 11.5px; }
+.strip { padding: 20px 0 4px; }
 
-/* ---- 動態帶 ---- */
-.strip { padding-bottom: 18px; }
+/* ---- 全部池 ---- */
+.all { padding-top: 14px; }
+.allHead { display: flex; align-items: baseline; gap: 10px; }
+h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
+.count { font-size: 13px; }
 
-/* ---- 骨架 ---- */
-.skel { display: grid; grid-template-columns: 300px 1fr; gap: 34px; align-items: center; }
-.skBall { aspect-ratio: 1; border-radius: 50%; background: var(--surface-2); }
-.skLines { display: grid; gap: 14px; }
-.skLines i { display: block; height: 18px; border-radius: 6px; background: var(--surface-2); }
-.skLines i:nth-child(1) { width: 40%; } .skLines i:nth-child(2) { width: 75%; } .skLines i:nth-child(3) { width: 55%; }
-.empty { text-align: center; padding: 60px 0; }
+.cats { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 14px 0 16px; padding-bottom: 2px; }
+.cats::-webkit-scrollbar { display: none; }
+.chip {
+  flex: none;
+  padding: 8px 15px; border-radius: var(--pill);
+  border: 1px solid var(--line-soft); background: transparent;
+  color: var(--muted); font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s, transform .1s;
+}
+.chip.on { background: var(--ink); color: var(--bg); border-color: transparent; font-weight: 600; }
+@media (hover: hover) { .chip:not(.on):hover { color: var(--ink); border-color: var(--line); } }
+.chip:active { transform: scale(.96); }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* ---- 首次引導 ---- */
-.onboard {
-  position: fixed; inset: 0; z-index: 70;
-  display: grid; place-items: end center;
-  padding: 0 14px calc(18px + var(--nav-total));
-  background: rgba(5, 4, 10, .55);
-  backdrop-filter: blur(6px);
-}
-.onboardCard {
-  width: 100%; max-width: 520px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  padding: 18px 18px 16px;
-  box-shadow: var(--shadow-lg);
-}
-.obSlides {
-  display: flex; gap: 12px;
-  overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
-  margin: 0 -18px; padding: 0 18px 6px;
-}
-.obSlides::-webkit-scrollbar { display: none; }
-.obSlide {
-  flex: 0 0 min(78%, 300px); scroll-snap-align: start;
-  display: grid; gap: 6px; align-content: start;
-  padding: 14px 16px;
-  background: var(--surface-2); border-radius: var(--radius);
-}
-.obN { font-size: 11px; color: var(--accent); letter-spacing: .16em; }
-.obSlide h2 { margin: 0; font-size: 16px; font-weight: 650; }
-.obSlide p { margin: 0; font-size: 13px; line-height: 1.55; }
-.obActs { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
-.btn.sm { padding: 8px 16px; font-size: 13.5px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.sk { height: 320px; border-radius: var(--radius); background: var(--surface-2); }
+@media (prefers-reduced-motion: no-preference) { .sk { animation: pulse 1.4s ease-in-out infinite alternate; } }
+@keyframes pulse { to { opacity: .55; } }
+.none { text-align: center; padding: 46px 0; }
 
-/* ---- 手機：單欄、右欄拿掉 ---- */
 @media (max-width: 960px) {
-  .stage { grid-template-columns: 1fr; grid-template-areas: "eyebrow" "duo"; }
-  .others { display: none; }
+  .duo { grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 24px; }
 }
 @media (max-width: 720px) {
-  .stage { padding-top: 12px; padding-bottom: 8px; gap: 2px; align-content: start; }
-  .duo { grid-template-columns: 1fr; gap: 6px; justify-items: center; text-align: center; }
-  .ballWrap { width: min(62vw, 250px); }
+  .stage { padding-top: 12px; }
+  .duo { grid-template-columns: 1fr; gap: 8px; justify-items: center; text-align: center; }
+  .ballWrap { width: min(56vw, 220px); }
   .info { justify-items: center; gap: 9px; }
   .badges { justify-content: center; }
-  h1 { font-size: 22px; }
+  h1 { font-size: 21px; }
   .prize { font-size: 14px; }
   .meter { max-width: 320px; }
   .price { font-size: 19px; }
   .ctas { justify-content: center; width: 100%; }
   .go { flex: 1 1 auto; max-width: 260px; padding: 13px 20px; font-size: 15px; }
-  .strip { padding-bottom: 12px; }
-  .skel { grid-template-columns: 1fr; justify-items: center; }
-  .skBall { width: 200px; }
-}
-/* 極矮螢幕（iPhone SE 667px）：球再縮一點，仍然要一屏 */
-@media (max-width: 720px) and (max-height: 700px) {
-  .ballWrap { width: min(50vw, 200px); }
-  .info { gap: 6px; }
-  .strip { padding-bottom: 8px; }
+  .strip { padding: 14px 0 2px; }
+  .field { height: 560px; }
+  .grid { grid-template-columns: repeat(2, 1fr); gap: 11px; }
+  .sk { height: 250px; }
 }
 </style>

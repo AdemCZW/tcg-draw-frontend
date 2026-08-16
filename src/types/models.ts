@@ -137,6 +137,28 @@ export interface AuctionLot {
   status: 'live' | 'ended'
 }
 
+/**
+ * 市場掛單 —— 玩家之間直接買賣卡片。
+ *
+ * 成交幣別是「點數」不是現金，而且點數永不可提現。
+ * 這不是設計偏好，是 lib/recycle.ts 那整套法律論述的地基：
+ * 一旦價值能流出平台，「付錢碰運氣 + 輸贏可換回金錢」的對價關係就成立。
+ * 玩家互相買賣仍然停留在站內閉環，這條線不能破。
+ */
+export interface Listing {
+  id: string
+  card: CardItem
+  /** 賣家開的點數價 */
+  price: number
+  /** 上架者。平台自營用 'platform' */
+  sellerId: string
+  sellerName: string
+  listedAt: string
+  status: 'live' | 'sold'
+  /** 來源：玩家抽到的卡（帶 UserPrize.id），或平台上架 */
+  fromPrizeId?: string
+}
+
 export interface UserPrize {
   id: string
   card: CardItem

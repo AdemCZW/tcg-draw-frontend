@@ -6,7 +6,10 @@
 
 type GaEvent =
   | 'view_play'
+  | 'view_lobby'
   | 'view_pool_list'
+  | 'view_market'
+  | 'market_buy_success'
   | 'view_pool_detail'
   | 'click_draw_1'
   | 'click_draw_3'

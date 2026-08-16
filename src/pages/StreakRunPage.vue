@@ -237,7 +237,7 @@ function pushOn() {
     </div>
   </div>
   </div>
-  <div v-else class="container page"><p class="muted">找不到這個池。<RouterLink :to="{ name: 'pool-index' }">回抽選列表</RouterLink></p></div>
+  <div v-else class="container page"><p class="muted">找不到這個池。<RouterLink :to="{ name: 'home' }">回抽選列表</RouterLink></p></div>
 </template>
 
 <style scoped>

@@ -3,7 +3,7 @@
 // Swap `MOCK = false` once FastAPI endpoints are live; the function
 // signatures already mirror the REST interface in the architecture doc.
 // ------------------------------------------------------------------
-import type { Pool, DrawResult, UserPrize, LedgerEntry, WinnerEvent, StreakRun, AuctionLot, Seller } from '@/types/models'
+import type { Pool, DrawResult, UserPrize, LedgerEntry, WinnerEvent, StreakRun, AuctionLot, Seller, Listing, CardItem } from '@/types/models'
 import * as mock from '@/mocks/data'
 
 export const MOCK = true
@@ -90,6 +90,41 @@ export const api = {
   async myPrizes(): Promise<UserPrize[]> {
     if (MOCK) { await delay(150); return mock.userPrizes }
     return http('/me/prizes')
+  },
+
+  // ---- 市場 ----
+  async listMarket(): Promise<Listing[]> {
+    if (MOCK) { await delay(160); return mock.listings }
+    return http('/market/listings')
+  },
+  async buyListing(id: string): Promise<Listing> {
+    if (MOCK) {
+      await delay(300)
+      const l = mock.listings.find(x => x.id === id)
+      if (!l) throw new Error('listing not found')
+      if (l.status === 'sold') throw new Error('already sold')
+      l.status = 'sold'
+      return l
+    }
+    return http(`/market/listings/${id}/buy`, { method: 'POST' })
+  },
+  async createListing(input: { prizeId: string; card: CardItem; price: number; sellerName: string }): Promise<Listing> {
+    if (MOCK) {
+      await delay(300)
+      const l: Listing = {
+        id: 'l-' + input.prizeId,
+        card: input.card,
+        price: input.price,
+        sellerId: 'me',
+        sellerName: input.sellerName,
+        listedAt: '剛剛',
+        status: 'live',
+        fromPrizeId: input.prizeId
+      }
+      mock.listings.unshift(l)
+      return l
+    }
+    return http('/market/listings', { method: 'POST', body: JSON.stringify(input) })
   },
 
   async ledger(): Promise<LedgerEntry[]> {

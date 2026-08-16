@@ -35,7 +35,7 @@ const describe = (p: Pool) => `${p.title}，${p.ticketPrice} 點一抽，剩 ${p
         <h1>挑一池來開</h1>
         <p class="muted sub">左右滑動選擇</p>
       </div>
-      <RouterLink :to="{ name: 'pool-index' }" class="toggle">
+      <RouterLink :to="{ name: 'home' }" class="toggle">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 5h6v6H4zM14 5h6v6h-6zM4 13h6v6H4zM14 13h6v6h-6z" />
         </svg>
@@ -63,7 +63,7 @@ const describe = (p: Pool) => `${p.title}，${p.ticketPrice} 點一抽，剩 ${p
 
     <p v-if="list.length" class="container tail muted">
       共 {{ list.length }} 池 ·
-      <RouterLink :to="{ name: 'pool-index' }">用清單看全部</RouterLink>
+      <RouterLink :to="{ name: 'home' }">回大廳看全部</RouterLink>
     </p>
   </div>
 </template>

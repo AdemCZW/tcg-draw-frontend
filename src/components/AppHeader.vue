@@ -12,7 +12,7 @@ const auth = useAuthStore()
       <RouterLink :to="{ name: 'home' }" class="brand display">Vault<span>Draw</span></RouterLink>
       <nav class="nav">
         <RouterLink :to="{ name: 'play' }">抽選台</RouterLink>
-        <RouterLink :to="{ name: 'pool-index' }">全部池</RouterLink>
+        <RouterLink :to="{ name: 'market' }">市場</RouterLink>
         <RouterLink :to="{ name: 'fairness' }">公平性驗證</RouterLink>
         <RouterLink :to="{ name: 'cards' }">我的卡冊</RouterLink>
         <RouterLink :to="{ name: 'seller-new' }" class="sell">＋ 我要開池</RouterLink>

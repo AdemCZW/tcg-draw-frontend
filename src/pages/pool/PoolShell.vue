@@ -96,7 +96,7 @@ const activeTab = computed(() => String(route.name))
   </div>
 
   <div v-else class="container shell">
-    <p class="muted">找不到這個池，可能已下架。<RouterLink :to="{ name: 'pool-index' }">回抽選列表</RouterLink></p>
+    <p class="muted">找不到這個池，可能已下架。<RouterLink :to="{ name: 'home' }">回抽選列表</RouterLink></p>
   </div>
 </template>
 

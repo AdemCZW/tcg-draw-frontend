@@ -1,4 +1,4 @@
-import type { Pool, CardItem, DrawResult, UserPrize, LedgerEntry, WinnerEvent, PoolPrize, StreakRun, AuctionLot, Seller, Escrow, Tier } from '@/types/models'
+import type { Pool, CardItem, Listing, DrawResult, UserPrize, LedgerEntry, WinnerEvent, PoolPrize, StreakRun, AuctionLot, Seller, Escrow, Tier } from '@/types/models'
 
 // 卡圖先用漸層佔位；正式版換 R2 實拍圖 URL
 const ph = (hue: number) => `placeholder:${hue}`
@@ -71,6 +71,28 @@ function seatsOf(total: number, taken: number, step = 7): number[] {
  *
  * 各池 prizes 加總 = totalTickets；classic/shitei 的 LAST 為額外贈獎不佔籤位。
  */
+/* 市場掛單。價格用「相對市值的折數」算出來，不寫死絕對值 ——
+   寫死很容易跟卡片索引對不起來，變成 PSA 10 的 SAR 掛市值一折這種假資料。
+   分佈刻意從 -14% 到 +6% 都有：市場的重點是價差看得見，不是每張都划算。 */
+const mk = (id: string, c: CardItem, ratio: number, sellerId: string, sellerName: string, listedAt: string): Listing => ({
+  id, card: c, price: Math.round((c.refPrice * ratio) / 10) * 10,
+  sellerId, sellerName, listedAt, status: 'live'
+})
+export const listings: Listing[] = [
+  mk('l1', cards[1], 0.94, 'u-8823', 'VD-8823', '2 小時前'),
+  mk('l2', cards[5], 0.88, 'u-41A0', 'VD-41A0', '5 小時前'),
+  mk('l3', cards[3], 1.06, 's1', '保庫堂', '昨天'),
+  mk('l4', cards[10], 0.9, 'u-C3E0', 'VD-C3E0', '昨天'),
+  mk('l5', cards[2], 0.92, 'u-77B1', 'VD-77B1', '2 天前'),
+  mk('l6', cards[6], 1.04, 'u-2D9F', 'VD-2D9F', '2 天前'),
+  mk('l7', cards[0], 1.04, 's3', '關都卡舖', '3 天前'),
+  mk('l8', cards[12], 0.86, 'u-5E12', 'VD-5E12', '3 天前'),
+  mk('l9', cards[21], 0.95, 'u-9A44', 'VD-9A44', '4 天前'),
+  mk('l10', cards[15], 0.97, 'u-B071', 'VD-B071', '5 天前'),
+  mk('l11', cards[23], 0.91, 'u-3C88', 'VD-3C88', '6 天前'),
+  mk('l12', cards[16], 1.02, 'u-6F20', 'VD-6F20', '6 天前')
+]
+
 export const sellers: Seller[] = [
   {
     id: 's1', handle: 'vaultkeeper', name: '保庫堂', tier: 'trusted', avatarHue: 28,

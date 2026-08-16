@@ -45,10 +45,13 @@ export const router = createRouter({
       component: () => import('@/pages/PlayPage.vue'),
       meta: { depth: 1, title: '挑池' }
     },
+    // 「全部池」併進大廳 —— 兩頁回答的是同一個問題「現在有什麼可以開」，
+    // 差別只是挑重點還是列全部，那是同一頁的上下半。舊路徑留 redirect
+    { path: '/pools', redirect: { name: 'home' } },
     {
-      path: '/pools', name: 'pool-index',
-      component: () => import('@/pages/PoolListPage.vue'),
-      meta: { depth: 1, title: '抽選中' }
+      path: '/market', name: 'market',
+      component: () => import('@/pages/MarketPage.vue'),
+      meta: { depth: 1, title: '市場' }
     },
     {
       /* 池：外殼 + 三個 tab 子頁。外殼負責標題列、tab、桌機側欄與「找不到」的 fallback；
@@ -185,7 +188,7 @@ router.beforeEach(async (to) => {
 /* startViewTransition 的型別由 lib.dom 提供（TS 5.x 已內建），不要自己 declare —— 會跟內建衝突 */
 let vtSettle: (() => void) | null = null
 router.beforeResolve((to, from) => {
-  const cardToPool = from.name === 'pool-index' || from.name === 'play' || from.name === 'home'
+  const cardToPool = from.name === 'home' || from.name === 'play'
   const intoPool = String(to.name ?? '').startsWith('pool-')
   const reduce = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
   if (!document.startViewTransition || !cardToPool || !intoPool || reduce) return

@@ -16,18 +16,19 @@ import { useRoute } from 'vue-router'
 
 const route = useRoute()
 
-/* 左二 + 中央 + 右二。「全部池」回來當左二 —— 它是清單模式，
-   跟中央鍵的挑選台是同一批內容的兩種看法，各佔一格合理。 */
+/* 左二 + 中央 + 右二。
+   「全部池」已併進大廳（同一個問題的兩半），空出來的格子給市場 ——
+   抽選是碰運氣，市場是直接買賣，兩個不同的意圖各佔一格。 */
 const items = [
   { name: 'home', label: '大廳', icon: 'home', match: ['home'] },
-  { name: 'pool-index', label: '全部池', icon: 'grid', match: ['pool-index'] },
+  { name: 'market', label: '市場', icon: 'tag', match: ['market'] },
   { name: 'cards', label: '卡冊', icon: 'book', match: ['cards'] },
   { name: 'me', label: '我的', icon: 'user', match: ['me', 'wallet', 'topup', 'seller-new'] }
 ] as const
 
 const paths: Record<string, string> = {
   home: 'M3 10.5 12 3l9 7.5M5.5 9.5V20h13V9.5',
-  grid: 'M4 5h6v6H4zM14 5h6v6h-6zM4 13h6v6H4zM14 13h6v6h-6z',
+  tag: 'M3 12.5V5a2 2 0 0 1 2-2h7.5a2 2 0 0 1 1.4.6l6.5 6.5a2 2 0 0 1 0 2.8l-7.5 7.5a2 2 0 0 1-2.8 0L3.6 13.9a2 2 0 0 1-.6-1.4zM7.5 7.5h.01',
   book: 'M5 4h11a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2zM18 16H7a2 2 0 0 0-2 2',
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 20a8 8 0 0 1 16 0'
 }
