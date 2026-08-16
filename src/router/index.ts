@@ -182,9 +182,7 @@ router.beforeEach(async (to) => {
    否則它拍到的新畫面還是舊的。做法：beforeResolve 開一個 promise 擋住導航，
    把「放行導航」放進 transition callback，callback 再等 afterEach 通知
    「新 DOM 已掛」（nextTick 之後）才結束。 */
-declare global {
-  interface Document { startViewTransition?: (cb: () => void | Promise<void>) => { finished: Promise<void> } }
-}
+/* startViewTransition 的型別由 lib.dom 提供（TS 5.x 已內建），不要自己 declare —— 會跟內建衝突 */
 let vtSettle: (() => void) | null = null
 router.beforeResolve((to, from) => {
   const cardToPool = from.name === 'pool-index' || from.name === 'play' || from.name === 'home'
@@ -193,7 +191,7 @@ router.beforeResolve((to, from) => {
   if (!document.startViewTransition || !cardToPool || !intoPool || reduce) return
   document.documentElement.dataset.vt = '1'
   return new Promise<void>(release => {
-    document.startViewTransition!(() => new Promise<void>(done => {
+    document.startViewTransition?.(() => new Promise<void>(done => {
       vtSettle = done       // afterEach + nextTick 會呼叫它：新 DOM 已在畫面上
       release()             // 放行導航 → 路由切換 → 元件掛載
     })).finished.finally(() => { delete document.documentElement.dataset.vt; vtSettle = null })
