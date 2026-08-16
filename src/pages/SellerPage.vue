@@ -41,12 +41,12 @@ const pastPools = computed(() => theirPools.value.filter(p => p.status !== 'open
 
     <section v-if="openPools.length">
       <h2 class="sec display">抽選中</h2>
-      <div class="grid"><PoolCard v-for="p in openPools" :key="p.id" :pool="p" /></div>
+      <div class="poolGrid"><PoolCard v-for="p in openPools" :key="p.id" :pool="p" /></div>
     </section>
 
     <section v-if="pastPools.length">
       <h2 class="sec display">已完抽</h2>
-      <div class="grid"><PoolCard v-for="p in pastPools" :key="p.id" :pool="p" /></div>
+      <div class="poolGrid"><PoolCard v-for="p in pastPools" :key="p.id" :pool="p" /></div>
     </section>
 
     <p v-if="!theirPools.length" class="muted empty">這位賣家還沒有開過池。</p>
@@ -79,11 +79,13 @@ dd { margin: 0; font-size: 19px; font-weight: 600; }
   padding: 3px 14px; color: var(--ink);
 }
 section + section { margin-top: 30px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 18px; }
+/* 不叫 .grid：子元件根元素會帶父層 scope id，而 PoolCard 預設 variant 就叫 grid，
+   會被這條規則打到、整張卡變成 grid 容器把卡圖壓成 0 寬 */
+.poolGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 18px; }
 .empty { margin-top: 20px; }
 @media (max-width: 720px) {
   .page { padding-top: 20px; padding-bottom: 40px; }
-  .grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .poolGrid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
   dd { font-size: 16px; }
 }
 </style>

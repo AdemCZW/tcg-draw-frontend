@@ -12,7 +12,6 @@ import CardArt from '@/components/CardArt.vue'
 import Tilt3D from '@/components/Tilt3D.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import SellerChip from '@/components/SellerChip.vue'
-import CapsuleArt from '@/components/CapsuleArt.vue'
 import AuctionPanel from '@/components/AuctionPanel.vue'
 import DrawPanel from '@/components/DrawPanel.vue'
 
@@ -37,13 +36,14 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
   <div class="ov">
     <section class="hero card">
       <!-- 左：封面卡（可傾斜）；右：寶貝球（球階＝還沒出的最高賞） -->
+      <!-- 這裡本來疊了一顆 compact 寶貝球當等級標記，拿掉了：
+           CapsuleArt 的細節（光暈、開口漏光、按鈕高光）在 70px 上糊成一團紫色斑塊，
+           讀不出那是一顆球；而它要傳達的等級，下面已經用文字講了三次
+           （玩法徽章 / 最高賞未出 / 最後賞 · 卡名）。讀不懂的裝飾就只是雜訊。 -->
       <div class="art">
         <Tilt3D :max="16" class="cover" :style="{ viewTransitionName: `pool-cover-${pool.id}` }">
           <CardArt :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo" />
         </Tilt3D>
-        <div class="ball" aria-hidden="true">
-          <CapsuleArt :tier="topLive?.tier ?? 'D'" compact flat />
-        </div>
       </div>
 
       <div class="facts">
@@ -86,12 +86,6 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
 .hero { padding: 18px; display: grid; grid-template-columns: auto 1fr; gap: 20px; align-items: center; }
 .art { position: relative; width: 150px; flex: none; }
 .cover { width: 100%; }
-/* 小球疊在封面右下角，蓋一點點邊 —— 「這一池的等級」貼在封面上 */
-.ball {
-  position: absolute; right: -14px; bottom: -10px;
-  width: 64px;
-  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, .5));
-}
 .facts { display: grid; gap: 12px; justify-items: start; min-width: 0; }
 .top { margin: 0; display: grid; gap: 4px; }
 .top .lbl { font-size: 11px; letter-spacing: .14em; color: var(--ok); }

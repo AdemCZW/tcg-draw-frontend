@@ -122,6 +122,11 @@ input, select { font-family: inherit; }
   .btn.ghost:hover { background: var(--accent-wash); box-shadow: none; }
 }
 .btn:active { transform: scale(.96); transition-duration: 60ms; }
+/* 觸控裝置上按鈕至少 44px 高（Apple HIG 的觸控目標下限）。
+   只在指標不精準時套用 —— 桌機滑鼠不需要，套下去小按鈕會變得笨重。 */
+@media (pointer: coarse) {
+  .btn { min-height: 44px; }
+}
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .btn.primary {
   background: var(--accent);

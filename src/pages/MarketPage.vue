@@ -196,6 +196,7 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .sub { font-size: 13.5px; margin: 5px 0 0; }
 .sell {
   flex: none;
+  min-height: 44px;
   display: inline-flex; align-items: center; gap: 7px;
   font-size: 13.5px; font-weight: 600;
   padding: 9px 16px; border-radius: var(--pill);
@@ -206,11 +207,18 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 @media (hover: hover) { .sell:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); } }
 .sell:active { transform: scale(.97); }
 
-.sorts { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 16px 0 14px; padding-bottom: 2px; }
+/* 右緣淡出：這排是可以左右滑的，但截斷處如果是硬邊，看起來就只是「被切掉」
+   而不是「還有更多」。mask 讓最後一顆膠囊漸隱，滑動的可能性才看得出來。 */
+.sorts {
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 34px), transparent 100%);
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 34px), transparent 100%);
+  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 16px 0 14px; padding-bottom: 2px; }
 .sorts::-webkit-scrollbar { display: none; }
 .chip {
   flex: none;
-  padding: 8px 15px; border-radius: var(--pill);
+  /* 44px 是觸控目標下限；視覺上仍是細膠囊，靠 padding 撐開可點區域 */
+  min-height: 44px;
+  padding: 8px 16px; border-radius: var(--pill);
   border: 1px solid var(--line-soft); background: transparent;
   color: var(--muted); font-size: 13px; font-weight: 500; cursor: pointer;
   transition: background .15s, color .15s, border-color .15s;

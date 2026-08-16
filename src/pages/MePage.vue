@@ -158,6 +158,8 @@ h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
 .pref { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; margin-top: 8px; }
 .switch {
   position: relative; width: 46px; height: 28px; flex: none;
+  /* 視覺上是 46x28 的細開關，但觸控目標要 44 高 —— 用偽元素把可點範圍撐開，
+     不動視覺尺寸。直接加 height 會把開關畫成一顆胖膠囊。 */
   border-radius: var(--pill); border: none; cursor: pointer;
   background: var(--surface-3);
   transition: background .2s;
@@ -167,6 +169,10 @@ h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
   width: 22px; height: 22px; border-radius: 50%;
   background: #fff;
   transition: transform .2s cubic-bezier(.34, 1.4, .64, 1);
+}
+.switch::after {
+  content: ''; position: absolute; left: 0; right: 0;
+  top: 50%; height: 44px; translate: 0 -50%;
 }
 .switch.on { background: var(--accent); }
 .switch.on .knob { transform: translateX(18px); }

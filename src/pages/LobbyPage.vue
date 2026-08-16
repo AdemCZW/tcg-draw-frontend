@@ -159,10 +159,10 @@ const list = computed(() => pools.pools.filter(MATCH[cat.value]))
         >{{ c.label }}</button>
       </div>
 
-      <div v-if="pools.loading && !pools.pools.length" class="grid" aria-hidden="true">
+      <div v-if="pools.loading && !pools.pools.length" class="poolGrid" aria-hidden="true">
         <div v-for="i in 4" :key="i" class="sk"></div>
       </div>
-      <div v-else-if="list.length" class="grid">
+      <div v-else-if="list.length" class="poolGrid">
         <PoolCard v-for="p in list" :key="p.id" :pool="p" />
       </div>
       <p v-else class="muted none">這個分類目前沒有池。</p>
@@ -238,11 +238,18 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
 h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
 .count { font-size: 13px; }
 
-.cats { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 14px 0 16px; padding-bottom: 2px; }
+/* 右緣淡出：這排是可以左右滑的，但截斷處如果是硬邊，看起來就只是「被切掉」
+   而不是「還有更多」。mask 讓最後一顆膠囊漸隱，滑動的可能性才看得出來。 */
+.cats {
+  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 34px), transparent 100%);
+  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 34px), transparent 100%);
+  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 14px 0 16px; padding-bottom: 2px; }
 .cats::-webkit-scrollbar { display: none; }
 .chip {
   flex: none;
-  padding: 8px 15px; border-radius: var(--pill);
+  /* 44px 是觸控目標下限；視覺上仍是細膠囊，靠 padding 撐開可點區域 */
+  min-height: 44px;
+  padding: 8px 16px; border-radius: var(--pill);
   border: 1px solid var(--line-soft); background: transparent;
   color: var(--muted); font-size: 13px; font-weight: 500; cursor: pointer;
   transition: background .15s, color .15s, border-color .15s, transform .1s;
@@ -252,7 +259,11 @@ h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
 .chip:active { transform: scale(.96); }
 .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+/* 命名要夠specific：子元件的根元素會帶上父層的 scope id，所以父層寫 `.grid`
+   會打到 PoolCard 的根 —— 而 PoolCard 的預設 variant 剛好就叫 grid，
+   class 是 "pool grid"。結果卡片自己變成 grid 容器、卡圖寬度被壓成 0，
+   徽章擠成一行一個字。父層的版面 class 不要用通用字。 */
+.poolGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
 .sk { height: 320px; border-radius: var(--radius); background: var(--surface-2); }
 @media (prefers-reduced-motion: no-preference) { .sk { animation: pulse 1.4s ease-in-out infinite alternate; } }
 @keyframes pulse { to { opacity: .55; } }
@@ -275,7 +286,7 @@ h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
   .go { flex: 1 1 auto; max-width: 260px; padding: 13px 20px; font-size: 15px; }
   .strip { padding: 14px 0 2px; }
   .field { height: 560px; }
-  .grid { grid-template-columns: repeat(2, 1fr); gap: 11px; }
+  .poolGrid { grid-template-columns: repeat(2, 1fr); gap: 11px; }
   .sk { height: 250px; }
 }
 </style>
