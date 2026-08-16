@@ -38,7 +38,8 @@ function back() {
 <style scoped>
 .ibar {
   position: sticky; top: 0; z-index: 50;
-  display: grid; grid-template-columns: 44px 1fr 44px; align-items: center;
+  /* 右槽 auto：徽章這種內容不能被壓成一欄直排；左槽固定 44 讓標題仍置中偏左一點點是可接受的 */
+  display: grid; grid-template-columns: 44px 1fr auto; align-items: center;
   height: calc(52px + var(--safe-t));
   padding: var(--safe-t) 6px 0;
   background: color-mix(in srgb, var(--bg) 84%, transparent);
@@ -57,5 +58,5 @@ function back() {
 .back:active { transform: scale(.9); }
 .back:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .t { margin: 0; font-size: 15.5px; font-weight: 600; text-align: center; letter-spacing: -.01em; }
-.right { display: grid; place-items: center; }
+.right { display: grid; place-items: center; min-width: 44px; padding-right: 8px; white-space: nowrap; }
 </style>

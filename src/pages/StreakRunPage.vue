@@ -10,6 +10,7 @@ import CardArt from '@/components/CardArt.vue'
 import TierBadge from '@/components/TierBadge.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import ImmersiveBar from '@/components/ImmersiveBar.vue'
+import CapsuleArt from '@/components/CapsuleArt.vue'
 import { track } from '@/lib/ga'
 
 type Phase = 'idle' | 'picking' | 'revealing' | 'decide' | 'busted'
@@ -33,7 +34,12 @@ onBeforeRouteLeave(() => {
   return window.confirm('這一輪還在進行中，離開後無法接續。確定要離開？')
 })
 const lastItem = ref<DrawResultItem | null>(null)
-const flipped = ref(false)
+/* 揭曉改成寶貝球：玩家自己按球開，開完（CapsuleArt 發 opened）才給
+   「收手／賭下去」。翻牌是被動看結果，開球是主動揭曉 —— 這是連莊玩法
+   「每一支都是你自己選的」的延伸。ballKey 每抽 +1 強制重掛，
+   因為 CapsuleArt 的相位機是單向的。 */
+const ballOpened = ref(false)
+const ballKey = ref(0)
 const busy = ref(false)
 const error = ref('')
 
@@ -72,7 +78,8 @@ async function pick(seat: number) {
   if (!run.value || taken.value.has(seat) || busy.value) return
   busy.value = true
   phase.value = 'revealing'
-  flipped.value = false
+  ballOpened.value = false
+  ballKey.value++
   try {
     const before = run.value.items.length
     const updated = await pools.streakDraw(pool.value!.id, run.value.runId, seat)
@@ -83,8 +90,8 @@ async function pick(seat: number) {
       track('draw_failed_soldout')
     } else {
       lastItem.value = updated.items[before] ?? updated.items[updated.items.length - 1]
+      // 結果已到手，但先不切 decide —— 球還沒開。玩家按開球鈕才揭曉
       phase.value = 'decide'
-      setTimeout(() => { flipped.value = true }, 60)
     }
   } finally { busy.value = false }
 }
@@ -166,21 +173,29 @@ function pushOn() {
     <!-- 揭曉 + 決策 -->
     <div v-else-if="phase === 'revealing' || phase === 'decide'" class="stage card">
       <div class="reveal" v-if="lastItem">
-        <div class="flip" :class="{ on: flipped }">
-          <div class="face back" aria-hidden="true"><span class="display q">?</span></div>
-          <div class="face front">
-            <CardArt :image="lastItem.card.image" :alt="lastItem.card.name" :tier="lastItem.tier" :cert-no="lastItem.card.certNo" />
+        <!-- 球階＝這一抽的賞。按中央鈕開球，卡片從殼裡浮出來 -->
+        <div class="ballStage">
+          <CapsuleArt
+            :key="ballKey"
+            :tier="lastItem.tier"
+            :card-image="lastItem.card.image"
+            interactive
+            @opened="ballOpened = true"
+          />
+        </div>
+        <p v-if="!ballOpened" class="muted hintOpen">按球中央開啟</p>
+        <Transition name="pop">
+          <div v-if="ballOpened" class="got">
+            <TierBadge :tier="lastItem.tier" />
+            <strong>{{ lastItem.card.name }}</strong>
+            <span class="mono muted">+{{ lastItem.card.refPrice.toLocaleString() }}</span>
           </div>
-        </div>
-        <div class="got">
-          <TierBadge :tier="lastItem.tier" />
-          <strong>{{ lastItem.card.name }}</strong>
-          <span class="mono muted">+{{ lastItem.card.refPrice.toLocaleString() }}</span>
-        </div>
+        </Transition>
       </div>
       <p v-else class="muted">開籤中…</p>
 
-      <div class="choice" v-if="phase === 'decide'">
+      <!-- 開完球才給選擇：沒揭曉之前談不上收手還是賭 -->
+      <div class="choice" v-if="phase === 'decide' && ballOpened">
         <button class="btn primary lg" :disabled="busy" @click="bank">
           收手落袋（{{ heldValue.toLocaleString() }}）
         </button>
@@ -237,19 +252,13 @@ h1 { font-size: 30px; margin: 0; }
 .choice { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
 .err { color: var(--danger); font-size: 13.5px; font-weight: 600; margin: 0; }
 
-.reveal { display: grid; gap: 12px; justify-items: center; }
-.flip { width: 168px; perspective: 900px; position: relative; transform-style: preserve-3d; transition: transform .55s cubic-bezier(.2,.7,.3,1); }
-.flip.on { transform: rotateY(180deg); }
-@media (prefers-reduced-motion: reduce) { .flip { transition: none; } }
-.face { backface-visibility: hidden; border-radius: var(--radius); }
-.face.back {
-  position: absolute; inset: 0;
-  display: grid; place-items: center;
-  border: 1px solid var(--line); background: var(--surface-2);
-}
-.q { font-size: 40px; color: var(--faint); }
-.face.front { transform: rotateY(180deg); }
+.reveal { display: grid; gap: 10px; justify-items: center; }
+/* 球的舞台：寬度給夠讓中央鈕好按（球徑是 stage 的 58%，鈕是球徑的 ~15%） */
+.ballStage { width: min(78vw, 300px); }
+.hintOpen { margin: 0; font-size: 12.5px; letter-spacing: .06em; }
 .got { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.pop-enter-active { transition: opacity .3s ease, transform .4s cubic-bezier(.2, 1.2, .4, 1); }
+.pop-enter-from { opacity: 0; transform: translateY(8px) scale(.94); }
 
 .bust { background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
 .floor {
