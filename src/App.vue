@@ -23,7 +23,9 @@ const transitionName = ref('fade')
 watch(
   () => route.meta.depth ?? 0,
   (to, from) => {
-    if (route.name === 'draw-result') transitionName.value = 'flash'
+    // 這次換頁若交給了 View Transitions（router 會在 <html> 上標記），Vue 的轉場讓路
+    if (document.documentElement.dataset.vt) transitionName.value = 'none'
+    else if (route.name === 'draw-result') transitionName.value = 'flash'
     else if (to > from) transitionName.value = 'push'
     else if (to < from) transitionName.value = 'pop'
     else transitionName.value = 'fade'

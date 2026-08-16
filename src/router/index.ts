@@ -172,7 +172,37 @@ router.beforeEach(async (to) => {
   }
 })
 
+/* 共享元素轉場（View Transitions API）。
+   把「舊畫面 → 新畫面」的 DOM 更新包進 startViewTransition，同名的元素
+   （pool-cover-{id}）會從舊位置滑到新位置。只在「池卡 → 池詳情」這條路啟用：
+   其他換頁維持 App.vue 的 <Transition>；兩者同時作用會打架。
+   不支援的瀏覽器（Firefox）走一般轉場，功能不受影響。
+
+   時序是關鍵：startViewTransition 的 callback 必須「等新 DOM 畫好」才 return，
+   否則它拍到的新畫面還是舊的。做法：beforeResolve 開一個 promise 擋住導航，
+   把「放行導航」放進 transition callback，callback 再等 afterEach 通知
+   「新 DOM 已掛」（nextTick 之後）才結束。 */
+declare global {
+  interface Document { startViewTransition?: (cb: () => void | Promise<void>) => { finished: Promise<void> } }
+}
+let vtSettle: (() => void) | null = null
+router.beforeResolve((to, from) => {
+  const cardToPool = from.name === 'pool-index' || from.name === 'play' || from.name === 'home'
+  const intoPool = String(to.name ?? '').startsWith('pool-')
+  const reduce = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
+  if (!document.startViewTransition || !cardToPool || !intoPool || reduce) return
+  document.documentElement.dataset.vt = '1'
+  return new Promise<void>(release => {
+    document.startViewTransition!(() => new Promise<void>(done => {
+      vtSettle = done       // afterEach + nextTick 會呼叫它：新 DOM 已在畫面上
+      release()             // 放行導航 → 路由切換 → 元件掛載
+    })).finished.finally(() => { delete document.documentElement.dataset.vt; vtSettle = null })
+  })
+})
+
 router.afterEach((to) => {
   const t = to.meta.title
   document.title = t ? `${t} — ${SITE}` : `${SITE} — 鑑定卡線上抽選`
+  // View Transition 在等新 DOM：下一個 tick 元件已掛上，通知它可以拍新畫面了
+  if (vtSettle) { const done = vtSettle; vtSettle = null; setTimeout(done, 0) }
 })

@@ -58,7 +58,12 @@ function onLeave() {
       <div
         ref="art"
         class="art-tilt"
-        :style="{ transform: `rotateX(${tilt.x}deg) rotateY(${tilt.y}deg)` }"
+        :style="{
+          transform: `rotateX(${tilt.x}deg) rotateY(${tilt.y}deg)`,
+          /* 共享元素轉場：跟池詳情總覽頁的封面同名，換頁時封面會從卡片位置
+             滑到詳情頁位置。名稱要唯一，所以帶 pool.id */
+          viewTransitionName: `pool-cover-${pool.id}`
+        }"
       >
         <CardArt :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo" />
         <span

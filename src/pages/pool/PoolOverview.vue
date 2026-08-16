@@ -38,7 +38,7 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
     <section class="hero card">
       <!-- 左：封面卡（可傾斜）；右：寶貝球（球階＝還沒出的最高賞） -->
       <div class="art">
-        <Tilt3D :max="16" class="cover">
+        <Tilt3D :max="16" class="cover" :style="{ viewTransitionName: `pool-cover-${pool.id}` }">
           <CardArt :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo" />
         </Tilt3D>
         <div class="ball" aria-hidden="true">
