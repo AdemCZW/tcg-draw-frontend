@@ -10,6 +10,7 @@ import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useWalletStore } from '@/stores/wallet'
+import RollingNumber from '@/components/RollingNumber.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -48,7 +49,7 @@ const paths: Record<string, string> = {
       </div>
       <RouterLink :to="{ name: 'topup' }" class="balance">
         <span class="muted lbl">點數餘額</span>
-        <strong class="mono">{{ wallet.points.toLocaleString() }}</strong>
+        <strong class="mono"><RollingNumber :value="wallet.points" /></strong>
         <span class="muted unit">點 · 儲值 →</span>
       </RouterLink>
     </header>

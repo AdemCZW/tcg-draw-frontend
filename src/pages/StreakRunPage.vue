@@ -11,6 +11,7 @@ import TierBadge from '@/components/TierBadge.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import ImmersiveBar from '@/components/ImmersiveBar.vue'
 import CapsuleArt from '@/components/CapsuleArt.vue'
+import RollingNumber from '@/components/RollingNumber.vue'
 import { track } from '@/lib/ga'
 
 type Phase = 'idle' | 'picking' | 'revealing' | 'decide' | 'busted'
@@ -133,7 +134,7 @@ function pushOn() {
       </div>
       <div class="g-item">
         <span class="g-label">暫持價值</span>
-        <strong class="g-val mono money">{{ heldValue.toLocaleString() }}</strong>
+        <strong class="g-val mono money"><RollingNumber :value="heldValue" /></strong>
       </div>
       <div class="g-item risk" :class="{ hot: bustPct >= 25 }">
         <span class="g-label">下一抽爆掉機率</span>
@@ -197,7 +198,7 @@ function pushOn() {
       <!-- 開完球才給選擇：沒揭曉之前談不上收手還是賭 -->
       <div class="choice" v-if="phase === 'decide' && ballOpened">
         <button class="btn primary lg" :disabled="busy" @click="bank">
-          收手落袋（{{ heldValue.toLocaleString() }}）
+          收手落袋（<RollingNumber :value="heldValue" />）
         </button>
         <button class="btn danger lg" :disabled="busy || seatsLeft <= 0" @click="pushOn">
           賭下去！再抽一支

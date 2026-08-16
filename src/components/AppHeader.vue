@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useWalletStore } from '@/stores/wallet'
 import { useAuthStore } from '@/stores/auth'
+import RollingNumber from '@/components/RollingNumber.vue'
 const wallet = useWalletStore()
 const auth = useAuthStore()
 </script>
@@ -18,7 +19,7 @@ const auth = useAuthStore()
       </nav>
       <div class="right">
         <RouterLink :to="{ name: 'topup' }" class="wallet mono" aria-label="點數餘額，前往儲值">
-          <span class="dot" aria-hidden="true"></span>{{ wallet.points.toLocaleString() }} 點
+          <span class="dot" aria-hidden="true"></span><RollingNumber :value="wallet.points" /> 點
         </RouterLink>
         <RouterLink v-if="auth.isLoggedIn" :to="{ name: 'me' }" class="user">{{ auth.user?.name }}</RouterLink>
         <RouterLink v-else :to="{ name: 'landing' }" class="user">登入</RouterLink>
