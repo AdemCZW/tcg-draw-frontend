@@ -7,12 +7,19 @@
  * 底部導覽就能只留四格 + 中央抽選鍵。
  */
 import { onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useWalletStore } from '@/stores/wallet'
 
+const router = useRouter()
 const auth = useAuthStore()
 const wallet = useWalletStore()
 onMounted(() => wallet.loadLedger())
+
+function logout() {
+  auth.logout()
+  router.replace({ name: 'landing' })
+}
 
 const rows = [
   { name: 'cards', t: '我的卡冊', d: '抽到的卡、出貨與回收', icon: 'book' },
@@ -62,6 +69,8 @@ const paths: Record<string, string> = {
         </RouterLink>
       </li>
     </ul>
+
+    <button type="button" class="btn ghost logout" @click="logout">登出</button>
 
     <p class="fine muted">
       點數僅可用於站內抽選與兌換商品，不可提領現金或轉讓。未滿 18 歲需監護人同意方可使用。
@@ -127,7 +136,8 @@ h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
 .txt span { font-size: 12.5px; }
 .chev { margin-left: auto; color: var(--faint); font-size: 22px; line-height: 1; }
 
-.fine { font-size: 11.5px; line-height: 1.6; margin: 26px 0 0; }
+.logout { margin-top: 18px; width: 100%; }
+.fine { font-size: 11.5px; line-height: 1.6; margin: 18px 0 0; }
 .fine a { color: var(--muted); text-decoration: underline; }
 
 @media (max-width: 720px) {

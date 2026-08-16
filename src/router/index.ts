@@ -13,6 +13,8 @@ export type Chrome = 'full' | 'none'
 declare module 'vue-router' {
   interface RouteMeta {
     chrome?: Chrome
+    /** 要登入才能進；沒登入導回形象頁並記住原本要去哪 */
+    requiresAuth?: boolean
     /** 導覽深度，之後做轉場方向判斷用（往深層滑入、返回滑出） */
     depth?: number
     /** 分頁標題，afterEach 會套上 */
@@ -28,9 +30,15 @@ export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
-      path: '/', name: 'home',
-      component: () => import('@/pages/HomePage.vue'),
-      meta: { depth: 0, title: '鑑定卡線上抽選' }
+      /* 形象頁：極簡、登入／註冊。已登入者由 beforeEach 直接送進大廳 */
+      path: '/', name: 'landing',
+      component: () => import('@/pages/LandingPage.vue'),
+      meta: { depth: 0, chrome: 'none', title: '鑑定卡線上抽選' }
+    },
+    {
+      path: '/lobby', name: 'home',
+      component: () => import('@/pages/LobbyPage.vue'),
+      meta: { depth: 0, title: '大廳' }
     },
     {
       path: '/play', name: 'play',
@@ -70,17 +78,17 @@ export const router = createRouter({
     {
       path: '/pools/:id/pick', name: 'pool-pick',
       component: () => import('@/pages/TicketPickPage.vue'),
-      meta: { depth: 3, chrome: 'none', title: '選籤' }
+      meta: { requiresAuth: true, depth: 3, chrome: 'none', title: '選籤' }
     },
     {
       path: '/pools/:id/streak', name: 'streak',
       component: () => import('@/pages/StreakRunPage.vue'),
-      meta: { depth: 3, chrome: 'none', title: '連莊' }
+      meta: { requiresAuth: true, depth: 3, chrome: 'none', title: '連莊' }
     },
     {
       path: '/draw/:drawId', name: 'draw-result',
       component: () => import('@/pages/DrawResultPage.vue'),
-      meta: { depth: 4, chrome: 'none', title: '開卡結果' }
+      meta: { requiresAuth: true, depth: 4, chrome: 'none', title: '開卡結果' }
     },
     {
       path: '/sellers/:id', name: 'seller',
@@ -90,7 +98,7 @@ export const router = createRouter({
     {
       path: '/seller/new', name: 'seller-new',
       component: () => import('@/pages/SellerNewPoolPage.vue'),
-      meta: { depth: 1, title: '開池' }
+      meta: { requiresAuth: true, depth: 1, title: '開池' }
     },
     {
       path: '/fairness', name: 'fairness',
@@ -105,22 +113,22 @@ export const router = createRouter({
     {
       path: '/me', name: 'me',
       component: () => import('@/pages/MePage.vue'),
-      meta: { depth: 1, title: '我的' }
+      meta: { requiresAuth: true, depth: 1, title: '我的' }
     },
     {
       path: '/me/cards', name: 'cards',
       component: () => import('@/pages/MyCardsPage.vue'),
-      meta: { depth: 1, title: '我的卡冊' }
+      meta: { requiresAuth: true, depth: 1, title: '我的卡冊' }
     },
     {
       path: '/me/wallet', name: 'wallet',
       component: () => import('@/pages/WalletPage.vue'),
-      meta: { depth: 1, title: '錢包' }
+      meta: { requiresAuth: true, depth: 1, title: '錢包' }
     },
     {
       path: '/me/wallet/topup', name: 'topup',
       component: () => import('@/pages/TopupPage.vue'),
-      meta: { depth: 2, title: '儲值' }
+      meta: { requiresAuth: true, depth: 2, title: '儲值' }
     },
     // 儲值原本在頂層 /topup。它是錢包的子功能，搬進 /me/wallet 底下；
     // 舊路徑留一版 redirect，避免使用者的書籤壞掉
@@ -147,6 +155,20 @@ export const router = createRouter({
     if (savedPosition) return savedPosition
     if (to.hash) return { el: to.hash, behavior: 'smooth' }
     return { top: 0 }
+  }
+})
+
+/* 登入守衛。
+   - 沒登入去要登入的頁：導回形象頁，redirect query 記原本要去哪，登入後送回去
+   - 已登入去形象頁：直接進大廳（形象頁對已登入的人沒有意義） */
+router.beforeEach(async (to) => {
+  const { useAuthStore } = await import('@/stores/auth')
+  const auth = useAuthStore()
+  if (to.meta.requiresAuth && !auth.isLoggedIn) {
+    return { name: 'landing', query: { redirect: to.fullPath } }
+  }
+  if (to.name === 'landing' && auth.isLoggedIn) {
+    return { name: 'home' }
   }
 })
 
