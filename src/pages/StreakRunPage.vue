@@ -2,13 +2,14 @@
 // 連莊爆賞：付一次入場費 → 反覆「選籤 → 揭曉 → 收手 or 賭下去」
 // 抽到 BUST 該輪全數沒收（沒收品流入賣家下一池，不回本池，以保籤序可驗證）
 import { computed, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { usePoolStore } from '@/stores/pools'
 import { useWalletStore } from '@/stores/wallet'
 import type { StreakRun, DrawResultItem } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 import TierBadge from '@/components/TierBadge.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
+import ImmersiveBar from '@/components/ImmersiveBar.vue'
 import { track } from '@/lib/ga'
 
 type Phase = 'idle' | 'picking' | 'revealing' | 'decide' | 'busted'
@@ -21,6 +22,16 @@ const wallet = useWalletStore()
 const pool = computed(() => pools.byId(String(route.params.id)))
 const run = ref<StreakRun | null>(null)
 const phase = ref<Phase>('idle')
+
+/* 進行中的一輪有暫持獎品，離開要問一聲。往結果頁（收手落袋）的那次不算。
+   後端 mock 裡 run 仍在，所以答案是「會保留」—— 但這版還沒有從 /me 回到進行中
+   run 的入口，先誠實說「離開後這一輪無法接續」。 */
+let leavingForResult = false
+onBeforeRouteLeave(() => {
+  const inRun = ['picking', 'revealing', 'decide'].includes(phase.value)
+  if (leavingForResult || !inRun) return true
+  return window.confirm('這一輪還在進行中，離開後無法接續。確定要離開？')
+})
 const lastItem = ref<DrawResultItem | null>(null)
 const flipped = ref(false)
 const busy = ref(false)
@@ -84,6 +95,7 @@ async function bank() {
   try {
     const result = await pools.bankStreak(run.value.runId)
     track('draw_success')
+    leavingForResult = true
     // replace 而不是 push：抽選是不可逆的，返回鍵若能回到選籤牆會讓人以為能重抽
     router.replace({ name: 'draw-result', params: { drawId: result.drawId } })
   } finally { busy.value = false }
@@ -96,10 +108,13 @@ function pushOn() {
 </script>
 
 <template>
-  <div class="container page" v-if="pool">
+  <div v-if="pool" class="wrap">
+    <ImmersiveBar :title="pool.title" :fallback="{ name: 'pool', params: { id: pool.id } }">
+      <template #right><PoolModeBadge :mode="pool.mode" /></template>
+    </ImmersiveBar>
+  <div class="container page">
     <div class="head">
       <h1 class="display">連莊爆賞</h1>
-      <PoolModeBadge :mode="pool.mode" />
     </div>
     <p class="sub"><strong>{{ pool.title }}</strong> — 入場 {{ entry.toLocaleString() }} 點，之後每一抽都免費。收手就落袋，抽到爆賞全部歸零。</p>
 
@@ -196,7 +211,8 @@ function pushOn() {
       </div>
     </div>
   </div>
-  <div v-else class="container page"><p class="muted">找不到這個池。<RouterLink to="/pools">回抽選列表</RouterLink></p></div>
+  </div>
+  <div v-else class="container page"><p class="muted">找不到這個池。<RouterLink :to="{ name: 'pool-index' }">回抽選列表</RouterLink></p></div>
 </template>
 
 <style scoped>

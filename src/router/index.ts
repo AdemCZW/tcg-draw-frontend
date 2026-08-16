@@ -5,9 +5,8 @@ import { createRouter, createWebHistory } from 'vue-router'
  *  - full    一般頁面，三者都在
  *  - none    沉浸模式：開卡演出這種頁面不該同時出現全域導覽與頁面自己的操作列
  *
- * 目前只有開卡結果頁走 none —— 它自己有「收進卡冊 / 再抽一次 / 自己驗算」三個出口。
- * 選籤牆與連莊進行中同樣該沉浸，但它們現在沒有任何返回控制，
- * 直接拿掉導覽會把人困在頁面裡，等 Phase 3 拆頁補上返回鍵再切。
+ * 走 none 的頁面：開卡結果（自己有三個出口）、選籤牆、連莊進行中
+ * （後兩者用 ImmersiveBar 提供返回鍵，並在有未完成動作時攔截離開）。
  */
 export type Chrome = 'full' | 'none'
 
@@ -44,19 +43,39 @@ export const router = createRouter({
       meta: { depth: 1, title: '抽選中' }
     },
     {
-      path: '/pools/:id', name: 'pool',
-      component: () => import('@/pages/PoolDetailPage.vue'),
-      meta: { depth: 2 }
+      /* 池：外殼 + 三個 tab 子頁。外殼負責標題列、tab、桌機側欄與「找不到」的 fallback；
+         子頁只管內容。tab 用 replace 切換，返回鍵直接跳出池。 */
+      path: '/pools/:id',
+      component: () => import('@/pages/pool/PoolShell.vue'),
+      meta: { depth: 2 },
+      children: [
+        { path: '', name: 'pool', redirect: { name: 'pool-overview' } },
+        {
+          path: 'overview', name: 'pool-overview',
+          component: () => import('@/pages/pool/PoolOverview.vue'),
+          meta: { depth: 2, title: '池' }
+        },
+        {
+          path: 'prizes', name: 'pool-prizes',
+          component: () => import('@/pages/pool/PoolPrizes.vue'),
+          meta: { depth: 2, title: '獎項' }
+        },
+        {
+          path: 'proof', name: 'pool-proof',
+          component: () => import('@/pages/pool/PoolProof.vue'),
+          meta: { depth: 2, title: '驗證' }
+        }
+      ]
     },
     {
       path: '/pools/:id/pick', name: 'pool-pick',
       component: () => import('@/pages/TicketPickPage.vue'),
-      meta: { depth: 3, title: '選籤' }
+      meta: { depth: 3, chrome: 'none', title: '選籤' }
     },
     {
       path: '/pools/:id/streak', name: 'streak',
       component: () => import('@/pages/StreakRunPage.vue'),
-      meta: { depth: 3, title: '連莊' }
+      meta: { depth: 3, chrome: 'none', title: '連莊' }
     },
     {
       path: '/draw/:drawId', name: 'draw-result',

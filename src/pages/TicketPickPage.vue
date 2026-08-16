@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // 選籤牆：玩家親手挑籤位，而不是系統代抽
 import { computed, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { usePoolStore } from '@/stores/pools'
 import { useWalletStore } from '@/stores/wallet'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
+import ImmersiveBar from '@/components/ImmersiveBar.vue'
 import { track } from '@/lib/ga'
 
 const route = useRoute()
@@ -32,6 +33,14 @@ function toggle(seat: number) {
   picked.value.push(seat)
 }
 
+/* 已選了籤但還沒送出就要離開 —— 問一下。往結果頁的那次不算（是 confirm 觸發的）。
+   用原生 confirm：這是不可逆邊界，不需要漂亮，需要的是不會被 CSS 動畫吃掉。 */
+let leavingForResult = false
+onBeforeRouteLeave(() => {
+  if (leavingForResult || busy.value || picked.value.length === 0) return true
+  return window.confirm(`要放棄已選的 ${picked.value.length} 支籤嗎？`)
+})
+
 async function confirm() {
   if (!pool.value || !ready.value) return
   error.value = ''
@@ -41,6 +50,7 @@ async function confirm() {
     wallet.spend(cost.value)
     const result = await pools.draw(pool.value.id, [...picked.value])
     track('draw_success')
+    leavingForResult = true
     // replace 而不是 push：抽選是不可逆的，返回鍵若能回到選籤牆會讓人以為能重抽
     router.replace({ name: 'draw-result', params: { drawId: result.drawId } })
   } catch {
@@ -53,10 +63,13 @@ async function confirm() {
 </script>
 
 <template>
-  <div class="container page" v-if="pool">
+  <div v-if="pool" class="wrap">
+    <ImmersiveBar :title="pool.title" :fallback="{ name: 'pool', params: { id: pool.id } }">
+      <template #right><PoolModeBadge :mode="pool.mode" /></template>
+    </ImmersiveBar>
+  <div class="container page">
     <div class="head">
       <h1 class="display">選你的籤！</h1>
-      <PoolModeBadge :mode="pool.mode" />
     </div>
     <p class="sub">
       <strong>{{ pool.title }}</strong> — 從剩下的
@@ -91,11 +104,12 @@ async function confirm() {
       <p v-if="error" class="err" role="alert">{{ error }}</p>
     </div>
   </div>
-  <div v-else class="container page"><p class="muted">找不到這個池。<RouterLink to="/pools">回抽選列表</RouterLink></p></div>
+  </div>
+  <div v-else class="container page"><p class="muted">找不到這個池。<RouterLink :to="{ name: 'pool-index' }">回抽選列表</RouterLink></p></div>
 </template>
 
 <style scoped>
-.page { padding-top: 32px; padding-bottom: 72px; }
+.page { padding-top: 22px; padding-bottom: 72px; }
 .head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 h1 { font-size: 30px; margin: 0; }
 .sub { margin: 10px 0 22px; font-size: 14.5px; color: var(--muted); }
@@ -160,7 +174,8 @@ h1 { font-size: 30px; margin: 0; }
 @media (max-width: 720px) {
   /* 底部要同時容納 sticky 結算列與 AppBottomNav。
      導覽高度吃 --nav-total，不再自己抄一份數字 */
-  .page { padding-top: 20px; padding-bottom: calc(94px + var(--nav-total)); }
+  /* 沉浸模式沒有底部導覽，只要讓出結算列自己的高度 + Home 指示器 */
+  .page { padding-top: 14px; padding-bottom: calc(112px + var(--safe-b)); }
   h1 { font-size: 23px; }
   .head { gap: 10px; }
   .sub { font-size: 13px; margin: 8px 0 16px; }
@@ -170,7 +185,7 @@ h1 { font-size: 30px; margin: 0; }
   .gone { font-size: 9px; bottom: 4px; }
   .bar {
     position: fixed; left: 10px; right: 10px;
-    bottom: var(--nav-total);
+    bottom: calc(10px + var(--safe-b));
     z-index: 55;
     display: grid; grid-template-columns: 1fr auto; gap: 6px 12px;
     padding: 10px 14px;

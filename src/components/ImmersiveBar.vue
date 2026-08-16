@@ -1,0 +1,61 @@
+<script setup lang="ts">
+/**
+ * 沉浸頁的頂部返回列。
+ *
+ * 選籤牆與連莊進行中走 chrome:'none'（不掛全域 header / 底部導覽），
+ * 沒有這一條的話使用者會被困在頁面裡。它是唯一的出口，所以要：
+ * 一直在頂上（sticky）、讓出瀏海（safe-area）、返回鍵夠大。
+ *
+ * 返回走 router.back()：這兩頁一定是從池詳情進來的，back 就是回去。
+ * 有 fallback 是防直接輸網址進來（history 裡沒有上一頁）。
+ */
+import { useRouter } from 'vue-router'
+
+const props = withDefaults(defineProps<{
+  title: string
+  /** history 裡沒上一頁時退到哪 */
+  fallback?: { name: string; params?: Record<string, string> }
+}>(), { fallback: undefined })
+
+const router = useRouter()
+function back() {
+  if (window.history.length > 1) router.back()
+  else if (props.fallback) router.replace(props.fallback)
+  else router.replace({ name: 'home' })
+}
+</script>
+
+<template>
+  <header class="ibar">
+    <button type="button" class="back" aria-label="返回" @click="back">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+    </button>
+    <h1 class="t">{{ title }}</h1>
+    <div class="right"><slot name="right" /></div>
+  </header>
+</template>
+
+<style scoped>
+.ibar {
+  position: sticky; top: 0; z-index: 50;
+  display: grid; grid-template-columns: 44px 1fr 44px; align-items: center;
+  height: calc(52px + var(--safe-t));
+  padding: var(--safe-t) 6px 0;
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+  backdrop-filter: saturate(180%) blur(14px);
+  border-bottom: 1px solid var(--line-soft);
+}
+.back {
+  width: 44px; height: 44px;
+  display: grid; place-items: center;
+  border: none; background: transparent; color: var(--ink);
+  border-radius: 50%; cursor: pointer;
+  transition: background .15s, transform .12s;
+}
+.back svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+@media (hover: hover) { .back:hover { background: var(--surface-2); } }
+.back:active { transform: scale(.9); }
+.back:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.t { margin: 0; font-size: 15.5px; font-weight: 600; text-align: center; letter-spacing: -.01em; }
+.right { display: grid; place-items: center; }
+</style>

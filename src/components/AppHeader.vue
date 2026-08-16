@@ -67,7 +67,8 @@ const auth = useAuthStore()
   .nav { display: none; }
   .row { height: 56px; gap: 12px; }
   .brand { font-size: 18px; }
-  .wallet { font-size: 13px; padding: 6px 12px; }
+  /* 餘額九位數在 375px 會折成兩行；不換行 + 收字距 */
+  .wallet { font-size: 12.5px; padding: 6px 11px; white-space: nowrap; letter-spacing: -.01em; }
   .user { font-size: 13px; }
 }
 </style>
