@@ -579,13 +579,24 @@ h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
   .reflection { height: 70px; }
   .prizeTag { margin-top: -46px; }
 
-  .info { justify-items: center; gap: 9px; }
-  .badges { justify-content: center; }
+  /* 手機上改成靠左＋每一列撐滿寬度。
+     原本整欄置中，短元素（徽章、價格、賣家）只佔內容寬度，
+     左右各留一大塊空白，看起來很稀疏 —— 資訊沒有變多，只是沒在用版面。
+     卡片維持置中（它是主視覺），底下的資訊列靠左，是常見的
+     「主視覺置中、細節左對齊」寫法，不會顯得不協調。 */
+  .info { justify-items: stretch; text-align: left; gap: 10px; width: 100%; }
+  .badges { justify-content: flex-start; }
   h1 { font-size: 21px; }
-  .meter { max-width: 320px; }
-  .price { font-size: 19px; }
-  .ctas { justify-content: center; width: 100%; }
-  .go { flex: 1 1 auto; max-width: 260px; padding: 13px 20px; font-size: 15px; }
+  .meter { max-width: none; }
+  .price { font-size: 21px; }
+  /* 價格靠左、剩餘靠右，把整條寬度用掉 */
+  .nums { justify-content: space-between; gap: 10px; width: 100%; }
+  .rest { font-size: 12.5px; }
+  /* 主鈕吃掉剩餘寬度，次要連結靠右 */
+  .ctas { justify-content: space-between; width: 100%; gap: 10px; flex-wrap: nowrap; }
+  .go { flex: 1 1 auto; max-width: none; padding: 13px 16px; font-size: 15px; }
+  .ctas .btn.ghost { flex: none; padding: 13px 4px; font-size: 13.5px; }
+  .sellerRow { justify-content: flex-start; }
   .strip { padding: 14px 0 2px; }
   .field { height: 560px; }
   .poolGrid { grid-template-columns: repeat(2, 1fr); gap: 11px; }
