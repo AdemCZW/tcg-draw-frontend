@@ -66,11 +66,15 @@ const TIER_HUE: Record<Tier, string> = {
 const hue = computed(() => TIER_HUE[featuredTier.value])
 
 /* ---- 分類 ---- */
-type Cat = 'all' | 'hot' | 'cheap' | 'big' | 'special' | 'done'
+type Cat = 'all' | 'official' | 'merchant' | 'personal' | 'hot' | 'cheap' | 'big' | 'special' | 'done'
 const cat = ref<Cat>('all')
 
 const MATCH: Record<Cat, (p: Pool) => boolean> = {
   all: p => p.status === 'open',
+  // 來源分類：買家最常問的其實是「這池是誰開的」
+  official: p => p.status === 'open' && p.origin === 'official',
+  merchant: p => p.status === 'open' && p.origin === 'merchant',
+  personal: p => p.status === 'open' && p.origin === 'personal',
   // 快完抽：剩不到三成。這是最有張力的狀態，排第一個
   hot: p => p.status === 'open' && leftPct(p) <= 30,
   cheap: p => p.status === 'open' && p.ticketPrice <= 300,
@@ -85,6 +89,9 @@ const MATCH: Record<Cat, (p: Pool) => boolean> = {
 }
 const CATS: { k: Cat; label: string }[] = [
   { k: 'all', label: '全部' },
+  { k: 'official', label: '官方池' },
+  { k: 'merchant', label: '商家池' },
+  { k: 'personal', label: '個人池' },
   { k: 'hot', label: '快完抽' },
   { k: 'big', label: '高額賞' },
   { k: 'cheap', label: '銅板價' },

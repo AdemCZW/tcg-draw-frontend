@@ -92,6 +92,19 @@ export const listings: Listing[] = [
 
 export const sellers: Seller[] = [
   {
+    /* 平台自營。官方池的賣家就是平台自己 —— 沒有托管，因為沒有第三方要防。 */
+    id: 's0', handle: 'vaultdraw', name: 'VaultDraw 官方', tier: 'trusted', avatarHue: 14,
+    joinedAt: '2025-01-01', bio: '平台自營池。全數由 VaultDraw 進貨、鑑定、直接出貨，糾紛由平台全責處理。',
+    stats: {
+      poolsRun: 310, cardsShipped: 12480, avgShipDays: 1.2, disputeRate: 0.05,
+      advertisedTopRate: 3.0, actualTopRate: 3.0, drawsSettled: 24600
+    },
+    pastPrizes: [
+      { cardName: '噴火龍 ex UR', artId: 'SV4a-349', tier: 'A', poolTitle: '官方旗艦場 #58', wonAt: '2026-08-10', winner: 'VD-A2**' },
+      { cardName: '太樂巴戈斯 ex UR', artId: 'SV8a-237', tier: 'LAST', poolTitle: '官方旗艦場 #55', wonAt: '2026-07-26', winner: 'VD-77**' }
+    ]
+  },
+  {
     id: 's1', handle: 'vaultkeeper', name: '保庫堂', tier: 'trusted', avatarHue: 28,
     joinedAt: '2025-03-11', bio: 'PSA / BGS 鑑定卡專門。開池前全數實拍上架，出貨附鑑定證書照。',
     stats: {
@@ -184,7 +197,61 @@ const escrowOf = (sold: number, price: number, released = 0): Escrow => ({
 
 export const pools: Pool[] = [
   {
+    /* 官方旗艦池：平台自營、直接出貨，沒有托管期。
+       獎項規格刻意做得比商家池好一階 —— 官方池的角色是「基準線」，
+       讓買家知道這個平台的池應該長什麼樣。 */
+    sellerId: 's0',
+    origin: 'official',
+    id: 'p12',
+    title: '官方旗艦場 #59 · 閃色寶藏 精選',
+    cover: ph(14),
+    mode: 'classic',
+    ticketPrice: 1280,
+    totalTickets: 100,
+    remainingTickets: 58,
+    takenSeats: seatsOf(100, 42),
+    status: 'open',
+    commitHash: 'a91c3f7e5d2b8064ff2233445566778899aabbccddeeff00112233445566aabb',
+    clientSeedSource: 'BTC block #920604 hash',
+    openedAt: '2026-08-16T18:00:00+08:00',
+    escrow: { held: 0, releaseAfterShipDays: 0, released: 53760 },
+    prizes: [
+      { id: 'pr45', tier: 'A', card: cards[0], total: 1, remaining: 1 },
+      { id: 'pr46', tier: 'B', card: cards[2], total: 2, remaining: 1 },
+      { id: 'pr47', tier: 'C', card: cards[6], total: 6, remaining: 3 },
+      { id: 'pr48a', tier: 'D', card: cards[13], total: 45, remaining: 26 },
+      { id: 'pr48b', tier: 'D', card: cards[20], total: 46, remaining: 27 },
+      { id: 'pr49', tier: 'LAST', card: cards[1], total: 1, remaining: 1 }
+    ]
+  },
+  {
+    /* 官方的銅板池：低門檻讓新使用者第一次抽有個安全的地方 */
+    sellerId: 's0',
+    origin: 'official',
+    id: 'p13',
+    title: '官方入門場 · 一百點開一張',
+    cover: ph(200),
+    mode: 'battle',
+    ticketPrice: 100,
+    totalTickets: 150,
+    remainingTickets: 96,
+    takenSeats: seatsOf(150, 54),
+    status: 'open',
+    commitHash: 'ff8811aa22bb33cc44dd55ee66770099aabbccddeeff112233445566778899aa',
+    clientSeedSource: 'BTC block #920611 hash',
+    openedAt: '2026-08-17T09:00:00+08:00',
+    escrow: { held: 0, releaseAfterShipDays: 0, released: 5400 },
+    prizes: [
+      { id: 'pr50', tier: 'A', card: cards[14], total: 1, remaining: 1 },
+      { id: 'pr51', tier: 'B', card: cards[18], total: 3, remaining: 2 },
+      { id: 'pr52', tier: 'C', card: cards[22], total: 20, remaining: 12 },
+      { id: 'pr53a', tier: 'D', card: cards[28], total: 63, remaining: 41 },
+      { id: 'pr53b', tier: 'D', card: cards[30], total: 63, remaining: 40 }
+    ]
+  },
+  {
     sellerId: 's1',
+    origin: 'merchant',
     id: 'p1',
     title: '朱紫 SAR 精選 第 1 彈',
     cover: ph(28),
@@ -213,6 +280,7 @@ export const pools: Pool[] = [
   },
   {
     sellerId: 's2',
+    origin: 'personal',
     id: 'p2',
     title: '經典促販卡 大亂鬥',
     cover: ph(260),
@@ -237,6 +305,7 @@ export const pools: Pool[] = [
   },
   {
     sellerId: 's3',
+    origin: 'merchant',
     id: 'p3',
     title: '莉莉艾 無敵賞（已完抽）',
     cover: ph(340),
@@ -261,6 +330,7 @@ export const pools: Pool[] = [
   },
   {
     sellerId: 's2',
+    origin: 'personal',
     id: 'p4',
     title: '皮卡丘 指定賞挑戰',
     cover: ph(48),
@@ -291,6 +361,7 @@ export const pools: Pool[] = [
   },
   {
     sellerId: 's1',
+    origin: 'merchant',
     id: 'p5',
     title: '莉莉艾 二選一對決',
     cover: ph(340),
@@ -317,6 +388,7 @@ export const pools: Pool[] = [
        確保「付入場費一定帶走一張卡」。經模擬：一般玩法還元率 86.5%、
        玩家最佳策略 90.3%。保底卡若給到 120 元以上，最佳策略會衝破 100% 打爆莊家。 */
     sellerId: 's3',
+    origin: 'merchant',
     id: 'p6',
     title: '夢幻 連莊爆賞',
     cover: ph(300),
@@ -349,6 +421,7 @@ export const pools: Pool[] = [
        重組後：三個大獎（莉莉艾 9,800 / 快龍 6,800 / 夢幻 3,600）留給競標席，
        固定 77 席獎品總值 19,640，還元率 85.0%。 */
     sellerId: 's1',
+    origin: 'merchant',
     id: 'p7',
     title: '噴火龍 尾籤競標',
     cover: ph(28),
@@ -385,6 +458,7 @@ export const pools: Pool[] = [
        80 席 × 35 元 = 2,800 收入；獎品總值 2,370；還元率 84.6%（已試算驗證）。
        每支籤都保底給卡，最低的普卡值 16 元，仍佔票價的 46%。 */
     sellerId: 's2',
+    origin: 'personal',
     id: 'p8',
     title: '銅板入門賞 · 銅板價開一張',
     cover: ph(110),
@@ -411,6 +485,7 @@ export const pools: Pool[] = [
     /* 滿分保庫的精品池：籤少、單價高、每張都有鑑定編號。
        這種池的價值主張是「可查證」——買家能拿 certNo 自己去 PSA 網站對。 */
     sellerId: 's5',
+    origin: 'merchant',
     id: 'p9',
     title: '滿分場 #30 · 全 PSA 10',
     cover: ph(46),
@@ -436,6 +511,7 @@ export const pools: Pool[] = [
     /* 南港開箱王的量產池：便宜、籤多、獎項普通。
        這個賣家的實際中獎率低於標示，賣家頁上會看得到 —— 刻意留著。 */
     sellerId: 's6',
+    origin: 'personal',
     id: 'p10',
     title: '銅板場 #72 · 快開快抽',
     cover: ph(8),
@@ -460,6 +536,7 @@ export const pools: Pool[] = [
   {
     /* 關都卡舖的已完抽池：賣家頁要有「過去的池」才看得出經營時間。 */
     sellerId: 's3',
+    origin: 'merchant',
     id: 'p11',
     title: '關都精選 夏季場（已完抽）',
     cover: ph(140),
@@ -518,8 +595,11 @@ export function createPool(input: NewPoolInput): Pool {
     }
   }))
 
+  /* 使用者自己開的池一律是個人池 —— 要升級成商家池得先完成營業登記驗證，
+     不是開池表單上可以自己勾的選項。 */
   const pool: Pool = {
     sellerId: input.sellerId,
+    origin: 'personal',
     id: `p${seq}`,
     title: input.title,
     cover: prizes[0]?.card.image ?? ph(200),

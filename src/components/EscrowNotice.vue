@@ -6,18 +6,30 @@ defineProps<{ pool: Pool }>()
 </script>
 
 <template>
-  <div class="escrow card">
+  <div class="escrow card" :class="pool.origin">
     <div class="row">
-      <div>
+      <!-- 官方池沒有第三方賣家，講「代管防跑路」是沒有意義的 ——
+           它的保障來源不同，文案也必須不同 -->
+      <div v-if="pool.origin === 'official'">
+        <strong>平台自營，直接出貨</strong>
+        <p class="muted">
+          這一池由 VaultDraw 進貨、鑑定並直接出貨，沒有第三方賣家，
+          因此不需要托管期。出貨或商品有任何問題，由平台直接負責處理。
+        </p>
+      </div>
+      <div v-else>
         <strong>款項由平台代管</strong>
         <p class="muted">
           你付的點數不會立刻進賣家帳戶。賣家出貨、你確認收到，
           再經過 {{ pool.escrow.releaseAfterShipDays }} 天鑑賞期後才撥款。
           期間若未出貨或商品不符，可申請全額退回。
+          <template v-if="pool.origin === 'personal'">
+            個人池的鑑賞期較長，且賣家已預繳保證金。
+          </template>
         </p>
       </div>
     </div>
-    <div class="bar">
+    <div class="bar" v-if="pool.origin !== 'official'">
       <span class="mono">本池代管中 <strong>{{ pool.escrow.held.toLocaleString() }}</strong> 點</span>
       <span class="mono muted" v-if="pool.escrow.released">已撥款 {{ pool.escrow.released.toLocaleString() }} 點</span>
     </div>

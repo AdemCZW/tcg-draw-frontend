@@ -18,6 +18,16 @@ export type Tier = 'A' | 'B' | 'C' | 'D' | 'LAST' | 'BUST'
  *            以免破壞開賣前封存的籤序）
  * - auction  尾籤競標：最後 N 支籤不固定售價，改限時英式競標，落標全額退還
  */
+/**
+ * 池的來源。三級的差別必須是「實際保障不同」，不能只是顏色不同 ——
+ * 標籤如果不對應任何真實差異，使用者學會忽略它只要一週。
+ *
+ *  official  平台自營。平台就是賣家，出貨與糾紛平台全責，沒有托管期
+ *  merchant  已驗證商家（統編／實體店）。款項托管到出貨 + 鑑賞期
+ *  personal  個人賣家。托管期最長、單池總額有上限、需要保證金
+ */
+export type PoolOrigin = 'official' | 'merchant' | 'personal'
+
 export type PoolMode = 'classic' | 'shitei' | 'muteki' | 'battle' | 'niboichi' | 'streak' | 'auction'
 
 export type PoolStatus = 'committed' | 'open' | 'sold_out' | 'revealed'
@@ -107,6 +117,7 @@ export interface Escrow {
 export interface Pool {
   id: string
   sellerId: string
+  origin: PoolOrigin
   title: string
   cover: string
   mode: PoolMode

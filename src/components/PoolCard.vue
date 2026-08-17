@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type { Pool } from '@/types/models'
 import CardArt from './CardArt.vue'
 import PoolModeBadge from './PoolModeBadge.vue'
+import PoolOriginBadge from './PoolOriginBadge.vue'
 
 const props = withDefaults(defineProps<{
   pool: Pool
@@ -75,6 +76,7 @@ function onLeave() {
     <span class="scrim" aria-hidden="true"></span>
 
     <div class="mode-tag"><PoolModeBadge :mode="pool.mode" /></div>
+    <div class="origin-tag"><PoolOriginBadge :origin="pool.origin" /></div>
     <span v-if="pool.status !== 'open'" class="doneTag">完抽</span>
 
     <div class="body">
@@ -148,8 +150,9 @@ function onLeave() {
 }
 
 .mode-tag { position: absolute; top: 10px; left: 10px; z-index: 2; }
+.origin-tag { position: absolute; top: 10px; right: 10px; z-index: 2; }
 .doneTag {
-  position: absolute; top: 10px; right: 10px; z-index: 2;
+  position: absolute; bottom: auto; top: 44px; right: 10px; z-index: 2;
   font-size: 11px; font-weight: 700;
   padding: 4px 10px; border-radius: var(--pill);
   background: rgba(8, 6, 14, .8); color: #fff;
@@ -197,7 +200,8 @@ h3 {
   .price { font-size: 14.5px; }
   .per, .rest { font-size: 10px; }
   .mode-tag { top: 7px; left: 7px; transform: scale(.86); transform-origin: top left; }
-  .doneTag { top: 7px; right: 7px; font-size: 10px; padding: 3px 8px; }
+  .origin-tag { top: 7px; right: 7px; transform: scale(.86); transform-origin: top right; }
+  .doneTag { top: 38px; right: 7px; font-size: 10px; padding: 3px 8px; }
   .pool.stage .body { padding: 14px; }
   .pool.stage h3 { font-size: 17px; }
   .pool.stage .price { font-size: 19px; }

@@ -11,6 +11,7 @@ import { useWalletStore } from '@/stores/wallet'
 import CardArt from '@/components/CardArt.vue'
 import Tilt3D from '@/components/Tilt3D.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
+import PoolOriginBadge from '@/components/PoolOriginBadge.vue'
 import SellerChip from '@/components/SellerChip.vue'
 import AuctionPanel from '@/components/AuctionPanel.vue'
 import DrawPanel from '@/components/DrawPanel.vue'
@@ -48,6 +49,7 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
 
       <div class="facts">
         <PoolModeBadge :mode="pool.mode" detailed />
+        <PoolOriginBadge :origin="pool.origin" detailed class="originBlock" />
         <p v-if="topLive" class="top">
           <span class="lbl mono">最高賞未出</span>
           <strong>{{ topLive.tier === 'LAST' ? '最後賞' : topLive.tier + ' 賞' }} · {{ topLive.card.name }}</strong>
@@ -87,6 +89,7 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
 .art { position: relative; width: 150px; flex: none; }
 .cover { width: 100%; }
 .facts { display: grid; gap: 12px; justify-items: start; min-width: 0; }
+.originBlock { padding-top: 10px; border-top: 1px dashed var(--line-soft); width: 100%; }
 .top { margin: 0; display: grid; gap: 4px; }
 .top .lbl { font-size: 11px; letter-spacing: .14em; color: var(--ok); }
 .top strong { font-size: 16px; }

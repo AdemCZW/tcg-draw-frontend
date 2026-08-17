@@ -19,6 +19,7 @@ import { usePoolStore } from '@/stores/pools'
 import { useSellerStore } from '@/stores/sellers'
 import DrawPanel from '@/components/DrawPanel.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
+import PoolOriginBadge from '@/components/PoolOriginBadge.vue'
 import { track } from '@/lib/ga'
 
 const route = useRoute()
@@ -49,6 +50,7 @@ const activeTab = computed(() => String(route.name))
       <div class="titleRow">
         <h1>{{ pool.title }}</h1>
         <PoolModeBadge :mode="pool.mode" />
+        <PoolOriginBadge :origin="pool.origin" />
       </div>
       <p class="meta mono muted">
         <span>{{ pool.ticketPrice.toLocaleString() }} 點 / 抽</span>
