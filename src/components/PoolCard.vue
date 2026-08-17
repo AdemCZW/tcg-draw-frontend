@@ -8,7 +8,10 @@ import PoolOriginBadge from './PoolOriginBadge.vue'
 const props = withDefaults(defineProps<{
   pool: Pool
   /** grid = 清單裡的一格；stage = 選池台上的主角，字級放大、資訊更好讀 */
-  variant?: 'grid' | 'stage'
+  /* grid  直式卡，格線用
+     stage 選池台的大卡
+     wide  橫式卡，橫向捲動列用 —— 形狀跟格線不同才有節奏變化 */
+  variant?: 'grid' | 'stage' | 'wide'
 }>(), { variant: 'grid' })
 
 const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.totalTickets) * 100))
@@ -185,6 +188,38 @@ h3 {
 .price { font-size: 17px; font-weight: 800; letter-spacing: -.01em; text-shadow: 0 2px 8px rgba(0, 0, 0, .7); }
 .per { font-size: 11px; font-weight: 400; opacity: .7; }
 .rest { font-size: 11px; opacity: .68; white-space: nowrap; }
+
+/* ---- wide：橫式卡 ----
+   卡圖靠左佔約四成，資訊在右邊的實底上。跟直式卡的「資訊壓在圖上」不同 ——
+   橫式卡的高度矮，壓在圖上會把卡圖整個蓋掉，不如讓兩者並排。 */
+.pool.wide {
+  aspect-ratio: auto;
+  height: 132px;
+  display: grid; grid-template-columns: 96px minmax(0, 1fr);
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+}
+.pool.wide .art-tilt { position: relative; inset: auto; }
+.pool.wide .scrim {
+  /* 只在卡圖那一欄的右緣做一小段過渡，接到右邊的實底 */
+  right: auto; width: 96px;
+  background: linear-gradient(90deg, transparent 60%, var(--surface));
+}
+.pool.wide .mode-tag { top: 8px; left: 8px; transform: scale(.8); transform-origin: top left; }
+.pool.wide .origin-tag { top: 8px; right: 8px; transform: scale(.8); transform-origin: top right; }
+.pool.wide .doneTag { top: 36px; right: 8px; }
+.pool.wide .body {
+  position: relative; inset: auto;
+  padding: 12px 14px; gap: 5px;
+  align-content: center;
+  color: var(--ink);
+}
+.pool.wide h3 { font-size: 16px; -webkit-line-clamp: 1; text-shadow: none; }
+.pool.wide .top { font-size: 11.5px; }
+.pool.wide .prize { color: var(--muted); }
+.pool.wide .meter { background: var(--surface-3); }
+.pool.wide .price { font-size: 16px; text-shadow: none; }
+.pool.wide .per, .pool.wide .rest { color: var(--muted); opacity: 1; }
 
 /* ---- stage：選池台的大卡，同一套版面放大 ---- */
 .pool.stage { border-radius: var(--radius-lg); }

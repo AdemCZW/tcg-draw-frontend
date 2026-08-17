@@ -12,7 +12,9 @@
 import { computed, onMounted, ref } from 'vue'
 import { usePoolStore } from '@/stores/pools'
 import { useSellerStore } from '@/stores/sellers'
-import type { Pool, Tier } from '@/types/models'
+import type { Listing, Pool, Tier } from '@/types/models'
+import { api } from '@/lib/api'
+import CardArt from '@/components/CardArt.vue'
 import CapsuleArt from '@/components/CapsuleArt.vue'
 import ShaderSky from '@/components/ShaderSky.vue'
 import PoolCard from '@/components/PoolCard.vue'
@@ -117,6 +119,38 @@ const CATS: { k: Cat; label: string }[] = [
 /** 空的分類不顯示 —— 點進去看到空白比少一個選項糟 */
 const cats = computed(() => CATS.filter(c => pools.pools.some(MATCH[c.k])))
 const list = computed(() => pools.pools.filter(MATCH[cat.value]))
+
+/* ---- 分區的資料 ----
+   大廳單調的原因不是特效不夠，是「整頁只有一種模組」：一排一樣大的卡片格線。
+   遊戲大廳的節奏來自模組形狀交替 —— 大主視覺 → 橫向捲動列 → 寬版帶 → 密集格線。
+   下面三個區塊各自用不同的排版方式，就是為了製造這個節奏。 */
+
+/* 熱抽中：依「已抽走的比例」排序，取前六。
+   本來寫死「剩不到 45% 才算快完抽」，但實測只有一池符合 ——
+   橫向捲動列只有一張卡是沒有意義的版面。改成排序取前 N，
+   資料怎麼分布都填得滿；門檻只用來擋掉幾乎沒人抽的池（未達 35% 不算熱）。
+   標題也跟著改成「熱抽中」而不是「快完抽」—— 一池剩 64% 說它快完抽是誇大。 */
+const closing = computed(() =>
+  pools.openPools
+    .filter(p => leftPct(p) <= 65)
+    .sort((a, b) => leftPct(a) - leftPct(b))
+    .slice(0, 6))
+
+/** 官方池：平台自營，當基準線 */
+const officials = computed(() => pools.openPools.filter(p => p.origin === 'official').slice(0, 2))
+
+/** 市場精選：低於市值最多的幾張 */
+const marketPicks = ref<Listing[]>([])
+onMounted(async () => {
+  const all = await api.listMarket()
+  marketPicks.value = all
+    .filter(l => l.status === 'live')
+    .map(l => ({ l, d: (l.price - l.card.refPrice) / l.card.refPrice }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, 8)
+    .map(x => x.l)
+})
+const dealPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card.refPrice) * 100)
 </script>
 
 <template>
@@ -182,6 +216,49 @@ const list = computed(() => pools.pools.filter(MATCH[cat.value]))
     </section>
 
     <div class="strip container"><WinnerTicker /></div>
+
+    <!-- ===== 快完抽：橫向捲動列，寬版卡 =====
+         跟下面的直式格線形狀完全不同 —— 節奏就是這樣做出來的 -->
+    <section v-if="closing.length" class="band container">
+      <header class="bh">
+        <h2><span class="dot hot"></span>熱抽中</h2>
+        <span class="muted bhNote">已抽走最多的幾池，抽走最後一籤有最後賞</span>
+      </header>
+      <div class="rail">
+        <PoolCard v-for="p in closing" :key="p.id" :pool="p" variant="wide" class="railItem" />
+      </div>
+    </section>
+
+    <!-- ===== 官方池：兩張大卡，獨立的帶狀底色 ===== -->
+    <section v-if="officials.length" class="official">
+      <div class="container">
+        <header class="bh">
+          <h2><span class="dot off"></span>官方池</h2>
+          <span class="muted bhNote">平台自營並直接出貨，糾紛平台全責</span>
+        </header>
+        <div class="offGrid">
+          <PoolCard v-for="p in officials" :key="p.id" :pool="p" />
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 市場精選：小方塊橫排，密度最高的一區 ===== -->
+    <section v-if="marketPicks.length" class="band container">
+      <header class="bh">
+        <h2><span class="dot deal"></span>市場低於市值</h2>
+        <RouterLink :to="{ name: 'market' }" class="more">看全部 →</RouterLink>
+      </header>
+      <div class="rail tight">
+        <RouterLink
+          v-for="l in marketPicks" :key="l.id"
+          :to="{ name: 'market' }" class="mini"
+        >
+          <CardArt class="miniArt" :image="''" :alt="l.card.name" :art-id="l.card.artId" />
+          <span class="miniPct">{{ dealPct(l) }}%</span>
+          <span class="miniPrice mono">{{ l.price.toLocaleString() }}</span>
+        </RouterLink>
+      </div>
+    </section>
 
     <!-- ===== 全部池 ===== -->
     <section class="all container">
@@ -280,6 +357,67 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
 }
 
 .strip { padding: 20px 0 4px; }
+
+/* ---- 分區共用 ---- */
+.band { padding-top: 26px; }
+.bh { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.bh h2 { display: flex; align-items: center; gap: 8px; font-size: 17px; margin: 0; letter-spacing: -.01em; }
+.bhNote { font-size: 12px; }
+.more { margin-left: auto; font-size: 13px; color: var(--accent); }
+/* 每一區一個顏色的小點：不用整區換色（那會很吵），
+   一個點就足以讓眼睛知道「換段落了」 */
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dot.hot { background: #ff5236; box-shadow: 0 0 8px #ff5236; }
+.dot.off { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.dot.deal { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+
+/* 橫向捲動列 */
+.rail {
+  display: flex; gap: 12px;
+  overflow-x: auto; scroll-snap-type: x proximity;
+  scrollbar-width: none; overscroll-behavior-x: contain;
+  padding-bottom: 4px;
+  -webkit-mask-image: linear-gradient(90deg, #000 0 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(90deg, #000 0 calc(100% - 28px), transparent);
+}
+.rail::-webkit-scrollbar { display: none; }
+.railItem { flex: 0 0 min(78vw, 340px); scroll-snap-align: start; }
+.rail.tight { gap: 10px; }
+
+/* 市場小方塊：整頁密度最高的一區，跟旁邊的大卡形成對比 */
+.mini {
+  position: relative; flex: 0 0 92px;
+  scroll-snap-align: start;
+  border-radius: var(--radius); overflow: hidden;
+  background: var(--surface-2);
+  transition: transform .2s;
+}
+@media (hover: hover) { .mini:hover { transform: translateY(-3px); } }
+.miniArt { width: 100%; aspect-ratio: 5 / 7; }
+.miniArt :deep(img) { width: 100%; height: 100%; object-fit: cover; }
+.miniPct {
+  position: absolute; top: 5px; left: 5px;
+  font-size: 10.5px; font-weight: 700;
+  padding: 2px 6px; border-radius: var(--pill);
+  background: var(--ok); color: #06210f;
+}
+.miniPrice {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 12px 6px 5px;
+  font-size: 11.5px; font-weight: 700; color: #fff; text-align: center;
+  background: linear-gradient(0deg, rgba(8,6,14,.92), transparent);
+}
+
+/* 官方池帶：獨立底色把它從深色頁面裡切出來 */
+.official {
+  margin-top: 26px;
+  padding: 22px 0 24px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%),
+    var(--surface);
+  border-block: 1px solid var(--line-soft);
+}
+.offGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; max-width: 560px; }
 
 /* ---- 全部池 ---- */
 .all { padding-top: 14px; }
