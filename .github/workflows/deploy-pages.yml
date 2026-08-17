@@ -26,6 +26,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build:pages
+      # SPA 的深層連結退回。GitHub Pages 是靜態檔案伺服器，/design/smoke
+      # 這種路徑在磁碟上沒有對應檔案，直接開會吃 404 —— 只有從首頁點進去才會動，
+      # 因為那是 history.pushState 不是真的請求。
+      # Pages 找不到檔案時會送 404.html，把它做成 index.html 的複本，
+      # 應用程式就會照樣啟動，再由 vue-router 依網址決定顯示哪一頁。
+      - run: cp dist/index.html dist/404.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
