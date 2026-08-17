@@ -17,6 +17,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import CapsuleArt from '@/components/CapsuleArt.vue'
+import ShaderSky from '@/components/ShaderSky.vue'
 import { canonicalArt } from '@/lib/tcgdex'
 import { haptic } from '@/lib/haptics'
 
@@ -44,6 +45,16 @@ const SCRIPT: { k: Act; ms: number }[] = [
   { k: 'ember', ms: 6800 }    // 餘燼：光點沉降，回到夜色
 ]
 const act = ref<Act>('night')
+
+/* 著色器背景。拿不到 WebGL2（或跑太慢被判定為軟體渲染）就 fail，
+   退回原本那套 CSS 圖層 —— 兩者是同一個視覺方向，退化不會像壞掉。 */
+/* ?nogl=1 強制走 CSS 退路。
+   留著不是為了除錯方便而已 —— WebGL 在某些裝置／驅動上會「能建立但畫面全黑」，
+   那種情況偵測不到，得有一個使用者或客服能直接指定的開關。 */
+const sky3d = ref(!new URLSearchParams(location.search).has('nogl'))
+const skyFps = ref<number | null>(null)
+/** 各幕的能量餵給 shader，跟 CSS 的 --e 是同一組數字 */
+const ENERGY: Record<Act, number> = { night: .12, wake: .55, align: .85, burst: 1, ember: .3 }
 const cycle = ref(0)          // 每輪 +1，用來重播一次性動畫
 let timer: number | undefined
 
@@ -179,16 +190,27 @@ async function goIn(kind: 'login' | 'register') {
 
 <template>
   <div class="land" :class="`sc-${act}`" :style="{ '--px': px, '--py': py }">
-    <!-- ===== 0 極光星雲 ===== -->
-    <div class="sky" aria-hidden="true">
+    <!-- ===== 0 背景 =====
+         優先用著色器即時算的星雲；失敗才退回下面那套 CSS 圖層。
+         兩者不同時開 —— 疊在一起會互相洗掉對比，變成一片灰紫。 -->
+    <ShaderSky
+      v-if="sky3d"
+      class="skyGl"
+      :energy="ENERGY[act]"
+      :burst="act === 'burst'"
+      @fail="sky3d = false"
+      @fps="v => (skyFps = v)"
+    />
+
+    <div v-if="!sky3d" class="sky" aria-hidden="true">
       <div class="aur a1"></div>
       <div class="aur a2"></div>
       <div class="aur a3"></div>
       <div class="vignette"></div>
     </div>
 
-    <!-- ===== 0b 極光簾幕：兩片 conic 漸層緩慢反向旋轉，用徑向遮罩收邊 ===== -->
-    <div class="curtains" aria-hidden="true">
+    <!-- ===== 0b 極光簾幕：shader 版已經有雲氣，這裡只留一點方向性的光帶 ===== -->
+    <div class="curtains" :class="{ dim: sky3d }" aria-hidden="true">
       <div class="curtain c1"></div>
       <div class="curtain c2"></div>
     </div>
@@ -197,7 +219,7 @@ async function goIn(kind: 'login' | 'register') {
     <div class="rays" aria-hidden="true"></div>
 
     <!-- ===== 0d 散景光斑 ===== -->
-    <div class="bokehs" aria-hidden="true">
+    <div class="bokehs" :class="{ dim: sky3d }" aria-hidden="true">
       <span
         v-for="(b, i) in BOKEH" :key="i"
         class="bokeh"
@@ -477,6 +499,13 @@ async function goIn(kind: 'login' | 'register') {
   8%  { opacity: 1; }
   100% { opacity: 0; }
 }
+
+/* 著色器背景鋪在最底 */
+.skyGl { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+/* shader 已經畫了雲氣，CSS 這兩層就收斂成點綴，不然疊起來會糊成一片灰紫 */
+.curtains.dim { opacity: .34; }
+.bokehs.dim { opacity: .45; }
+.curtains, .bokehs { transition: opacity .6s ease; }
 
 /* ===== 0b 極光簾幕 =====
    conic-gradient 轉起來就是一片繞著中心掃的光帶，很像極光。
