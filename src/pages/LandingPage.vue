@@ -18,6 +18,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import CapsuleArt from '@/components/CapsuleArt.vue'
 import ShaderSky from '@/components/ShaderSky.vue'
+import KineticTitle from '@/components/KineticTitle.vue'
 import { canonicalArt } from '@/lib/tcgdex'
 import { haptic } from '@/lib/haptics'
 
@@ -313,8 +314,20 @@ async function goIn(kind: 'login' | 'register') {
         </div>
       </div>
 
-      <!-- 7 文字 -->
-      <h1 class="title">每一支籤，<br class="br">開賣前就已封存。</h1>
+      <!-- 7 文字
+           英文當主視覺（動態標題），中文留在下面當真正讀的那一行 ——
+           使用者是台灣人，資訊要用中文讀；英文負責的是氣勢不是傳達。
+           key 綁 cycle：每一輪短片回到「靜夜」時標題重新演一次。 -->
+      <h1 class="title">
+        <KineticTitle
+          :key="cycle"
+          :lines="['SEALED', 'BEFORE THE DRAW']"
+          label="Sealed before the draw"
+          :stagger="46"
+          :delay="180"
+        />
+      </h1>
+      <p class="zh">每一支籤，開賣前就已封存</p>
       <p class="tag muted">PSA 鑑定卡 · 定量抽選 · 完抽可驗算</p>
 
       <div class="acts">
@@ -837,27 +850,39 @@ async function goIn(kind: 'login' | 'register') {
 }
 
 /* ===== 7 文字 ===== */
+/* 標題排版。動態與掃光都在 KineticTitle 內部，這裡只給尺寸與字距。
+   英文大寫 + 極重字重 + 收緊字距：這是 title card 的排版語彙，
+   跟內文用同一套 font-size 會顯得像標語不像片名。 */
 .title {
-  position: relative;
   margin: 6px 0 0;
-  font-size: clamp(27px, 4.8vw, 42px);
-  line-height: 1.2; letter-spacing: -.02em; font-weight: 700;
-  text-wrap: balance;
-  /* 漸層字 + 掃光：亮部靠 background-position 移動 */
-  background: linear-gradient(100deg, #fff 0 38%, #ffd9ef 46%, #b9a2ff 54%, #fff 62% 100%);
-  background-size: 260% 100%;
-  -webkit-background-clip: text; background-clip: text;
-  color: transparent;
+  --kt-ink: #fff;
+  --kt-shine: #ffe0a8;
 }
-@media (prefers-reduced-motion: no-preference) {
-  .title { animation: shimmer 7s ease-in-out infinite; }
+.title :deep(.r0) {
+  font-size: clamp(46px, 12vw, 104px);
+  font-weight: 800;
+  letter-spacing: -.028em;
 }
-@keyframes shimmer {
-  0%, 55% { background-position: 180% 0; }
-  100%    { background-position: -60% 0; }
+.title :deep(.r1) {
+  /* 15 個字 × 寬字距，在 375px 上必須夠小才不會爆行 —— 這一行的角色是
+     襯托主標的細長副標，小反而對 */
+  font-size: clamp(11px, 2.9vw, 24px);
+  font-weight: 600;
+  letter-spacing: .3em;
+  /* 字距是往右加的，整行會偏左，補回一半 */
+  text-indent: .3em;
+  --kt-ink: #cdbdf0;
+  --kt-shine: #fff2d2;
 }
-.br { display: none; }
-.tag { margin: -4px 0 0; font-size: 14px; letter-spacing: .06em; }
+/* 中文那一行才是真的要讀的資訊 */
+.zh {
+  margin: 14px 0 0;
+  font-size: clamp(15px, 3.6vw, 18px);
+  font-weight: 500;
+  color: #e8e2f4;
+  letter-spacing: .02em;
+}
+.tag { margin: 6px 0 0; font-size: 13.5px; letter-spacing: .06em; }
 
 .acts { display: grid; grid-auto-flow: column; gap: 12px; align-items: center; margin-top: 8px; }
 .btn.big { padding: 14px 32px; font-size: 16px; }
@@ -883,8 +908,9 @@ async function goIn(kind: 'login' | 'register') {
      光柱就會亮到吃掉整個畫面。自己一條，終點停在設計值。 */
   .rays          { animation: spinSlow 120s linear infinite, raysIn 2.4s ease .4s both; }
   .orbit         { animation: riseIn 1s cubic-bezier(.2, .8, .3, 1) .1s both; }
-  .title         { animation: shimmer 7s ease-in-out infinite, riseIn .8s cubic-bezier(.2,.8,.3,1) .3s both; }
-  .tag           { animation: riseIn .8s cubic-bezier(.2,.8,.3,1) .42s both; }
+  /* .title 不套 riseIn —— KineticTitle 自己有逐字進場，再疊一層整體位移會打架 */
+  .zh            { animation: riseIn .8s cubic-bezier(.2,.8,.3,1) .95s both; }
+  .tag           { animation: riseIn .8s cubic-bezier(.2,.8,.3,1) 1.08s both; }
   .acts          { animation: riseIn .8s cubic-bezier(.2,.8,.3,1) .54s both; }
   .demo, .foot   { animation: fadeIn .9s ease .7s both; }
 }
@@ -895,7 +921,6 @@ async function goIn(kind: 'login' | 'register') {
 @media (max-width: 900px) { .orbit { --k: .8; } }
 @media (max-width: 720px) {
   .orbit { --k: .66; }
-  .br { display: inline; }
   .acts { grid-auto-flow: row; width: 100%; max-width: 320px; }
   .btn.big { width: 100%; }
   .peek { margin: 4px 0 0; }
