@@ -79,6 +79,32 @@ watch(
 </template>
 
 <style scoped>
+/* ---- 全像反光 ----
+   真的 holo 卡轉動時本來就會跑彩虹光，所以這不是裝飾，是模擬實體商品。
+   預設不開：卡冊列表的 40px 縮圖跑這個只是雜訊，
+   由使用端在需要的版位加 .holo。 */
+.holo { position: relative; overflow: hidden; }
+.holo::after {
+  content: '';
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg,
+    transparent 32%,
+    rgba(255, 255, 255, .28) 45%,
+    rgba(170, 220, 255, .34) 50%,
+    rgba(255, 190, 240, .28) 55%,
+    transparent 68%);
+  background-size: 300% 100%;
+  mix-blend-mode: screen;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .holo::after { animation: holoSweep 5.5s ease-in-out var(--holo-delay, 0s) infinite; }
+}
+@keyframes holoSweep {
+  0%, 58% { background-position: 190% 0; }
+  100%    { background-position: -80% 0; }
+}
+
 .art, .art-img {
   width: 100%; aspect-ratio: 63 / 88;
   border-radius: 14px;

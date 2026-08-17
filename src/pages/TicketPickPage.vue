@@ -79,6 +79,10 @@ async function confirm() {
       <strong class="mono">{{ count }}</strong> 支。籤序開賣前就已封存，位置由你決定。
     </p>
 
+    <!-- 掃描光：一道光定期掃過整面籤牆。
+         這一頁的敘事是「這些籤在開賣前就封存好了」，掃描的意象剛好對上 ——
+         不是裝飾，是把「已封存、待驗證」講成畫面。 -->
+    <div class="wallWrap">
     <div class="wall card" :class="{ duel: pool.totalTickets <= 2 }">
       <button
         v-for="seat in pool.totalTickets" :key="seat"
@@ -92,6 +96,8 @@ async function confirm() {
         <span class="no mono">{{ seat }}</span>
         <span v-if="taken.has(seat)" class="gone">已抽</span>
       </button>
+    </div>
+
     </div>
 
     <div class="bar card">
@@ -122,6 +128,42 @@ h1 { font-size: 30px; margin: 0; }
   gap: 10px; padding: 18px;
 }
 .wall.duel { grid-template-columns: repeat(2, 1fr); gap: 20px; padding: 28px; }
+/* ---- 籤牆掃描光 ---- */
+.wallWrap { position: relative; overflow: hidden; border-radius: var(--radius); }
+.wallWrap::after {
+  content: '';
+  position: absolute; left: -2%; right: -2%; top: 0;
+  height: 24%;
+  pointer-events: none; z-index: 3;
+  background: linear-gradient(180deg,
+    transparent,
+    color-mix(in srgb, var(--accent) 14%, transparent) 46%,
+    color-mix(in srgb, var(--accent) 26%, transparent) 53%,
+    transparent);
+  mix-blend-mode: screen;
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .wallWrap::after { animation: wallScan 7s cubic-bezier(.4, 0, .5, 1) 1.2s infinite; }
+}
+@keyframes wallScan {
+  0%   { transform: translateY(-110%); opacity: 0; }
+  8%   { opacity: 1; }
+  38%  { opacity: 1; }
+  47%  { transform: translateY(430%); opacity: 0; }
+  100% { transform: translateY(430%); opacity: 0; }
+}
+
+/* 選中的籤持續脈衝：一面 80 格的牆上只靠變色不夠顯眼，
+   會動的那幾格才會被眼睛抓住 */
+@media (prefers-reduced-motion: no-preference) {
+  .ticket.on { animation: seatPulse 1.6s ease-in-out infinite; }
+}
+@keyframes seatPulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+  50%      { box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+
 .ticket {
   position: relative;
   aspect-ratio: 3 / 4;

@@ -137,7 +137,11 @@ function markSold(id: string) {
     <div v-else-if="shown.length" class="grid">
       <article v-for="l in shown" :key="l.id" class="lot card">
         <Tilt3D :max="12" class="art">
-          <CardArt :image="l.card.image" :alt="l.card.name" :cert-no="l.card.certNo" />
+          <CardArt
+            class="holo"
+            :style="{ '--holo-delay': (l.id.charCodeAt(l.id.length - 1) % 7) * 0.8 + 's' }"
+            :image="l.card.image" :alt="l.card.name" :cert-no="l.card.certNo"
+          />
         </Tilt3D>
 
         <div class="body">

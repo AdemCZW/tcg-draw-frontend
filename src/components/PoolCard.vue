@@ -65,7 +65,11 @@ function onLeave() {
           viewTransitionName: `pool-cover-${pool.id}`
         }"
       >
-        <CardArt :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo" />
+        <CardArt
+          class="holo"
+          :style="{ '--holo-delay': (pool.id.charCodeAt(pool.id.length - 1) % 7) * 0.8 + 's' }"
+          :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo"
+        />
         <span
           class="glare"
           :style="{ background: `radial-gradient(60% 60% at ${tilt.gx}% ${tilt.gy}%, rgba(255,255,255,.5), transparent 70%)` }"
