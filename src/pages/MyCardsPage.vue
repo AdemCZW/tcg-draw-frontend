@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api } from '@/lib/api'
 import type { UserPrize } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
@@ -13,6 +13,31 @@ import { track } from '@/lib/ga'
 const wallet = useWalletStore()
 const prizes = ref<UserPrize[]>([])
 onMounted(async () => { prizes.value = await api.myPrizes() })
+
+/* ---- 收藏總覽 ----
+   卡冊原本是一長串扁平清單，看不出「我收了多少、值多少」。
+   對抽卡的人來說那是這一頁最想知道的事，所以拉到最上面。
+   已回收的不計入市值 —— 卡已經交還平台了，還算進總值是騙自己。 */
+const owned = computed(() => prizes.value.filter(p => p.status !== 'recycled'))
+const totalValue = computed(() => owned.value.reduce((s, p) => s + p.card.refPrice, 0))
+const bestCard = computed(() =>
+  owned.value.reduce<UserPrize | null>((b, p) => (!b || p.card.refPrice > b.card.refPrice ? p : b), null))
+
+/* ---- 狀態分頁 ----
+   寄存中要出貨、待出貨要等、已出貨是歷史 —— 三種狀態的下一步動作完全不同，
+   混在同一張清單裡每張卡都要重新判斷「這張現在能做什麼」。 */
+type Tab = 'all' | UserPrize['status']
+const tab = ref<Tab>('all')
+const TABS: { k: Tab; label: string }[] = [
+  { k: 'all', label: '全部' },
+  { k: 'stashed', label: '寄存中' },
+  { k: 'ship_requested', label: '待出貨' },
+  { k: 'shipped', label: '已出貨' },
+  { k: 'recycled', label: '已回收' }
+]
+const countOf = (k: Tab) => k === 'all' ? prizes.value.length : prizes.value.filter(p => p.status === k).length
+const tabs = computed(() => TABS.filter(t => countOf(t.k) > 0))
+const shown = computed(() => tab.value === 'all' ? prizes.value : prizes.value.filter(p => p.status === tab.value))
 
 const statusLabel: Record<UserPrize['status'], string> = {
   stashed: '寄存中',
@@ -53,13 +78,46 @@ function doRecycle(p: UserPrize) {
 <template>
   <div class="container page">
     <h1>我的卡冊</h1>
+
+    <!-- 收藏總覽：這一頁最想被回答的問題就是「我收了多少、值多少」 -->
+    <section v-if="owned.length" class="overview card">
+      <div class="ovCell">
+        <span class="ovLabel">持有</span>
+        <strong class="ovNum mono">{{ owned.length }}</strong>
+        <span class="ovUnit">張</span>
+      </div>
+      <div class="ovCell">
+        <span class="ovLabel">市值合計</span>
+        <strong class="ovNum mono val">{{ totalValue.toLocaleString() }}</strong>
+      </div>
+      <div class="ovBest" v-if="bestCard">
+        <span class="ovLabel">最高價</span>
+        <span class="ovBestRow">
+          <TierBadge :tier="bestCard.tier" />
+          <strong>{{ bestCard.card.name }}</strong>
+        </span>
+      </div>
+    </section>
+
     <p class="muted note">寄存中的卡可合併出貨（省運費），寄存期限 90 天。</p>
+
     <div v-if="!prizes.length" class="empty card">
       <p>卡冊還是空的。</p>
-      <RouterLink to="/pools" class="btn primary">去抽第一張</RouterLink>
+      <RouterLink :to="{ name: 'home' }" class="btn primary">去抽第一張</RouterLink>
     </div>
+
+    <!-- 狀態分頁：三種狀態的下一步動作完全不同，分開才不用每張卡重新判斷 -->
+    <div v-if="tabs.length > 1" class="tabs" role="tablist">
+      <button
+        v-for="t in tabs" :key="t.k"
+        type="button" role="tab" :aria-selected="tab === t.k"
+        class="tab" :class="{ on: tab === t.k }"
+        @click="tab = t.k"
+      >{{ t.label }}<span class="tabN mono">{{ countOf(t.k) }}</span></button>
+    </div>
+
     <div class="grid">
-      <div v-for="p in prizes" :key="p.id" class="item card" :class="{ dim: p.status === 'recycled' }">
+      <div v-for="p in shown" :key="p.id" class="item card" :class="{ dim: p.status === 'recycled' }">
         <Tilt3D :max="14">
           <CardArt :image="p.card.image" :alt="p.card.name" :tier="p.tier" :cert-no="p.card.certNo" :art-id="p.card.artId" :caption="`${p.card.setCode.toUpperCase()} · ${p.card.cardNo}`" />
         </Tilt3D>
@@ -110,6 +168,51 @@ function doRecycle(p: UserPrize) {
 </template>
 
 <style scoped>
+/* ---- 收藏總覽 ---- */
+.overview {
+  display: flex; align-items: center; gap: 26px; flex-wrap: wrap;
+  padding: 16px 18px; margin: 14px 0 10px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 70%),
+    var(--surface);
+}
+.ovCell { display: grid; gap: 2px; }
+.ovLabel { font-size: 11.5px; color: var(--faint); letter-spacing: .04em; }
+.ovNum { font-size: 26px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; }
+.ovNum.val { color: var(--gold, #d8b25a); }
+.ovUnit { font-size: 11.5px; color: var(--muted); }
+.ovBest { display: grid; gap: 4px; margin-left: auto; min-width: 0; }
+.ovBestRow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ovBestRow strong { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- 狀態分頁 ---- */
+.tabs {
+  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none;
+  margin: 4px 0 16px; padding-bottom: 2px;
+  -webkit-mask-image: linear-gradient(90deg, #000 0 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(90deg, #000 0 calc(100% - 24px), transparent);
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  flex: none; min-height: 44px;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 15px; border-radius: var(--pill);
+  border: 1px solid var(--line-soft); background: transparent;
+  color: var(--muted); font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.tab.on { background: var(--ink); color: var(--bg); border-color: transparent; font-weight: 600; }
+.tabN { font-size: 11px; opacity: .65; }
+.tab.on .tabN { opacity: .8; }
+@media (hover: hover) { .tab:not(.on):hover { color: var(--ink); border-color: var(--line); } }
+
+@media (max-width: 720px) {
+  .overview { gap: 18px; padding: 14px; }
+  .ovNum { font-size: 22px; }
+  .ovBest { margin-left: 0; width: 100%; }
+}
+
+
 .page { padding-top: 36px; padding-bottom: 72px; }
 h1 { font-size: 22px; margin: 0 0 6px; }
 .note { font-size: 13px; margin: 0 0 22px; }

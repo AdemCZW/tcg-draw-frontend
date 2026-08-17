@@ -44,6 +44,23 @@ const SORTS: { k: Sort; label: string }[] = [
 /** 掛價相對市值的折數。負數＝比市值便宜 */
 const diffPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card.refPrice) * 100)
 
+/* ---- 分區 ----
+   市場原本跟大廳一樣是單一格線，兩頁看起來幾乎一樣。
+   買家來市場只有兩種意圖：「撿便宜」或「找特定的好貨」，
+   所以先用這兩個意圖分區，剩下的才進全部清單。 */
+
+/** 撿便宜：低於市值最多的幾張，橫向捲動 */
+const deals = computed(() =>
+  listings.value.filter(l => l.status === 'live' && diffPct(l) <= -8)
+    .sort((a, b) => diffPct(a) - diffPct(b))
+    .slice(0, 6))
+
+/** 鑑定卡：有鑑定編號的，這些是市場上單價最高、也最需要被凸顯的 */
+const graded = computed(() =>
+  listings.value.filter(l => l.status === 'live' && l.card.certNo)
+    .sort((a, b) => b.price - a.price)
+    .slice(0, 4))
+
 const shown = computed(() => {
   const live = listings.value.filter(l => l.status === 'live')
   const a = [...live]
@@ -127,6 +144,53 @@ function markSold(id: string) {
       <RouterLink :to="{ name: 'cards' }">去看看 →</RouterLink>
     </p>
     <p v-if="error" class="err" role="alert">{{ error }}</p>
+
+    <!-- 撿便宜：橫向捲動的小方塊，密度高，跟下面的大格線形成對比 -->
+    <section v-if="deals.length && sort === 'deal'" class="band">
+      <header class="bh">
+        <h2><span class="dot deal"></span>今日最殺</h2>
+        <span class="muted bhNote">低於市值 8% 以上</span>
+      </header>
+      <div class="rail">
+        <button
+          v-for="l in deals" :key="l.id"
+          type="button" class="dealCard" @click="ask(l)"
+        >
+          <CardArt class="dealArt" :image="''" :alt="l.card.name" :art-id="l.card.artId" />
+          <span class="dealPct">{{ diffPct(l) }}%</span>
+          <span class="dealFoot">
+            <span class="mono dealPrice">{{ l.price.toLocaleString() }}</span>
+            <span class="dealRef mono">市值 {{ l.card.refPrice.toLocaleString() }}</span>
+          </span>
+        </button>
+      </div>
+    </section>
+
+    <!-- 鑑定卡：單價最高的一區，用寬一點的卡凸顯 -->
+    <section v-if="graded.length && sort === 'deal'" class="band gradedBand">
+      <header class="bh">
+        <h2><span class="dot cert"></span>已鑑定</h2>
+        <span class="muted bhNote">附鑑定編號，可自行到鑑定機構查證</span>
+      </header>
+      <div class="rail">
+        <button
+          v-for="l in graded" :key="l.id"
+          type="button" class="gradedCard" @click="ask(l)"
+        >
+          <CardArt class="gradedArt" :image="''" :alt="l.card.name" :art-id="l.card.artId" />
+          <span class="gradedInfo">
+            <strong class="gName">{{ l.card.name }}</strong>
+            <span class="gCert mono">{{ l.card.grader }} {{ l.card.grade }} · #{{ l.card.certNo }}</span>
+            <span class="mono gPrice">{{ l.price.toLocaleString() }} 點</span>
+          </span>
+        </button>
+      </div>
+    </section>
+
+    <header v-if="sort === 'deal' && (deals.length || graded.length)" class="bh allHead">
+      <h2><span class="dot all"></span>全部掛單</h2>
+      <span class="muted bhNote">{{ shown.length }} 件</span>
+    </header>
 
     <div v-if="loading" class="grid" aria-hidden="true">
       <div v-for="i in 6" :key="i" class="sk"></div>
@@ -238,6 +302,78 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .ok { background: var(--ok-wash); color: var(--ok); }
 .ok a { color: inherit; text-decoration: underline; }
 .err { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); font-weight: 600; }
+
+/* ---- 分區 ---- */
+.band { margin-bottom: 22px; }
+.bh { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 11px; }
+.bh h2 { display: flex; align-items: center; gap: 8px; font-size: 16px; margin: 0; letter-spacing: -.01em; }
+.bhNote { font-size: 11.5px; }
+.allHead { margin-top: 4px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dot.deal { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.dot.cert { background: #d8b25a; box-shadow: 0 0 8px #d8b25a; }
+.dot.all { background: var(--muted); }
+
+.rail {
+  display: flex; gap: 10px;
+  overflow-x: auto; scroll-snap-type: x proximity;
+  scrollbar-width: none; overscroll-behavior-x: contain;
+  padding-bottom: 4px;
+  -webkit-mask-image: linear-gradient(90deg, #000 0 calc(100% - 26px), transparent);
+  mask-image: linear-gradient(90deg, #000 0 calc(100% - 26px), transparent);
+}
+.rail::-webkit-scrollbar { display: none; }
+
+/* 撿便宜：小方塊，整頁密度最高 */
+.dealCard {
+  position: relative; flex: 0 0 104px;
+  scroll-snap-align: start;
+  padding: 0; border: none; cursor: pointer;
+  border-radius: var(--radius); overflow: hidden;
+  background: var(--surface-2);
+  transition: transform .2s;
+}
+@media (hover: hover) { .dealCard:hover { transform: translateY(-3px); } }
+.dealCard:active { transform: scale(.96); }
+.dealArt { width: 100%; aspect-ratio: 5 / 7; display: block; }
+.dealArt :deep(img) { width: 100%; height: 100%; object-fit: cover; }
+.dealPct {
+  position: absolute; top: 5px; left: 5px;
+  font-size: 11px; font-weight: 800;
+  padding: 2px 7px; border-radius: var(--pill);
+  background: var(--ok); color: #06210f;
+}
+.dealFoot {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: grid; gap: 1px;
+  padding: 14px 7px 6px;
+  background: linear-gradient(0deg, rgba(8,6,14,.94), transparent);
+  color: #fff;
+}
+.dealPrice { font-size: 13px; font-weight: 800; }
+.dealRef { font-size: 9.5px; opacity: .6; text-decoration: line-through; }
+
+/* 已鑑定：橫式寬卡，跟上面的小方塊形狀完全不同 */
+.gradedCard {
+  flex: 0 0 min(80vw, 300px);
+  scroll-snap-align: start;
+  display: grid; grid-template-columns: 66px minmax(0, 1fr);
+  gap: 11px; align-items: center;
+  padding: 9px; cursor: pointer;
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, #d8b25a 32%, transparent);
+  background: linear-gradient(100deg, color-mix(in srgb, #d8b25a 10%, transparent), var(--surface) 60%);
+  text-align: left;
+  transition: transform .2s, border-color .2s;
+}
+@media (hover: hover) { .gradedCard:hover { transform: translateY(-3px); border-color: #d8b25a; } }
+.gradedCard:active { transform: scale(.98); }
+.gradedArt { width: 100%; aspect-ratio: 5 / 7; border-radius: 6px; overflow: hidden; }
+.gradedArt :deep(img) { width: 100%; height: 100%; object-fit: cover; }
+.gradedInfo { display: grid; gap: 3px; min-width: 0; }
+.gName { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gCert { font-size: 10px; color: #d8b25a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gPrice { font-size: 15px; font-weight: 800; margin-top: 1px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
 
