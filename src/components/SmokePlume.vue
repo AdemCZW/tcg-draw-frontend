@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 煙霧羽流 —— 一團煙衝進畫面、翻捲、然後散開露出後面的東西。
+ * 煙霧羽流 —— 一團煙從上方砸下來、著地炸開、翻捲，然後散開露出後面的東西。
  *
  * 跟 ShaderSky 的差別在「它站在哪一層」。星雲是背景，畫在最底下；
  * 這團煙畫在卡片「前面」，靠自己的 alpha 讓卡片露出來。
@@ -80,12 +80,12 @@ float fbm(vec2 p, int oct) {
 /* 煙的密度場。
    跟星雲用的是同一套 fbm，差別在三個地方 ——
    這三個差別就是「煙」跟「雲氣」的分野：
-     1 整團往上飄（減 t）：煙有方向，雲氣沒有
+     1 整團有方向（flow）：下墜時往下捲、落地後才轉成上升。雲氣沒有方向
      2 繞中心捲，內圈角速度比外圈快：這是 curl noise 的窮人版，煙才會「翻」
      3 域扭曲的強度大很多（2.6 vs 星雲的 3.2 但取樣頻率更高）：煙的邊緣要撕裂
 */
-float smokeField(vec2 p, float t, int oct) {
-  p.y -= t * 0.13;                                  // 上升流
+float smokeField(vec2 p, float t, float flow, int oct) {
+  p.y -= t * 0.13 * flow;                           // flow > 0 上升、< 0 下墜
   float r = length(p);
   float a = (0.62 / (r + 0.30)) * t * 0.30;         // 內圈轉得快 = 翻捲
   float cs = cos(a), sn = sin(a);
@@ -101,13 +101,15 @@ void main() {
   vec2 p = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
   int oct = uQuality > 0.5 ? 4 : 2;
 
-  /* 兩條互相獨立的時間曲線。
-     burst  湧入：一團煙從畫面下方衝上來填滿畫面
+  /* 三條互相獨立的時間曲線。
+     fall   下墜：一團煙從畫面上方砸進來
+     hit    著地：砸到之後往外炸開、攤平
      clear  消散：從中心先破開，再整體變薄
 
-     兩條分開才控制得住 —— 用同一條曲線的話，煙會「進來又原路退回去」，
-     看起來像倒放。真實的煙是進來之後在原地散掉的。 */
-  float burst = smoothstep(0.0, 0.20, uProg);
+     分開才控制得住 —— 用同一條曲線的話，煙會「進來又原路退回去」，
+     看起來像倒放。真實的煙是砸下來、炸開、然後在原地散掉的。 */
+  float fall  = smoothstep(0.0, 0.12, uProg);
+  float hit   = smoothstep(0.10, 0.32, uProg);
   float clear = smoothstep(0.40, 1.0, uProg);
 
   /* 特徵尺寸隨進度變大 = 整團煙往鏡頭方向逼近。
@@ -115,16 +117,28 @@ void main() {
      整組數值都往上抬過一次：尺寸太大的話一個畫面裡只剩三四團，
      細節不夠就不像煙像水彩暈開。 */
   float zoom = mix(3.10, 1.45, smoothstep(0.0, 0.75, uProg));
+  // 著地那一下讓特徵尺寸快速撐大 = 往外炸開
+  zoom *= mix(1.55, 1.0, hit);
 
-  float d = smokeField(p * zoom, uTime, oct);
+  // 下墜時整團往下捲，落地後轉為上升
+  float flow = mix(-1.25, 1.0, hit);
+  float d = smokeField(p * zoom, uTime, flow, oct);
 
-  /* 湧入的前緣。從畫面下緣外面往上掃，掃過的地方才有煙。
-     前緣本身用 smoothstep 給 0.4 的寬度，邊界才是一團煙而不是一條直線。 */
-  float front = mix(-0.72, 1.10, burst);
-  float wipe = 1.0 - smoothstep(front, front + 0.42, p.y);
-  // 前緣附近多一點亂流，看起來才像在翻滾而不是一片布往上拉
-  wipe *= 0.75 + 0.5 * fbm(p * 4.0 + vec2(0.0, uTime * 0.3), oct);
-  d *= clamp(wipe, 0.0, 1.0);
+  /* 砸下來的那一團。
+     不是一片布往上拉，是一個有位置、有大小的塊體：
+       cy  中心高度 —— 下墜用平方曲線，才有重力加速度的感覺
+       rad 半徑 —— 落地那一刻整個撐開
+       sq  形狀 —— 下墜時被拉長（速度感），落地後攤平成一圈往外推的煙
+     邊緣要用噪聲咬碎，否則就是一顆很明顯的橢圓。 */
+  float cy = mix(0.95, -0.12, fall * fall);
+  float rad = mix(0.32, 1.85, hit);
+  vec2 sq = mix(vec2(1.40, 0.52), vec2(0.70, 1.75), hit);
+  vec2 bp = (p - vec2(0.0, cy)) * sq;
+  float edge = fbm(p * 3.4 + vec2(0.0, uTime * 0.35), oct) - 0.5;
+  /* 羽化從很靠近中心就開始。從 rad*0.42 才開始收的話，
+     中間會是一塊密度打滿的實心區 —— 讀起來是一塊板不是一團煙。 */
+  float mass = 1.0 - smoothstep(rad * 0.08, rad * (1.0 + 0.55 * edge), length(bp));
+  d *= clamp(mass, 0.0, 1.0);
 
   /* 消散：中心先破開一個洞（要露出來的東西在中心），再整體變薄。
      只做「整體變薄」的話煙會像一起淡出，讀不出「散開」。 */
@@ -144,7 +158,10 @@ void main() {
      而且密度的「邊緣」最亮 —— 薄的地方光透得過去，厚的地方透不過。
      正統做法是朝光源再取樣一次密度算梯度，但那要多跑三次 fbm；
      用 alpha 的邊帶當梯度的近似，視覺幾乎一樣，成本是零。 */
-  float glow = exp(-rc * 1.75);
+  /* 背光的強度要等它落到光源前面才給滿。
+     下墜途中就給滿的話，那一團會亮成一隻發光的變形蟲 ——
+     煙在飛的時候是暗的，這是它有質量的訊號。 */
+  float glow = exp(-rc * 1.75) * mix(0.30, 1.0, hit);
   float rim = smoothstep(thr, thr + 0.09, d) - smoothstep(thr + 0.09, thr + 0.34, d);
 
   vec3 dark = vec3(0.035, 0.026, 0.062);
@@ -155,6 +172,12 @@ void main() {
   col *= mix(1.0, 0.40, smoothstep(thr + 0.05, thr + 0.44, d));
   col += uTint * rim * (0.45 + 1.05 * glow);
   col += vec3(1.0, 0.93, 0.86) * rim * glow * glow * 0.8;   // 最靠近光源的邊緣接近白
+
+  /* 著地的一記塵閃。很短，只在撞擊那一瞬 ——
+     沒有這一下，煙只是「飄到定位」，讀不出它是「砸」下來的。 */
+  float flash = exp(-pow((uProg - 0.145) * 30.0, 2.0));
+  col += mix(uTint, vec3(1.0), 0.45) * flash * (0.22 + 1.5 * rim);
+  alpha = min(1.0, alpha + flash * 0.12 * mass);
 
   // 顆粒：打散漸層色帶，暗部重亮部細
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
