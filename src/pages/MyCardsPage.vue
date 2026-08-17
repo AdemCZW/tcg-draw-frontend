@@ -61,7 +61,7 @@ function doRecycle(p: UserPrize) {
     <div class="grid">
       <div v-for="p in prizes" :key="p.id" class="item card" :class="{ dim: p.status === 'recycled' }">
         <Tilt3D :max="14">
-          <CardArt :image="p.card.image" :alt="p.card.name" :tier="p.tier" :cert-no="p.card.certNo" :caption="`${p.card.setCode.toUpperCase()} · ${p.card.cardNo}`" />
+          <CardArt :image="p.card.image" :alt="p.card.name" :tier="p.tier" :cert-no="p.card.certNo" :art-id="p.card.artId" :caption="`${p.card.setCode.toUpperCase()} · ${p.card.cardNo}`" />
         </Tilt3D>
         <div class="body">
           <div class="row"><TierBadge :tier="p.tier" /><span class="chip">{{ statusLabel[p.status] }}</span></div>

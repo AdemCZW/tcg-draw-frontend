@@ -91,7 +91,7 @@ onMounted(() => {
           <div class="grid flat">
             <div v-for="(item, i) in result.items" :key="i" class="slot">
               <div class="face card">
-                <CardArt :image="item.card.image" :alt="item.card.name" :tier="item.tier" :cert-no="item.card.certNo" />
+                <CardArt :image="item.card.image" :alt="item.card.name" :tier="item.tier" :cert-no="item.card.certNo" :art-id="item.card.artId" />
                 <div class="info"><TierBadge :tier="item.tier" /><strong>{{ item.card.name }}</strong></div>
               </div>
             </div>
@@ -104,7 +104,7 @@ onMounted(() => {
     <ul class="detail" :class="{ in: revealed }">
       <li v-for="(item, i) in result.items" :key="i">
         <Tilt3D :max="12" radius="10px" class="thumb">
-          <CardArt :image="item.card.image" :alt="item.card.name" :tier="item.tier" :cert-no="item.card.certNo" />
+          <CardArt :image="item.card.image" :alt="item.card.name" :tier="item.tier" :cert-no="item.card.certNo" :art-id="item.card.artId" />
         </Tilt3D>
         <div class="meta">
           <div class="row">

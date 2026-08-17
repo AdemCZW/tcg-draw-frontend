@@ -57,6 +57,25 @@ async function search(name: string, quality: ArtQuality): Promise<string | null>
  * 依卡名找一張示意圖。查不到回傳 null，呼叫端應退回漸層佔位卡。
  * 同一個卡名＋畫質只查一次（快取），避免同頁重複卡片重複打 API。
  */
+/**
+ * 用 TCGdex 卡片編號直接組出圖片網址，不必查 API。
+ *
+ * 網址格式是固定的：assets.tcgdex.net/{lang}/{serie}/{set}/{number}/{quality}.webp
+ * 例如 SV4a-349 → .../ja/SV/SV4a/349/high.webp
+ *
+ * 語系用日文：密卡（SAR / UR 金卡）的圖只有日文端點齊全，
+ * 中文端點對這些高號段卡片全部沒有圖 —— 實測 zh-tw 的 SV4a-349 回傳 image: null。
+ * 反正卡面美術是共通的，卡名我們自己用中文顯示。
+ */
+export function artUrlById(id: string, quality: ArtQuality = 'high'): string | null {
+  const m = id.match(/^([A-Za-z]+\d*[a-zA-Z]*)-(\d+)$/)
+  if (!m) return null
+  const [, set, num] = m
+  // serie 是 set 開頭的字母部分（SV4a → SV、SV8a → SV、S8a → S）
+  const serie = set.match(/^[A-Za-z]+/)?.[0]?.replace(/\d.*$/, '') ?? set
+  return `https://assets.tcgdex.net/ja/${serie}/${set}/${num}/${quality}.webp`
+}
+
 export function canonicalArt(
   name: string | null | undefined,
   quality: ArtQuality = 'high'

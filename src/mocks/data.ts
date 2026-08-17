@@ -4,45 +4,42 @@ import type { Pool, CardItem, Listing, DrawResult, UserPrize, LedgerEntry, Winne
 const ph = (hue: number) => `placeholder:${hue}`
 
 const cards: CardItem[] = [
-  { id: 'c1', name: '噴火龍 ex SAR', setCode: 'sv4a', cardNo: '349/190', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345671', image: ph(28), refPrice: 18800 },
-  { id: 'c2', name: '皮卡丘 AR', setCode: 'sv4a', cardNo: '205/190', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345672', image: ph(48), refPrice: 5200 },
-  { id: 'c3', name: '夢幻 SAR', setCode: 'sv2a', cardNo: '347/165', language: 'JP', grader: 'PSA', grade: 9, certNo: '82345673', image: ph(300), refPrice: 3600 },
-  { id: 'c4', name: '莉莉艾 SR', setCode: 'sm12a', cardNo: '196/173', language: 'JP', grader: 'BGS', grade: 9.5, certNo: '0015678901', image: ph(340), refPrice: 9800 },
-  { id: 'c5', name: '伊布 促販卡', setCode: 'promo', cardNo: '175/S-P', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(80), refPrice: 60 },
-  { id: 'c6', name: '卡比獸 AR', setCode: 'sv1a', cardNo: '181/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(200), refPrice: 380 },
-  { id: 'c7', name: '夢幻 促販卡', setCode: 'promo', cardNo: '151/S-P', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(260), refPrice: 520 },
-  { id: 'c8', name: '寶可夢中心 木木梟', setCode: 'promo', cardNo: '215/S-P', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(120), refPrice: 300 },
-  { id: 'c9', name: '皮卡丘 普卡', setCode: 'svp', cardNo: '087/SV-P', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(56), refPrice: 60 },
-  // 保底卡：價值必須低於票價，否則「輸了反而划算」會破壞獎池
-  { id: 'c10', name: '皮卡丘 AR（保底）', setCode: 'sv2a', cardNo: '173/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(50), refPrice: 200 },
+  /* 高階密卡（SAR / UR 金卡）。artId 指定 TCGdex 的確切編號 ——
+     不指定的話卡名搜尋只會拿到同名的普卡，展示不出金卡的樣子。
+     市值抓的是 2025 年前後日版單卡的概略行情，示意用。 */
+  { id: 'c1', name: '噴火龍 ex UR', setCode: 'sv4a', cardNo: '349/190', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345671', image: '', artId: 'SV4a-349', refPrice: 42000 },
+  { id: 'c2', name: '奇樹 SAR', setCode: 'sv4a', cardNo: '350/190', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345672', image: '', artId: 'SV4a-350', refPrice: 28000 },
+  { id: 'c3', name: '太樂巴戈斯 ex UR', setCode: 'sv8a', cardNo: '237/187', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345673', image: '', artId: 'SV8a-237', refPrice: 19800 },
+  { id: 'c4', name: '牡丹 SAR', setCode: 'sv4a', cardNo: '354/190', language: 'JP', grader: 'BGS', grade: 9.5, certNo: '0015678901', image: '', artId: 'SV4a-354', refPrice: 15600 },
+  { id: 'c5', name: '皮卡丘 ex SAR', setCode: 'sv8a', cardNo: '236/187', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345675', image: '', artId: 'SV8a-236', refPrice: 12800 },
+  { id: 'c6', name: '噴火龍 ex SAR', setCode: 'sv3', cardNo: '125/108', language: 'JP', grader: 'PSA', grade: 9, certNo: '82345676', image: '', artId: 'SV3-125', refPrice: 9800 },
+  { id: 'c7', name: '沙奈朵 ex UR', setCode: 'sv4a', cardNo: '348/190', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345677', image: '', artId: 'SV4a-348', refPrice: 7600 },
+  { id: 'c8', name: '夢幻 ex UR', setCode: 'sv4a', cardNo: '347/190', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV4a-347', refPrice: 6400 },
+  { id: 'c9', name: '月亮伊布 ex SAR', setCode: 'sv8a', cardNo: '217/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-217', refPrice: 5400 },
+  /* 保底卡：價值必須低於票價，否則「輸了反而划算」會破壞獎池 */
+  { id: 'c10', name: '謎擬Ｑ SAR（保底）', setCode: 'sv4a', cardNo: '341/190', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV4a-341', refPrice: 200 },
   // 以下為擴充卡池，象徵性測試各玩法在「多樣卡片」下的顯示與抽取
-  { id: 'c11', name: '傑尼龜 AR', setCode: 'sv3a', cardNo: '007/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(210), refPrice: 420 },
-  { id: 'c12', name: '妙蛙種子 AR', setCode: 'sv3a', cardNo: '001/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(140), refPrice: 380 },
-  { id: 'c13', name: '小火龍 SAR', setCode: 'sv3a', cardNo: '223/165', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345680', image: ph(20), refPrice: 4200 },
-  { id: 'c14', name: '卡蒂狗 促販卡', setCode: 'promo', cardNo: '058/S-P', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(24), refPrice: 90 },
-  { id: 'c15', name: '快龍 VSTAR', setCode: 's12a', cardNo: '093/172', language: 'JP', grader: 'PSA', grade: 9, certNo: '82345681', image: ph(255), refPrice: 6800 },
-  { id: 'c16', name: '拉普拉斯 AR', setCode: 'sv1a', cardNo: '131/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(200), refPrice: 340 },
-  { id: 'c17', name: '胡地 ex', setCode: 'sv4a', cardNo: '256/190', language: 'JP', grader: 'ARS', grade: 8, certNo: 'ARS9012345', image: ph(285), refPrice: 2200 },
-  { id: 'c18', name: '卡拉卡拉 促販卡', setCode: 'promo', cardNo: '104/S-P', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(35), refPrice: 70 },
-  { id: 'c19', name: '大針蜂 AR', setCode: 'sv1a', cardNo: '015/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(45), refPrice: 260 },
-  { id: 'c20', name: '三合一磁怪 V', setCode: 's9', cardNo: '082/100', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(190), refPrice: 180 },
-  { id: 'c21', name: '六尾 促販卡', setCode: 'promo', cardNo: '037/S-P', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(15), refPrice: 85 },
-  { id: 'c22', name: '暴鯉龍 SAR', setCode: 'sv1a', cardNo: '230/165', language: 'JP', grader: 'BGS', grade: 9.5, certNo: '0015678910', image: ph(230), refPrice: 7600 },
-  { id: 'c23', name: '皮皮 AR', setCode: 'sv2a', cardNo: '040/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(320), refPrice: 150 },
-  { id: 'c24', name: '耿鬼 VMAX', setCode: 's8', cardNo: '157/184', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345682', image: ph(275), refPrice: 5400 },
-  { id: 'c25', name: '卡比獸 促販卡', setCode: 'promo', cardNo: '143/S-P', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(205), refPrice: 95 },
-  { id: 'c26', name: '波克比 AR', setCode: 'sv3a', cardNo: '196/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(40), refPrice: 220 },
-  { id: 'c27', name: '迷唇姐 促販卡', setCode: 'promo', cardNo: '122/S-P', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(330), refPrice: 65 },
-  { id: 'c28', name: '鯉魚王 AR', setCode: 'sv1a', cardNo: '128/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(215), refPrice: 40 },
-
-  /* 低價入門池專用的普卡（c29–c31）。
-     一定要有這個價位帶：在「每支籤都保底給卡」的前提下，票價的下限被最便宜的
-     卡值綁死 —— 原本最低只有 40 元的鯉魚王，35 元的池還元率會直接超過 130%
-     必然賠本。有 16–18 元的普卡，低價漏斗才算得出來。
-     三張皆已確認 TCGdex 繁中庫有圖。 */
-  { id: 'c29', name: '綠毛蟲 普卡', setCode: 'sv9', cardNo: '001/098', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(110), refPrice: 17 },
-  { id: 'c30', name: '波波 普卡', setCode: 'sv2a', cardNo: '016/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(35), refPrice: 18 },
-  { id: 'c31', name: '小拉達 普卡', setCode: 'sv2a', cardNo: '019/165', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: ph(275), refPrice: 16 }
+  { id: 'c11', name: '多龍巴魯托 ex SAR', setCode: 'sv8a', cardNo: '221/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-221', refPrice: 4200 },
+  { id: 'c12', name: '伊布 ex SAR', setCode: 'sv8a', cardNo: '223/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-223', refPrice: 3800 },
+  { id: 'c13', name: '猛雷鼓 ex SAR', setCode: 'sv8a', cardNo: '222/187', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345680', image: '', artId: 'SV8a-222', refPrice: 3400 },
+  { id: 'c14', name: '太陽伊布 ex SAR', setCode: 'sv8a', cardNo: '211/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-211', refPrice: 2600 },
+  { id: 'c15', name: '大比鳥 ex SAR', setCode: 'sv3', cardNo: '128/108', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV3-128', refPrice: 2200 },
+  { id: 'c16', name: '派帕 SAR', setCode: 'sv4a', cardNo: '353/190', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV4a-353', refPrice: 1800 },
+  { id: 'c17', name: '幸福蛋 ex SAR', setCode: 'sv6', cardNo: '121/101', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV6-121', refPrice: 1500 },
+  { id: 'c18', name: '八朔 SAR', setCode: 'sv6', cardNo: '124/101', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV6-124', refPrice: 1200 },
+  { id: 'c19', name: '多龍巴魯托 ex', setCode: 'sv6', cardNo: '120/101', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV6-120', refPrice: 980 },
+  { id: 'c20', name: '波琵 SAR', setCode: 'sv3', cardNo: '131/108', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV3-131', refPrice: 760 },
+  { id: 'c21', name: '仙子伊布 ex', setCode: 'sv8a', cardNo: '212/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-212', refPrice: 620 },
+  { id: 'c22', name: '雷伊布 ex', setCode: 'sv8a', cardNo: '209/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-209', refPrice: 520 },
+  { id: 'c23', name: '水伊布 ex', setCode: 'sv8a', cardNo: '205/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-205', refPrice: 460 },
+  { id: 'c24', name: '火伊布 ex', setCode: 'sv8a', cardNo: '202/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-202', refPrice: 420 },
+  { id: 'c25', name: '葉伊布 ex', setCode: 'sv8a', cardNo: '200/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-200', refPrice: 380 },
+  { id: 'c26', name: '冰伊布 ex', setCode: 'sv8a', cardNo: '206/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-206', refPrice: 340 },
+  { id: 'c27', name: '鐵臂膀 ex', setCode: 'sv8a', cardNo: '210/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-210', refPrice: 300 },
+  { id: 'c28', name: '差不多娃娃 ex', setCode: 'sv8a', cardNo: '215/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-215', refPrice: 240 },
+  { id: 'c29', name: '桃歹郎 ex', setCode: 'sv8a', cardNo: '219/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-219', refPrice: 180 },
+  { id: 'c30', name: '海豚俠 ex', setCode: 'sv8a', cardNo: '207/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-207', refPrice: 150 },
+  { id: 'c31', name: '砂鐵蜥 ex', setCode: 'sv8a', cardNo: '216/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-216', refPrice: 120 }
 ]
 
 // 產生已抽籤位（mock 用固定步長跳位，讓籤牆看起來自然散落）

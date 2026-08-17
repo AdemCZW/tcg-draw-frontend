@@ -10,7 +10,7 @@
 import { computed, ref, watch } from 'vue'
 import type { Tier } from '@/types/models'
 import { certImages } from '@/lib/psa'
-import { canonicalArt } from '@/lib/tcgdex'
+import { artUrlById, canonicalArt } from '@/lib/tcgdex'
 
 const props = defineProps<{
   image: string
@@ -18,6 +18,8 @@ const props = defineProps<{
   tier?: Tier
   caption?: string
   certNo?: string | null
+  /** TCGdex 卡片編號。給了就直接用那一張的圖，不必靠卡名去猜 */
+  artId?: string | null
 }>()
 
 const remoteUrl = ref<string | null>(null)
@@ -30,15 +32,18 @@ const TIER_LABEL: Record<Tier, string> = {
   A: 'A 賞', B: 'B 賞', C: 'C 賞', D: 'D 賞', LAST: '最後賞', BUST: '爆賞'
 }
 const tierLabel = computed(() => (props.tier ? TIER_LABEL[props.tier] : ''))
-const hasOwnImage = computed(() => !props.image.startsWith('placeholder:'))
+/* 空字串不算「有自己的圖」。
+   原本只判斷開頭不是 placeholder:，於是 image:'' 會被當成有實拍圖，
+   watch 直接 return，artId 與卡名搜尋都不會跑 —— 整站卡圖變成佔位漸層。 */
+const hasOwnImage = computed(() => !!props.image && !props.image.startsWith('placeholder:'))
 // 有自己的實拍就不必打任何 API
 const src = computed(() => (hasOwnImage.value ? props.image : remoteUrl.value))
 const isPlaceholder = computed(() => !src.value)
 const tierClass = computed(() => (props.tier ? `t-${props.tier.toLowerCase()}` : ''))
 
 watch(
-  () => [props.certNo, props.alt, hasOwnImage.value] as const,
-  async ([cert, alt, own]) => {
+  () => [props.certNo, props.alt, props.artId, hasOwnImage.value] as const,
+  async ([cert, alt, artId, own]) => {
     remoteUrl.value = null
     if (own) return
 
@@ -47,7 +52,13 @@ watch(
       // 等待期間 props 可能已改變，確認仍是同一張卡才套用
       if (imgs?.front && props.certNo === cert) { remoteUrl.value = imgs.front; return }
     }
-    // 沒有 cert，或 PSA 查無此鑑定編號 → 退一步用示意圖
+    /* 有指定編號就直接組網址，不必查 API 也不會拿錯版本。
+       靠卡名搜尋只會拿到「第一張有圖的」—— 通常是普卡而不是密卡。 */
+    if (artId) {
+      const byId = artUrlById(artId)
+      if (byId) { remoteUrl.value = byId; return }
+    }
+    // 沒有 cert 也沒有編號 → 退一步用卡名搜示意圖
     const canon = await canonicalArt(alt)
     if (canon && props.alt === alt && !hasOwnImage.value) remoteUrl.value = canon
   },

@@ -42,7 +42,7 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
            （玩法徽章 / 最高賞未出 / 最後賞 · 卡名）。讀不懂的裝飾就只是雜訊。 -->
       <div class="art">
         <Tilt3D :max="16" class="cover" :style="{ viewTransitionName: `pool-cover-${pool.id}` }">
-          <CardArt :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo" />
+          <CardArt :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo" :art-id="topPrize?.card.artId" />
         </Tilt3D>
       </div>
 

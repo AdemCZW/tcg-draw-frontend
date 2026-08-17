@@ -34,6 +34,13 @@ export interface CardItem {
   certNo: string | null  // PSA cert — 對外可驗證
   image: string
   refPrice: number       // 市場參考價（顯示用）
+  /* TCGdex 的卡片編號，例如 'SV4a-349'（閃色寶藏ex 的噴火龍ex UR 金卡）。
+     給了就直接取那一張的圖；不給才退回用卡名去搜。
+
+     為什麼需要這個：搜尋只吃卡名的第一個詞（「噴火龍 ex SAR」→ 搜「噴火龍」），
+     然後拿回傳清單裡第一張有圖的 —— 那通常是普卡，不是我們想展示的密卡。
+     要指定「就是那張金卡」只能給編號。 */
+  artId?: string
 }
 
 export interface PoolPrize {

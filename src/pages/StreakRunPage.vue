@@ -223,7 +223,7 @@ function pushOn() {
       <div class="floor" v-if="floorItem">
         <p class="floor-label">但保底卡是你的</p>
         <div class="floor-card">
-          <CardArt :image="floorItem.card.image" :alt="floorItem.card.name" :cert-no="floorItem.card.certNo" />
+          <CardArt :image="floorItem.card.image" :alt="floorItem.card.name" :cert-no="floorItem.card.certNo" :art-id="floorItem.card.artId" />
         </div>
         <strong>{{ floorItem.card.name }}</strong>
         <span class="mono muted">市值 {{ floorItem.card.refPrice.toLocaleString() }}</span>

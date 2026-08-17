@@ -139,7 +139,7 @@ function markSold(id: string) {
       <article v-for="l in shown" :key="l.id" class="lot">
         <CardArt
           class="art"
-          :image="l.card.image" :alt="l.card.name" :cert-no="l.card.certNo"
+          :image="l.card.image" :alt="l.card.name" :cert-no="l.card.certNo" :art-id="l.card.artId"
         />
         <span class="scrim" aria-hidden="true"></span>
 
