@@ -168,13 +168,7 @@ const list = computed(() => pools.pools.filter(MATCH[cat.value]))
         <div v-for="i in 4" :key="i" class="sk"></div>
       </div>
       <div v-else-if="list.length" class="poolGrid">
-        <!-- 只有快完抽的池卡會故障。特效綁在「這一池快沒了」這個事實上，
-             才不是裝飾 —— 每張都閃等於沒有一張被強調 -->
-        <PoolCard
-          v-for="p in list" :key="p.id" :pool="p"
-          :class="{ 'fx-glitch': p.status === 'open' && leftPct(p) <= 30 }"
-          :style="{ '--fx-phase': '-' + (p.id.charCodeAt(p.id.length - 1) % 6) + 's', '--fx-amp': .45 }"
-        />
+        <PoolCard v-for="p in list" :key="p.id" :pool="p" />
       </div>
       <p v-else class="muted none">這個分類目前沒有池。</p>
     </section>

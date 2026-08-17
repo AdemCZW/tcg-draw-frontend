@@ -3,17 +3,12 @@ import { computed, ref } from 'vue'
 import type { Pool } from '@/types/models'
 import CardArt from './CardArt.vue'
 import PoolModeBadge from './PoolModeBadge.vue'
-import SellerChip from './SellerChip.vue'
-import { useSellerStore } from '@/stores/sellers'
 
 const props = withDefaults(defineProps<{
   pool: Pool
   /** grid = 清單裡的一格；stage = 選池台上的主角，字級放大、資訊更好讀 */
   variant?: 'grid' | 'stage'
 }>(), { variant: 'grid' })
-const sellers = useSellerStore()
-sellers.ensureLoaded()
-const seller = computed(() => sellers.byId(props.pool.sellerId))
 
 const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.totalTickets) * 100))
 const topPrize = computed(() => props.pool.prizes.find(p => p.tier === 'A') ?? props.pool.prizes.find(p => p.tier === 'LAST'))
@@ -54,133 +49,157 @@ function onLeave() {
     @pointermove="onMove"
     @pointerleave="onLeave"
   >
-    <div class="art-scene">
-      <div
-        ref="art"
-        class="art-tilt"
-        :style="{
-          transform: `rotateX(${tilt.x}deg) rotateY(${tilt.y}deg)`,
-          /* 共享元素轉場：跟池詳情總覽頁的封面同名，換頁時封面會從卡片位置
-             滑到詳情頁位置。名稱要唯一，所以帶 pool.id */
-          viewTransitionName: `pool-cover-${pool.id}`
-        }"
-      >
-        <CardArt
-          class="holo"
-          :style="{ '--holo-delay': (pool.id.charCodeAt(pool.id.length - 1) % 7) * 0.8 + 's' }"
-          :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo"
-        />
-        <span
-          class="glare"
-          :style="{ background: `radial-gradient(60% 60% at ${tilt.gx}% ${tilt.gy}%, rgba(255,255,255,.5), transparent 70%)` }"
-          aria-hidden="true"
-        ></span>
-      </div>
-      <div class="mode-tag"><PoolModeBadge :mode="pool.mode" /></div>
+    <!-- 卡圖鋪滿整格，資訊壓在圖上（跟市場同一套語彙）。
+         去掉外框與內距之後，同樣的格子寬度下卡片大了一圈。 -->
+    <div
+      ref="art"
+      class="art-tilt"
+      :style="{
+        transform: `rotateX(${tilt.x}deg) rotateY(${tilt.y}deg)`,
+        /* 共享元素轉場：跟池詳情總覽頁的封面同名，換頁時封面會從卡片位置
+           滑到詳情頁位置。名稱要唯一，所以帶 pool.id */
+        viewTransitionName: `pool-cover-${pool.id}`
+      }"
+    >
+      <CardArt
+        class="art"
+        :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo"
+      />
+      <span
+        class="glare"
+        :style="{ background: `radial-gradient(60% 60% at ${tilt.gx}% ${tilt.gy}%, rgba(255,255,255,.42), transparent 70%)` }"
+        aria-hidden="true"
+      ></span>
     </div>
 
+    <span class="scrim" aria-hidden="true"></span>
+
+    <div class="mode-tag"><PoolModeBadge :mode="pool.mode" /></div>
+    <span v-if="pool.status !== 'open'" class="doneTag">完抽</span>
+
     <div class="body">
-      <div class="title-row">
-        <h3>{{ pool.title }}</h3>
-        <span v-if="pool.status !== 'open'" class="chip">完抽</span>
-      </div>
+      <h3>{{ pool.title }}</h3>
       <p class="top" v-if="topPrize">
-        <span class="muted prize">{{ topPrize.tier === 'LAST' ? '最後賞' : 'A 賞' }} · {{ topPrize.card.name }}</span>
+        <span class="prize">{{ topPrize.tier === 'LAST' ? '最後賞' : 'A 賞' }} · {{ topPrize.card.name }}</span>
         <span class="state" :class="aLive ? 'live' : 'gone'">{{ aLive ? '未出' : '已出' }}</span>
       </p>
       <div class="meter" role="progressbar" :aria-valuenow="pct" aria-valuemin="0" aria-valuemax="100" :aria-label="`剩餘 ${pct}%`">
         <div class="fill" :style="{ width: pct + '%' }"></div>
       </div>
       <div class="foot">
-        <strong class="price">{{ pool.ticketPrice.toLocaleString() }} 點 <span class="per muted">/ 抽</span></strong>
-        <span class="muted rest">剩 {{ pool.remainingTickets }} / {{ pool.totalTickets }}</span>
+        <strong class="price">{{ pool.ticketPrice.toLocaleString() }} 點 <span class="per">/ 抽</span></strong>
+        <span class="rest mono">剩 {{ pool.remainingTickets }}/{{ pool.totalTickets }}</span>
       </div>
-      <div v-if="seller" class="seller"><SellerChip :seller="seller" :link="false" /></div>
     </div>
   </RouterLink>
 </template>
 
 <style scoped>
-/* 卡片高度由 grid 拉齊，內部用 flex 把進度條以下推到底 ——
-   否則標題長短不一時，各卡的價格與進度條會落在不同高度。 */
+/* 一格 = 一張卡。沒有外框、沒有內距，卡圖就是整格。 */
 .pool {
-  display: flex; flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--line-soft);
+  position: relative;
+  display: block;
+  aspect-ratio: 5 / 7;
   border-radius: var(--radius-lg);
-  padding: 12px;
-  box-shadow: var(--shadow-sm);
-  transition: transform .28s cubic-bezier(.2,.7,.3,1), box-shadow .28s;
+  overflow: hidden;
+  background: var(--surface-2);
+  isolation: isolate;
+  perspective: 900px;
+  transition: transform .28s cubic-bezier(.2, .7, .3, 1), box-shadow .28s;
 }
-/* hover 包在能力偵測裡，不是斷點。觸控裝置點完之後 :hover 會「黏住」，
-   卡片就一直浮著回不來 —— 觸控筆電用斷點判斷會漏掉。 */
 @media (hover: hover) {
   .pool:hover { transform: translateY(-6px); box-shadow: var(--shadow-lg); }
-    }
+}
 .pool:active { transform: scale(.985); transition-duration: 70ms; }
 .pool:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
-.art-scene { position: relative; perspective: 900px; }
 .art-tilt {
-  position: relative;
+  position: absolute; inset: 0;
   transform-style: preserve-3d;
-  transition: transform .35s cubic-bezier(.2,.7,.3,1);
-  border-radius: 14px;
-  overflow: hidden;
+  transition: transform .35s cubic-bezier(.2, .7, .3, 1);
 }
+.art { width: 100%; height: 100%; }
+.art :deep(img), .art :deep(.art-img) { width: 100%; height: 100%; object-fit: cover; }
 .glare {
   position: absolute; inset: 0;
   pointer-events: none;
   mix-blend-mode: soft-light;
   opacity: 0; transition: opacity .3s;
 }
-.mode-tag { position: absolute; top: 10px; left: 10px; }
+@media (hover: hover) { .pool:hover .glare { opacity: 1; } }
 
-.body { padding: 14px 6px 4px; display: flex; flex-direction: column; flex: 1; }
-.title-row { display: flex; align-items: flex-start; gap: 8px; }
-h3 {
-  margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.02em;
-  /* 統一最多兩行，避免超長標題把版面撐開 */
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden;
+/* 左到右 + 由下往上的雙層遮罩，把文字區壓暗到足以承載白字 */
+.scrim {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  /* 底部那一段要夠深：卡圖本身有招式名與傷害數字，遮罩不夠會跟白字打架。
+     下緣 .96 一路撐到 16% 才開始收，剛好蓋住資訊區的高度。 */
+  background:
+    linear-gradient(100deg,
+      rgba(8, 6, 14, .95) 0%,
+      rgba(8, 6, 14, .8) 34%,
+      rgba(8, 6, 14, .32) 62%,
+      transparent 88%),
+    linear-gradient(0deg,
+      rgba(8, 6, 14, .96) 0%,
+      rgba(8, 6, 14, .88) 16%,
+      rgba(8, 6, 14, .42) 34%,
+      transparent 56%);
 }
-.top { display: flex; align-items: baseline; gap: 6px; font-size: 13px; margin: 6px 0 12px; }
-.prize { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.state { flex: none; }
-.live { color: var(--ok); font-weight: 600; }
-.gone { color: var(--faint); }
-/* 進度條以下貼齊卡片底部 */
-.meter { margin-top: auto; height: 6px; border-radius: var(--pill); background: var(--surface-2); overflow: hidden; }
-.fill { height: 100%; border-radius: var(--pill); background: linear-gradient(90deg, var(--accent), var(--accent-soft)); }
-.foot { display: flex; align-items: baseline; justify-content: space-between; margin-top: 12px; }
-.price { font-size: 16px; font-weight: 600; letter-spacing: -0.02em; }
-.per { font-size: 13px; font-weight: 400; }
-.rest { font-size: 13px; }
-.seller { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line-soft); }
 
-/* ---- stage：選池台上一次只看一張，字可以放大、資訊排得開 ---- */
-.pool.stage { padding: 14px; border-radius: var(--radius-lg); }
-.pool.stage h3 { font-size: 19px; }
-.pool.stage .top { font-size: 14px; margin: 8px 0 14px; }
-.pool.stage .price { font-size: 20px; }
-.pool.stage .per, .pool.stage .rest { font-size: 14px; }
-.pool.stage .body { padding: 16px 8px 6px; }
+.mode-tag { position: absolute; top: 10px; left: 10px; z-index: 2; }
+.doneTag {
+  position: absolute; top: 10px; right: 10px; z-index: 2;
+  font-size: 11px; font-weight: 700;
+  padding: 4px 10px; border-radius: var(--pill);
+  background: rgba(8, 6, 14, .8); color: #fff;
+}
+
+.body {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  padding: 12px 12px 13px;
+  display: grid; gap: 6px;
+  color: #fff;
+}
+h3 {
+  margin: 0; font-size: 15px; font-weight: 700; line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, .75);
+}
+.top { display: flex; align-items: baseline; gap: 6px; font-size: 12px; margin: 0; min-width: 0; }
+.prize { opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.state { flex: none; font-weight: 700; font-size: 11px; }
+.state.live { color: #5ce08a; }
+.state.gone { opacity: .5; }
+
+.meter { height: 4px; border-radius: var(--pill); background: rgba(255, 255, 255, .22); overflow: hidden; }
+.fill { height: 100%; border-radius: var(--pill); background: linear-gradient(90deg, var(--accent), var(--accent-soft)); }
+
+.foot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.price { font-size: 17px; font-weight: 800; letter-spacing: -.01em; text-shadow: 0 2px 8px rgba(0, 0, 0, .7); }
+.per { font-size: 11px; font-weight: 400; opacity: .7; }
+.rest { font-size: 11px; opacity: .68; white-space: nowrap; }
+
+/* ---- stage：選池台的大卡，同一套版面放大 ---- */
+.pool.stage { border-radius: var(--radius-lg); }
+.pool.stage .body { padding: 16px 16px 17px; gap: 8px; }
+.pool.stage h3 { font-size: 20px; }
+.pool.stage .top { font-size: 13.5px; }
+.pool.stage .price { font-size: 22px; }
+.pool.stage .per, .pool.stage .rest { font-size: 13px; }
+.pool.stage .meter { height: 5px; }
 
 @media (max-width: 720px) {
-  .pool { padding: 9px; border-radius: var(--radius); }
-  .pool.stage { padding: 12px; }
-  .pool.stage h3 { font-size: 17px; }
-  .pool.stage .top { font-size: 13px; }
-  .pool.stage .price { font-size: 18px; }
-  .pool.stage .foot { flex-direction: row; align-items: baseline; }
-  .mode-tag { top: 7px; left: 7px; transform: scale(.9); transform-origin: top left; }
-  .body { padding: 11px 4px 2px; }
-  h3 { font-size: 14px; line-height: 1.35; }
-  /* 手機不換行：靠截斷保持每張卡同高，換行會讓相鄰卡片錯開 */
-  .top { font-size: 12px; margin: 5px 0 10px; gap: 5px; }
-  .foot { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .body { padding: 9px 9px 10px; gap: 5px; }
+  h3 { font-size: 12.5px; }
+  .top { font-size: 10.5px; }
+  .state { font-size: 10px; }
   .price { font-size: 14.5px; }
-  .rest { font-size: 12px; }
-  .seller { margin-top: 10px; padding-top: 9px; }
+  .per, .rest { font-size: 10px; }
+  .mode-tag { top: 7px; left: 7px; transform: scale(.86); transform-origin: top left; }
+  .doneTag { top: 7px; right: 7px; font-size: 10px; padding: 3px 8px; }
+  .pool.stage .body { padding: 14px; }
+  .pool.stage h3 { font-size: 17px; }
+  .pool.stage .price { font-size: 19px; }
 }
 </style>

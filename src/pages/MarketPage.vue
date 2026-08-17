@@ -15,8 +15,6 @@ import type { Listing } from '@/types/models'
 import { useWalletStore } from '@/stores/wallet'
 import { useAuthStore } from '@/stores/auth'
 import CardArt from '@/components/CardArt.vue'
-import Tilt3D from '@/components/Tilt3D.vue'
-import CertTag from '@/components/CertTag.vue'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { haptic } from '@/lib/haptics'
 import { track } from '@/lib/ga'
@@ -135,49 +133,49 @@ function markSold(id: string) {
     </div>
 
     <div v-else-if="shown.length" class="grid">
-      <!-- 只有明顯低於市值的掛單會故障：特效在這裡等於「這張值得看一眼」 -->
-      <article
-        v-for="l in shown" :key="l.id" class="lot card"
-        :class="{ 'fx-glitch': diffPct(l) <= -10 }"
-        :style="{ '--fx-phase': '-' + (l.id.charCodeAt(l.id.length - 1) % 6) + 's', '--fx-amp': .45 }"
-      >
-        <Tilt3D :max="12" class="art">
-          <CardArt
-            class="holo"
-            :style="{ '--holo-delay': (l.id.charCodeAt(l.id.length - 1) % 7) * 0.8 + 's' }"
-            :image="l.card.image" :alt="l.card.name" :cert-no="l.card.certNo"
-          />
-        </Tilt3D>
+      <!-- 卡圖滿版鋪滿整格，資訊直接壓在圖上。
+           左到右的漸層遮罩把左半邊壓暗 —— 卡圖的主體（寶可夢）多半偏中上，
+           壓左下角最不會蓋到重點，文字也才有足夠對比。 -->
+      <article v-for="l in shown" :key="l.id" class="lot">
+        <CardArt
+          class="art"
+          :image="l.card.image" :alt="l.card.name" :cert-no="l.card.certNo"
+        />
+        <span class="scrim" aria-hidden="true"></span>
 
-        <div class="body">
+        <div class="info">
           <strong class="name">{{ l.card.name }}</strong>
-          <CertTag :card="l.card" />
-
           <div class="price">
             <strong class="mono p">{{ l.price.toLocaleString() }}</strong>
-            <span class="muted u">點</span>
+            <span class="u">點</span>
             <span class="tag" :class="diffPct(l) <= 0 ? 'good' : 'over'">
               {{ diffPct(l) <= 0 ? '' : '+' }}{{ diffPct(l) }}%
             </span>
           </div>
-          <p class="ref muted mono">市值參考 {{ l.card.refPrice.toLocaleString() }}</p>
+          <p class="meta mono">
+            市值 {{ l.card.refPrice.toLocaleString() }}
+          </p>
+          <p class="by">{{ l.sellerName }} · {{ l.listedAt }}</p>
+        </div>
 
-          <p class="by muted">{{ l.sellerName }} · {{ l.listedAt }}</p>
+        <!-- 買下鍵疊在右下角，不佔卡圖的高度 -->
+        <button
+          v-if="confirming !== l.id"
+          type="button" class="buy" :disabled="l.status !== 'live'" @click="ask(l)"
+        >買下</button>
 
-          <!-- 確認區 -->
-          <div v-if="confirming === l.id" class="confirm">
-            <p class="cq">
-              用 <strong class="mono">{{ l.price.toLocaleString() }}</strong> 點買下？
-              餘額將剩 <span class="mono">{{ (wallet.points - l.price).toLocaleString() }}</span>
-            </p>
-            <div class="crow">
-              <button type="button" class="btn sm" @click="confirming = null">取消</button>
-              <button type="button" class="btn primary sm" :disabled="busy === l.id" @click="buy(l)">
-                {{ busy === l.id ? '處理中…' : '確定買下' }}
-              </button>
-            </div>
+        <!-- 確認時整格覆蓋，避免在小格子裡擠兩層資訊 -->
+        <div v-else class="confirm">
+          <p class="cq">
+            用 <strong class="mono">{{ l.price.toLocaleString() }}</strong> 點買下？<br>
+            餘額將剩 <span class="mono">{{ (wallet.points - l.price).toLocaleString() }}</span>
+          </p>
+          <div class="crow">
+            <button type="button" class="btn sm" @click="confirming = null">取消</button>
+            <button type="button" class="btn primary sm" :disabled="busy === l.id" @click="buy(l)">
+              {{ busy === l.id ? '處理中…' : '確定' }}
+            </button>
           </div>
-          <button v-else type="button" class="btn primary buy" :disabled="l.status !== 'live'" @click="ask(l)">買下</button>
         </div>
       </article>
     </div>
@@ -241,28 +239,102 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .ok a { color: inherit; text-decoration: underline; }
 .err { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); font-weight: 600; }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
-.lot { padding: 14px; display: grid; gap: 10px; align-content: start; }
-.art { width: 100%; }
-.body { display: grid; gap: 6px; justify-items: start; }
-.name { font-size: 14.5px; font-weight: 650; line-height: 1.35; }
-.price { display: flex; align-items: baseline; gap: 6px; margin-top: 2px; }
-.p { font-size: 21px; font-weight: 700; letter-spacing: -.02em; }
-.u { font-size: 12.5px; }
-.tag { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: var(--pill); margin-left: 2px; }
-.tag.good { background: var(--ok-wash); color: var(--ok); }
-.tag.over { background: var(--surface-2); color: var(--muted); }
-.ref { font-size: 11.5px; margin: -2px 0 0; }
-.by { font-size: 11.5px; margin: 2px 0 0; }
-.buy { width: 100%; margin-top: 6px; padding: 11px; font-size: 14.5px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
 
-.confirm { width: 100%; margin-top: 6px; display: grid; gap: 9px; padding: 12px; background: var(--surface-2); border-radius: var(--radius); }
-.cq { margin: 0; font-size: 13px; line-height: 1.5; }
+/* 一格 = 一張卡。沒有外框、沒有內距，卡圖就是整格 —— 同樣的格子寬度下
+   卡片比原本大了一圈（原本被 14px 內距與白底框吃掉）。 */
+.lot {
+  position: relative;
+  aspect-ratio: 5 / 7;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-2);
+  isolation: isolate;
+  transition: transform .25s cubic-bezier(.2, .7, .3, 1), box-shadow .25s;
+}
+@media (hover: hover) {
+  .lot:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
+}
+.lot .art { width: 100%; height: 100%; }
+.lot .art :deep(img), .lot .art :deep(.art-img) { width: 100%; height: 100%; object-fit: cover; }
+
+/* 左到右的漸層：左側夠暗撐住文字，右側完全透明讓卡圖露出來。
+   再疊一層由下往上的，因為文字是靠下的。 */
+.scrim {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  /* 底部要夠深：卡圖本身有招式名與傷害數字，遮罩不夠會跟白字打架 */
+  background:
+    linear-gradient(100deg,
+      rgba(8, 6, 14, .95) 0%,
+      rgba(8, 6, 14, .8) 34%,
+      rgba(8, 6, 14, .32) 62%,
+      transparent 88%),
+    linear-gradient(0deg,
+      rgba(8, 6, 14, .96) 0%,
+      rgba(8, 6, 14, .88) 16%,
+      rgba(8, 6, 14, .42) 34%,
+      transparent 56%);
+}
+
+/* 右側留出買下鍵的寬度：不留的話最底下那兩行（市值、賣家）會被鍵蓋掉，
+   實測「市值 4,200 · PSA 10」被截成「市值 4,200 · PSA 1」 */
+.info {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 12px 86px 13px 12px;
+  display: grid; gap: 3px; justify-items: start;
+  color: #fff;
+}
+/* 卡名與價格在買下鍵的上方，可以用滿整格寬度 */
+.name, .price { margin-right: -74px; }
+.name {
+  font-size: 15px; font-weight: 700; line-height: 1.3;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, .7);
+}
+.price { display: flex; align-items: baseline; gap: 5px; margin-top: 2px; }
+.p { font-size: 23px; font-weight: 800; letter-spacing: -.02em; text-shadow: 0 2px 10px rgba(0, 0, 0, .8); }
+.u { font-size: 12px; opacity: .8; }
+.tag { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: var(--pill); margin-left: 2px; }
+.tag.good { background: var(--ok); color: #06210f; }
+.tag.over { background: rgba(255, 255, 255, .22); color: #fff; }
+/* 留給買下鍵的寬度之後，這兩行很窄 —— 強制單行，寧可截斷也不要折成兩行
+   把整塊資訊往上推、蓋掉更多卡圖 */
+.meta, .by {
+  max-width: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.meta { font-size: 11px; opacity: .78; margin: 1px 0 0; }
+.by { font-size: 10.5px; opacity: .6; margin: 0; }
+
+/* 買下鍵：右下角，不佔卡圖高度 */
+.buy {
+  position: absolute; right: 10px; bottom: 11px; z-index: 2;
+  padding: 9px 16px;
+  border: none; border-radius: var(--pill);
+  background: var(--accent); color: #fff;
+  font-size: 13.5px; font-weight: 700; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .45);
+  transition: transform .12s, background .15s;
+}
+@media (hover: hover) { .buy:hover { background: var(--accent-soft); } }
+.buy:active { transform: scale(.94); }
+.buy:disabled { opacity: .45; cursor: default; }
+.buy:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* 確認：整格覆蓋，小格子裡塞不下兩層資訊 */
+.confirm {
+  position: absolute; inset: 0; z-index: 3;
+  display: grid; align-content: center; gap: 12px;
+  padding: 16px;
+  background: rgba(8, 6, 14, .93);
+  backdrop-filter: blur(3px);
+}
+.cq { margin: 0; font-size: 13px; line-height: 1.6; color: #fff; text-align: center; }
 .crow { display: flex; gap: 8px; }
 .crow .btn { flex: 1; }
-.btn.sm { padding: 9px 10px; font-size: 13.5px; }
+.btn.sm { padding: 9px 8px; font-size: 13px; }
 
-.sk { height: 340px; border-radius: var(--radius); background: var(--surface-2); }
+.sk { aspect-ratio: 5 / 7; border-radius: var(--radius); background: var(--surface-2); }
 @media (prefers-reduced-motion: no-preference) {
   .sk { animation: pulse 1.4s ease-in-out infinite alternate; }
 }
@@ -278,11 +350,15 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   .page { padding-top: 16px; }
   h1 { font-size: 20px; }
   .sub { font-size: 12.5px; }
-  .grid { grid-template-columns: repeat(2, 1fr); gap: 11px; }
-  .lot { padding: 10px; gap: 8px; }
-  .name { font-size: 13px; }
-  .p { font-size: 17px; }
-  .buy { padding: 9px; font-size: 13.5px; }
+  .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .info { padding: 9px 66px 10px 9px; }
+  .name, .price { margin-right: -57px; }
+  .name { font-size: 12.5px; }
+  .p { font-size: 18px; }
+  .u, .tag { font-size: 10px; }
+  .meta { font-size: 10px; }
+  .by { display: none; }          /* 小格子放不下，賣家資訊讓給價格 */
+  .buy { right: 7px; bottom: 8px; padding: 7px 12px; font-size: 12px; }
   .sell { font-size: 12.5px; padding: 8px 13px; }
 }
 </style>
