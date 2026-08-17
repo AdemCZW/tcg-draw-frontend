@@ -24,6 +24,10 @@ const props = withDefaults(defineProps<{
   describe: undefined
 })
 
+/* 目前停在第幾張要吐給外層 —— 選池台靠它讓背景跟著當前這一池變色。
+   軌道自己知道停在哪，外層要重算一次等於把 scroll 監聽做兩份。 */
+const emit = defineEmits<{ (e: 'change', index: number): void }>()
+
 const rail = ref<HTMLElement | null>(null)
 const cells = ref<HTMLElement[]>([])
 const active = ref(0)
@@ -76,7 +80,10 @@ function measure() {
     const d = Math.abs(c - mid)
     if (d < bestD) { bestD = d; best = i }
   }
-  active.value = best
+  if (best !== active.value) {
+    active.value = best
+    emit('change', best)
+  }
 }
 
 let ro: ResizeObserver | undefined
