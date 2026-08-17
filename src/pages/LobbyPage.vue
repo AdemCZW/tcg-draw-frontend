@@ -15,7 +15,6 @@ import { useSellerStore } from '@/stores/sellers'
 import type { Listing, Pool, Tier } from '@/types/models'
 import { api } from '@/lib/api'
 import CardArt from '@/components/CardArt.vue'
-import CapsuleArt from '@/components/CapsuleArt.vue'
 import ShaderSky from '@/components/ShaderSky.vue'
 import PoolCard from '@/components/PoolCard.vue'
 import WinnerTicker from '@/components/WinnerTicker.vue'
@@ -176,16 +175,41 @@ const dealPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card
     <section v-if="featured" class="stage container">
       <p class="lbl">今日推薦池</p>
       <div class="duo">
+        <!-- 主視覺改成「這一池最高的那張獎品卡」而不是一顆球。
+             球每一池都長一樣（只有顏色不同），傳達不了任何關於這一池的資訊；
+             真正會讓人想抽的東西是那張卡。球留在形象頁（品牌符號）
+             與開卡演出（開啟的隱喻），那裡才是它的位置。 -->
         <RouterLink
           :to="{ name: 'pool', params: { id: featured.id } }"
-          class="ballWrap"
-          :aria-label="`${featured.title}，前往池詳情`"
+          class="prizeStage"
+          :aria-label="`${featured.title}，最高賞 ${featuredPrize?.card.name ?? ''}，前往池詳情`"
         >
-          <!-- 故障套在內層而不是 .ballWrap：.ballWrap 自己有 bob 浮動動畫，
-               一個元素只能有一個 animation 屬性，兩者會互相蓋掉。
-               分兩層各自持有自己的動畫最單純。 -->
-          <span class="fx-glitch ballFx" :style="{ '--fx-every': '9s', '--fx-amp': .6 }">
-            <CapsuleArt :tier="featuredTier" :hash="featured.commitHash" />
+          <div class="prizeCard">
+            <CardArt
+              class="prizeArt"
+              :image="''"
+              :alt="featuredPrize?.card.name ?? featured.title"
+              :art-id="featuredPrize?.card.artId"
+              :tier="featuredTier"
+            />
+            <span class="holoSweep" aria-hidden="true"></span>
+            <span class="rim" aria-hidden="true"></span>
+          </div>
+          <!-- 底下的倒影：把同一張卡上下翻轉再往下淡出。
+               有倒影才像放在檯面上的實體，不然卡是飄在空中的貼圖 -->
+          <div class="reflection" aria-hidden="true">
+            <CardArt
+              class="prizeArt"
+              :image="''"
+              :alt="''"
+              :art-id="featuredPrize?.card.artId"
+              :tier="featuredTier"
+            />
+          </div>
+
+          <span v-if="featuredPrize" class="prizeTag">
+            <span class="ptTier">{{ featuredTier === 'LAST' ? '最後賞' : featuredTier + ' 賞' }}</span>
+            <span class="ptName">{{ featuredPrize.card.name }}</span>
           </span>
         </RouterLink>
 
@@ -195,10 +219,6 @@ const dealPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card
             <span v-if="featuredPrize" class="live mono">最高賞未出</span>
           </div>
           <h1>{{ featured.title }}</h1>
-          <p v-if="featuredPrize" class="prize">
-            <span class="muted">{{ featuredTier === 'LAST' ? '最後賞' : featuredTier + ' 賞' }}</span>
-            {{ featuredPrize.card.name }}
-          </p>
           <div class="meter" role="progressbar" :aria-valuenow="pct" aria-valuemin="0" aria-valuemax="100" :aria-label="`剩餘 ${pct}%`">
             <div class="fill" :style="{ width: pct + '%' }"></div>
           </div>
@@ -324,22 +344,115 @@ const dealPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card
 }
 .lbl::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--hue); box-shadow: 0 0 8px var(--hue); }
 
-.duo { display: grid; grid-template-columns: minmax(220px, 340px) minmax(0, 1fr); gap: 34px; align-items: center; }
+.duo { display: grid; grid-template-columns: minmax(230px, 300px) minmax(0, 1fr); gap: 40px; align-items: center; }
 .ballFx { display: block; }
-.ballWrap { display: block; border-radius: 50%; transition: transform .4s cubic-bezier(.2, .8, .3, 1); }
-@media (hover: hover) { .ballWrap:hover { transform: translateY(-6px) scale(1.02); } }
-.ballWrap:focus-visible { outline: 3px solid var(--accent); outline-offset: 8px; }
-@media (prefers-reduced-motion: no-preference) {
-  .ballWrap { animation: bob 5.2s ease-in-out infinite alternate; }
+/* ---- 獎品卡主視覺 ----
+   卡片略微側傾、帶全像掃光、邊緣一圈球階色的光，底下有倒影。
+   目標是讓它看起來像「放在展示檯上的一張實體卡」，不是一張貼圖。 */
+.prizeStage {
+  display: grid; justify-items: center; gap: 0;
+  perspective: 1100px;
+  padding-top: 6px;
 }
-@keyframes bob { from { translate: 0 -6px; } to { translate: 0 8px; } }
+.prizeStage:focus-visible { outline: 3px solid var(--accent); outline-offset: 10px; border-radius: var(--radius); }
+
+.prizeCard {
+  position: relative;
+  width: min(74vw, 268px);
+  aspect-ratio: 5 / 7;
+  border-radius: 12px;
+  transform-style: preserve-3d;
+  /* 側傾一點才有立體感；正對著看就是一張平的圖 */
+  transform: rotateY(-11deg) rotateX(5deg);
+  transition: transform .5s cubic-bezier(.2, .8, .3, 1);
+  filter:
+    drop-shadow(0 0 26px color-mix(in srgb, var(--hue) 70%, transparent))
+    drop-shadow(0 26px 44px rgba(0, 0, 0, .72));
+}
+@media (hover: hover) {
+  .prizeStage:hover .prizeCard { transform: rotateY(-4deg) rotateX(2deg) scale(1.03); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .prizeCard { animation: cardFloat 6s ease-in-out infinite alternate; }
+}
+@keyframes cardFloat { from { translate: 0 -7px; } to { translate: 0 9px; } }
+
+.prizeArt { width: 100%; height: 100%; border-radius: 12px; overflow: hidden; }
+.prizeArt :deep(img) { width: 100%; height: 100%; object-fit: cover; }
+
+/* 邊緣光：沿著卡片輪廓的一圈球階色細邊，讓卡片跟背景分離 */
+.rim {
+  position: absolute; inset: 0;
+  border-radius: 12px;
+  box-shadow:
+    inset 0 0 0 1.5px color-mix(in srgb, var(--hue) 75%, transparent),
+    inset 0 0 22px color-mix(in srgb, var(--hue) 22%, transparent);
+  pointer-events: none;
+}
+
+/* 全像掃光：實體 holo 卡轉動時本來就會跑彩虹光 */
+.holoSweep {
+  position: absolute; inset: 0;
+  border-radius: 12px;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  background: linear-gradient(104deg,
+    transparent 36%,
+    rgba(255, 255, 255, .5) 46%,
+    rgba(150, 215, 255, .72) 50%,
+    rgba(255, 170, 240, .6) 54%,
+    transparent 64%);
+  background-size: 300% 100%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .holoSweep { animation: prizeHolo 5.2s cubic-bezier(.3, 0, .3, 1) 1.2s infinite; }
+}
+@keyframes prizeHolo {
+  0%, 68% { background-position: 190% 0; }
+  100%    { background-position: -80% 0; }
+}
+
+/* 倒影：同一張卡翻轉後往下淡出。有倒影才像放在檯面上。
+   高度只留實際看得到的那一段（遮罩之外全是透明），
+   給滿版高度會多佔 190px 的空白，把主 CTA 推到摺線以下。 */
+.reflection {
+  width: min(74vw, 268px);
+  height: 92px;
+  overflow: hidden;
+  margin-top: 4px;
+  opacity: .18;
+  -webkit-mask-image: linear-gradient(0deg, transparent 8%, #000 100%);
+  mask-image: linear-gradient(0deg, transparent 8%, #000 100%);
+  pointer-events: none;
+}
+/* 翻轉套在裡層：外層要保持正常的區塊高度才好控制 */
+.reflection .prizeArt {
+  height: auto; aspect-ratio: 5 / 7;
+  transform: rotateY(-11deg) scaleY(-1);
+  transform-origin: top center;
+}
+
+/* 賞別 + 卡名：壓在卡片下緣，主視覺自己把話講完 */
+.prizeTag {
+  display: inline-flex; align-items: center; gap: 9px;
+  margin-top: -58px;
+  padding: 7px 15px;
+  border-radius: var(--pill);
+  background: rgba(8, 6, 14, .82);
+  backdrop-filter: blur(8px);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hue) 40%, transparent);
+  position: relative; z-index: 2;
+}
+.ptTier {
+  font-size: 11.5px; font-weight: 800; letter-spacing: .06em;
+  color: var(--hue);
+}
+.ptName { font-size: 14px; font-weight: 650; color: #fff; }
 
 .info { display: grid; gap: 12px; justify-items: start; }
 .badges { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .live { font-size: 11.5px; letter-spacing: .12em; font-weight: 600; padding: 4px 11px; border-radius: var(--pill); color: var(--ok); background: var(--ok-wash); }
 h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.02em; margin: 0; font-weight: 700; text-wrap: balance; }
-.prize { margin: -4px 0 0; font-size: 16px; }
-.prize .muted { margin-right: 8px; }
 .meter { width: 100%; max-width: 380px; height: 7px; border-radius: var(--pill); background: var(--surface-2); overflow: hidden; }
 .fill { height: 100%; border-radius: var(--pill); background: linear-gradient(90deg, var(--accent), var(--accent-soft)); }
 .nums { display: flex; align-items: baseline; gap: 16px; }
@@ -457,16 +570,18 @@ h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
 .none { text-align: center; padding: 46px 0; }
 
 @media (max-width: 960px) {
-  .duo { grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 24px; }
+  .duo { grid-template-columns: minmax(180px, 250px) minmax(0, 1fr); gap: 26px; }
 }
 @media (max-width: 720px) {
   .stage { padding-top: 12px; }
-  .duo { grid-template-columns: 1fr; gap: 8px; justify-items: center; text-align: center; }
-  .ballWrap { width: min(56vw, 220px); }
+  .duo { grid-template-columns: 1fr; gap: 14px; justify-items: center; text-align: center; }
+  .prizeCard, .reflection { width: min(58vw, 215px); }
+  .reflection { height: 70px; }
+  .prizeTag { margin-top: -46px; }
+
   .info { justify-items: center; gap: 9px; }
   .badges { justify-content: center; }
   h1 { font-size: 21px; }
-  .prize { font-size: 14px; }
   .meter { max-width: 320px; }
   .price { font-size: 19px; }
   .ctas { justify-content: center; width: 100%; }
