@@ -50,6 +50,15 @@ const tint = computed<[number, number, number]>(() => {
   return [Math.min(1, v(0) * 1.15), Math.min(1, v(2) * 1.15), Math.min(1, v(4) * 1.15)]
 })
 const sky3d = ref(!new URLSearchParams(location.search).has('nogl'))
+
+/* 每次換池 +1，用來重播「切換脈衝」。
+   一次性動畫要重播就得讓元素重新掛載 —— 同一個節點上重設 animation
+   不會重跑，這是 CSS 動畫的規則。 */
+const switchKey = ref(0)
+function onChange(i: number) {
+  activeIndex.value = i
+  switchKey.value++
+}
 </script>
 
 <template>
@@ -59,9 +68,9 @@ const sky3d = ref(!new URLSearchParams(location.search).has('nogl'))
       <ShaderSky
         v-if="sky3d"
         class="envGl"
-        :energy="0.42"
+        :energy="0.62"
         :tint="tint"
-        :gain="0.6"
+        :gain="1.05"
         :core-y="0.42"
         @fail="sky3d = false"
       />
@@ -92,12 +101,14 @@ const sky3d = ref(!new URLSearchParams(location.search).has('nogl'))
       :items="list"
       label="抽選池"
       :describe="describe"
-      @change="i => (activeIndex = i)"
+      @change="onChange"
       v-slot="{ item, active }"
     >
       <!-- 置中那一張加一圈跟球階同色的光暈：讓「現在選的是這張」有實體感 -->
       <div class="slot" :class="{ on: active }">
         <PoolCard :pool="item" variant="stage" />
+        <!-- 切換脈衝：只掛在置中那張，key 變動才會重播 -->
+        <span v-if="active" :key="switchKey" class="pulse" aria-hidden="true"></span>
       </div>
     </SnapRail>
 
@@ -132,25 +143,42 @@ const sky3d = ref(!new URLSearchParams(location.search).has('nogl'))
   position: absolute; left: 50%; top: 42%;
   width: 120vmax; height: 90vmax; translate: -50% -50%;
   background: radial-gradient(circle closest-side, var(--hue), transparent 62%);
-  opacity: .22; filter: blur(70px);
+  opacity: .4; filter: blur(70px);
 }
 
 /* 置中卡的光暈。用 filter 而不是 box-shadow ——
    卡片是圓角矩形，box-shadow 會沿著矩形邊框走，看起來像加了外框；
    drop-shadow 吃的是元素的實際輪廓，光才會貼著卡片本身。 */
-/* 置中卡的光暈。
-   刻意不加 transition：filter 的值裡有 var(--hue)（未註冊的自訂屬性），
-   而 --hue 變動時不會觸發過渡 —— 實測 getAnimations() 回傳空陣列，
-   過渡根本沒開始，光暈就卡在基底值永遠不出現。
-   真要淡入得先用 @property 把 --hue 註冊成可動畫型別，但它在多處被使用，
-   為了一個 0.35 秒的淡入不值得。滑動輪播本來就該是即時的手感。
+/* --hue 現在是註冊過的 <color>（見 styles/fx.css），可以被內插了，
+   所以換池時整頁的顏色是滑過去的，不是硬跳。 */
+.page { transition: --hue .5s ease; }
 
+/* 置中卡的光暈。
    用 filter 不用 box-shadow：卡片是圓角矩形，box-shadow 會沿著矩形邊框走，
    看起來像加了外框；drop-shadow 吃的是元素實際輪廓，光才會貼著卡片。 */
+.slot { position: relative; }
 .slot.on {
   filter:
-    drop-shadow(0 0 18px color-mix(in srgb, var(--hue) 60%, transparent))
-    drop-shadow(0 14px 34px rgba(0, 0, 0, .55));
+    drop-shadow(0 0 26px color-mix(in srgb, var(--hue) 85%, transparent))
+    drop-shadow(0 0 60px color-mix(in srgb, var(--hue) 45%, transparent))
+    drop-shadow(0 16px 38px rgba(0, 0, 0, .6));
+}
+
+/* 切換脈衝：一圈跟球階同色的環從卡片邊緣擴散出去。
+   只有一次、340ms —— 換池是頻繁動作，長一點就會拖沓。 */
+.pulse {
+  position: absolute; inset: -2px;
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--hue);
+  pointer-events: none;
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pulse { animation: switchPulse .34s cubic-bezier(.2, .8, .3, 1) forwards; }
+}
+@keyframes switchPulse {
+  0%   { transform: scale(.97); opacity: .9; }
+  100% { transform: scale(1.06); opacity: 0; }
 }
 
 .head {
