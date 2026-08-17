@@ -36,17 +36,23 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ (e: 'done'): void }>()
 
 /* 相位：
-   still  只有煙，什麼都還沒發生
-   stir   煙開始翻騰，底部透出光
-   rise   卡片從煙裡升起（遮罩往下退、模糊散去）
-   settle 卡片定位，煙沉澱
+   still   空的，只有一點微光
+   gather  煙從四個邊往內聚攏
+   swell   煙合攏成一片，翻騰、懸著
+   form    卡片從煙裡凝聚出來
+   settle  煙散掉，卡片定裝
 */
-type Phase = 'still' | 'stir' | 'rise' | 'settle'
+/* 五拍。
+   swell 那一拍（煙已經合攏、卡片還沒開始成形）是刻意留的空白 ——
+   演出要有一個「什麼都沒發生」的懸置，後面的凝聚才有份量。
+   四拍版沒有這一拍，煙一合攏卡片就開始長，整段黏在一起沒有呼吸。 */
+type Phase = 'still' | 'gather' | 'swell' | 'form' | 'settle'
 const SCRIPT: { k: Phase; ms: number }[] = [
-  { k: 'still', ms: 700 },
-  { k: 'stir', ms: 1100 },
-  { k: 'rise', ms: 1900 },
-  { k: 'settle', ms: 900 }
+  { k: 'still', ms: 900 },
+  { k: 'gather', ms: 1600 },
+  { k: 'swell', ms: 1200 },
+  { k: 'form', ms: 2400 },
+  { k: 'settle', ms: 1300 }
 ]
 /* 演出可以整段放慢，用來逐格調動畫：?fxslow=8。
    跟 ?nogl=1 同一套除錯開關。正式流程不會帶這個參數，倍率就是 1。 */
@@ -178,8 +184,9 @@ onBeforeUnmount(() => clearTimeout(timer))
   scale: .35;
   transition: opacity 1.1s ease, scale 1.9s cubic-bezier(.2, .75, .25, 1);
 }
-.ph-stir .coreGlow { opacity: .8; scale: .5; }
-.ph-rise .coreGlow { opacity: 1; scale: 1.1; }
+.ph-gather .coreGlow { opacity: .55; scale: .45; }
+.ph-swell .coreGlow { opacity: .85; scale: .62; }
+.ph-form .coreGlow { opacity: 1; scale: 1.1; }
 .ph-settle .coreGlow { opacity: .45; scale: 1.25; }
 
 /* ---- 2 卡片 ----
@@ -219,9 +226,10 @@ onBeforeUnmount(() => clearTimeout(timer))
   border-radius: 10px;
 }
 
-/* stir：煙深處隱約有東西，還看不出是卡 */
-.ph-stir .card3d { opacity: .5; scale: .53; }
-.ph-rise .card3d,
+/* 煙裡隱約有東西，還看不出是卡 */
+.ph-gather .card3d { opacity: .3; scale: .5; }
+.ph-swell .card3d { opacity: .5; scale: .56; }
+.ph-form .card3d,
 .ph-settle .card3d {
   opacity: 1; scale: 1; translate: 0 0;
   transform: rotateX(0deg);
@@ -291,6 +299,6 @@ onBeforeUnmount(() => clearTimeout(timer))
   opacity: 1;
   transition: opacity 1.6s ease, transform 2.2s ease;
 }
-.ph-rise .plumeCss { opacity: .35; transform: scale(1.3); }
+.ph-form .plumeCss { opacity: .35; transform: scale(1.3); }
 .ph-settle .plumeCss { opacity: 0; transform: scale(1.5); }
 </style>

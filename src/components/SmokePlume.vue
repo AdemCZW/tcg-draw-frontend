@@ -114,6 +114,8 @@ float smokeField(vec2 p, float t, float flow, float conv, int oct) {
 void main() {
   vec2 uv = gl_FragCoord.xy / uRes;
   vec2 p = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
+  /* 四層就夠。細絲交給下面獨立的高頻層去做，比在每一次 fbm 都多疊一層便宜得多 ——
+     這支 shader 一個畫素要算十次 fbm，octave 加一層等於多四十次噪聲取樣。 */
   int oct = uQuality > 0.5 ? 4 : 2;
 
   /* 兩條互相獨立的時間曲線。
@@ -122,11 +124,25 @@ void main() {
 
      分開才控制得住 —— 用同一條曲線的話，煙會沿原路退回四個邊，
      看起來像倒放。煙聚攏之後是在原地散掉的，不是縮回去。 */
-  float gather = smoothstep(0.0, 0.44, uProg);
-  float clear  = smoothstep(0.50, 1.0, uProg);
+  float gather = smoothstep(0.08, 0.34, uProg);   // gather 這一拍結束時煙剛好合攏
+  float clear  = smoothstep(0.55, 0.99, uProg);   // form 開始後才動，讓凝聚有煙可用
+
+  /* 很慢的鏡頭漂移。只作用在煙的取樣座標，不能動到 p ——
+     p 還要拿來定位卡片，一起轉的話卡片會跟著歪。
+     沒有這一層，整片煙只是在原地翻；有了之後畫面有輕微視差。 */
+  float cam = uTime * 0.016;
+  vec2 sp = mat2(cos(cam), -sin(cam), sin(cam), cos(cam)) * p
+          * (1.0 - 0.045 * sin(uTime * 0.10));
 
   float zoom = mix(2.60, 1.30, smoothstep(0.0, 0.80, uProg));
-  float d = smokeField(p * zoom, uTime, 0.45, gather * 0.5, oct);
+  float d = smokeField(sp * zoom, uTime, 0.45, gather * 0.5, oct);
+
+  /* 細絲層：更高頻、跑更快的一層疊上去。
+     主場的 fbm 給的是大團的形狀，煙真正「活」的感覺來自邊緣那些細絲 ——
+     只有一層的話所有結構都是同一個尺度，看久了會發現它在重複。 */
+  // 這一層本來就是高頻，再往下疊的 octave 已經細過一個畫素，算了也看不到
+  float fine = fbm(sp * zoom * 3.4 + vec2(uTime * 0.26, -uTime * 0.33), 2);
+  d += (fine - 0.5) * 0.13;
 
   /* 從四個邊聚集。
      推進量用「到最近的那條邊的距離」—— 這是矩形的距離場，
@@ -141,8 +157,8 @@ void main() {
      只用單一高頻噪聲的話，前緣會是一條「有毛邊的直線」——
      畫面上讀到的仍然是一個等寬的圓角矩形框在往內縮。
      真正破掉框感的是低頻：某幾處的煙會先伸出長舌頭進來，其它地方還落在後面。 */
-  float tongue = (fbm(p * 1.5 + vec2(uTime * 0.13, uTime * -0.09), oct) - 0.5) * 0.42;
-  float fray = (fbm(p * 5.5 - vec2(uTime * 0.21, 0.0), oct) - 0.5) * 0.13;
+  float tongue = (fbm(sp * 1.5 + vec2(uTime * 0.13, uTime * -0.09), oct) - 0.5) * 0.42;
+  float fray = (fbm(sp * 5.5 - vec2(uTime * 0.21, 0.0), oct) - 0.5) * 0.13;
   // 舌頭一開始就要在，只用 gather 當係數的話前 1/4 段仍然是規矩的方框
   float ragged = (tongue + fray) * smoothstep(0.0, 0.16, gather);
   float reach = mix(0.04, 0.80, gather) + ragged;
@@ -174,11 +190,11 @@ void main() {
   float rim = smoothstep(thr, thr + 0.09, d) - smoothstep(thr + 0.09, thr + 0.34, d);
 
   vec3 dark = vec3(0.035, 0.026, 0.062);
-  vec3 col = mix(dark, uTint * 0.55, glow * 0.55);
+  vec3 col = mix(dark, uTint * 0.55, glow * 0.42);
   /* 自陰影：厚的地方擋住背後的光，所以越厚越暗。
      少了這一項，整片煙會是同一個中間調的紫 —— 看起來像紫色顏料不像煙。
      煙之所以讀得出體積，靠的就是「暗的body + 亮的邊」這個對比。 */
-  col *= mix(1.0, 0.40, smoothstep(thr + 0.05, thr + 0.44, d));
+  col *= mix(1.0, 0.30, smoothstep(thr + 0.03, thr + 0.40, d));
   col += uTint * rim * (0.45 + 1.05 * glow);
   col += vec3(1.0, 0.93, 0.86) * rim * glow * glow * 0.8;   // 最靠近光源的邊緣接近白
 
@@ -209,14 +225,42 @@ void main() {
                      fbm(rel * 1.6 + vec2(6.3, -uTime * 0.16), oct)) - 0.5;
     vec2 q = rel / spread + warp * (1.0 - ease) * 1.5;
 
-    // 每個畫素的生成時刻。用 q 取樣（跟著料一起走），不是用 p ——
-    // 用 p 的話生成的圖樣會釘在螢幕上，煙在動、生成邊界卻不動
-    float birth = fbm(q * 2.3 + vec2(11.7, 4.3), oct);
-    float formed = smoothstep(birth * 0.9, birth * 0.9 + 0.30, form);
+    /* 生成分兩波，這就是「拼湊起來」的本體。
+       第一波是大塊：整片區域先以半強度落定，畫面上看到的是一塊一塊接起來。
+       第二波是細節：在已落定的塊上把剩下的一半補滿。
+       只有一波的話，每個畫素從無到有一次到位，讀起來是「溶解進來」不是「拼起來」。
+
+       兩波都用 q 取樣（跟著料一起走），不是用 p ——
+       用 p 的話生成圖樣會釘在螢幕上，煙在動、生成邊界卻不動，馬上穿幫。 */
+    float bCoarse = fbm(q * 1.5 + vec2(11.7, 4.3), oct);
+    float bFine = fbm(q * 4.8 + vec2(3.1, 19.4), oct);
+    /* 生成順序帶一點方向性：由左下往右上。
+       純噪聲的話落定的位置到處亂跳，看起來像雜訊在閃；
+       混一點方向進去，才會讀成有人在依序把它拼完。 */
+    float sweep = 0.5 + 0.42 * (q.x * 0.55 - q.y * 0.75);
+    float bc = mix(bCoarse, sweep, 0.42) * 0.62;
+    float bf = mix(bFine, sweep, 0.25) * 0.55 + 0.30;
+
+    float wCoarse = smoothstep(bc, bc + 0.26, form);
+    float wFine = smoothstep(bf, bf + 0.20, form);
+    float formed = wCoarse * (0.55 + 0.45 * wFine);
 
     // 卡框外面不要有東西，邊界隨凝聚收緊
     float edgeSoft = mix(0.55, 0.02, ease);
     float box = 1.0 - smoothstep(1.0 - edgeSoft, 1.0 + edgeSoft * 0.4, max(abs(q.x), abs(q.y)));
+
+    /* swell 那一拍（煙合攏、卡片還沒開始長）先閃一次卡片輪廓。
+       那一拍本來是刻意的空白，但完全沒東西看會變成單純的等待 ——
+       給一個「有東西要來了」的預告，懸置才成立。 */
+    float ghost = smoothstep(0.34, 0.42, uProg) * (1.0 - smoothstep(0.44, 0.53, uProg));
+    if (ghost > 0.002) {
+      vec2 gq = rel * 1.05 + (vec2(fbm(rel * 2.1 + uTime * 0.30, 2),
+                                   fbm(rel * 2.1 + 9.1 - uTime * 0.24, 2)) - 0.5) * 0.55;
+      float gbox = 1.0 - smoothstep(0.84, 1.06, max(abs(gq.x), abs(gq.y)));
+      float gl2 = dot(texture(uCard, gq * 0.5 + 0.5).rgb, vec3(0.299, 0.587, 0.114));
+      col += mix(uTint, vec3(1.0), 0.35) * gl2 * gbox * ghost * 0.6;
+      alpha = max(alpha, gbox * ghost * 0.32);
+    }
 
     vec4 tex = texture(uCard, q * 0.5 + 0.5);
     // 還沒成形的料是煙：抽掉彩度、染成煙的色調
@@ -227,10 +271,24 @@ void main() {
     col = mix(col, raw, ca);
     alpha = max(alpha, ca);
 
-    // 成形中的邊緣透出一點光，讓凝聚看起來是「亮起來」不是「浮出來」
-    float spark = formed * (1.0 - formed) * 4.0 * box;
-    col += mix(uTint, vec3(1.0), 0.5) * spark * 0.55;
+    /* 每一塊接上去的瞬間亮一下。兩波各閃一次 ——
+       第一次是塊落定，第二次是細節補滿，所以同一個位置會亮兩下。 */
+    float spark = (wCoarse * (1.0 - wCoarse) + wFine * (1.0 - wFine) * 0.7) * 4.0 * box;
+    col += mix(uTint, vec3(1.0), 0.5) * spark * 0.5;
   }
+
+  /* 灰燼：稀疏的亮點在煙裡慢慢往上飄。
+     用格子雜湊不用 fbm —— 每格最多一顆，成本幾乎是零。
+     半徑要留得夠大（約十個畫素）：低解析度算完再放大，
+     太小的亮點會變成一顆顆方塊，就是之前星點踩過的那個坑。 */
+  vec2 gp = p * 9.5 + vec2(sin(uTime * 0.19) * 0.35, -uTime * 0.26);
+  vec2 gi = floor(gp), gf = fract(gp) - 0.5;
+  // 衰減指數決定顆粒大小。太小會變方塊、太大就成了鏡頭光斑，
+  // 這個值對應到畫面上大約六到八個畫素
+  float mote = step(0.90, hash(gi)) * exp(-dot(gf, gf) * 95.0);
+  float emberLife = smoothstep(0.28, 0.48, uProg) * (1.0 - smoothstep(0.82, 1.0, uProg));
+  col += mix(uTint, vec3(1.0), 0.55) * mote * emberLife * 0.45;
+  alpha = max(alpha, mote * emberLife * 0.5);
 
   // 顆粒：打散漸層色帶，暗部重亮部細
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
@@ -259,7 +317,7 @@ function compile(g: WebGL2RenderingContext, type: number, src: string) {
 function resize() {
   const c = canvas.value
   if (!c || !gl) return
-  const scale = (quality ? 0.5 : 0.34) * dpr
+  const scale = (quality ? 0.62 : 0.34) * dpr
   const w = Math.max(1, Math.floor(c.clientWidth * scale))
   const h = Math.max(1, Math.floor(c.clientHeight * scale))
   if (c.width !== w || c.height !== h) {
