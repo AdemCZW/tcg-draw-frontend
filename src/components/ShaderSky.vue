@@ -22,7 +22,10 @@ const props = withDefaults(defineProps<{
   energy?: number
   /** 爆發那一拍設 true，shader 會給一記衝擊 */
   burst?: boolean
-}>(), { energy: 0.2, burst: false })
+  /** 光源（球）在畫面上的垂直位置，0 = 上緣、1 = 下緣。
+      鏡頭光斑必須從真正的亮源長出來，對不上就只是一條莫名其妙的橫帶 */
+  coreY?: number
+}>(), { energy: 0.2, burst: false, coreY: 0.3 })
 
 const emit = defineEmits<{ (e: 'fail'): void; (e: 'fps', v: number): void }>()
 
@@ -55,6 +58,7 @@ uniform float uTime;
 uniform float uEnergy;   // 0..1 這一幕的能量
 uniform float uBurst;    // 爆發後經過的秒數，負值代表沒發生
 uniform float uQuality;  // 1 全效 / 0 降級
+uniform float uCoreY;    // 亮源的垂直位置（shader 座標）
 
 // ---- 噪聲：value noise + fbm ----
 float hash(vec2 p) {
@@ -95,9 +99,19 @@ void main() {
      砍成一層扭曲（q → f）只要三次 fbm，少四成成本，
      而雲氣的有機感幾乎看不出差別 —— 第二層扭曲的貢獻主要在極近距離的細節，
      全螢幕背景根本看不到。 */
-  vec2 q = vec2(fbm(p * 1.7 + vec2(0.0, t), oct),
-                fbm(p * 1.7 + vec2(5.2, 1.3 - t), oct));
-  float f = fbm(p * 2.3 + 3.2 * q + vec2(1.7, 9.2) + t * 0.6, oct);
+  /* 取樣座標先繞中心旋轉一點點，角速度隨半徑衰減 —— 這是 curl noise 的窮人版：
+     不算向量場，直接讓內圈轉得比外圈快，雲氣就會「捲」而不只是平移。 */
+  // 以光源（球）為中心的座標 —— 光暈與鏡頭光斑都要從這裡長出來
+  vec2 pc = p - vec2(0.0, uCoreY);
+  float rad = length(p);
+  float rc = length(pc);
+  float swirl = (0.55 / (rad + 0.35)) * (0.25 + 0.75 * uEnergy) * uTime * 0.045;
+  float cs = cos(swirl), sn = sin(swirl);
+  vec2 pw = mat2(cs, -sn, sn, cs) * p;
+
+  vec2 q = vec2(fbm(pw * 1.7 + vec2(0.0, t), oct),
+                fbm(pw * 1.7 + vec2(5.2, 1.3 - t), oct));
+  float f = fbm(pw * 2.3 + 3.2 * q + vec2(1.7, 9.2) + t * 0.6, oct);
 
   /* 配色。
      這裡的關鍵不是「亮」而是「對比」：星雲要大片暗、少數地方很亮。
@@ -110,10 +124,19 @@ void main() {
   vec3 hot   = vec3(0.90, 0.38, 0.70);
   vec3 flare = vec3(1.00, 0.82, 0.55);
 
+  /* 色差（chromatic aberration）。
+     正統做法是把畫面在 R/G/B 三個位移各取樣一次 —— 但那代表噪聲要算三遍，
+     這裡最貴的就是噪聲。改成「每個通道走稍微不同的色階門檻」：
+     視覺結果同樣是邊緣出現紅／藍分離，成本是零。
+     偏移量隨半徑增加，因為真實鏡頭的色散就是越靠邊越明顯。 */
+  float ca = rad * 0.055 * (0.6 + 0.4 * uEnergy);
+
   vec3 col = deep;
   col = mix(col, cool, smoothstep(0.30, 0.86, f));
   col = mix(col, mid,  smoothstep(0.46, 0.96, f) * (0.30 + 0.45 * uEnergy));
   col = mix(col, hot,  smoothstep(0.62, 1.02, f) * (0.18 + 0.62 * uEnergy));
+  col.r = mix(col.r, smoothstep(0.30 - ca, 0.86 - ca, f), 0.22);
+  col.b = mix(col.b, smoothstep(0.30 + ca, 0.86 + ca, f), 0.22);
 
   /* 亮部溢出（就是 bloom 的本質）：只有最亮的一小撮才往外抹光。
      真的做 bloom 要離屏 blur 好幾趟，這裡讓亮處自己溢出。 */
@@ -121,14 +144,30 @@ void main() {
   col += flare * pow(core, 2.0) * (0.20 + 0.72 * uEnergy);
 
   // ---- 中央的能量核 ----
-  float d = length(p);
+  float d = rc;
   float halo = exp(-d * 3.2) * (0.06 + 0.38 * uEnergy);
   col += vec3(0.45, 0.28, 0.85) * halo;
+
+  /* 變形鏡頭光斑（anamorphic flare）。
+     就是電影裡那道水平藍色長條 —— 變形鏡頭把光斑在水平方向拉長的結果。
+     做法很單純：把座標的 x 壓扁再取指數衰減，就得到一條又長又細的光。
+     這是整組效果裡「電影感」訊號最強、成本最低的一個。 */
+  float streak = exp(-abs(pc.x) * 2.6) * exp(-abs(pc.y) * 52.0);
+  col += vec3(0.35, 0.62, 1.0) * streak * (0.10 + 0.75 * uEnergy);
+  // 垂直方向給一道很淡的，避免看起來只有一根棒子
+  float streakV = exp(-abs(pc.y) * 6.0) * exp(-abs(pc.x) * 96.0);
+  col += vec3(0.5, 0.7, 1.0) * streakV * (0.05 + 0.3 * uEnergy);
+
+  /* 暈光（halation）：亮部往周圍滲出的暖色。
+     底片上強光會穿透乳劑再從背面反射回來，形成偏紅的暈 ——
+     數位相機沒有，所以它是很強的「這是底片」訊號。 */
+  float glowMask = smoothstep(0.55, 1.0, f) + streak * 0.8 + halo;
+  col += vec3(1.0, 0.42, 0.26) * glowMask * glowMask * 0.06 * (0.4 + 0.6 * uEnergy);
 
   // ---- 爆發衝擊：一圈往外擴散的亮環 ----
   if (uBurst >= 0.0) {
     float bt = uBurst;
-    float ring = exp(-pow((d - bt * 1.5) * 7.0, 2.0));    // 高斯環
+    float ring = exp(-pow((rc - bt * 1.5) * 7.0, 2.0));   // 高斯環，從光源擴散
     float decay = exp(-bt * 1.6);
     col += flare * ring * decay * 1.6;
     col += flare * exp(-bt * 6.0) * 0.30;                  // 起手的白閃
@@ -142,7 +181,11 @@ void main() {
   // ---- 收尾：四角壓暗 + 輕微顆粒 ----
   float vig = smoothstep(1.20, 0.26, length((uv - 0.5) * vec2(1.15, 1.0)));
   col *= 0.24 + 0.76 * vig;
-  col += (hash(gl_FragCoord.xy + fract(uTime)) - 0.5) * 0.016;   // 打散色帶
+  /* 底片顆粒。關鍵是「暗部顆粒重、亮部細」—— 整片同量的雜訊看起來像壞掉的螢幕，
+     隨亮度衰減才像底片。順便打散漸層的色帶。 */
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  float grain = hash(gl_FragCoord.xy + fract(uTime) * 91.7) - 0.5;
+  col += grain * mix(0.055, 0.012, smoothstep(0.0, 0.5, lum));
 
   outColor = vec4(max(col, 0.0), 1.0);
 }`
@@ -178,6 +221,7 @@ let uTime: WebGLUniformLocation | null = null
 let uEnergy: WebGLUniformLocation | null = null
 let uBurst: WebGLUniformLocation | null = null
 let uQuality: WebGLUniformLocation | null = null
+let uCoreY: WebGLUniformLocation | null = null
 
 let frames = 0
 let measureStart = 0
@@ -197,6 +241,8 @@ function frame(now: number) {
   gl.uniform1f(uEnergy, energyNow)
   gl.uniform1f(uBurst, burstAt < 0 ? -1 : t - burstAt)
   gl.uniform1f(uQuality, quality)
+  // coreY 從「畫面比例」換算成 shader 座標（y 向上、以中心為 0）
+  gl.uniform1f(uCoreY, 0.5 - props.coreY)
   gl.drawArrays(gl.TRIANGLES, 0, 3)
 
   /* 開頭量一次真實幀率。低於 40fps 就降級 —— 與其讓整頁卡，
@@ -247,6 +293,7 @@ onMounted(() => {
   uEnergy = g.getUniformLocation(prog, 'uEnergy')
   uBurst = g.getUniformLocation(prog, 'uBurst')
   uQuality = g.getUniformLocation(prog, 'uQuality')
+  uCoreY = g.getUniformLocation(prog, 'uCoreY')
 
   energyNow = props.energy
   startTime = performance.now()

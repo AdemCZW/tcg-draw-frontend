@@ -56,6 +56,17 @@ const sky3d = ref(!new URLSearchParams(location.search).has('nogl'))
 const skyFps = ref<number | null>(null)
 /** 各幕的能量餵給 shader，跟 CSS 的 --e 是同一組數字 */
 const ENERGY: Record<Act, number> = { night: .12, wake: .55, align: .85, burst: 1, ember: .3 }
+
+/* 球在畫面上的垂直位置，餵給 shader 當光源座標。
+   實測量出來的：桌機球心約在 28%、手機約 26%。寫死一個近似值就夠 ——
+   要精準到跟著版面走，得每幀讀 getBoundingClientRect，不值得。 */
+const coreY = ref(0.28)
+onMounted(() => {
+  const el = document.querySelector('.ball')
+  if (!el) return
+  const b = el.getBoundingClientRect()
+  if (b.height) coreY.value = (b.top + b.height / 2) / window.innerHeight
+})
 const cycle = ref(0)          // 每輪 +1，用來重播一次性動畫
 let timer: number | undefined
 
@@ -199,6 +210,7 @@ async function goIn(kind: 'login' | 'register') {
       class="skyGl"
       :energy="ENERGY[act]"
       :burst="act === 'burst'"
+      :core-y="coreY"
       @fail="sky3d = false"
       @fps="v => (skyFps = v)"
     />
