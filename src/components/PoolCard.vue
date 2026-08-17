@@ -164,10 +164,13 @@ function onLeave() {
   display: grid; gap: 6px;
   color: #fff;
 }
+/* 池標題是這張卡上最該先被讀到的東西，字級要壓過價格。
+   行高收到 1.22：字放大之後如果行高不跟著收，兩行標題會多吃掉一截卡圖。 */
 h3 {
-  margin: 0; font-size: 15px; font-weight: 700; line-height: 1.3;
+  margin: 0; font-size: 18px; font-weight: 700; line-height: 1.22;
+  letter-spacing: -.01em;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-  text-shadow: 0 1px 6px rgba(0, 0, 0, .75);
+  text-shadow: 0 1px 7px rgba(0, 0, 0, .8);
 }
 .top { display: flex; align-items: baseline; gap: 6px; font-size: 12px; margin: 0; min-width: 0; }
 .prize { opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -186,7 +189,7 @@ h3 {
 /* ---- stage：選池台的大卡，同一套版面放大 ---- */
 .pool.stage { border-radius: var(--radius-lg); }
 .pool.stage .body { padding: 16px 16px 17px; gap: 8px; }
-.pool.stage h3 { font-size: 20px; }
+.pool.stage h3 { font-size: 24px; }
 .pool.stage .top { font-size: 13.5px; }
 .pool.stage .price { font-size: 22px; }
 .pool.stage .per, .pool.stage .rest { font-size: 13px; }
@@ -194,7 +197,7 @@ h3 {
 
 @media (max-width: 720px) {
   .body { padding: 9px 9px 10px; gap: 5px; }
-  h3 { font-size: 12.5px; }
+  h3 { font-size: 15px; line-height: 1.2; }
   .top { font-size: 10.5px; }
   .state { font-size: 10px; }
   .price { font-size: 14.5px; }
@@ -203,7 +206,7 @@ h3 {
   .origin-tag { top: 7px; right: 7px; transform: scale(.86); transform-origin: top right; }
   .doneTag { top: 38px; right: 7px; font-size: 10px; padding: 3px 8px; }
   .pool.stage .body { padding: 14px; }
-  .pool.stage h3 { font-size: 17px; }
+  .pool.stage h3 { font-size: 20px; }
   .pool.stage .price { font-size: 19px; }
 }
 </style>
