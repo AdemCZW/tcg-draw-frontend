@@ -43,6 +43,7 @@ const emit = defineEmits<{ (e: 'done'): void }>()
    settle  煙散掉，卡片定裝
 */
 /* 五拍。
+   form 那一拍裡面還分兩段：煙先堆成卡的形狀，圖案才在上面顯影。
    swell 那一拍（煙已經合攏、卡片還沒開始成形）是刻意留的空白 ——
    演出要有一個「什麼都沒發生」的懸置，後面的凝聚才有份量。
    四拍版沒有這一拍，煙一合攏卡片就開始長，整段黏在一起沒有呼吸。 */
@@ -51,7 +52,7 @@ const SCRIPT: { k: Phase; ms: number }[] = [
   { k: 'still', ms: 900 },
   { k: 'gather', ms: 1600 },
   { k: 'swell', ms: 1200 },
-  { k: 'form', ms: 2400 },
+  { k: 'form', ms: 3000 },
   { k: 'settle', ms: 1300 }
 ]
 /* 演出可以整段放慢，用來逐格調動畫：?fxslow=8。

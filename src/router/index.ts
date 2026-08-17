@@ -142,6 +142,13 @@ export const router = createRouter({
       component: () => import('@/pages/DesignPackPage.vue'),
       meta: { depth: 1, title: '寶貝球設計' }
     },
+    // 煙霧凝聚特效自己一頁：跟寶貝球示範擠在同一頁的話，
+    // 量到的幀率不是這支 shader 的幀率，調不準
+    {
+      path: '/design/smoke', name: 'design-smoke',
+      component: () => import('@/pages/DesignSmokePage.vue'),
+      meta: { depth: 1, title: '煙霧凝聚' }
+    },
     {
       path: '/:pathMatch(.*)*', name: 'not-found',
       component: () => import('@/pages/NotFoundPage.vue'),

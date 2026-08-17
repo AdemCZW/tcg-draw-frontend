@@ -124,8 +124,8 @@ void main() {
 
      分開才控制得住 —— 用同一條曲線的話，煙會沿原路退回四個邊，
      看起來像倒放。煙聚攏之後是在原地散掉的，不是縮回去。 */
-  float gather = smoothstep(0.08, 0.34, uProg);   // gather 這一拍結束時煙剛好合攏
-  float clear  = smoothstep(0.55, 0.99, uProg);   // form 開始後才動，讓凝聚有煙可用
+  float gather = smoothstep(0.07, 0.31, uProg);   // gather 這一拍結束時煙剛好合攏
+  float clear  = smoothstep(0.50, 0.98, uProg);   // 周圍的煙往中間收，收完就散
 
   /* 很慢的鏡頭漂移。只作用在煙的取樣座標，不能動到 p ——
      p 還要拿來定位卡片，一起轉的話卡片會跟著歪。
@@ -166,17 +166,37 @@ void main() {
   float band = 1.0 - smoothstep(reach - 0.22, reach, edgeDist);
   d *= clamp(band, 0.0, 1.0);
 
-  /* 消散：中心先破開（要露出來的東西在中心），再整體變薄。
-     只做「整體變薄」的話煙會像一起淡出，讀不出「散開」。 */
+  /* 消散的方向。
+     之前是「中心先破洞」—— 那是為了露出底下的卡。現在卡是煙聚出來的，
+     中心正是煙要堆起來的地方，在那裡挖洞等於把要用的料挖掉。
+     改成外圍先空、煙往中間收。 */
   float rc = length(p * vec2(1.0, 0.78));
-  float hole = clear * (1.0 - smoothstep(0.0, 0.62, rc)) * 1.35;
-  d -= hole;
+  d -= clear * smoothstep(0.16, 0.78, rc) * 1.6;
+
+  /* ---- 第一段：煙往卡的位置堆積 ----
+     這一段做的是「形」，不是「圖」：煙在卡框的位置越堆越厚，
+     先堆出一張煙做的卡 —— 這時候還完全沒有圖案。
+
+     它加在門檻之前，所以這塊煙跟畫面上其它煙走同一套門檻、打光、自我陰影。
+     這是它讀起來是煙而不是一個貼上去的矩形的原因。 */
+  float acc = uHasCard > 0.5 ? smoothstep(0.44, 0.72, uProg) : 0.0;
+  vec2 relA = p / (uCardHalf * mix(0.74, 1.0, acc));
+  float sdA = max(abs(relA.x), abs(relA.y));
+  // 邊界一開始很糊很不規則，隨堆積收緊成卡框。用已經算過的細絲層當亂數，不多花成本
+  float ragA = (fine - 0.5) * (1.0 - acc) * 1.5;
+  float softA = mix(0.95, 0.05, acc * acc);
+  float slab = 1.0 - smoothstep(1.0 - softA, 1.0 + softA * 0.45, sdA + ragA);
+  /* 堆上去的密度要帶著煙自己的紋理，不能是一塊均勻的高原。
+     加常數的話這塊區域每個畫素一樣厚 —— 自陰影把它整片壓黑、
+     邊緣光又完全不觸發，結果是一個黑色矩形，讀起來像破洞不像一團煙。 */
+  d += slab * acc * 0.70 * (0.35 + 0.90 * fine);
 
   /* 門檻決定「多少比例的畫面算是煙」。
      fbm 的值集中在 0.5 附近，門檻設 0.4 的話有一半以上的畫素直接變全透明 ——
-     煙就只剩幾縷，遮不住後面的卡。起手要遮得住，門檻必須壓在分布下緣。 */
-  /* 消散的門檻走平方曲線。線性的話門檻一開始就抬得很快，
-     煙在卡片還沒到定位前就掉掉一大半 —— 卡片是在空畫面裡完成推近的。 */
+     煙就只剩幾縷，遮不住後面的卡。起手要遮得住，門檻必須壓在分布下緣。
+
+     消散的門檻走平方曲線。線性的話門檻一開始就抬得很快，
+     周圍的煙在還沒堆到卡上之前就掉光了。 */
   float thr = mix(0.12, 0.82, clear * clear);
   float alpha = smoothstep(thr, thr + 0.30, d);
   alpha *= (1.0 - clear * clear * 0.55) * uDensity;
@@ -194,81 +214,64 @@ void main() {
   /* 自陰影：厚的地方擋住背後的光，所以越厚越暗。
      少了這一項，整片煙會是同一個中間調的紫 —— 看起來像紫色顏料不像煙。
      煙之所以讀得出體積，靠的就是「暗的body + 亮的邊」這個對比。 */
-  col *= mix(1.0, 0.30, smoothstep(thr + 0.03, thr + 0.40, d));
+  col *= mix(1.0, 0.38, smoothstep(thr + 0.03, thr + 0.44, d));
   col += uTint * rim * (0.45 + 1.05 * glow);
   col += vec3(1.0, 0.93, 0.86) * rim * glow * glow * 0.8;   // 最靠近光源的邊緣接近白
+  /* 堆在卡片位置上的那團煙被卡背後的光打亮。
+     少了這一項，煙堆得越厚反而越黑，看起來像卡片的位置被挖空。 */
+  col += mix(uTint, vec3(1.0), 0.30) * slab * acc * (rim * 1.15 + 0.10);
 
-  /* ---- 卡片從煙裡凝聚出來 ----
-     不是「煙散開露出底下的卡」，是煙自己收攏成卡：
-     卡面的顏色一開始被攤在一大片區域上、被噪聲攪亂、彩度被抽掉，
-     然後往內收進卡框、擾動歸零、顏色長回來。
-
-     三件事同時發生，缺一個就不成立：
-       spread 攤開的倍率 2.9 → 1     只有這個 = 一張很大的卡縮小
-       warp   擾動的幅度 大 → 0      只有這個 = 卡在原地抖
-       birth  每個畫素各自的生成時刻  只有這個 = 整張一起淡入
-     第三個是最關鍵的 —— 沒有它，不管前兩個怎麼調都只是「一張卡在變形」，
-     不會讀成「一塊一塊從煙裡長出來」。 */
+  /* ---- 第二段：圖案在堆好的煙上顯影 ----
+     順序不能顛倒。之前把「聚集」跟「顯影」擠在同一段做，材料一出現就是卡的顏色，
+     結果看到的是一張大卡在縮小 —— 不是煙聚成卡。
+     先有形（上面的 slab），後有圖（這裡）。 */
   if (uHasCard > 0.5) {
-    /* 凝聚要在 settle 開始前就完成 —— DOM 那張卡是在 settle 接手的，
-       接手時 shader 這張還沒長好的話，兩張會對不起來。 */
-    float form = smoothstep(0.40, 0.80, uProg);
-    float ease = form * form * (3.0 - 2.0 * form);
+    float img = smoothstep(0.63, 0.835, uProg);
 
-    // 卡框本身也從遠處推近，凝聚是在一個正在靠近的矩形上完成的
-    // half 是 GLSL 的保留字，不能拿來當變數名
-    vec2 hs = uCardHalf * mix(0.62, 1.0, ease);
-    vec2 rel = p / hs;
+    /* 這一段的擾動很小：料已經堆在該在的位置了，這裡只負責讓圖案浮出來。
+       之前那個 2.9 倍的攤開量是「聚集」階段的工作，已經移到 slab 去做。 */
+    vec2 warp = vec2(fbm(relA * 1.9 + vec2(0.0, uTime * 0.18), 2),
+                     fbm(relA * 1.9 + vec2(6.3, -uTime * 0.15), 2)) - 0.5;
+    vec2 q = relA + warp * (1.0 - img) * 0.62;
 
-    float spread = mix(2.90, 1.0, ease);
-    vec2 warp = vec2(fbm(rel * 1.6 + vec2(0.0, uTime * 0.20), oct),
-                     fbm(rel * 1.6 + vec2(6.3, -uTime * 0.16), oct)) - 0.5;
-    vec2 q = rel / spread + warp * (1.0 - ease) * 1.5;
-
-    /* 生成分兩波，這就是「拼湊起來」的本體。
-       第一波是大塊：整片區域先以半強度落定，畫面上看到的是一塊一塊接起來。
-       第二波是細節：在已落定的塊上把剩下的一半補滿。
-       只有一波的話，每個畫素從無到有一次到位，讀起來是「溶解進來」不是「拼起來」。
+    /* 顯影分兩波，這是「拼湊起來」的本體。
+       第一波大塊先以半強度落定，第二波在已落定的塊上補滿剩下一半。
+       只有一波的話每個畫素從無到有一次到位，讀起來是「溶解進來」不是「拼起來」。
 
        兩波都用 q 取樣（跟著料一起走），不是用 p ——
        用 p 的話生成圖樣會釘在螢幕上，煙在動、生成邊界卻不動，馬上穿幫。 */
     float bCoarse = fbm(q * 1.5 + vec2(11.7, 4.3), oct);
     float bFine = fbm(q * 4.8 + vec2(3.1, 19.4), oct);
-    /* 生成順序帶一點方向性：由左下往右上。
+    /* 顯影順序帶一點方向性：由左下往右上。
        純噪聲的話落定的位置到處亂跳，看起來像雜訊在閃；
        混一點方向進去，才會讀成有人在依序把它拼完。 */
     float sweep = 0.5 + 0.42 * (q.x * 0.55 - q.y * 0.75);
     float bc = mix(bCoarse, sweep, 0.42) * 0.62;
     float bf = mix(bFine, sweep, 0.25) * 0.55 + 0.30;
-
-    float wCoarse = smoothstep(bc, bc + 0.26, form);
-    float wFine = smoothstep(bf, bf + 0.20, form);
+    float wCoarse = smoothstep(bc, bc + 0.26, img);
+    float wFine = smoothstep(bf, bf + 0.20, img);
     float formed = wCoarse * (0.55 + 0.45 * wFine);
 
-    // 卡框外面不要有東西，邊界隨凝聚收緊
-    float edgeSoft = mix(0.55, 0.02, ease);
-    float box = 1.0 - smoothstep(1.0 - edgeSoft, 1.0 + edgeSoft * 0.4, max(abs(q.x), abs(q.y)));
+    // 卡框：顯影完成時要是乾淨的直邊，才接得上 DOM 那張卡
+    float box = 1.0 - smoothstep(0.985, 1.0 + mix(0.26, 0.004, img),
+                                 max(abs(q.x), abs(q.y)));
 
-    /* swell 那一拍（煙合攏、卡片還沒開始長）先閃一次卡片輪廓。
+    /* swell 那一拍（煙合攏、還沒開始堆）先閃一次卡片輪廓。
        那一拍本來是刻意的空白，但完全沒東西看會變成單純的等待 ——
        給一個「有東西要來了」的預告，懸置才成立。 */
-    float ghost = smoothstep(0.34, 0.42, uProg) * (1.0 - smoothstep(0.44, 0.53, uProg));
+    float ghost = smoothstep(0.33, 0.41, uProg) * (1.0 - smoothstep(0.43, 0.52, uProg));
     if (ghost > 0.002) {
-      vec2 gq = rel * 1.05 + (vec2(fbm(rel * 2.1 + uTime * 0.30, 2),
-                                   fbm(rel * 2.1 + 9.1 - uTime * 0.24, 2)) - 0.5) * 0.55;
+      vec2 gq = relA * 1.05 + (vec2(fbm(relA * 2.1 + uTime * 0.30, 2),
+                                    fbm(relA * 2.1 + 9.1 - uTime * 0.24, 2)) - 0.5) * 0.55;
       float gbox = 1.0 - smoothstep(0.84, 1.06, max(abs(gq.x), abs(gq.y)));
       float gl2 = dot(texture(uCard, gq * 0.5 + 0.5).rgb, vec3(0.299, 0.587, 0.114));
       col += mix(uTint, vec3(1.0), 0.35) * gl2 * gbox * ghost * 0.6;
       alpha = max(alpha, gbox * ghost * 0.32);
     }
 
-    vec4 tex = texture(uCard, q * 0.5 + 0.5);
-    // 還沒成形的料是煙：抽掉彩度、染成煙的色調
-    float luma = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
-    vec3 raw = mix(vec3(luma) * uTint * 1.5, tex.rgb, formed);
-
+    vec3 tex = texture(uCard, q * 0.5 + 0.5).rgb;
     float ca = clamp(formed * box, 0.0, 1.0);
-    col = mix(col, raw, ca);
+    col = mix(col, tex, ca);
     alpha = max(alpha, ca);
 
     /* 每一塊接上去的瞬間亮一下。兩波各閃一次 ——
