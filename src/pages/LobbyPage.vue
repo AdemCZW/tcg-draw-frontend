@@ -14,6 +14,7 @@ import { usePoolStore } from '@/stores/pools'
 import { useSellerStore } from '@/stores/sellers'
 import type { Pool, Tier } from '@/types/models'
 import CapsuleArt from '@/components/CapsuleArt.vue'
+import ShaderSky from '@/components/ShaderSky.vue'
 import PoolCard from '@/components/PoolCard.vue'
 import WinnerTicker from '@/components/WinnerTicker.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
@@ -65,6 +66,21 @@ const TIER_HUE: Record<Tier, string> = {
 }
 const hue = computed(() => TIER_HUE[featuredTier.value])
 
+/* 同一組球階色也餵給著色器當主色調。
+   十六進位轉 0..1，並往上抬一點飽和 —— shader 裡還會再乘 0.62，
+   直接餵原色的話雲氣會偏灰。 */
+const tint = computed<[number, number, number]>(() => {
+  const h = hue.value.replace('#', '')
+  const v = (i: number) => parseInt(h.slice(i, i + 2), 16) / 255
+  return [Math.min(1, v(0) * 1.15), Math.min(1, v(2) * 1.15), Math.min(1, v(4) * 1.15)]
+})
+
+/* 著色器背景。大廳跟形象頁的角色不同：
+   形象頁只有球和 CTA，背景可以搶戲；大廳有卡片、跑馬燈、分類要讀，
+   所以只搬星雲本體，不搬分幕、爆發、流星那些會閃的東西，
+   而且 energy 固定在低檔、gain 壓到 0.55。 */
+const sky3d = ref(!new URLSearchParams(location.search).has('nogl'))
+
 /* ---- 分類 ---- */
 type Cat = 'all' | 'official' | 'merchant' | 'personal' | 'hot' | 'cheap' | 'big' | 'special' | 'done'
 const cat = ref<Cat>('all')
@@ -106,8 +122,20 @@ const list = computed(() => pools.pools.filter(MATCH[cat.value]))
 <template>
   <div class="lobby" :style="{ '--hue': hue }">
     <div class="field" aria-hidden="true">
-      <div class="glow g1"></div>
-      <div class="glow g2"></div>
+      <ShaderSky
+        v-if="sky3d"
+        class="skyGl"
+        :energy="0.34"
+        :tint="tint"
+        :gain="0.55"
+        :core-y="0.22"
+        @fail="sky3d = false"
+      />
+      <!-- shader 失敗才用 CSS 光暈；兩層同時開會互相洗掉對比 -->
+      <template v-if="!sky3d">
+        <div class="glow g1"></div>
+        <div class="glow g2"></div>
+      </template>
     </div>
 
     <!-- ===== 今日推薦 ===== -->
@@ -186,7 +214,15 @@ const list = computed(() => pools.pools.filter(MATCH[cat.value]))
 .lobby { position: relative; padding-bottom: calc(40px + var(--nav-total)); isolation: isolate; overflow: hidden; }
 
 /* ---- 能量場：只鋪在推薦區那一屏，不要跟著整頁捲 ---- */
-.field { position: absolute; inset: 0 0 auto; height: 720px; z-index: -1; pointer-events: none; }
+/* ---- 背景只鋪在推薦區那一屏 ----
+   往下用遮罩淡出：卡片區要乾淨，星雲鋪到卡片後面會跟卡圖搶。 */
+.field {
+  position: absolute; inset: 0 0 auto; height: 720px;
+  z-index: -1; pointer-events: none;
+  -webkit-mask-image: linear-gradient(180deg, #000 0 58%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0 58%, transparent 100%);
+}
+.skyGl { position: absolute; inset: 0; }
 .glow { position: absolute; border-radius: 50%; filter: blur(70px); }
 .g1 {
   width: 60vmax; height: 60vmax; left: -14vmax; top: -24vmax; opacity: .3;

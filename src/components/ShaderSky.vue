@@ -25,7 +25,12 @@ const props = withDefaults(defineProps<{
   /** 光源（球）在畫面上的垂直位置，0 = 上緣、1 = 下緣。
       鏡頭光斑必須從真正的亮源長出來，對不上就只是一條莫名其妙的橫帶 */
   coreY?: number
-}>(), { energy: 0.2, burst: false, coreY: 0.3 })
+  /** 主色調 [r,g,b]（0..1）。大廳會餵推薦池的球階色進來，
+      背景就跟著今天的主打池變色。不給則用預設的紫。 */
+  tint?: [number, number, number]
+  /** 整體亮度倍率。內容頁要把背景壓下去，不然卡片和文字讀不出來 */
+  gain?: number
+}>(), { energy: 0.2, burst: false, coreY: 0.3, tint: undefined, gain: 1 })
 
 const emit = defineEmits<{ (e: 'fail'): void; (e: 'fps', v: number): void }>()
 
@@ -59,6 +64,8 @@ uniform float uEnergy;   // 0..1 這一幕的能量
 uniform float uBurst;    // 爆發後經過的秒數，負值代表沒發生
 uniform float uQuality;  // 1 全效 / 0 降級
 uniform float uCoreY;    // 亮源的垂直位置（shader 座標）
+uniform vec3  uTint;     // 主色調
+uniform float uGain;     // 整體亮度倍率
 
 // ---- 噪聲：value noise + fbm ----
 float hash(vec2 p) {
@@ -118,10 +125,12 @@ void main() {
      第一版把門檻設得太低（0.15 起就開始上色），fbm 的值大多落在 0.3~0.6，
      結果整個畫面被中等亮度的紫填滿，前景的字和卡全被洗掉。
      把門檻往上推、把底色壓更暗，亮的地方才會「亮起來」。 */
+  /* 主色調由外部指定。deep 保持很暗的中性色不跟著變 ——
+     底色一起染會讓整片背景偏色，反而看不出雲氣的層次。 */
   vec3 deep  = vec3(0.022, 0.014, 0.052);
-  vec3 cool  = vec3(0.23, 0.13, 0.56);
-  vec3 mid   = vec3(0.12, 0.36, 0.82);
-  vec3 hot   = vec3(0.90, 0.38, 0.70);
+  vec3 cool  = uTint * 0.62;
+  vec3 mid   = mix(uTint, vec3(0.12, 0.36, 0.82), 0.55);
+  vec3 hot   = mix(uTint, vec3(1.0, 0.45, 0.72), 0.5);
   vec3 flare = vec3(1.00, 0.82, 0.55);
 
   /* 色差（chromatic aberration）。
@@ -187,7 +196,7 @@ void main() {
   float grain = hash(gl_FragCoord.xy + fract(uTime) * 91.7) - 0.5;
   col += grain * mix(0.055, 0.012, smoothstep(0.0, 0.5, lum));
 
-  outColor = vec4(max(col, 0.0), 1.0);
+  outColor = vec4(max(col * uGain, 0.0), 1.0);
 }`
 
 function compile(g: WebGL2RenderingContext, type: number, src: string) {
@@ -222,6 +231,8 @@ let uEnergy: WebGLUniformLocation | null = null
 let uBurst: WebGLUniformLocation | null = null
 let uQuality: WebGLUniformLocation | null = null
 let uCoreY: WebGLUniformLocation | null = null
+let uTint: WebGLUniformLocation | null = null
+let uGain: WebGLUniformLocation | null = null
 
 let frames = 0
 let measureStart = 0
@@ -243,6 +254,9 @@ function frame(now: number) {
   gl.uniform1f(uQuality, quality)
   // coreY 從「畫面比例」換算成 shader 座標（y 向上、以中心為 0）
   gl.uniform1f(uCoreY, 0.5 - props.coreY)
+  const tint = props.tint ?? [0.37, 0.21, 0.90]
+  gl.uniform3f(uTint, tint[0], tint[1], tint[2])
+  gl.uniform1f(uGain, props.gain)
   gl.drawArrays(gl.TRIANGLES, 0, 3)
 
   /* 開頭量一次真實幀率。低於 40fps 就降級 —— 與其讓整頁卡，
@@ -294,6 +308,8 @@ onMounted(() => {
   uBurst = g.getUniformLocation(prog, 'uBurst')
   uQuality = g.getUniformLocation(prog, 'uQuality')
   uCoreY = g.getUniformLocation(prog, 'uCoreY')
+  uTint = g.getUniformLocation(prog, 'uTint')
+  uGain = g.getUniformLocation(prog, 'uGain')
 
   energyNow = props.energy
   startTime = performance.now()
