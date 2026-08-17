@@ -22,9 +22,9 @@
      --fx-amp    位移幅度（預設 1，卡片這種大物件建議 .5）
 */
 .fx-glitch {
-  --fx-every: 6s;
+  --fx-every: 4.5s;
   --fx-phase: 0s;
-  --fx-amp: 1;
+  --fx-amp: 1.6;
 }
 @media (prefers-reduced-motion: no-preference) {
   .fx-glitch {
@@ -32,37 +32,40 @@
   }
 }
 
+/* 單次故障從 0.28s 拉長到約 0.5s、幅度加大。
+   第一版一次只閃 0.28 秒、週期 6 秒＝4.6% 的時間，而且只有一張卡有 ——
+   不盯著看根本發現不了。故障要「偶爾」但被看見的那一次要夠清楚。 */
 @keyframes fxGlitch {
-  0%, 88% {
+  0%, 82% {
     transform: none;
     opacity: 1;
     clip-path: inset(0);
     filter: none;
   }
   /* 第一跳：往左偏＋切掉中段一條 */
-  88.6% {
+  82.8% {
     transform: translate(calc(-4px * var(--fx-amp)), calc(1px * var(--fx-amp))) skewX(-2.5deg);
     clip-path: inset(34% 0 42% 0);
     filter: drop-shadow(3px 0 rgba(255, 59, 107, .85)) drop-shadow(-3px 0 rgba(53, 232, 255, .85));
   }
   /* 空白格 —— 這一格才是「瞬移」 */
-  89.4% { opacity: 0; }
+  83.8% { opacity: 0; }
   /* 第二跳：跳到另一邊，切另一條 */
-  90.2% {
+  84.8% {
     transform: translate(calc(5px * var(--fx-amp)), calc(-2px * var(--fx-amp))) skewX(2deg);
     clip-path: inset(8% 0 66% 0);
     filter: drop-shadow(-4px 0 rgba(255, 59, 107, .8)) drop-shadow(4px 0 rgba(53, 232, 255, .8));
     opacity: 1;
   }
-  90.9% { opacity: 0; }
+  86% { opacity: 0; }
   /* 收回，殘影還在 */
-  91.6% {
+  87.2% {
     transform: translate(calc(-2px * var(--fx-amp)), 0) skewX(0deg);
     clip-path: inset(0);
     filter: drop-shadow(2px 0 rgba(255, 59, 107, .5)) drop-shadow(-2px 0 rgba(53, 232, 255, .5));
     opacity: 1;
   }
-  92.6%, 100% {
+  89%, 100% {
     transform: none;
     opacity: 1;
     clip-path: inset(0);

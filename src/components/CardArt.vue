@@ -88,20 +88,24 @@ watch(
   content: '';
   position: absolute; inset: 0;
   pointer-events: none;
+  /* 亮度調高、光帶收窄。
+     第一版透明度只有 .28 疊在本來就鮮豔的卡圖上，對比不足 —— 時間夠長卻看不見。
+     真的 holo 卡反光是「一道明確的光帶掃過」，不是整張變亮。 */
   background: linear-gradient(105deg,
-    transparent 32%,
-    rgba(255, 255, 255, .28) 45%,
-    rgba(170, 220, 255, .34) 50%,
-    rgba(255, 190, 240, .28) 55%,
-    transparent 68%);
+    transparent 38%,
+    rgba(255, 255, 255, .55) 46%,
+    rgba(140, 210, 255, .8) 49.5%,
+    rgba(255, 255, 255, .7) 51%,
+    rgba(255, 160, 235, .75) 53%,
+    transparent 62%);
   background-size: 300% 100%;
   mix-blend-mode: screen;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .holo::after { animation: holoSweep 5.5s ease-in-out var(--holo-delay, 0s) infinite; }
+  .holo::after { animation: holoSweep 4.6s cubic-bezier(.3, 0, .3, 1) var(--holo-delay, 0s) infinite; }
 }
 @keyframes holoSweep {
-  0%, 58% { background-position: 190% 0; }
+  0%, 72% { background-position: 190% 0; }
   100%    { background-position: -80% 0; }
 }
 
