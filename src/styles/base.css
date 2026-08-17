@@ -25,6 +25,57 @@ body {
 }
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+
+/* ------------------------------------------------------------------
+   手機誤觸防護
+   ------------------------------------------------------------------
+   原則：只擋「會妨礙操作的預設行為」，不擋使用者真的需要的功能。
+
+   特別注意：這個站的賣點是「自己驗算」—— 承諾雜湊、鑑定編號、種子
+   一定要能長按選取複製。所以這裡刻意不做全站 user-select: none，
+   只針對圖片與互動元件關掉。
+   ------------------------------------------------------------------ */
+
+/* 圖片：長按不跳「儲存圖片 / 拷貝」選單，也不能拖曳。
+   卡圖是商品圖，被長按存下來對使用者沒好處（他們要的是實體卡），
+   而誤觸跳出系統選單會打斷抽卡流程。 */
+img {
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 互動元件：關掉長按選單、點擊高亮、以及雙擊縮放。
+   touch-action: manipulation 只關掉「雙擊放大」，雙指縮放仍然保留 ——
+   不能用 user-scalable=no 把縮放整個關掉，那會害到需要放大的使用者。 */
+a, button, [role="button"], [role="tab"], [role="switch"], .ticket, .chip, .pool, .lot {
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+
+/* 純裝飾的圖層不該吃到任何觸控 —— 疊在按鈕上會讓按鈕點不到 */
+[aria-hidden="true"].scrim,
+[aria-hidden="true"].glare,
+.field, .sky, .stars, .meteors, .motes, .bokehs, .curtains, .rays, .floor, .lines {
+  pointer-events: none;
+}
+
+/* 驗證用的資料一定要能選取複製，別被上面的規則掃到。
+   雜湊、鑑定編號、種子 —— 使用者要拿去別的地方對，複製不了等於不能驗。 */
+.mono, input, textarea, select, code, pre, .selectable {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* 下拉重新整理關掉。
+   抽卡演出進行中不小心往下拉會整頁重載 —— 演出白跑、
+   而且開卡結果頁靠 sessionStorage 還原，重載雖然救得回來，
+   但那一刻的體驗已經斷了。橫向的則是避免觸發瀏覽器的返回手勢。 */
+html, body {
+  overscroll-behavior: none;
+}
 input, select { font-family: inherit; }
 
 .container { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--pad); }
