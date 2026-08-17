@@ -51,6 +51,31 @@ const MOTES = [
   { c: '#ffd23d', p: 'M13 2 4 14h6l-1 8 9-12h-6l1-8z', x: 82, d: -7.3, dur: 12 }
 ]
 
+/* ---- 散景光斑 ----
+   失焦的圓形光點，前後景各幾顆。用 radial-gradient 畫而不是 filter: blur() ——
+   blur 每一幀都要重算，這裡有九顆會直接吃掉幀率；gradient 是靜態的，
+   瀏覽器只要平移合成層。 */
+const BOKEH = [
+  { c: '#a06bff', x: 12, y: 22, r: 190, o: .16, dur: 26, d: 0, depth: 26 },
+  { c: '#3fa9ff', x: 84, y: 16, r: 150, o: .14, dur: 31, d: -6, depth: 20 },
+  { c: '#ff5f8f', x: 72, y: 74, r: 210, o: .12, dur: 35, d: -12, depth: 30 },
+  { c: '#5fe0c0', x: 22, y: 78, r: 130, o: .1, dur: 29, d: -3, depth: 16 },
+  { c: '#ffc94d', x: 50, y: 8, r: 110, o: .1, dur: 24, d: -17, depth: 12 },
+  { c: '#8b5cf6', x: 6, y: 54, r: 160, o: .12, dur: 33, d: -9, depth: 24 },
+  { c: '#ff7a3d', x: 92, y: 48, r: 120, o: .1, dur: 27, d: -21, depth: 14 },
+  { c: '#4f8dff', x: 38, y: 92, r: 170, o: .1, dur: 37, d: -14, depth: 22 },
+  { c: '#e879f9', x: 62, y: 36, r: 100, o: .09, dur: 22, d: -5, depth: 10 }
+]
+
+/* ---- 能量電弧 ----
+   球周圍偶爾竄一下的電流。三條各自的節奏，大部分時間是隱形的 ——
+   一直閃就變成霓虹燈，偶爾才閃才像有能量在裡面。 */
+const ARCS = [
+  { d: 'M14 78 C 40 52, 62 96, 96 62', delay: 0, dur: 7 },
+  { d: 'M18 30 C 48 58, 66 22, 98 44', delay: -2.8, dur: 9 },
+  { d: 'M10 56 C 36 88, 70 40, 92 84', delay: -5.4, dur: 11 }
+]
+
 /* ---- 星塵 ----
    固定種子的偽亂數：每次進站星星位置一樣，不會因為重繪而跳動。 */
 function mulberry32(a: number) {
@@ -70,6 +95,14 @@ const STARS = Array.from({ length: 46 }, () => ({
   dur: +(rnd() * 4 + 2.6).toFixed(1),
   delay: +(-rnd() * 6).toFixed(1)
 }))
+
+/* 星座連線：從星塵裡挑相鄰的幾顆連成折線。
+   不是隨機連 —— 挑出來的點先照 x 排序再連，線才不會亂交叉成一團毛球。 */
+const CONSTELLATIONS = (() => {
+  const pick = (from: number, n: number) =>
+    STARS.slice(from, from + n).sort((a, b) => a.x - b.x).map(s => `${s.x},${s.y}`).join(' ')
+  return [pick(2, 5), pick(14, 4), pick(28, 5)]
+})()
 
 /* ---- 視差 ----
    指標移動時各層位移不同。用 CSS 變數餵給 transform，
@@ -117,6 +150,31 @@ async function goIn(kind: 'login' | 'register') {
       <div class="vignette"></div>
     </div>
 
+    <!-- ===== 0b 極光簾幕：兩片 conic 漸層緩慢反向旋轉，用徑向遮罩收邊 ===== -->
+    <div class="curtains" aria-hidden="true">
+      <div class="curtain c1"></div>
+      <div class="curtain c2"></div>
+    </div>
+
+    <!-- ===== 0c 神之光：從球心放射的光柱，極慢旋轉 ===== -->
+    <div class="rays" aria-hidden="true"></div>
+
+    <!-- ===== 0d 散景光斑 ===== -->
+    <div class="bokehs" aria-hidden="true">
+      <span
+        v-for="(b, i) in BOKEH" :key="i"
+        class="bokeh"
+        :style="{
+          left: b.x + '%', top: b.y + '%',
+          width: b.r + 'px', height: b.r + 'px',
+          '--c': b.c, '--o': b.o, '--dur': b.dur + 's', '--delay': b.d + 's', '--depth': b.depth
+        }"
+      ></span>
+    </div>
+
+    <!-- ===== 0e 透視地平線格線 ===== -->
+    <div class="floor" aria-hidden="true"><span></span></div>
+
     <!-- ===== 1 星塵 ===== -->
     <div class="stars" aria-hidden="true">
       <i
@@ -128,6 +186,11 @@ async function goIn(kind: 'login' | 'register') {
         }"
       ></i>
     </div>
+
+    <!-- ===== 1b 星座連線 ===== -->
+    <svg class="lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <polyline v-for="(pts, i) in CONSTELLATIONS" :key="i" :points="pts" :style="{ '--i': i }" />
+    </svg>
 
     <!-- ===== 2 流星：兩道，長週期，不搶戲 ===== -->
     <div class="meteors" aria-hidden="true"><span class="m1"></span><span class="m2"></span></div>
@@ -171,10 +234,17 @@ async function goIn(kind: 'login' | 'register') {
           </div>
         </div>
 
-        <!-- 5 球 + 能量脈衝環 -->
+        <!-- 5 球 + 能量脈衝環 + 電弧 -->
         <div class="ball">
           <span class="pulse p1"></span>
           <span class="pulse p2"></span>
+          <span class="halo"></span>
+          <svg class="arcs" viewBox="0 0 108 108" aria-hidden="true">
+            <path
+              v-for="(a, i) in ARCS" :key="i"
+              :d="a.d" :style="{ '--delay': a.delay + 's', '--dur': a.dur + 's' }"
+            />
+          </svg>
           <CapsuleArt tier="LAST" compact flat />
         </div>
       </div>
@@ -252,6 +322,116 @@ async function goIn(kind: 'login' | 'register') {
 @keyframes aur1 { to { transform: translate(7vmax, 5vmax) scale(1.14); opacity: .34; } }
 @keyframes aur2 { to { transform: translate(-8vmax, 4vmax) scale(1.1);  opacity: .3; } }
 @keyframes aur3 { to { transform: translate(5vmax, -6vmax) scale(1.16); opacity: .2; } }
+
+/* ===== 0b 極光簾幕 =====
+   conic-gradient 轉起來就是一片繞著中心掃的光帶，很像極光。
+   用 mask 讓它中間濃、邊緣散掉，不然會看到明顯的扇形邊。 */
+.curtains { position: absolute; inset: -20%; z-index: 0; pointer-events: none; }
+.curtain {
+  position: absolute; inset: 0;
+  mix-blend-mode: screen;
+  -webkit-mask-image: radial-gradient(ellipse 60% 50% at 50% 45%, #000 10%, transparent 72%);
+  mask-image: radial-gradient(ellipse 60% 50% at 50% 45%, #000 10%, transparent 72%);
+}
+.c1 {
+  background: conic-gradient(from 0deg at 50% 42%,
+    transparent 0deg, rgba(124, 77, 255, .30) 38deg, transparent 84deg,
+    transparent 150deg, rgba(56, 189, 248, .24) 194deg, transparent 244deg,
+    transparent 310deg, rgba(236, 72, 153, .22) 342deg, transparent 360deg);
+  opacity: .8;
+}
+.c2 {
+  background: conic-gradient(from 180deg at 50% 42%,
+    transparent 0deg, rgba(94, 234, 212, .18) 46deg, transparent 96deg,
+    transparent 190deg, rgba(167, 139, 250, .22) 236deg, transparent 288deg);
+  opacity: .6;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .c1 { animation: spinSlow 52s linear infinite; }
+  .c2 { animation: spinSlow 78s linear reverse infinite; }
+}
+@keyframes spinSlow { to { transform: rotate(1turn); } }
+
+/* ===== 0c 神之光 =====
+   repeating-conic 做出等距光柱，遮罩讓它從球心往外散開後消失 */
+.rays {
+  position: absolute; left: 50%; top: 42%; z-index: 0;
+  width: 92vmax; height: 92vmax; translate: -50% -50%;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  opacity: .1;
+  background: repeating-conic-gradient(from 0deg at 50% 50%,
+    rgba(214, 190, 255, .42) 0deg 1.2deg, transparent 1.2deg 22deg);
+  /* 只在球外圍一圈可見：內側讓給球本身，外側在碰到文字前就散掉 */
+  -webkit-mask-image: radial-gradient(circle closest-side, transparent 11%, #000 20%, transparent 44%);
+  mask-image: radial-gradient(circle closest-side, transparent 11%, #000 20%, transparent 44%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rays { animation: spinSlow 120s linear infinite; }
+}
+
+/* ===== 0d 散景光斑 =====
+   --depth 越大位移越多，視差就有前後之分 */
+.bokehs { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.bokeh {
+  position: absolute;
+  border-radius: 50%;
+  translate: calc(var(--px) * var(--depth) * 1px) calc(var(--py) * var(--depth) * 1px);
+  background: radial-gradient(circle closest-side, var(--c), transparent 72%);
+  opacity: var(--o);
+  mix-blend-mode: screen;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bokeh { animation: drift var(--dur) ease-in-out var(--delay) infinite alternate; }
+}
+@keyframes drift {
+  from { transform: translate(-16px, 10px) scale(.9); }
+  to   { transform: translate(18px, -14px) scale(1.12); }
+}
+
+/* ===== 0e 透視地平線 =====
+   兩組線做出往遠方收束的地板。background-position 往下捲＝往觀者靠近。 */
+.floor {
+  position: absolute; left: -25%; right: -25%; bottom: 0; height: 42vh;
+  z-index: 0; pointer-events: none; overflow: hidden;
+  perspective: 190px;
+  -webkit-mask-image: linear-gradient(to top, #000 4%, transparent 78%);
+  mask-image: linear-gradient(to top, #000 4%, transparent 78%);
+}
+.floor span {
+  position: absolute; inset: -60% 0 -110%;
+  transform: rotateX(76deg);
+  transform-origin: 50% 100%;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(168, 130, 255, .3) 0 1px, transparent 1px 68px),
+    repeating-linear-gradient(0deg,  rgba(168, 130, 255, .26) 0 1px, transparent 1px 68px);
+  opacity: .5;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .floor span { animation: floorRun 5.5s linear infinite; }
+}
+@keyframes floorRun { to { background-position: 0 68px, 0 68px; } }
+
+/* ===== 1b 星座連線 ===== */
+.lines {
+  position: absolute; inset: 0; z-index: 1;
+  width: 100%; height: 100%; pointer-events: none;
+  translate: calc(var(--px) * -6px) calc(var(--py) * -6px);
+}
+.lines polyline {
+  fill: none;
+  stroke: rgba(190, 210, 255, .34);
+  stroke-width: .12;
+  vector-effect: non-scaling-stroke;
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .lines polyline { animation: lineFade 14s ease-in-out calc(var(--i) * -4.6s) infinite; }
+}
+@keyframes lineFade {
+  0%, 62%, 100% { opacity: 0; }
+  22%, 38%      { opacity: 1; }
+}
 
 /* ===== 1 星塵 ===== */
 .stars { position: absolute; inset: 0; z-index: 1; pointer-events: none;
@@ -346,6 +526,49 @@ async function goIn(kind: 'login' | 'register') {
   0%   { transform: scale(.72); opacity: .7; }
   70%  { opacity: .12; }
   100% { transform: scale(1.9); opacity: 0; }
+}
+
+/* 球背後的光暈掃描：一圈 conic 亮帶繞著球轉，像能量在殼裡流動 */
+.halo {
+  position: absolute; left: 50%; top: 50%;
+  width: 128%; aspect-ratio: 1; translate: -50% -50%;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg,
+    transparent 0deg, rgba(214, 170, 255, .5) 42deg, transparent 96deg,
+    transparent 180deg, rgba(129, 200, 255, .38) 226deg, transparent 286deg);
+  -webkit-mask-image: radial-gradient(circle closest-side, transparent 52%, #000 66%, transparent 92%);
+  mask-image: radial-gradient(circle closest-side, transparent 52%, #000 66%, transparent 92%);
+  mix-blend-mode: screen;
+  z-index: -1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .halo { animation: spinSlow 9s linear infinite; }
+}
+
+/* 電弧：大部分時間隱形，偶爾竄一下。stroke-dash 讓它像是「畫過去」 */
+.arcs {
+  position: absolute; inset: -8%;
+  width: 116%; height: 116%;
+  pointer-events: none; z-index: -1;
+  overflow: visible;
+}
+.arcs path {
+  fill: none;
+  stroke: #cbb2ff;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px #a97dff);
+  stroke-dasharray: 26 200;
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .arcs path { animation: crackle var(--dur) ease-in-out var(--delay) infinite; }
+}
+@keyframes crackle {
+  0%, 84%, 100% { opacity: 0; stroke-dashoffset: 40; }
+  87%           { opacity: .95; }
+  92%           { opacity: .45; }
+  97%           { opacity: 0; stroke-dashoffset: -200; }
 }
 
 /* 4 環繞卡 */
@@ -471,7 +694,10 @@ async function goIn(kind: 'login' | 'register') {
 
 /* ===== 進場編排：由後往前依序浮現 ===== */
 @media (prefers-reduced-motion: no-preference) {
-  .sky, .stars   { animation: fadeIn 1.1s ease both; }
+  .sky, .stars, .curtains, .bokehs, .floor, .lines { animation: fadeIn 1.4s ease both; }
+  /* 不能共用 fadeIn：它的終點是 opacity:1，會蓋掉 .rays 自己的 .1，
+     光柱就會亮到吃掉整個畫面。自己一條，終點停在設計值。 */
+  .rays          { animation: spinSlow 120s linear infinite, raysIn 2.4s ease .4s both; }
   .orbit         { animation: riseIn 1s cubic-bezier(.2, .8, .3, 1) .1s both; }
   .title         { animation: shimmer 7s ease-in-out infinite, riseIn .8s cubic-bezier(.2,.8,.3,1) .3s both; }
   .tag           { animation: riseIn .8s cubic-bezier(.2,.8,.3,1) .42s both; }
@@ -479,6 +705,7 @@ async function goIn(kind: 'login' | 'register') {
   .demo, .foot   { animation: fadeIn .9s ease .7s both; }
 }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes raysIn { from { opacity: 0; } to { opacity: .1; } }
 @keyframes riseIn { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
 
 @media (max-width: 900px) { .orbit { --k: .8; } }

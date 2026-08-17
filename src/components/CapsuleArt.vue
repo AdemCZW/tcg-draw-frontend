@@ -892,7 +892,7 @@ const ORBIT_NEAR = `M${n(CX - ORB_RX)} ${CY} A${ORB_RX} ${ORB_RY} 0 0 0 ${n(CX +
       <!-- 按鈕。落在赤道最前面，球面在那裡正對水平，所以是被壓扁的橢圓 -->
       <component
         :is="interactive ? 'button' : 'div'"
-        class="btn" :class="{ live: interactive && phase === 'idle' }"
+        class="coreBtn" :class="{ live: interactive && phase === 'idle' }"
         :type="interactive ? 'button' : undefined"
         :disabled="interactive ? phase !== 'idle' : undefined"
         :aria-label="interactive ? '開啟寶貝球' : undefined"
@@ -902,9 +902,9 @@ const ORBIT_NEAR = `M${n(CX - ORB_RX)} ${CY} A${ORB_RX} ${ORB_RY} 0 0 0 ${n(CX +
         }"
         @click="openCapsule"
       >
-        <span class="btnRim" :style="{ borderColor: grade.trim }"></span>
+        <span class="coreRim" :style="{ borderColor: grade.trim }"></span>
         <span
-          class="btnGlow"
+          class="coreGlow"
           :style="{ background: elem.core, boxShadow: `0 0 1.6cqw ${elem.mid}, 0 0 .6cqw ${elem.core}` }"
         ></span>
       </component>
@@ -1007,7 +1007,7 @@ const ORBIT_NEAR = `M${n(CX - ORB_RX)} ${CY} A${ORB_RX} ${ORB_RY} 0 0 0 ${n(CX +
 .ph-burst .leak, .ph-reveal .leak { opacity: 0; transition: opacity .25s ease; }
 
 /* ---- 按鈕 ---- */
-.btn {
+.coreBtn {
   position: absolute;
   transform: translate(-50%, -50%);
   border: none; padding: 0;
@@ -1020,26 +1020,26 @@ const ORBIT_NEAR = `M${n(CX - ORB_RX)} ${CY} A${ORB_RX} ${ORB_RY} 0 0 0 ${n(CX +
   display: grid; place-items: center;
   cursor: default;
 }
-.btn.live { cursor: pointer; }
-.btn:disabled { cursor: default; }
-.btnRim {
+.coreBtn.live { cursor: pointer; }
+.coreBtn:disabled { cursor: default; }
+.coreRim {
   position: absolute;
   width: 78%; height: 78%;
   border-radius: 50%;
   border: 1.5px solid;
   opacity: .7;
 }
-.btnGlow {
+.coreGlow {
   position: absolute;
   width: 54%; height: 54%; border-radius: 50%;
   opacity: calc(var(--glow) * .8);
   transition: opacity .3s, transform .3s;
 }
-.btn.live:hover .btnGlow { opacity: 1; transform: scale(1.12); }
-.btn.live:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
-.ph-charge .btnGlow, .ph-hold .btnGlow { opacity: 1; transform: scale(1.3); }
+.coreBtn.live:hover .coreGlow { opacity: 1; transform: scale(1.12); }
+.coreBtn.live:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
+.ph-charge .coreGlow, .ph-hold .coreGlow { opacity: 1; transform: scale(1.3); }
 @media (prefers-reduced-motion: no-preference) {
-  .btn.live .btnGlow { animation: btn-idle 2.6s ease-in-out infinite; }
+  .coreBtn.live .coreGlow { animation: btn-idle 2.6s ease-in-out infinite; }
   /* 蓄能：振幅遞增。衰減式的抖動讀起來是餘震，遞增才是蓄力 */
   .ph-charge .ball { animation: wind-up .42s linear; }
   .ph-burst .ball { animation: kick .22s cubic-bezier(.2, .8, .3, 1); }
