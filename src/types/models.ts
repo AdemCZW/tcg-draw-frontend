@@ -72,7 +72,26 @@ export interface Seller {
     cardsShipped: number
     avgShipDays: number
     disputeRate: number   // 百分比
+
+    /* 中獎率：標示 vs 實際結算。
+       這兩個數字擺在一起才有意義 —— 只公布「標示率」等於只公布行銷文案，
+       產業裡使用者最常見的抱怨就是「標示的跟實際對不上」。
+       實際率由已完抽池的結果統計出來，樣本數一起公開，
+       否則開三池就宣稱 100% 命中也能成立。 */
+    advertisedTopRate: number   // 標示的高賞（A / 最後賞）機率 %
+    actualTopRate: number       // 已完抽池實際結算的 %
+    drawsSettled: number        // 統計樣本：已結算的抽數
   }
+  /** 過去開出的大獎，給買家判斷這個賣家真的放得起好東西 */
+  pastPrizes: {
+    cardName: string
+    artId?: string
+    tier: Tier
+    poolTitle: string
+    wonAt: string
+    /** 得主代號，遮罩後的 */
+    winner: string
+  }[]
 }
 
 /**

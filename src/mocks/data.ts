@@ -94,22 +94,78 @@ export const sellers: Seller[] = [
   {
     id: 's1', handle: 'vaultkeeper', name: '保庫堂', tier: 'trusted', avatarHue: 28,
     joinedAt: '2025-03-11', bio: 'PSA / BGS 鑑定卡專門。開池前全數實拍上架，出貨附鑑定證書照。',
-    stats: { poolsRun: 142, cardsShipped: 3810, avgShipDays: 1.8, disputeRate: 0.2 }
+    stats: {
+      poolsRun: 142, cardsShipped: 3810, avgShipDays: 1.8, disputeRate: 0.2,
+      advertisedTopRate: 2.5, actualTopRate: 2.6, drawsSettled: 8420
+    },
+    pastPrizes: [
+      { cardName: '噴火龍 ex UR', artId: 'SV4a-349', tier: 'A', poolTitle: '朱紫 SAR 精選 第 9 彈', wonAt: '2026-07-28', winner: 'VD-7F**' },
+      { cardName: '奇樹 SAR', artId: 'SV4a-350', tier: 'LAST', poolTitle: '閃色寶藏 尾張', wonAt: '2026-07-14', winner: 'VD-21**' },
+      { cardName: '太樂巴戈斯 ex UR', artId: 'SV8a-237', tier: 'A', poolTitle: '太晶慶典 精選', wonAt: '2026-06-30', winner: 'VD-C4**' }
+    ]
   },
   {
     id: 's2', handle: 'promo_lab', name: '促販實驗室', tier: 'verified', avatarHue: 260,
     joinedAt: '2026-01-20', bio: '專收日版促販卡與 AR，小池快開快抽。',
-    stats: { poolsRun: 23, cardsShipped: 402, avgShipDays: 3.1, disputeRate: 1.1 }
+    stats: {
+      poolsRun: 23, cardsShipped: 402, avgShipDays: 3.1, disputeRate: 1.1,
+      advertisedTopRate: 4.0, actualTopRate: 3.8, drawsSettled: 910
+    },
+    pastPrizes: [
+      { cardName: '皮卡丘 ex SAR', artId: 'SV8a-236', tier: 'A', poolTitle: '促販卡 大亂鬥 第 6 回', wonAt: '2026-07-22', winner: 'VD-9A**' },
+      { cardName: '謎擬Ｑ SAR', artId: 'SV4a-341', tier: 'B', poolTitle: '促販卡 大亂鬥 第 5 回', wonAt: '2026-06-18', winner: 'VD-3D**' }
+    ]
   },
   {
     id: 's3', handle: 'kanto_cards', name: '關都卡舖', tier: 'verified', avatarHue: 140,
     joinedAt: '2025-11-02', bio: '實體店第 8 年，線上同步開池。台北可自取。',
-    stats: { poolsRun: 67, cardsShipped: 1520, avgShipDays: 2.4, disputeRate: 0.6 }
+    stats: {
+      poolsRun: 67, cardsShipped: 1520, avgShipDays: 2.4, disputeRate: 0.6,
+      advertisedTopRate: 3.0, actualTopRate: 3.1, drawsSettled: 3260
+    },
+    pastPrizes: [
+      { cardName: '沙奈朵 ex UR', artId: 'SV4a-348', tier: 'A', poolTitle: '關都精選 夏季場', wonAt: '2026-08-02', winner: 'VD-55**' },
+      { cardName: '多龍巴魯托 ex SAR', artId: 'SV8a-221', tier: 'B', poolTitle: '變幻假面 開箱', wonAt: '2026-07-09', winner: 'VD-E1**' }
+    ]
+  },
+  {
+    /* 高單價、低量的精品賣家：樣本數少，所以實際率的信賴區間寬 —— 
+       頁面上要標示樣本數，不然「4.2% 命中」看起來會比保庫堂的 2.6% 更好，
+       但那只是還沒開夠多池。 */
+    id: 's5', handle: 'grade10_vault', name: '滿分保庫', tier: 'trusted', avatarHue: 46,
+    joinedAt: '2025-08-19', bio: '只收 PSA 10。單池 20 籤以內，每張都附鑑定編號可自行查證。',
+    stats: {
+      poolsRun: 31, cardsShipped: 590, avgShipDays: 1.5, disputeRate: 0.1,
+      advertisedTopRate: 4.0, actualTopRate: 4.2, drawsSettled: 620
+    },
+    pastPrizes: [
+      { cardName: '噴火龍 ex SAR', artId: 'SV3-125', tier: 'A', poolTitle: '滿分場 #29', wonAt: '2026-08-05', winner: 'VD-B8**' },
+      { cardName: '牡丹 SAR', artId: 'SV4a-354', tier: 'LAST', poolTitle: '滿分場 #27', wonAt: '2026-07-19', winner: 'VD-4C**' }
+    ]
+  },
+  {
+    /* 刻意放一個「實際率低於標示」的賣家。
+       如果每個賣家的數字都漂亮，這組數字就沒有資訊量、也不會有人相信。
+       願意把難看的數字也顯示出來，整套統計才有公信力 —— 這是「公開實際中獎率」
+       這件事的重點，不是拿來當行銷徽章。 */
+    id: 's6', handle: 'nangang_box', name: '南港開箱王', tier: 'verified', avatarHue: 8,
+    joinedAt: '2026-02-14', bio: '大量快開，主打銅板價入門池。出貨較慢請見諒。',
+    stats: {
+      poolsRun: 88, cardsShipped: 2140, avgShipDays: 4.6, disputeRate: 2.3,
+      advertisedTopRate: 3.5, actualTopRate: 2.7, drawsSettled: 5180
+    },
+    pastPrizes: [
+      { cardName: '猛雷鼓 ex SAR', artId: 'SV8a-222', tier: 'A', poolTitle: '銅板場 #71', wonAt: '2026-07-30', winner: 'VD-6F**' }
+    ]
   },
   {
     id: 's4', handle: 'newbie_seller', name: '新手賣家', tier: 'pending', avatarHue: 200,
     joinedAt: '2026-08-09', bio: '剛註冊，等待身分驗證中。',
-    stats: { poolsRun: 0, cardsShipped: 0, avgShipDays: 0, disputeRate: 0 }
+    stats: {
+      poolsRun: 0, cardsShipped: 0, avgShipDays: 0, disputeRate: 0,
+      advertisedTopRate: 0, actualTopRate: 0, drawsSettled: 0
+    },
+    pastPrizes: []
   }
 ]
 
@@ -349,6 +405,80 @@ export const pools: Pool[] = [
       { id: 'pr30a', tier: 'D', card: cards[28], total: 20, remaining: 16 },
       { id: 'pr30b', tier: 'D', card: cards[29], total: 20, remaining: 15 },
       { id: 'pr30c', tier: 'D', card: cards[30], total: 20, remaining: 15 }
+    ]
+  },
+  {
+    /* 滿分保庫的精品池：籤少、單價高、每張都有鑑定編號。
+       這種池的價值主張是「可查證」——買家能拿 certNo 自己去 PSA 網站對。 */
+    sellerId: 's5',
+    id: 'p9',
+    title: '滿分場 #30 · 全 PSA 10',
+    cover: ph(46),
+    mode: 'classic',
+    ticketPrice: 4800,
+    totalTickets: 20,
+    remainingTickets: 11,
+    takenSeats: Array.from({ length: 9 }, (_, i) => i + 1),
+    status: 'open',
+    commitHash: '9a1f4c7e2b8d6053ff11aa22bb33cc44dd55ee66ff7788990011223344556677',
+    clientSeedSource: 'BTC block #920512 hash',
+    openedAt: '2026-08-15T20:00:00+08:00',
+    escrow: escrowOf(9, 4800),
+    prizes: [
+      { id: 'pr31', tier: 'A', card: cards[0], total: 1, remaining: 1 },
+      { id: 'pr32', tier: 'B', card: cards[2], total: 1, remaining: 1 },
+      { id: 'pr33', tier: 'C', card: cards[5], total: 3, remaining: 2 },
+      { id: 'pr34', tier: 'D', card: cards[12], total: 15, remaining: 7 },
+      { id: 'pr35', tier: 'LAST', card: cards[3], total: 1, remaining: 1 }
+    ]
+  },
+  {
+    /* 南港開箱王的量產池：便宜、籤多、獎項普通。
+       這個賣家的實際中獎率低於標示，賣家頁上會看得到 —— 刻意留著。 */
+    sellerId: 's6',
+    id: 'p10',
+    title: '銅板場 #72 · 快開快抽',
+    cover: ph(8),
+    mode: 'classic',
+    ticketPrice: 60,
+    totalTickets: 120,
+    remainingTickets: 74,
+    takenSeats: Array.from({ length: 46 }, (_, i) => i + 1),
+    status: 'open',
+    commitHash: '5e2b8d6039a1f4c7ff99aa88bb77cc66dd55ee44ff3322110099887766554433',
+    clientSeedSource: 'BTC block #920533 hash',
+    openedAt: '2026-08-16T11:30:00+08:00',
+    escrow: escrowOf(46, 60),
+    prizes: [
+      { id: 'pr36', tier: 'A', card: cards[12], total: 1, remaining: 1 },
+      { id: 'pr37', tier: 'B', card: cards[16], total: 2, remaining: 1 },
+      { id: 'pr38', tier: 'C', card: cards[20], total: 17, remaining: 10 },
+      { id: 'pr39a', tier: 'D', card: cards[28], total: 50, remaining: 31 },
+      { id: 'pr39b', tier: 'D', card: cards[29], total: 50, remaining: 31 }
+    ]
+  },
+  {
+    /* 關都卡舖的已完抽池：賣家頁要有「過去的池」才看得出經營時間。 */
+    sellerId: 's3',
+    id: 'p11',
+    title: '關都精選 夏季場（已完抽）',
+    cover: ph(140),
+    mode: 'classic',
+    ticketPrice: 880,
+    totalTickets: 60,
+    remainingTickets: 0,
+    takenSeats: Array.from({ length: 60 }, (_, i) => i + 1),
+    status: 'revealed',
+    commitHash: '77aa33bb99cc11dd55ee22ff8800112233445566778899aabbccddeeff001122',
+    clientSeedSource: 'BTC block #919804 hash',
+    openedAt: '2026-07-25T19:00:00+08:00',
+    escrow: { held: 0, releaseAfterShipDays: 7, released: 52800 },
+    prizes: [
+      { id: 'pr40', tier: 'A', card: cards[6], total: 1, remaining: 0 },
+      { id: 'pr41', tier: 'B', card: cards[10], total: 2, remaining: 0 },
+      { id: 'pr42', tier: 'C', card: cards[14], total: 12, remaining: 0 },
+      { id: 'pr43', tier: 'D', card: cards[24], total: 45, remaining: 0 },
+      { id: 'pr44', tier: 'LAST', card: cards[1], total: 1, remaining: 0 }
     ]
   }
 ]
