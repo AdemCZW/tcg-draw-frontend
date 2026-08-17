@@ -21,6 +21,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Tier } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
+import { artUrlById } from '@/lib/tcgdex'
 import SmokePlume from '@/components/SmokePlume.vue'
 
 const props = withDefaults(defineProps<{
@@ -68,6 +69,25 @@ const tint = computed<[number, number, number]>(() => {
 })
 
 const plumeGl = ref(!new URLSearchParams(location.search).has('nogl'))
+
+/* 要交給 shader 當貼圖的卡圖。拿不到就退回 DOM 那張卡自己做推近。 */
+const cardUrl = computed(() => {
+  if (props.image && !props.image.startsWith('placeholder:')) return props.image
+  return props.artId ? artUrlById(props.artId) : null
+})
+
+/* 卡片矩形換算到 shader 座標（以畫布高為 1）。
+   舞台 4:5、卡片佔寬 58%、卡面 5:7 —— 這三個數字一改這裡就要跟著改，
+   對不上的話 shader 聚出來的卡跟 DOM 那張會錯位。 */
+const STAGE_AR = 4 / 5
+const CARD_W = 0.58
+const cardHalf = computed<[number, number]>(() => {
+  const hx = (CARD_W * STAGE_AR) / 2
+  return [hx, hx * (7 / 5)]
+})
+
+/** shader 已經拿到卡圖：卡片改由煙聚出來，DOM 那張等 settle 才接手 */
+const shaderCard = ref(false)
 const plume = ref<{ restart: () => void } | null>(null)
 const reduce = () =>
   typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -90,7 +110,11 @@ onBeforeUnmount(() => clearTimeout(timer))
 </script>
 
 <template>
-  <div class="emerge" :class="`ph-${phase}`" :style="{ '--hue': hue }">
+  <div
+    class="emerge"
+    :class="[`ph-${phase}`, { sc: shaderCard }]"
+    :style="{ '--hue': hue }"
+  >
     <!-- 1 卡背後的光：跟著卡片一起由小放大，才會像「那個光源正在靠近」 -->
     <div class="coreGlow" aria-hidden="true"></div>
 
@@ -108,14 +132,17 @@ onBeforeUnmount(() => clearTimeout(timer))
       </div>
     </div>
 
-    <!-- 3 煙霧羽流：蓋在卡片前面，靠自己散掉來揭曉 -->
+    <!-- 3 煙霧：聚攏成一片，再收攏成卡片本身 -->
     <SmokePlume
       v-if="plumeGl"
       ref="plume"
       class="plumeLayer"
       :duration="TOTAL"
       :tint="tint"
+      :image="cardUrl"
+      :card-half="cardHalf"
       @fail="plumeGl = false"
+      @cardready="shaderCard = true"
     />
     <div v-else class="plumeCss" aria-hidden="true"></div>
   </div>
@@ -205,6 +232,28 @@ onBeforeUnmount(() => clearTimeout(timer))
     0 0 30px color-mix(in srgb, var(--hue) 60%, transparent),
     0 22px 44px rgba(0, 0, 0, .7);
 }
+
+/* ---- shader 聚出卡片時的接手 ----
+   卡片由 shader 用煙聚出來，DOM 這張只負責最後的定裝：
+   它有 shader 給不了的東西（正確的色彩管理、陰影、掃光、可被選取的 <img>）。
+
+   接手點放在 settle：shader 那邊的凝聚在 uProg 0.80 完成，settle 正好從
+   0.804 開始。兩張卡的矩形是同一組數字算出來的，所以交接時是同一個位置。
+   畫布晚一點才淡出，讓殘煙有時間飄完，不要在交接那一刻整片消失。 */
+.sc .card3d {
+  opacity: 0;
+  scale: 1;
+  translate: 0 0;
+  transform: none;
+  filter: none;
+  transition: opacity .5s ease;
+}
+.sc.ph-settle .card3d { opacity: 1; }
+.sc .plumeLayer { transition: opacity .7s ease .3s; }
+.sc.ph-settle .plumeLayer { opacity: 0; }
+/* 背光交給 shader 裡的凝聚光。這條排在 .ph-* 那幾條後面，
+   同分but後到，不需要 !important */
+.sc .coreGlow { opacity: 0; }
 
 /* 全像反光：定位後很淡地掃一次。這是卡面的反光，不是掃描線 */
 .sheen {

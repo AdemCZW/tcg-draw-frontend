@@ -1,6 +1,9 @@
 <script setup lang="ts">
 /**
- * 煙霧 —— 從畫面四個邊慢慢往內聚攏，圍成一片，然後散開露出後面的東西。
+ * 煙霧 —— 從畫面四個邊慢慢往內聚攏圍成一片，然後收攏成一張卡。
+ *
+ * 給了 image 的話，卡片是這支 shader「用煙聚出來」的，不是煙散開露出底下的卡：
+ * 卡面的顏色先被攤在一大片區域上、被噪聲攪亂、彩度抽掉，再往內收回卡框。
  *
  * 跟 ShaderSky 的差別在「它站在哪一層」。星雲是背景，畫在最底下；
  * 這團煙畫在卡片「前面」，靠自己的 alpha 讓卡片露出來。
@@ -16,7 +19,7 @@
  * 效能沿用 ShaderSky 那三件事：降解析度算、分頁看不見就停、
  * 開頭量一次幀率太慢就降 octave。煙是低頻訊號，降解析度幾乎看不出來。
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
   /** 整段演出長度（毫秒）。煙的湧入與消散都攤在這段時間上 */
@@ -25,9 +28,14 @@ const props = withDefaults(defineProps<{
   tint?: [number, number, number]
   /** 濃度倍率。1 = 完全遮住後面，調低可以讓卡片一直隱約看得到 */
   density?: number
-}>(), { duration: 4600, tint: undefined, density: 1 })
+  /** 要被煙「聚出來」的卡圖網址。給了才會做凝聚，沒給就只是一團煙 */
+  image?: string | null
+  /** 卡片在畫面上的半寬半高（shader 座標，以畫布高為 1）。
+      凝聚完成時卡片就落在這個矩形上，DOM 那張卡要能無縫接上去 */
+  cardHalf?: [number, number]
+}>(), { duration: 4600, tint: undefined, density: 1, image: null, cardHalf: () => [0.232, 0.325] })
 
-const emit = defineEmits<{ (e: 'fail'): void; (e: 'fps', v: number): void }>()
+const emit = defineEmits<{ (e: 'fail'): void; (e: 'fps', v: number): void; (e: 'cardready'): void }>()
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 let gl: WebGL2RenderingContext | null = null
@@ -53,6 +61,9 @@ uniform float uProg;      // 0..1 整段演出的進度
 uniform float uQuality;
 uniform vec3  uTint;
 uniform float uDensity;
+uniform sampler2D uCard;
+uniform float uHasCard;   // 卡圖貼圖就緒才是 1
+uniform vec2  uCardHalf;  // 卡片最終矩形的半寬半高
 
 float hash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -171,6 +182,56 @@ void main() {
   col += uTint * rim * (0.45 + 1.05 * glow);
   col += vec3(1.0, 0.93, 0.86) * rim * glow * glow * 0.8;   // 最靠近光源的邊緣接近白
 
+  /* ---- 卡片從煙裡凝聚出來 ----
+     不是「煙散開露出底下的卡」，是煙自己收攏成卡：
+     卡面的顏色一開始被攤在一大片區域上、被噪聲攪亂、彩度被抽掉，
+     然後往內收進卡框、擾動歸零、顏色長回來。
+
+     三件事同時發生，缺一個就不成立：
+       spread 攤開的倍率 2.9 → 1     只有這個 = 一張很大的卡縮小
+       warp   擾動的幅度 大 → 0      只有這個 = 卡在原地抖
+       birth  每個畫素各自的生成時刻  只有這個 = 整張一起淡入
+     第三個是最關鍵的 —— 沒有它，不管前兩個怎麼調都只是「一張卡在變形」，
+     不會讀成「一塊一塊從煙裡長出來」。 */
+  if (uHasCard > 0.5) {
+    /* 凝聚要在 settle 開始前就完成 —— DOM 那張卡是在 settle 接手的，
+       接手時 shader 這張還沒長好的話，兩張會對不起來。 */
+    float form = smoothstep(0.40, 0.80, uProg);
+    float ease = form * form * (3.0 - 2.0 * form);
+
+    // 卡框本身也從遠處推近，凝聚是在一個正在靠近的矩形上完成的
+    // half 是 GLSL 的保留字，不能拿來當變數名
+    vec2 hs = uCardHalf * mix(0.62, 1.0, ease);
+    vec2 rel = p / hs;
+
+    float spread = mix(2.90, 1.0, ease);
+    vec2 warp = vec2(fbm(rel * 1.6 + vec2(0.0, uTime * 0.20), oct),
+                     fbm(rel * 1.6 + vec2(6.3, -uTime * 0.16), oct)) - 0.5;
+    vec2 q = rel / spread + warp * (1.0 - ease) * 1.5;
+
+    // 每個畫素的生成時刻。用 q 取樣（跟著料一起走），不是用 p ——
+    // 用 p 的話生成的圖樣會釘在螢幕上，煙在動、生成邊界卻不動
+    float birth = fbm(q * 2.3 + vec2(11.7, 4.3), oct);
+    float formed = smoothstep(birth * 0.9, birth * 0.9 + 0.30, form);
+
+    // 卡框外面不要有東西，邊界隨凝聚收緊
+    float edgeSoft = mix(0.55, 0.02, ease);
+    float box = 1.0 - smoothstep(1.0 - edgeSoft, 1.0 + edgeSoft * 0.4, max(abs(q.x), abs(q.y)));
+
+    vec4 tex = texture(uCard, q * 0.5 + 0.5);
+    // 還沒成形的料是煙：抽掉彩度、染成煙的色調
+    float luma = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 raw = mix(vec3(luma) * uTint * 1.5, tex.rgb, formed);
+
+    float ca = clamp(formed * box, 0.0, 1.0);
+    col = mix(col, raw, ca);
+    alpha = max(alpha, ca);
+
+    // 成形中的邊緣透出一點光，讓凝聚看起來是「亮起來」不是「浮出來」
+    float spark = formed * (1.0 - formed) * 4.0 * box;
+    col += mix(uTint, vec3(1.0), 0.5) * spark * 0.55;
+  }
+
   // 顆粒：打散漸層色帶，暗部重亮部細
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   float grain = hash(gl_FragCoord.xy + fract(uTime) * 91.7) - 0.5;
@@ -214,6 +275,48 @@ let uProg: WebGLUniformLocation | null = null
 let uQuality: WebGLUniformLocation | null = null
 let uTint: WebGLUniformLocation | null = null
 let uDensity: WebGLUniformLocation | null = null
+let uCard: WebGLUniformLocation | null = null
+let uHasCard: WebGLUniformLocation | null = null
+let uCardHalf: WebGLUniformLocation | null = null
+
+let cardTex: WebGLTexture | null = null
+let cardImg: HTMLImageElement | null = null
+
+/* 卡圖上貼圖。
+   跨網域的圖必須帶 crossOrigin='anonymous'，否則 texImage2D 會讓
+   context 被污染而丟 SecurityError（tcgdex 有回 access-control-allow-origin: *）。
+   失敗就安靜放棄 —— uHasCard 保持 0，外層自己用 DOM 那張卡。 */
+function loadCard(url: string) {
+  const img = new Image()
+  img.crossOrigin = 'anonymous'
+  cardImg = img
+  img.onload = () => {
+    if (!gl || cardImg !== img) return
+    const tex = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+    // 攤開的時候會取樣到框外，夾邊比重複好 —— 重複會看到卡片密鋪
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    /* 一定要有 mipmap。卡圖是 ~730px，畫布只有 ~170px 寬，卡片佔其中一半 ——
+       接近 10 倍的縮小。只用 LINEAR 的話每個畫素只取一個 texel，
+       卡面會變成一片閃爍的雜訊，看起來像訊號壞掉不像卡片。
+       WebGL2 對非二次冪貼圖也支援 mipmap，所以可以直接產。 */
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    // WebGL 的 v 軸跟圖片相反，不翻的話卡片會上下顛倒
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
+    try {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img)
+    } catch {
+      gl.deleteTexture(tex)
+      return
+    }
+    gl.generateMipmap(gl.TEXTURE_2D)
+    cardTex = tex
+    emit('cardready')
+  }
+  img.src = url
+}
 
 let frames = 0
 let measureStart = 0
@@ -237,6 +340,13 @@ function frame(now: number) {
   const tint = props.tint ?? [0.55, 0.34, 0.92]
   gl.uniform3f(uTint, tint[0], tint[1], tint[2])
   gl.uniform1f(uDensity, props.density)
+  if (cardTex) {
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, cardTex)
+    gl.uniform1i(uCard, 0)
+  }
+  gl.uniform1f(uHasCard, cardTex ? 1 : 0)
+  gl.uniform2f(uCardHalf, props.cardHalf[0], props.cardHalf[1])
   gl.drawArrays(gl.TRIANGLES, 0, 3)
 
   if (quality && measureStart) {
@@ -294,6 +404,15 @@ onMounted(() => {
   uQuality = g.getUniformLocation(prog, 'uQuality')
   uTint = g.getUniformLocation(prog, 'uTint')
   uDensity = g.getUniformLocation(prog, 'uDensity')
+  uCard = g.getUniformLocation(prog, 'uCard')
+  uHasCard = g.getUniformLocation(prog, 'uHasCard')
+  uCardHalf = g.getUniformLocation(prog, 'uCardHalf')
+
+  // 半透明的煙要正常疊在頁面上
+  g.enable(g.BLEND)
+  g.blendFuncSeparate(g.SRC_ALPHA, g.ONE_MINUS_SRC_ALPHA, g.ONE, g.ONE_MINUS_SRC_ALPHA)
+
+  if (props.image) loadCard(props.image)
 
   startTime = performance.now()
   measureStart = startTime
@@ -311,10 +430,20 @@ function onVis() {
   }
 }
 
+watch(() => props.image, url => {
+  cardTex = null
+  cardImg = null
+  if (url && gl) loadCard(url)
+})
+
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
   document.removeEventListener('visibilitychange', onVis)
-  if (gl && program) gl.deleteProgram(program)
+  cardImg = null
+  if (gl) {
+    if (program) gl.deleteProgram(program)
+    if (cardTex) gl.deleteTexture(cardTex)
+  }
   gl = null
 })
 </script>
