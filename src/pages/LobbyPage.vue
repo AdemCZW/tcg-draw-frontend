@@ -112,7 +112,12 @@ const list = computed(() => pools.pools.filter(MATCH[cat.value]))
           class="ballWrap"
           :aria-label="`${featured.title}，前往池詳情`"
         >
-          <CapsuleArt :tier="featuredTier" :hash="featured.commitHash" />
+          <!-- 故障套在內層而不是 .ballWrap：.ballWrap 自己有 bob 浮動動畫，
+               一個元素只能有一個 animation 屬性，兩者會互相蓋掉。
+               分兩層各自持有自己的動畫最單純。 -->
+          <span class="fx-glitch ballFx" :style="{ '--fx-every': '9s', '--fx-amp': .6 }">
+            <CapsuleArt :tier="featuredTier" :hash="featured.commitHash" />
+          </span>
         </RouterLink>
 
         <div class="info">
@@ -163,7 +168,13 @@ const list = computed(() => pools.pools.filter(MATCH[cat.value]))
         <div v-for="i in 4" :key="i" class="sk"></div>
       </div>
       <div v-else-if="list.length" class="poolGrid">
-        <PoolCard v-for="p in list" :key="p.id" :pool="p" />
+        <!-- 只有快完抽的池卡會故障。特效綁在「這一池快沒了」這個事實上，
+             才不是裝飾 —— 每張都閃等於沒有一張被強調 -->
+        <PoolCard
+          v-for="p in list" :key="p.id" :pool="p"
+          :class="{ 'fx-glitch': p.status === 'open' && leftPct(p) <= 30 }"
+          :style="{ '--fx-phase': '-' + (p.id.charCodeAt(p.id.length - 1) % 6) + 's', '--fx-amp': .45 }"
+        />
       </div>
       <p v-else class="muted none">這個分類目前沒有池。</p>
     </section>
@@ -200,6 +211,7 @@ const list = computed(() => pools.pools.filter(MATCH[cat.value]))
 .lbl::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--hue); box-shadow: 0 0 8px var(--hue); }
 
 .duo { display: grid; grid-template-columns: minmax(220px, 340px) minmax(0, 1fr); gap: 34px; align-items: center; }
+.ballFx { display: block; }
 .ballWrap { display: block; border-radius: 50%; transition: transform .4s cubic-bezier(.2, .8, .3, 1); }
 @media (hover: hover) { .ballWrap:hover { transform: translateY(-6px) scale(1.02); } }
 .ballWrap:focus-visible { outline: 3px solid var(--accent); outline-offset: 8px; }

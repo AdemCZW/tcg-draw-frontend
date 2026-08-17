@@ -1,0 +1,76 @@
+/* ------------------------------------------------------------------
+   通用特效工具類
+   ------------------------------------------------------------------ */
+
+/* ---- .fx-glitch：任意元素的「瞬間移動」故障 ----
+
+   標題的故障靠偽元素複製字元（content: attr()）做紅／青分身，但那招只對文字
+   有效 —— 卡片、圖片沒辦法用偽元素複製內容。所以任意元素的故障要換三種手法：
+
+     1 位移＋傾斜跳格：硬切的幾個位置，不是平滑位移
+     2 瞬間消失：中間那兩格 opacity 0 —— 「瞬移」的來源不是位移是空白
+     3 橫向撕裂：clip-path momentarily 切掉一條帶狀區域，像訊號斷層
+     4 邊緣色散：drop-shadow 疊紅青兩層。這招對圖片也有效，
+       因為它吃的是元素的輪廓不是文字
+
+   節奏跟標題同一套規則：九成五的時間完全靜止，故障只佔幾個百分點。
+   一直在動的東西不叫故障，叫壞掉。
+
+   可調：
+     --fx-every  週期（預設 6s）
+     --fx-phase  相位偏移，多個元素要錯開就給不同值（用負值）
+     --fx-amp    位移幅度（預設 1，卡片這種大物件建議 .5）
+*/
+.fx-glitch {
+  --fx-every: 6s;
+  --fx-phase: 0s;
+  --fx-amp: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .fx-glitch {
+    animation: fxGlitch var(--fx-every) steps(1, end) var(--fx-phase) infinite;
+  }
+}
+
+@keyframes fxGlitch {
+  0%, 88% {
+    transform: none;
+    opacity: 1;
+    clip-path: inset(0);
+    filter: none;
+  }
+  /* 第一跳：往左偏＋切掉中段一條 */
+  88.6% {
+    transform: translate(calc(-4px * var(--fx-amp)), calc(1px * var(--fx-amp))) skewX(-2.5deg);
+    clip-path: inset(34% 0 42% 0);
+    filter: drop-shadow(3px 0 rgba(255, 59, 107, .85)) drop-shadow(-3px 0 rgba(53, 232, 255, .85));
+  }
+  /* 空白格 —— 這一格才是「瞬移」 */
+  89.4% { opacity: 0; }
+  /* 第二跳：跳到另一邊，切另一條 */
+  90.2% {
+    transform: translate(calc(5px * var(--fx-amp)), calc(-2px * var(--fx-amp))) skewX(2deg);
+    clip-path: inset(8% 0 66% 0);
+    filter: drop-shadow(-4px 0 rgba(255, 59, 107, .8)) drop-shadow(4px 0 rgba(53, 232, 255, .8));
+    opacity: 1;
+  }
+  90.9% { opacity: 0; }
+  /* 收回，殘影還在 */
+  91.6% {
+    transform: translate(calc(-2px * var(--fx-amp)), 0) skewX(0deg);
+    clip-path: inset(0);
+    filter: drop-shadow(2px 0 rgba(255, 59, 107, .5)) drop-shadow(-2px 0 rgba(53, 232, 255, .5));
+    opacity: 1;
+  }
+  92.6%, 100% {
+    transform: none;
+    opacity: 1;
+    clip-path: inset(0);
+    filter: none;
+  }
+}
+
+/* 手機上把幅度收一半：小螢幕上同樣的位移看起來大得多 */
+@media (max-width: 720px) {
+  .fx-glitch { --fx-amp: .55; }
+}

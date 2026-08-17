@@ -135,7 +135,12 @@ function markSold(id: string) {
     </div>
 
     <div v-else-if="shown.length" class="grid">
-      <article v-for="l in shown" :key="l.id" class="lot card">
+      <!-- 只有明顯低於市值的掛單會故障：特效在這裡等於「這張值得看一眼」 -->
+      <article
+        v-for="l in shown" :key="l.id" class="lot card"
+        :class="{ 'fx-glitch': diffPct(l) <= -10 }"
+        :style="{ '--fx-phase': '-' + (l.id.charCodeAt(l.id.length - 1) % 6) + 's', '--fx-amp': .45 }"
+      >
         <Tilt3D :max="12" class="art">
           <CardArt
             class="holo"
