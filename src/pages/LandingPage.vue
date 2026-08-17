@@ -25,6 +25,43 @@ const route = useRoute()
 const auth = useAuthStore()
 const busy = ref<'login' | 'register' | null>(null)
 
+/* ================= 場次導演機 =================
+   之前每一層都各自無限循環，沒有開始也沒有收尾 —— 那是氛圍壁紙不是一部片。
+   改成一段 30 秒的循環短片，分五幕，每一幕整個畫面的狀態都不同：
+   鏡頭會推近拉遠、能量會累積、爆發、然後沉降回夜色。
+
+   實作跟 RevealBuildup 同一套：一串 Act 推進根節點的 class，
+   CSS 用 transition 接住幕與幕之間的變化，一次性事件（閃光、衝擊波）用 animation。
+
+   用 setTimeout 不用 rAF：分頁被節流時 rAF 不推進，整部片會停在某一幕，
+   使用者切回來看到的是凍住的畫面。setTimeout 被節流只是慢，不會卡死。 */
+type Act = 'night' | 'wake' | 'align' | 'burst' | 'ember'
+const SCRIPT: { k: Act; ms: number }[] = [
+  { k: 'night', ms: 7000 },   // 靜夜：深空緩慢漂移，球沉睡，鏡頭遠
+  { k: 'wake', ms: 6500 },    // 甦醒：能量聚集，電弧變密，鏡頭推近
+  { k: 'align', ms: 6500 },   // 共鳴：卡片收攏成環一起公轉，色調流轉
+  { k: 'burst', ms: 3200 },   // 爆發：白閃、衝擊波、卡片被推開
+  { k: 'ember', ms: 6800 }    // 餘燼：光點沉降，回到夜色
+]
+const act = ref<Act>('night')
+const cycle = ref(0)          // 每輪 +1，用來重播一次性動畫
+let timer: number | undefined
+
+const reduceMotion = () =>
+  typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
+
+function runScene(i = 0) {
+  const step = SCRIPT[i % SCRIPT.length]
+  act.value = step.k
+  if (step.k === 'night') cycle.value++
+  timer = window.setTimeout(() => runScene(i + 1), step.ms)
+}
+onMounted(() => {
+  // 關動效的人停在最安靜的那一幕，不跑劇本
+  if (!reduceMotion()) runScene()
+})
+onBeforeUnmount(() => clearTimeout(timer))
+
 /* ---- 環繞的卡 ----
    先畫卡背（不必等網路），卡面示意圖抓到才淡入蓋上去。
    這樣首屏永遠是完整的，慢網路只是少了圖不是缺一塊。 */
@@ -141,7 +178,7 @@ async function goIn(kind: 'login' | 'register') {
 </script>
 
 <template>
-  <div class="land" :style="{ '--px': px, '--py': py }">
+  <div class="land" :class="`sc-${act}`" :style="{ '--px': px, '--py': py }">
     <!-- ===== 0 極光星雲 ===== -->
     <div class="sky" aria-hidden="true">
       <div class="aur a1"></div>
@@ -208,6 +245,9 @@ async function goIn(kind: 'login' | 'register') {
       </span>
     </div>
 
+    <!-- 全幕白閃：爆發那一拍蓋過整個畫面 -->
+    <div v-if="act === 'burst'" :key="'f' + cycle" class="flash" aria-hidden="true"></div>
+
     <header class="brand">
       <span class="wordmark">Vault<em>Draw</em></span>
     </header>
@@ -239,6 +279,8 @@ async function goIn(kind: 'login' | 'register') {
           <span class="pulse p1"></span>
           <span class="pulse p2"></span>
           <span class="halo"></span>
+          <!-- 衝擊波：只在爆發那一幕出現。key 綁 cycle，每輪重新掛載才會重播 -->
+          <span v-if="act === 'burst'" :key="cycle" class="shock"></span>
           <svg class="arcs" viewBox="0 0 108 108" aria-hidden="true">
             <path
               v-for="(a, i) in ARCS" :key="i"
@@ -322,6 +364,119 @@ async function goIn(kind: 'login' | 'register') {
 @keyframes aur1 { to { transform: translate(7vmax, 5vmax) scale(1.14); opacity: .34; } }
 @keyframes aur2 { to { transform: translate(-8vmax, 4vmax) scale(1.1);  opacity: .3; } }
 @keyframes aur3 { to { transform: translate(5vmax, -6vmax) scale(1.16); opacity: .2; } }
+
+/* ================= 分幕演出 =================
+   每一幕改的是「狀態」，不是重新播一支動畫 —— 所以各層都給 transition，
+   幕與幕之間是滑過去的。一次性的事件（白閃、衝擊波）才用 animation。
+
+   .land 上的 --e 是這一幕的「能量強度」(0→1)，各層拿它去調自己的亮度／速度，
+   不必每一層都寫五份規則。 */
+.land { --e: 0; --cam: 1; transition: --e 2.2s ease; }
+@property --e { syntax: '<number>'; inherits: true; initial-value: 0; }
+
+.sc-night { --e: .12; --cam: 1.00; }
+.sc-wake  { --e: .55; --cam: 1.06; }
+.sc-align { --e: .85; --cam: 1.11; }
+.sc-burst { --e: 1;   --cam: 1.16; }
+.sc-ember { --e: .3;  --cam: 1.03; }
+
+/* 鏡頭：整組舞台隨幕次推近拉遠。
+   用獨立的 scale 屬性，不用 transform —— .orbit 的 transform 已經被進場動畫
+   riseIn 佔用（它的終點是 transform: none 且 fill: both，會一直壓著），
+   translate 又給了視差。scale 是第三個互不干擾的屬性。 */
+.orbit {
+  transition: scale 3.4s cubic-bezier(.33, 0, .2, 1);
+  scale: var(--cam);
+}
+/* 爆發那一拍鏡頭要頓一下，不能慢慢推 */
+.sc-burst .orbit { transition: scale .5s cubic-bezier(.2, 1.4, .3, 1); }
+
+/* 極光：越後面越亮越飽和 */
+.curtain { transition: opacity 2.6s ease, filter 2.6s ease; }
+.sc-night .curtain { opacity: .28; filter: saturate(.7); }
+.sc-wake  .curtain { opacity: .7; }
+.sc-align .curtain { opacity: .95; filter: saturate(1.35); }
+.sc-burst .curtain { opacity: 1; filter: saturate(1.8) brightness(1.3); }
+.sc-ember .curtain { opacity: .45; filter: saturate(.9); }
+
+/* 神之光：靜夜幾乎看不見，共鳴時最強 */
+.rays { transition: opacity 2.4s ease; }
+.sc-night .rays { opacity: .03; }
+.sc-wake  .rays { opacity: .1; }
+.sc-align .rays { opacity: .2; }
+.sc-burst .rays { opacity: .34; }
+.sc-ember .rays { opacity: .06; }
+
+/* 地平線格線：能量越高捲得越快 */
+.floor span { transition: opacity 2s ease; }
+.sc-night .floor span { opacity: .28; animation-duration: 9s; }
+.sc-wake  .floor span { opacity: .5;  animation-duration: 5s; }
+.sc-align .floor span { opacity: .75; animation-duration: 2.4s; }
+.sc-burst .floor span { opacity: .95; animation-duration: 1.1s; }
+.sc-ember .floor span { opacity: .35; animation-duration: 7s; }
+
+/* 光暈掃描：共鳴時轉快 */
+.sc-night .halo { animation-duration: 16s; opacity: .35; }
+.sc-wake  .halo { animation-duration: 9s; }
+.sc-align .halo { animation-duration: 4s; }
+.sc-burst .halo { animation-duration: 1.6s; }
+.sc-ember .halo { animation-duration: 13s; opacity: .5; }
+.halo { transition: opacity 1.8s ease; }
+
+/* 電弧：靜夜不放電，越後面越密 */
+.sc-night .arcs path { animation-duration: 14s; }
+.sc-wake  .arcs path { animation-duration: 5s; }
+.sc-align .arcs path { animation-duration: 2.2s; }
+.sc-burst .arcs path { animation-duration: 1s; }
+.sc-ember .arcs path { animation-duration: 11s; }
+
+/* 環繞卡：
+   靜夜散得開、共鳴時被吸近球、爆發被推出去。
+   位移量用 --spread 統一縮放，一個變數就能收攏整組。 */
+.fly { --spread: 1; transition: transform 3s cubic-bezier(.33, 0, .2, 1), filter 2s ease; }
+.sc-night .fly { --spread: 1.12; filter: drop-shadow(0 14px 30px rgba(0,0,0,.66)) brightness(.75); }
+.sc-wake  .fly { --spread: 1; }
+.sc-align .fly { --spread: .74; filter: drop-shadow(0 14px 34px rgba(120,80,255,.5)) brightness(1.12); }
+.sc-burst .fly { --spread: 1.42; filter: drop-shadow(0 14px 40px rgba(255,220,150,.6)) brightness(1.5); }
+.sc-ember .fly { --spread: 1.05; filter: drop-shadow(0 14px 30px rgba(0,0,0,.6)) brightness(.9); }
+
+/* 星塵：爆發時整片被吹亮一下 */
+.stars i { transition: opacity 1.4s ease; }
+.sc-burst .stars i { opacity: 1; }
+
+/* 散景：能量高時脹大 */
+.bokeh { transition: opacity 2.4s ease; }
+.sc-night .bokeh { opacity: calc(var(--o) * .5); }
+.sc-align .bokeh { opacity: calc(var(--o) * 1.6); }
+.sc-burst .bokeh { opacity: calc(var(--o) * 2.2); }
+
+/* ---- 一次性事件 ---- */
+/* 衝擊波：從球心炸開的環 */
+.shock {
+  position: absolute; left: 50%; top: 50%;
+  width: 60%; aspect-ratio: 1; translate: -50% -50%;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 236, 190, .9);
+  pointer-events: none; z-index: 3;
+  animation: shockOut 1.5s cubic-bezier(.15, .7, .3, 1) forwards;
+}
+@keyframes shockOut {
+  0%   { transform: scale(.5); opacity: 0; border-width: 4px; }
+  12%  { opacity: 1; }
+  100% { transform: scale(5.2); opacity: 0; border-width: .5px; }
+}
+/* 全幕白閃：很短，只有一拍 */
+.flash {
+  position: absolute; inset: 0; z-index: 6; pointer-events: none;
+  background: radial-gradient(circle at 50% 42%, rgba(255, 245, 225, .82), rgba(255, 220, 190, .12) 42%, transparent 66%);
+  mix-blend-mode: screen;
+  animation: flashOut 1.1s ease-out forwards;
+}
+@keyframes flashOut {
+  0%  { opacity: 0; }
+  8%  { opacity: 1; }
+  100% { opacity: 0; }
+}
 
 /* ===== 0b 極光簾幕 =====
    conic-gradient 轉起來就是一片繞著中心掃的光帶，很像極光。
@@ -576,7 +731,7 @@ async function goIn(kind: 'login' | 'register') {
   position: absolute; top: 50%; left: 50%; z-index: 4;
   width: calc(100px * var(--k) * var(--s));
   aspect-ratio: 5 / 7;
-  translate: calc(var(--x) * var(--k) - 50%) calc(var(--y) * var(--k) - 50%);
+  translate: calc(var(--x) * var(--k) * var(--spread) - 50%) calc(var(--y) * var(--k) * var(--spread) - 50%);
   rotate: var(--rot);
   filter: drop-shadow(0 14px 30px rgba(0, 0, 0, .66));
 }
@@ -584,8 +739,8 @@ async function goIn(kind: 'login' | 'register') {
   .fly { animation: bobCard var(--dur) ease-in-out var(--delay) infinite alternate; }
 }
 @keyframes bobCard {
-  from { translate: calc(var(--x) * var(--k) - 50%) calc(var(--y) * var(--k) - 50% - 11px); }
-  to   { translate: calc(var(--x) * var(--k) - 50%) calc(var(--y) * var(--k) - 50% + 13px); }
+  from { translate: calc(var(--x) * var(--k) * var(--spread) - 50%) calc(var(--y) * var(--k) * var(--spread) - 50% - 11px); }
+  to   { translate: calc(var(--x) * var(--k) * var(--spread) - 50%) calc(var(--y) * var(--k) * var(--spread) + 13px - 50%); }
 }
 /* 卡背先畫好，卡面抓到才蓋上去 —— 慢網路只是少了圖，不是缺一塊 */
 .back {
