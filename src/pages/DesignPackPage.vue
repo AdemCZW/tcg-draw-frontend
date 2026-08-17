@@ -6,9 +6,27 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import CapsuleArt from '@/components/CapsuleArt.vue'
 import RevealBuildup from '@/components/RevealBuildup.vue'
+import CardEmerge from '@/components/CardEmerge.vue'
 import type { Tier } from '@/types/models'
 
 const openedCount = ref(0)
+
+/* 煙霧浮出：每階一張代表卡，換階或按重播就重新掛載重跑。
+   一次性演出要重播只能重新掛載 —— 同一個節點上重設 CSS 動畫不會重跑。 */
+const EMERGE_CARDS: Record<Tier, { artId: string; name: string }> = {
+  LAST: { artId: 'SV4a-349', name: '噴火龍 ex UR' },
+  A: { artId: 'SV4a-350', name: '奇樹 SAR' },
+  B: { artId: 'SV8a-237', name: '太樂巴戈斯 ex UR' },
+  C: { artId: 'SV8a-217', name: '月亮伊布 ex SAR' },
+  D: { artId: 'SV4a-341', name: '謎擬Ｑ SAR' },
+  BUST: { artId: 'SV4a-341', name: '謎擬Ｑ SAR' }
+}
+const emergeTier = ref<Tier>('LAST')
+const emergeKey = ref(0)
+function replayEmerge(t?: Tier) {
+  if (t) emergeTier.value = t
+  emergeKey.value++
+}
 
 /* 蓄勢演出的展示控制。改成單一大舞台 —— 縮圖尺寸下這個特效根本讀不出來，
    它本來就是設計給接近滿版的畫面用的。 */
@@ -171,6 +189,32 @@ function reopenAll() {
       </figure>
     </div>
 
+    <h2>卡片從煙霧浮出</h2>
+    <p class="note">
+      「從煙裡浮上來」的關鍵不是淡入 —— 淡入只會像貼圖漸漸變不透明。
+      真正的訊號是卡的下半部還陷在煙裡看不清，而這條界線隨著卡片上升往下退。
+      核心是一條會移動的遮罩，不是 opacity。
+    </p>
+    <div class="emergeDemo">
+      <div class="emergeStage">
+        <CardEmerge
+          :key="emergeKey"
+          :tier="emergeTier"
+          :art-id="EMERGE_CARDS[emergeTier].artId"
+          :name="EMERGE_CARDS[emergeTier].name"
+        />
+      </div>
+      <div class="emergeCtl">
+        <button
+          v-for="t in (['D','C','B','A','LAST'] as Tier[])" :key="t"
+          type="button" class="btn sm"
+          :class="{ primary: emergeTier === t }"
+          @click="replayEmerge(t)"
+        >{{ t === 'LAST' ? '最後賞' : t + ' 賞' }}</button>
+        <button type="button" class="btn sm" @click="replayEmerge()">↻ 重播</button>
+      </div>
+    </div>
+
     <h2>開卡前蓄勢演出</h2>
     <p class="note muted">
       球體碎幾次、最後停在什麼顏色，就是稀有度的暗號：藍 → 青 → 金 → 橙 → 虹。
@@ -234,6 +278,11 @@ function reopenAll() {
 </template>
 
 <style scoped>
+.emergeDemo { display: grid; gap: 14px; margin-bottom: 30px; }
+.emergeStage { width: 100%; max-width: 420px; }
+.emergeCtl { display: flex; gap: 8px; flex-wrap: wrap; }
+.emergeCtl .btn.sm { padding: 8px 14px; font-size: 13px; }
+
 .note { font-size: 13px; margin: -6px 0 16px; max-width: 62ch; }
 .buildBig { max-width: 720px; }
 .bigStage {

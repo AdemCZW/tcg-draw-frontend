@@ -8,10 +8,16 @@
       "port": 5173
     },
     {
-      "name": "dental-clinic-demo",
+      "name": "fengtian-clinic-demo",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["-y", "http-server", "/Users/adem/vue.tools/dental-clinic-demo", "-p", "4321", "-c-1"],
+      "runtimeArgs": ["-y", "http-server", "/Users/adem/vue.tools/fengtian-clinic-demo", "-p", "4321", "-c-1"],
       "port": 4321
+    },
+    {
+      "name": "bosch-kitchen-dev",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd /Users/adem/vue.tools/bosch-ai-kitchen-studio && npx wrangler dev --port 4173"],
+      "port": 4173
     }
   ]
 }
