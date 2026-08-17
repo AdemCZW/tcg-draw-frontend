@@ -30,14 +30,23 @@ const props = withDefaults(defineProps<{
   delay?: number
   /** 給讀屏的完整句子，不給就用 lines 串起來 */
   label?: string
-}>(), { stagger: 42, delay: 0, label: undefined })
+  /** 待機時的循環故障週期（秒）。0 = 關掉 */
+  glitchEvery?: number
+}>(), { stagger: 42, delay: 0, label: undefined, glitchEvery: 5.5 })
 
 /** 切成字元，同時記錄全域序號 —— 跨行連續才有一條走過去的節奏 */
 const rows = computed(() => {
   let n = 0
   return props.lines.map(line => ({
     text: line,
-    chars: [...line].map((ch, k) => ({ ch, i: ch === ' ' ? -1 : n++, p: line.length > 1 ? k / (line.length - 1) : 0 }))
+    chars: [...line].map((ch, k) => ({
+      ch,
+      i: ch === ' ' ? -1 : n++,
+      p: line.length > 1 ? k / (line.length - 1) : 0,
+      /* 固定的偽亂數相位：故障要在字之間跳來跳去才像「訊號不穩」，
+         整行同時抽動看起來只是整體震動。用字元碼當種子，重繪不會變。 */
+      g: ((ch.charCodeAt(0) * 37 + k * 91) % 100) / 100
+    }))
   }))
 })
 const srText = computed(() => props.label ?? props.lines.join(' '))
@@ -59,7 +68,12 @@ const srText = computed(() => props.label ?? props.lines.join(' '))
       >
         <span
           class="ch"
-          :style="{ '--d': (delay + (c.i < 0 ? 0 : c.i) * stagger) + 'ms', '--p': c.p }"
+          :style="{
+            '--d': (delay + (c.i < 0 ? 0 : c.i) * stagger) + 'ms',
+            '--p': c.p,
+            '--g': (-c.g * glitchEvery).toFixed(2) + 's',
+            '--ge': glitchEvery + 's'
+          }"
           :data-ch="c.ch"
         >{{ c.ch === ' ' ? ' ' : c.ch }}</span>
       </span>
@@ -105,10 +119,15 @@ const srText = computed(() => props.label ?? props.lines.join(' '))
     content: attr(data-ch);
     position: absolute; left: 0; top: 0;
     pointer-events: none;
-    animation: ktSplit 900ms cubic-bezier(.16, 1.36, .3, 1) var(--d) both;
   }
   .ch::before { color: #ff3b6b; mix-blend-mode: screen; }
   .ch::after  { color: #35e8ff; mix-blend-mode: screen; --dir: -1; }
+  /* 待機故障時色差副本也跳一下，而且跳得比進場那次遠 —— 訊號斷裂的感覺 */
+  .ch::before, .ch::after {
+    animation:
+      ktSplit 900ms cubic-bezier(.16, 1.36, .3, 1) var(--d) both,
+      ktGhost var(--ge) steps(1, end) var(--g) infinite;
+  }
   .ch { position: relative; }
 }
 
@@ -150,14 +169,17 @@ const srText = computed(() => props.label ?? props.lines.join(' '))
   -webkit-text-fill-color: transparent;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .r0 .ch { animation-name: ktRise, ktFocus, ktShine; }
-  .r1 .ch { animation-name: ktRise, ktFocus, ktShine; }
   .ch {
-    animation-duration: 900ms, 620ms, 6.5s;
-    animation-timing-function: cubic-bezier(.16, 1.36, .3, 1), ease-out, ease-in-out;
-    animation-delay: var(--d), var(--d), 1.2s;
-    animation-fill-mode: both, both, none;
-    animation-iteration-count: 1, 1, infinite;
+    animation-name: ktRise, ktFocus, ktShine, ktGlitch, ktBlink;
+    animation-duration: 900ms, 620ms, 6.5s, var(--ge), var(--ge);
+    /* 故障用 steps()：數位訊號是硬切的，一用平滑緩動就變成普通的抖動動畫。
+       這是「看起來像故障」跟「看起來像沒做完的動畫」的分界。 */
+    animation-timing-function:
+      cubic-bezier(.16, 1.36, .3, 1), ease-out, ease-in-out,
+      steps(1, end), steps(1, end);
+    animation-delay: var(--d), var(--d), 1.2s, var(--g), var(--g);
+    animation-fill-mode: both, both, none, none, none;
+    animation-iteration-count: 1, 1, infinite, infinite, infinite;
   }
 }
 @keyframes ktShine {
@@ -165,6 +187,35 @@ const srText = computed(() => props.label ?? props.lines.join(' '))
   100%    { --bp: -260%; }
 }
 @property --bp { syntax: '<percentage>'; inherits: false; initial-value: 180%; }
+
+/* ---- 待機故障 ----
+   九成五的時間完全靜止。故障只佔幾個百分點，而且是一連串硬切的位置 ——
+   偶爾才壞一下才叫故障，一直在動只是吵。 */
+@keyframes ktGlitch {
+  0%, 90%   { transform: none; }
+  90.5%     { transform: translate(-.06em, .02em) skewX(-9deg); }
+  91.5%     { transform: translate(.05em, -.03em) skewX(7deg); }
+  92.5%     { transform: translate(-.03em, 0) skewX(0deg); }
+  93.5%     { transform: translate(.02em, .01em) skewX(-3deg); }
+  94.5%, 100% { transform: none; }
+}
+/* 瞬間消失再出現 —— 「瞬移」的關鍵不是位移，是中間那兩格空白 */
+@keyframes ktBlink {
+  0%, 90%     { opacity: 1; }
+  90.8%       { opacity: 0; }
+  91.6%       { opacity: 1; }
+  92.4%       { opacity: 0; }
+  93.2%, 100% { opacity: 1; }
+}
+
+@keyframes ktGhost {
+  0%, 90%     { opacity: 0; transform: none; }
+  90.5%       { opacity: .95; transform: translate(calc(var(--dir, 1) * .16em), 0); }
+  91.5%       { opacity: .7;  transform: translate(calc(var(--dir, 1) * -.11em), .02em); }
+  92.5%       { opacity: .9;  transform: translate(calc(var(--dir, 1) * .07em), 0); }
+  93.5%       { opacity: .4;  transform: translate(calc(var(--dir, 1) * -.03em), 0); }
+  94.5%, 100% { opacity: 0; transform: none; }
+}
 
 /* 色差副本要吃自己的實色，不能被 background-clip 洗成透明 */
 .ch::before, .ch::after {
