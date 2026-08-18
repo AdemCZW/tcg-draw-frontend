@@ -25,10 +25,10 @@ import type { CardItem } from '@/types/models'
  *
  * 要調整就改這一個常數，全站的報價與試算都跟著走。
  */
-export const RECYCLE_RATE = 0.7
-
-/** 低於這個點數不開放回收 —— 手續成本比卡片本身還高 */
-export const RECYCLE_MIN_VALUE = 10
+/* 常數搬到 src/shared/recycle.ts，後端結算跟這裡的試算是同一份。
+   這裡 re-export 讓既有 import 不用動。 */
+export { RECYCLE_RATE, RECYCLE_MIN_VALUE } from '@/shared/recycle'
+import { RECYCLE_RATE, RECYCLE_MIN_VALUE } from '@/shared/recycle'
 
 export interface RecycleQuote {
   /** 回收可得點數（已取整） */

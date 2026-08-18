@@ -10,6 +10,10 @@ import { corsOrigins, env } from './env.js'
 import { sql } from './db.js'
 import { ensureUser, issueToken } from './auth.js'
 import { orders } from './routes/orders.js'
+import { auth as authRoutes } from './routes/auth.js'
+import { wallet } from './routes/wallet.js'
+import { pools } from './routes/pools.js'
+import { prizes } from './routes/prizes.js'
 import { sweep } from './orders-service.js'
 
 const app = new Hono()
@@ -43,6 +47,10 @@ app.get('/v1/listings', async c => {
 })
 
 app.route('/v1/orders', orders)
+app.route('/v1/auth', authRoutes)
+app.route('/v1/wallet', wallet)
+app.route('/v1/pools', pools)
+app.route('/v1/prizes', prizes)
 
 /* 逾期掃描。
    時限本身是用時間戳算的，所以這支排程不是唯一真相 —— 它掛掉不會讓狀態算錯，

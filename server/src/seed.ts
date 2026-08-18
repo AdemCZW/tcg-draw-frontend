@@ -6,6 +6,7 @@
  */
 import { sql } from './db.js'
 import { PLATFORM_ID } from './orders-service.js'
+import { commitOf, seatSequence } from '../../src/shared/fairness.js'
 
 const users: [string, string, string][] = [
   [PLATFORM_ID, 'platform', 'VaultDraw 官方'],
@@ -51,6 +52,41 @@ async function run() {
       on conflict (id) do nothing
     `
   }
+  /* 賣家 + 一個直接處於 open 的池。
+     這裡不走 drand（測試不能等兩分鐘），用固定的 seed 與 client_seed 算籤序。
+     commit-reveal 的結構完全一樣，只是亂數來源是 fixture —— 標在 client_seed_source 裡。 */
+  await sql`insert into sellers (id, handle, name, origin, tier)
+            values ('u-seller', 'seller', '測試賣家', 'personal', 'verified')
+            on conflict (id) do nothing`
+  await sql`insert into sellers (id, handle, name, origin, tier)
+            values ('u-shop', 'shop', '關都卡舖', 'merchant', 'trusted')
+            on conflict (id) do nothing`
+
+  const poolId = 'p-seed-1'
+  const [exists] = await sql`select 1 from pools where id = ${poolId}`
+  if (!exists) {
+    const serverSeed = '11'.repeat(32)
+    const clientSeed = 'fixture:seed-1'
+    const prizeDefs = [
+      { id: `${poolId}-pr0`, tier: 'LAST', card: card('噴火龍 ex UR', null, 'SV4a-349', 43680), total: 1 },
+      { id: `${poolId}-pr1`, tier: 'A', card: card('奇樹 SAR', null, 'SV4a-350', 26320), total: 2 },
+      { id: `${poolId}-pr2`, tier: 'B', card: card('太樂巴戈斯 ex UR', null, 'SV8a-237', 19800), total: 5 },
+      { id: `${poolId}-pr3`, tier: 'C', card: card('月亮伊布 ex SAR', null, 'SV8a-217', 4200), total: 12 },
+      { id: `${poolId}-pr4`, tier: 'D', card: card('謎擬Ｑ SAR', null, 'SV4a-341', 380), total: 80 }
+    ]
+    const total = prizeDefs.reduce((a, p) => a + p.total, 0)
+    await sql`
+      insert into pools (id, seller_id, mode, title, ticket_price, total_tickets, status,
+                         server_seed, commit_hash, client_seed_source, client_seed, opened_at)
+      values (${poolId}, 'u-seller', 'classic', '測試池：閃色寶藏 100 抽', 300, ${total}, 'open',
+              ${serverSeed}, ${await commitOf(serverSeed)}, ${clientSeed}, ${clientSeed}, now())
+    `
+    await sql`insert into pool_prizes ${sql(prizeDefs.map(p => ({ id: p.id, pool_id: poolId, tier: p.tier, card: p.card, total: p.total })) as never)}`
+    const seq = await seatSequence(serverSeed, clientSeed, prizeDefs.map(p => ({ prizeId: p.id, total: p.total })))
+    await sql`insert into pool_seats ${sql(seq.map((prizeId, i) => ({ pool_id: poolId, seat: i + 1, prize_id: prizeId })) as never)}`
+    console.log(`seed pool ${poolId}: ${total} seats`)
+  }
+
   const [n] = await sql<{ count: string }[]>`select count(*)::text as count from listings where status = 'live'`
   console.log(`seed done — ${n?.count ?? 0} 筆有效掛單`)
   await sql.end()

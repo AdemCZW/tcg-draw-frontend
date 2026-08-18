@@ -48,6 +48,20 @@ Railway 那組連線字串（Railway 的 Postgres 頁面 → Connect → Public 
 Root Directory 要設對，因為這是 monorepo —— 共用模組在 `../src/shared`，
 tsup 打包時會把它一起 inline 進 `dist/index.js`。
 
+## 端點
+
+```
+POST /v1/auth/register  /login   GET /v1/auth/me
+GET  /v1/wallet
+GET  /v1/pools  /v1/pools/:id  /v1/pools/:id/reveal
+POST /v1/pools  (賣家)  /v1/pools/:id/open  /:id/draw  /:id/reveal
+GET  /v1/prizes   POST /v1/prizes/:id/recycle  /v1/prizes/ship
+GET  /v1/listings
+GET/POST /v1/orders ...（託管，見 ../src/shared/contract.ts）
+```
+
+完整設計、決策記錄、資料表：**DESIGN.md**。
+
 ## 三個不能省的正確性設計
 
 **1. 交易邊界。** 建立訂單是「檢查掛單 → 檢查餘額 → 改掛單狀態 → 建訂單」，
@@ -58,8 +72,13 @@ tsup 打包時會把它一起 inline 進 `dist/index.js`。
 餘額是 `SUM(delta)`，凍結是「進行中訂單的貨款 + 我押的保證金」。
 存欄位就會有跟帳本對不起來的一天，而且對帳時你不知道該信哪個。
 
-**3. 結算可以重試。** 每筆分錄都帶 `order_id`，靠 `ledger_once` 唯一索引擋重複。
+**3. 結算可以重試。** 每筆分錄都帶 `ref_id`，靠 `ledger_once` 唯一索引擋重複。
 逾期掃描可能同時被多個請求觸發，沒有這層保護就會重複入帳。
+
+**4. 籤序開賣前決定、事後可驗。** 建池時產生 `server_seed` 只公布 `SHA256`，
+client_seed 用開池後才出現的 drand round，籤序 = 兩者的 HMAC 洗牌，寫進 `pool_seats`。
+抽選只是搶佔一列（`UPDATE ... WHERE taken_by IS NULL`）。池結束後公布 seed，
+`GET /pools/:id/reveal` 給的資料可以用 `src/shared/fairness.ts` 在瀏覽器裡重算。
 
 ## 時限怎麼推進
 

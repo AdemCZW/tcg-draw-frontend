@@ -137,6 +137,52 @@ async function run() {
       v.ok ? `${w2.wallet.points} → ${vj.wallet.points}` : '')
   }
 
+  /* ---- 抽選 ---- */
+  console.log('\n抽選：')
+  const poolsRes = await json(await fetch(`${base}/v1/pools`))
+  const pool = poolsRes.pools.find((p: { id: string }) => p.id === 'p-seed-1')
+  check('種子池存在且 open', pool?.status === 'open', '先跑 npm run seed')
+  if (pool) {
+    check('open 的池不會洩漏 server_seed', pool.serverSeed === null)
+    check('但 commit_hash 是公開的', typeof pool.commitHash === 'string' && pool.commitHash.length === 64)
+
+    // 兩個人同時搶同一格
+    const seat = pool.takenSeats.includes(7) ? 8 : 7
+    const [d1, d2] = await Promise.all([
+      call(buyer, `/v1/pools/${pool.id}/draw`, { seats: [seat], idempotencyKey: 'smoke-d-' + Date.now() + 'a' }),
+      call(seller, `/v1/pools/${pool.id}/draw`, { seats: [seat], idempotencyKey: 'smoke-d-' + Date.now() + 'b' })
+    ])
+    const won = [d1, d2].filter(r => r.ok)
+    check('同一格只有一個人抽到', won.length === 1, `${won.length} 個成功`)
+    const lost = await Promise.all([d1, d2].filter(r => !r.ok).map(json))
+    check('另一個收到 SEATS_TAKEN 與衝突清單',
+      lost[0]?.error === 'SEATS_TAKEN' && Array.isArray(lost[0]?.taken) && lost[0].taken.includes(seat),
+      JSON.stringify(lost[0]))
+
+    const dj = await json(won[0]!)
+    check('抽到的東西有籤位、賞別、卡', dj.items?.[0]?.seat === seat && !!dj.items[0].tier && !!dj.items[0].card)
+    check('抽選扣點', dj.wallet.points < 1000000)
+
+    // 多籤：其中一格已被拿走 → 整筆失敗、一格都不給
+    const wBefore = (await json(await call(buyer, '/v1/wallet'))).wallet.points
+    const multi = await call(buyer, `/v1/pools/${pool.id}/draw`,
+      { seats: [seat, 90, 91], idempotencyKey: 'smoke-m-' + Date.now() })
+    check('多籤含已被拿走的格 → 整筆失敗', !multi.ok && (await json(multi)).error === 'SEATS_TAKEN')
+    const wAfter = (await json(await call(buyer, '/v1/wallet'))).wallet.points
+    check('失敗的多籤沒有扣任何點', wBefore === wAfter)
+
+    // 獎品進了保管庫
+    const mine = await json(await call(buyer, '/v1/prizes'))
+    const got = mine.prizes.find((p: { seat: number }) => Number(p.seat) === seat)
+    const owner = d1.ok ? buyer : seller
+    if (d1.ok) check('抽到的卡在買家的保管庫', !!got && got.status === 'stashed')
+
+    // reveal 前拿不到 seed
+    const rv = await fetch(`${base}/v1/pools/${pool.id}/reveal`)
+    check('未 revealed 的池不給 reveal 資料', rv.status === 409)
+    void owner
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`)
   process.exit(fail ? 1 : 0)
 }

@@ -25,6 +25,10 @@ export async function walletOf(userId: string, db: Db = root): Promise<Wallet> {
       select price   as amount from orders where buyer_id  = ${userId} and status = any(${OPEN as unknown as string[]})
       union all
       select deposit as amount from orders where seller_id = ${userId} and status = any(${OPEN as unknown as string[]})
+      union all
+      -- 競標中的最高出價也是凍結：被超過就自動解凍（is_top 變 false）
+      select b.amount from bids b join auction_lots l on l.id = b.lot_id
+       where b.user_id = ${userId} and b.is_top and l.status = 'live'
     ) t
   `
   const points = Number(bal?.sum ?? 0)
@@ -35,15 +39,15 @@ export async function walletOf(userId: string, db: Db = root): Promise<Wallet> {
 /**
  * 寫一筆帳。
  *
- * 帶 orderId 的分錄靠 ledger_once 唯一索引擋重複 —— 逾期掃描可能被多個請求
+ * 帶 refId 的分錄靠 ledger_once 唯一索引擋重複 —— 逾期掃描可能被多個請求
  * 同時觸發，沒有這層保護就會重複入帳。ON CONFLICT DO NOTHING 讓重試是安全的。
  */
 export async function credit(
-  db: Tx, userId: string, delta: number, reason: string, orderId?: string
+  db: Tx, userId: string, delta: number, reason: string, refId?: string
 ) {
   await db`
-    insert into points_ledger (user_id, delta, reason, order_id)
-    values (${userId}, ${delta}, ${reason}, ${orderId ?? null})
+    insert into points_ledger (user_id, delta, reason, ref_id)
+    values (${userId}, ${delta}, ${reason}, ${refId ?? null})
     on conflict do nothing
   `
 }
