@@ -27,13 +27,13 @@ VaultDraw 是台灣的鑑定寶可夢卡線上抽選（オリパ）平台。後�
 | 資料庫 | Postgres，raw SQL | 錢的正確性靠明確的交易邊界與 `FOR UPDATE`，ORM 會把這兩件事藏起來。表不多，抽象層的麻煩大於好處 |
 | 檔案 | Cloudflare R2，presigned URL 直傳 | Railway 檔案系統是暫時的；檔案不經過 API server；R2 出站免費 |
 | 快取 / 佇列 | 暫不引入 Redis | 現在沒有任何功能需要它。速率限制先用 Postgres；真的需要時再加 |
-| 驗證 | Email + 密碼（node:crypto scrypt），JWT 30 天 | 零額外相依。LINE Login 是下一步（台灣使用者主流），schema 已預留 `auth_identities` |
+| 驗證 | LINE Login（主）+ Email 密碼（備援），JWT 30 天 | 台灣使用者主流是 LINE；不申請 email 權限（要審核且非必要），用 LINE userId 識別。Google 之後接同一張 `auth_identities` |
 | 公平抽選 | 開池時預洗籤序（commit-reveal + 外部亂數） | 見第 5 節。放棄「每次抽選獨立算」—— 那是轉盤遊戲的模型，オリパ的籤位有實體意義（剩幾張、剩什麼賞） |
 | 外部亂數來源 | drand（League of Entropy），開池時鎖定一個未來的 round | 專門為此設計、公開可查、不能被單方影響。放棄 BTC 區塊雜湊（可行但礦工理論上可影響）。來源做成可替換 |
 | 籤位併發 | `pool_seats` 每格一列，條件式 UPDATE 搶佔 | 兩人同時選 78 號，只有一個 UPDATE 會影響到列。不需要 Redis 鎖 |
 | 多籤抽選 | 全成功或全失敗，回傳衝突的籤位 | 部分成功的語意太複雜（付了 3 張只拿到 2 張？）。前端拿到衝突清單重選 |
 | 時限推進 | 「拉」不是「推」：讀取時重算 + 排程掃 | 排程不是唯一真相，掛掉只會晚結案不會算錯。跟託管訂單同一套 |
-| 金流 | 帳本與 topups 表先建，供應商整合另案 | 需要商家帳號與合約（綠界 / 藍新 / LINE Pay 待決）。後端先能記帳與接 webhook |
+| 金流 | 暫不接，點數由後台發放（`/admin/grant`，每筆稽核） | 需要商家帳號與合約，等系統測試完再談。`topups` 表已建，屆時只接 webhook |
 | 平台角色 | `users.role in ('user','admin')`；賣家是獨立實體 | 一個使用者可以同時是買家和賣家；admin 是平台營運 |
 | 賣家統計 | 全部即時計算，不存 | 跟餘額同一個道理。開池數、出貨數、爭議率都是查詢 |
 
@@ -166,10 +166,10 @@ admin       POST /v1/admin/pools/:id/open  ;  /sellers/:id/verify  ;  /credit  ;
 
 ## 9. 還沒定、需要你決定的
 
-1. **登入方式**：先 Email + 密碼，LINE Login 排下一步 —— 可以嗎？
-2. **獎品保管到期政策**：卡放在庫裡超過 N 天怎麼辦？選項：(a) 到期自動以回收價轉點數 (b) 到期開始收保管費 (c) 只通知不處理。**我先做 (c) + 90 天**，因為前兩者是在動使用者的財產，要你拍板。
-3. **金流供應商**：綠界 / 藍新 / LINE Pay？影響 webhook 格式，但帳本這邊不受影響。
-4. **battle / niboichi 的規則**：mock 裡沒有完整實作，要你描述。
+1. ~~登入方式~~ → 已定：LINE 主、Email 備援
+2. ~~保管到期~~ → 已定：只通知不處理，管理費之後另外研究
+3. ~~金流~~ → 已定：先不接，點數由後台發放
+4. **battle / niboichi 的規則**：mock 裡只有名字沒有規則。battle 是兩人對戰？怎麼算輸贏？niboichi 是抽到後二選一還是兩個籤位選一個？沒有規則寫不出後端。不急，也可以先不做這兩種。
 
 ## 10. 實作階段與進度
 
@@ -177,7 +177,8 @@ admin       POST /v1/admin/pools/:id/open  ;  /sellers/:id/verify  ;  /credit  ;
 |---|---|---|
 | 0 | 託管訂單、帳本、種子、煙霧測試 | ✅ 已完成 |
 | 1 | 遷移 002（全部資料表）、公平抽選模組 + 自我測試、抽選端點、獎品/回收/出貨申請、Email 登入、錢包 | ✅ 已完成（待接 DB 跑 smoke） |
-| 2 | 檔案（R2 presign）、賣家與驗證、後台端點、出貨申請 | 待做 |
+| 2 | LINE Login、後台端點（發點數／審賣家／稽核）、出貨申請 | ✅ 已完成 |
+| 2b | 檔案（R2 presign）、賣家申請端點 | 待做 |
 | 3 | streak、auction 端點 | 待做 |
 | 4 | 前端從 mock 切到 API | 待做 |
 | 5 | battle / niboichi、LINE Login、金流 webhook、備份排程 | 待規格 |

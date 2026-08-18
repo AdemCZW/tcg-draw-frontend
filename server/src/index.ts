@@ -14,6 +14,8 @@ import { auth as authRoutes } from './routes/auth.js'
 import { wallet } from './routes/wallet.js'
 import { pools } from './routes/pools.js'
 import { prizes } from './routes/prizes.js'
+import { line } from './routes/line.js'
+import { admin } from './routes/admin.js'
 import { sweep } from './orders-service.js'
 
 const app = new Hono()
@@ -25,15 +27,18 @@ app.get('/health', async c => {
   return c.json({ ok: true, time: Date.now() })
 })
 
-/* 開發用登入：給 handle 就發 token，跟前端目前的 MOCK 行為一致。
-   真正的註冊登入還沒做，開放註冊之前必須補上。 */
-const LoginBody = z.object({ handle: z.string().min(2).max(32), name: z.string().min(1).max(32) })
-app.post('/v1/auth/login', async c => {
-  const parsed = LoginBody.safeParse(await c.req.json().catch(() => null))
-  if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '參數不合法' }, 400)
-  const id = await ensureUser(parsed.data.handle, parsed.data.name)
-  return c.json({ token: await issueToken(id), userId: id })
-})
+/* 開發用登入：給 handle 就發 token。
+   只在 DEV_LOGIN=1 時開 —— smoke 測試靠它建立測試身分。正式環境不設這個變數就沒有這條路。 */
+if (process.env.DEV_LOGIN === '1') {
+  const LoginBody = z.object({ handle: z.string().min(2).max(32), name: z.string().min(1).max(32) })
+  app.post('/v1/auth/dev-login', async c => {
+    const parsed = LoginBody.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '參數不合法' }, 400)
+    const id = await ensureUser(parsed.data.handle, parsed.data.name)
+    return c.json({ token: await issueToken(id), userId: id })
+  })
+  console.warn('[auth] DEV_LOGIN 已開啟：/v1/auth/dev-login 給 handle 就發 token，正式環境不要開')
+}
 
 app.get('/v1/listings', async c => {
   const rows = await sql`select * from listings where status = 'live' order by listed_at desc limit 100`
@@ -51,6 +56,8 @@ app.route('/v1/auth', authRoutes)
 app.route('/v1/wallet', wallet)
 app.route('/v1/pools', pools)
 app.route('/v1/prizes', prizes)
+app.route('/v1/auth/line', line)
+app.route('/v1/admin', admin)
 
 /* 逾期掃描。
    時限本身是用時間戳算的，所以這支排程不是唯一真相 —— 它掛掉不會讓狀態算錯，

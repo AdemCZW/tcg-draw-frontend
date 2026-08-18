@@ -34,6 +34,7 @@ async function run() {
     await sql`insert into users (id, handle, name) values (${id}, ${handle}, ${name})
               on conflict (id) do nothing`
   }
+  await sql`update users set role = 'admin' where id = ${PLATFORM_ID}`
   // 給測試買家一些點數。正式環境的點數只能從儲值來，這裡是為了讓 smoke 測跑得動
   await sql`insert into points_ledger (user_id, delta, reason)
             select 'u-buyer', 1000000, 'seed'

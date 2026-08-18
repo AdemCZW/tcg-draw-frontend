@@ -5,7 +5,7 @@
  * 是資料庫那一層 —— 交易邊界、SELECT FOR UPDATE、帳本一致性。
  * 那些沒有真的 Postgres 就驗不了，所以必須有一支能對著已部署的服務跑的測試。
  *
- *   npm run smoke                          # 打 localhost:8080
+ *   npm run smoke                          # 打 localhost:8080（伺服器要設 DEV_LOGIN=1）
  *   npm run smoke -- https://xxx.up.railway.app
  *
  * 會改資料，不要對正式環境跑。
@@ -24,7 +24,7 @@ function check(name: string, ok: boolean, detail = '') {
 }
 
 async function login(handle: string, name: string) {
-  const r = await fetch(`${base}/v1/auth/login`, {
+  const r = await fetch(`${base}/v1/auth/dev-login`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ handle, name })
   })

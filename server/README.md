@@ -40,9 +40,13 @@ Railway 那組連線字串（Railway 的 Postgres 頁面 → Connect → Public 
 
 1. 新建專案 → **Add Postgres**（會自動注入 `DATABASE_URL`）
 2. 從 GitHub 部署，**Root Directory 設成 `server`**
-3. 環境變數只需要補兩個：
+3. 環境變數：
    - `JWT_SECRET`：32 字元以上的隨機字串
    - `CORS_ORIGINS`：`https://ademczw.github.io`
+   - `PUBLIC_URL`：Railway 給你的後端網址（組 LINE 的 redirect_uri 用）
+   - `FRONTEND_URL`：`https://ademczw.github.io/tcg-draw-frontend`
+   - `LINE_CHANNEL_SECRET`：LINE Developers → channel → Basic settings（**只放這裡，不進 git**）
+   - `DEV_LOGIN=1`：**只在測試環境**。開啟 `/v1/auth/dev-login`（給 handle 就發 token）讓 smoke 能跑；正式環境不要設
 4. `railway.json` 已經設定啟動時先跑遷移
 
 Root Directory 要設對，因為這是 monorepo —— 共用模組在 `../src/shared`，
@@ -52,6 +56,9 @@ tsup 打包時會把它一起 inline 進 `dist/index.js`。
 
 ```
 POST /v1/auth/register  /login   GET /v1/auth/me
+GET  /v1/auth/line/start  → 302 到 LINE  → /v1/auth/line/callback → 302 回前端 /login#token=…
+POST /v1/admin/grant  (發點數，note 必填)   /v1/admin/sellers/:id/tier
+GET  /v1/admin/users  /users/:id/wallet  /actions  (稽核)
 GET  /v1/wallet
 GET  /v1/pools  /v1/pools/:id  /v1/pools/:id/reveal
 POST /v1/pools  (賣家)  /v1/pools/:id/open  /:id/draw  /:id/reveal
@@ -90,7 +97,8 @@ client_seed 用開池後才出現的 drand round，籤序 = 兩者的 HMAC 洗�
 
 ## 還沒做（上線前必須補）
 
-- **真正的登入。** 現在 `/v1/auth/login` 給 handle 就發 token，等同前端的 MOCK。
+- **Google 登入與帳號綁定頁。** LINE 與 Email 已可用；同一個人用不同方式登入會是兩個帳號，
+  要靠「綁定其他登入方式」合併（LINE 不申請 email 權限就拿不到 email，不能靠 email 自動合併）。
 - **物流單號查驗。** `looksLikeTracking()` 只擋格式，擋不掉「填別人的舊單號」。
   要打物流商 API 確認單號存在、交寄時間晚於訂單成立。
 - **簽收改成 webhook。** `POST /orders/:id/delivered` 現在限平台帳號呼叫（給測試用），

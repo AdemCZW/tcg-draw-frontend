@@ -11,7 +11,15 @@ const Env = z.object({
   DATABASE_URL: z.string().min(1, '缺少 DATABASE_URL'),
   JWT_SECRET: z.string().min(32, 'JWT_SECRET 至少要 32 個字元'),
   PORT: z.coerce.number().int().positive().default(8080),
-  CORS_ORIGINS: z.string().default('http://localhost:5173')
+  CORS_ORIGINS: z.string().default('http://localhost:5173'),
+  /* LINE Login。Channel ID 是公開的；Secret 只能從環境變數來。
+     兩個都沒填時 LINE 登入端點回 503，其他功能照常 —— 本機開發不一定要設。 */
+  LINE_CHANNEL_ID: z.string().default('2011159689'),
+  LINE_CHANNEL_SECRET: z.string().optional(),
+  /** 後端對外的網址，組 LINE 的 redirect_uri 用。Railway 上要填自己的網址 */
+  PUBLIC_URL: z.string().url().default('http://localhost:8080'),
+  /** 登入完成後導回前端的網址 */
+  FRONTEND_URL: z.string().url().default('http://localhost:5173')
 })
 
 const parsed = Env.safeParse(process.env)
