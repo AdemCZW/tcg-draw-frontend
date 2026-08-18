@@ -47,6 +47,10 @@ Railway 那組連線字串（Railway 的 Postgres 頁面 → Connect → Public 
    - `FRONTEND_URL`：`https://ademczw.github.io/tcg-draw-frontend`
    - `LINE_CHANNEL_SECRET`：LINE Developers → channel → Basic settings（**只放這裡，不進 git**）
    - `DEV_LOGIN=1`：**只在測試環境**。開啟 `/v1/auth/dev-login`（給 handle 就發 token）讓 smoke 能跑；正式環境不要設
+   - `R2_ACCOUNT_ID` / `R2_BUCKET` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`：Cloudflare R2 → 你的 bucket。
+     Access Key / Secret 從 R2 → Manage API Tokens 建立，**只放這裡，不進 git**
+   - `R2_PUBLIC_URL`（可選）：bucket 開了公開讀取（r2.dev 開發網域或自訂網域）才填，
+     沒填的話所有檔案都走簽名網址讀取——這是安全的預設值，不填也能動
 4. `railway.json` 已經設定啟動時先跑遷移
 
 Root Directory 要設對，因為這是 monorepo —— 共用模組在 `../src/shared`，
@@ -65,6 +69,8 @@ POST /v1/pools  (賣家)  /v1/pools/:id/open  /:id/draw  /:id/reveal
 GET  /v1/prizes   POST /v1/prizes/:id/recycle  /v1/prizes/ship
 GET  /v1/listings
 GET/POST /v1/orders ...（託管，見 ../src/shared/contract.ts）
+POST /v1/files/presign  (拿上傳用的簽名網址)   GET /v1/files/:id  (拿讀取用的網址)
+GET  /v1/sellers  /v1/sellers/:id   GET /v1/winners   POST /v1/listings
 ```
 
 完整設計、決策記錄、資料表：**DESIGN.md**。
@@ -103,6 +109,11 @@ client_seed 用開池後才出現的 drand round，籤序 = 兩者的 HMAC 洗�
   要打物流商 API 確認單號存在、交寄時間晚於訂單成立。
 - **簽收改成 webhook。** `POST /orders/:id/delivered` 現在限平台帳號呼叫（給測試用），
   接上真的物流之後要改成驗物流商的簽名，並拿掉平台帳號這條路。
+- **ship-photo / unbox-video 的讀取權限只到「要登入」，還沒做到「只有這筆訂單的
+  買賣雙方看得到」。** 現況是任何登入使用者只要知道 fileId 就能讀（key 本身不可猜測，
+  但沒有跟訂單綁定做真正的存取控制）。要補的話：`files` 表加 `order_id`，
+  `GET /v1/files/:id` 檢查呼叫者是不是那筆訂單的買家或賣家。
+  seller-doc（身分文件）已經做到只有本人或平台能看，不受這條影響。
 - **出貨照與開箱影片的實際儲存。** 目前只驗 URL 格式，沒有上傳流程。
 - **平台裁決的後台。** `/resolve` 現在只認 `u-platform` 這個帳號，沒有權限系統。
 - **速率限制**與濫用防護。

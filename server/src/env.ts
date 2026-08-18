@@ -19,7 +19,18 @@ const Env = z.object({
   /** 後端對外的網址，組 LINE 的 redirect_uri 用。Railway 上要填自己的網址 */
   PUBLIC_URL: z.string().url().default('http://localhost:8080'),
   /** 登入完成後導回前端的網址 */
-  FRONTEND_URL: z.string().url().default('http://localhost:5173')
+  FRONTEND_URL: z.string().url().default('http://localhost:5173'),
+
+  /* Cloudflare R2（S3 相容）。四項都沒填時檔案上傳端點回 503 ——
+     跟 LINE 一樣，本機開發不一定要設齊。Account ID 不是敏感值，
+     但 Access Key / Secret 只能從環境變數來，不進 git。 */
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_BUCKET: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  /** 公開讀取用的網址（r2.dev 的開發網域，或你自己接的自訂網域）。
+      沒填的話所有檔案都走簽名網址讀取，沒有東西是公開的——這是安全的預設值。 */
+  R2_PUBLIC_URL: z.string().url().optional()
 })
 
 const parsed = Env.safeParse(process.env)

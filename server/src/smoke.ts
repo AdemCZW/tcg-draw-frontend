@@ -183,6 +183,55 @@ async function run() {
     void owner
   }
 
+  /* ---- 檔案上傳 ---- */
+  console.log('\n檔案上傳：')
+  const noAuth = await fetch(`${base}/v1/files/presign`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ purpose: 'avatar', mime: 'image/png', bytes: 1000 })
+  })
+  check('presign 沒帶 token 回 401', noAuth.status === 401)
+
+  const badMime = await call(buyer, '/v1/files/presign', { purpose: 'avatar', mime: 'application/zip', bytes: 1000 })
+  check('presign 不在白名單的 mime 被拒', badMime.status === 400 && (await json(badMime)).error === 'BAD_MIME')
+
+  const tooBig = await call(buyer, '/v1/files/presign', { purpose: 'avatar', mime: 'image/png', bytes: 999_999_999 })
+  check('presign 超過大小上限被拒', tooBig.status === 400 && (await json(tooBig)).error === 'TOO_LARGE')
+
+  const png1x1 = Uint8Array.from(atob(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+  ), ch => ch.charCodeAt(0))
+
+  const pre = await call(buyer, '/v1/files/presign', { purpose: 'ship-photo', mime: 'image/png', bytes: png1x1.length })
+  if (pre.status === 503) {
+    check('R2 未設定時 presign 明確回 503（不是本地才有的行為，是尚未設定的預期行為）', true)
+  } else {
+    check('presign 成功回 fileId 與 uploadUrl', pre.ok, await pre.clone().text())
+    const { fileId, uploadUrl } = await json(pre)
+
+    const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: png1x1 })
+    check('用簽名網址直接 PUT 到 R2 成功', put.ok, `${put.status} ${await put.clone().text().catch(() => '')}`)
+
+    const anonRead = await fetch(`${base}/v1/files/${fileId}`)
+    check('私密檔案（ship-photo）沒登入讀不到', anonRead.status === 401)
+
+    const authRead = await call(buyer, `/v1/files/${fileId}`)
+    check('登入後可以讀到 ship-photo 的網址', authRead.ok)
+    const { url: readUrl } = await json(authRead)
+    const fetched = await fetch(readUrl)
+    check('讀到的網址真的能拿到剛才上傳的內容', fetched.ok, `${fetched.status}`)
+
+    // seller-doc：更敏感，只有本人或平台能看
+    const docPre = await call(seller, '/v1/files/presign', { purpose: 'seller-doc', mime: 'image/png', bytes: png1x1.length })
+    const { fileId: docId, uploadUrl: docUrl } = await json(docPre)
+    await fetch(docUrl, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: png1x1 })
+    const strangerRead = await call(buyer, `/v1/files/${docId}`)
+    check('seller-doc 不是本人也不是平台會被拒', strangerRead.status === 403)
+    const ownerRead = await call(seller, `/v1/files/${docId}`)
+    check('seller-doc 本人可以讀', ownerRead.ok)
+    const adminRead = await call(platform, `/v1/files/${docId}`)
+    check('seller-doc 平台帳號可以讀', adminRead.ok)
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`)
   process.exit(fail ? 1 : 0)
 }

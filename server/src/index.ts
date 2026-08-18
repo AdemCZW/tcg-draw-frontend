@@ -17,6 +17,7 @@ import { prizes } from './routes/prizes.js'
 import { line } from './routes/line.js'
 import { admin } from './routes/admin.js'
 import { pub } from './routes/public.js'
+import { files } from './routes/files.js'
 import { sweep } from './orders-service.js'
 
 const app = new Hono()
@@ -60,6 +61,7 @@ app.route('/v1/prizes', prizes)
 app.route('/v1/auth/line', line)
 app.route('/v1/admin', admin)
 app.route('/v1', pub)
+app.route('/v1/files', files)
 
 /* 逾期掃描。
    時限本身是用時間戳算的，所以這支排程不是唯一真相 —— 它掛掉不會讓狀態算錯，

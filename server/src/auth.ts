@@ -33,6 +33,20 @@ declare module 'hono' {
   interface ContextVariableMap { userId: string }
 }
 
+/** 不強制登入，但如果帶了合法 token 就取出 userId。
+    用在「大部分人不用登入，但登入的話有差別待遇」的端點（例如檔案讀取：
+    公開圖片誰都能看，但敏感檔案要看登入的人是不是本人）。 */
+export async function optionalUserId(c: Context): Promise<string | null> {
+  const h = c.req.header('authorization')
+  if (!h?.startsWith('Bearer ')) return null
+  try {
+    const { payload } = await jwtVerify(h.slice(7), key)
+    return typeof payload.sub === 'string' ? payload.sub : null
+  } catch {
+    return null
+  }
+}
+
 /** 需要登入的路由掛這個。沒帶或帶錯 token 一律 401，不透露細節 */
 export async function requireAuth(c: Context, next: Next) {
   const h = c.req.header('authorization')

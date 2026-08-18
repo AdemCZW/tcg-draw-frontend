@@ -177,7 +177,7 @@ admin       POST /v1/admin/pools/:id/open  ;  /sellers/:id/verify  ;  /credit  ;
 | 0 | 託管訂單、帳本、種子、煙霧測試 | ✅ 已完成 |
 | 1 | 遷移 002（全部資料表）、公平抽選模組 + 自我測試、抽選端點、獎品/回收/出貨申請、Email 登入、錢包 | ✅ 已完成（待接 DB 跑 smoke） |
 | 2 | LINE Login、後台端點（發點數／審賣家／稽核）、出貨申請 | ✅ 已完成 |
-| 2b | 檔案（R2 presign）、賣家申請端點 | 待做 |
+| 2b | 檔案（R2 presign／讀取）| ✅ presign+讀取已完成；賣家申請端點待做 |
 | 3 | streak、auction 端點 | 待做 |
 | 4 | 前端從 mock 切到 API（VITE_API_URL 決定模式；連莊／競標仍走 mock 直到階段 3） | ✅ 已完成 |
 | 5 | 金流 webhook、備份排程 | 待規格 |
