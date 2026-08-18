@@ -11,7 +11,7 @@
  */
 import { defineStore } from 'pinia'
 import type { CardItem, Listing, Order } from '@/types/models'
-import { applyDeadlines, depositFor, isOpen, looksLikeTracking } from '@/lib/escrow'
+import { applyDeadlines, depositFor, isOpen, looksLikeTracking } from '@/shared/escrow'
 import { useWalletStore } from '@/stores/wallet'
 
 const KEY = 'vd_orders_v1'

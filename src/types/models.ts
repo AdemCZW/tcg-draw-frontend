@@ -2,7 +2,14 @@
 // Domain models — mirrors the backend schema in the architecture doc
 // ------------------------------------------------------------------
 
-export type Grader = 'PSA' | 'BGS' | 'ARS' | 'RAW'
+/* 交易領域的型別搬到 src/shared/ —— 那裡的東西後端會直接吃。
+   這裡 re-export 讓既有的 import 不用動。 */
+export type {
+  Grader, CardItem, Delivery, Listing, OrderStatus, ClosedBy, Order
+} from '@/shared/domain'
+/* re-export 不會把名字帶進本檔的作用域，底下還有型別直接引用 CardItem，
+   所以要再 import 一次 */
+import type { CardItem } from '@/shared/domain'
 /** BUST = 連莊爆賞的「爆」籤，抽中即該輪歸零（僅 streak 模式使用） */
 export type Tier = 'A' | 'B' | 'C' | 'D' | 'LAST' | 'BUST'
 
@@ -33,25 +40,6 @@ export type PoolMode = 'classic' | 'shitei' | 'muteki' | 'battle' | 'niboichi' |
 export type PoolStatus = 'committed' | 'open' | 'sold_out' | 'revealed'
 export type PrizeStatus = 'stashed' | 'ship_requested' | 'shipped' | 'recycled'
 
-export interface CardItem {
-  id: string
-  name: string           // e.g. 噴火龍 ex SAR
-  setCode: string        // e.g. sv4a
-  cardNo: string         // e.g. 349/190
-  language: 'JP' | 'EN'
-  grader: Grader
-  grade: number | null   // RAW = null
-  certNo: string | null  // PSA cert — 對外可驗證
-  image: string
-  refPrice: number       // 市場參考價（顯示用）
-  /* TCGdex 的卡片編號，例如 'SV4a-349'（閃色寶藏ex 的噴火龍ex UR 金卡）。
-     給了就直接取那一張的圖；不給才退回用卡名去搜。
-
-     為什麼需要這個：搜尋只吃卡名的第一個詞（「噴火龍 ex SAR」→ 搜「噴火龍」），
-     然後拿回傳清單裡第一張有圖的 —— 那通常是普卡，不是我們想展示的密卡。
-     要指定「就是那張金卡」只能給編號。 */
-  artId?: string
-}
 
 export interface PoolPrize {
   id: string
@@ -182,28 +170,6 @@ export interface AuctionLot {
  * 一旦價值能流出平台，「付錢碰運氣 + 輸贏可換回金錢」的對價關係就成立。
  * 玩家互相買賣仍然停留在站內閉環，這條線不能破。
  */
-export interface Listing {
-  id: string
-  card: CardItem
-  /** 賣家開的點數價 */
-  price: number
-  /** 上架者。平台自營用 'platform' */
-  sellerId: string
-  sellerName: string
-  listedAt: string
-  status: 'live' | 'sold'
-  /** 來源：玩家抽到的卡（帶 UserPrize.id），或平台上架 */
-  fromPrizeId?: string
-  /**
-   * 交付方式。決定這筆交易要不要走託管與爭議流程：
-   *   vault 卡還在保管庫 —— 成交是一筆所有權異動，沒有運送、沒有驗收期
-   *   ship  卡在賣家手上 —— 要寄送，付款與交付之間有時間差，需要託管
-   *
-   * 沒填時由 fromPrizeId 推導（抽到的卡預設還在庫裡）。等後端接上之後
-   * 這裡要變成必填 —— 使用者可以先提領再上架，那時就推不出來了。
-   */
-  delivery?: 'vault' | 'ship'
-}
 
 export interface UserPrize {
   id: string
@@ -235,47 +201,3 @@ export interface WinnerEvent {
    只有 delivery: 'ship' 的交易會產生訂單。庫內轉移是原子交換，
    成交當下就結束，沒有中間狀態可言。 */
 
-export type OrderStatus =
-  /** 已鎖點，等賣家出貨 */
-  | 'escrowed'
-  /** 已出貨，運送中 */
-  | 'shipped'
-  /** 已送達，驗收期內 */
-  | 'delivered'
-  /** 爭議處理中 */
-  | 'disputed'
-  /** 已放款給賣家 */
-  | 'completed'
-  /** 已退款給買家 */
-  | 'refunded'
-  /** 逾期未出貨，自動取消 */
-  | 'cancelled'
-
-export interface Order {
-  id: string
-  listingId: string
-  card: CardItem
-  /** 貨款，成立時從買家帳戶凍結的點數 */
-  price: number
-  /** 賣家保證金。爭議判賣家敗訴或逾期未出貨時沒收 */
-  deposit: number
-  buyerId: string
-  buyerName: string
-  sellerId: string
-  sellerName: string
-  status: OrderStatus
-  /** 以下都是毫秒時間戳，沒發生的階段是 undefined */
-  createdAt: number
-  shippedAt?: number
-  deliveredAt?: number
-  settledAt?: number
-  /** 物流單號。沒有通過驗證的單號就不能標記出貨 */
-  tracking?: string
-  /** 爭議：開立時間與買家主張 */
-  disputedAt?: number
-  disputeReason?: string
-  /** 買家是否已附開箱影片。沒有影片不受理索賠 */
-  hasUnboxingVideo?: boolean
-  /** 結案原因，供帳本與客服追溯 */
-  closedBy?: 'buyer-confirm' | 'auto-release' | 'ship-timeout' | 'delivery-timeout' | 'dispute-buyer' | 'dispute-seller'
-}

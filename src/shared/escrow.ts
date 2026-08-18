@@ -6,8 +6,12 @@
  * 而這種錯誤在 UI 上很難看出來，只能靠對函式本身下輸入來確認。
  *
  * 規格見 /trade-protection。
+ *
+ * 這個檔案前後端共用，所以不能 import 任何前端的東西 ——
+ * 沒有 Vue、沒有 '@/' 別名、沒有 window。伺服器必須是唯一權威，
+ * 但兩邊跑同一份規則就消滅了「前端顯示剩 5 天、後端第 7 天才放款」這類漂移。
  */
-import type { Order, OrderStatus } from '@/types/models'
+import type { Order, OrderStatus } from './domain'
 
 export const HOUR = 3_600_000
 export const DAY = 24 * HOUR

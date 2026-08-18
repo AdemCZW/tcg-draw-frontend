@@ -9,7 +9,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useOrdersStore } from '@/stores/orders'
 import { useWalletStore } from '@/stores/wallet'
-import { actionsFor, deadlineOf, DAY, HOUR, isOpen, looksLikeTracking, remainText, STATUS_TEXT } from '@/lib/escrow'
+import { actionsFor, deadlineOf, DAY, HOUR, isOpen, looksLikeTracking, remainText, STATUS_TEXT } from '@/shared/escrow'
 import type { Order } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 
