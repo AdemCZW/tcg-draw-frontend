@@ -15,6 +15,7 @@ import type { Listing } from '@/types/models'
 import { useWalletStore } from '@/stores/wallet'
 import { useAuthStore } from '@/stores/auth'
 import CardArt from '@/components/CardArt.vue'
+import TradeGuard from '@/components/TradeGuard.vue'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { haptic } from '@/lib/haptics'
 import { track } from '@/lib/ga'
@@ -42,6 +43,13 @@ const SORTS: { k: Sort; label: string }[] = [
 ]
 
 /** 掛價相對市值的折數。負數＝比市值便宜 */
+/* 這筆走哪一條通道。
+   後端還沒接，listing.delivery 多半是空的，先由來源推導：
+   玩家抽到的卡跟平台自營的卡都還在保管庫，成交只是過戶。
+   使用者可以先提領再上架，那時候推導會失準 —— 所以 delivery 一旦有值就以它為準。 */
+const laneOf = (l: Listing): 'vault' | 'ship' =>
+  l.delivery ?? (l.fromPrizeId || l.sellerId === 'platform' ? 'vault' : 'ship')
+
 const diffPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card.refPrice) * 100)
 
 /* ---- 分區 ----
@@ -139,6 +147,8 @@ function markSold(id: string) {
       >{{ s.label }}</button>
     </div>
 
+    <TradeGuard />
+
     <p v-if="bought" class="ok" role="status">
       已買下 <strong>{{ bought.card.name }}</strong>，已收進卡冊。
       <RouterLink :to="{ name: 'cards' }">去看看 →</RouterLink>
@@ -207,6 +217,12 @@ function markSold(id: string) {
         />
         <span class="scrim" aria-hidden="true"></span>
 
+        <!-- 通道徽章疊在卡圖上。原本放在 .by 那行，但那行在手機上會被隱藏，
+             而「要不要等寄送」是買家下單前最需要先知道的事 -->
+        <span class="lane" :class="laneOf(l)">
+          {{ laneOf(l) === 'vault' ? '庫內' : '需寄送' }}
+        </span>
+
         <div class="info">
           <strong class="name">{{ l.card.name }}</strong>
           <div class="price">
@@ -233,6 +249,12 @@ function markSold(id: string) {
           <p class="cq">
             用 <strong class="mono">{{ l.price.toLocaleString() }}</strong> 點買下？<br>
             餘額將剩 <span class="mono">{{ (wallet.points - l.price).toLocaleString() }}</span>
+          </p>
+          <!-- 錢會怎麼流，要在按下去之前講，不是在爭議發生之後才講 -->
+          <p class="cnote">
+            {{ laneOf(l) === 'vault'
+              ? '卡在保管庫，成交立刻過戶到你名下。'
+              : '點數先凍結，你確認收貨或 7 天後才放款給賣家。' }}
           </p>
           <div class="crow">
             <button type="button" class="btn sm" @click="confirming = null">取消</button>
@@ -443,6 +465,24 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .by { font-size: 10.5px; opacity: .6; margin: 0; }
 
 /* 買下鍵：右下角，不佔卡圖高度 */
+/* 通道徽章：疊在卡圖左上角，不跟價格搶 .info 的空間 */
+.lane {
+  position: absolute; left: 8px; top: 8px; z-index: 2;
+  font-size: 10px; font-weight: 700; line-height: 1;
+  padding: 4px 7px; border-radius: var(--pill);
+  letter-spacing: .02em;
+  backdrop-filter: blur(6px);
+}
+.lane.vault { background: rgba(22, 130, 90, .82); color: #fff; }
+.lane.ship { background: rgba(10, 10, 14, .62); color: rgba(255, 255, 255, .92); }
+
+.cnote {
+  font-size: 11px; line-height: 1.55;
+  color: var(--muted);
+  margin: 6px 0 0;
+  max-width: 22ch;
+}
+
 .buy {
   position: absolute; right: 10px; bottom: 11px; z-index: 2;
   padding: 9px 16px;

@@ -194,6 +194,15 @@ export interface Listing {
   status: 'live' | 'sold'
   /** 來源：玩家抽到的卡（帶 UserPrize.id），或平台上架 */
   fromPrizeId?: string
+  /**
+   * 交付方式。決定這筆交易要不要走託管與爭議流程：
+   *   vault 卡還在保管庫 —— 成交是一筆所有權異動，沒有運送、沒有驗收期
+   *   ship  卡在賣家手上 —— 要寄送，付款與交付之間有時間差，需要託管
+   *
+   * 沒填時由 fromPrizeId 推導（抽到的卡預設還在庫裡）。等後端接上之後
+   * 這裡要變成必填 —— 使用者可以先提領再上架，那時就推不出來了。
+   */
+  delivery?: 'vault' | 'ship'
 }
 
 export interface UserPrize {

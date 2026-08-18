@@ -71,22 +71,31 @@ function seatsOf(total: number, taken: number, step = 7): number[] {
 /* 市場掛單。價格用「相對市值的折數」算出來，不寫死絕對值 ——
    寫死很容易跟卡片索引對不起來，變成 PSA 10 的 SAR 掛市值一折這種假資料。
    分佈刻意從 -14% 到 +6% 都有：市場的重點是價差看得見，不是每張都划算。 */
-const mk = (id: string, c: CardItem, ratio: number, sellerId: string, sellerName: string, listedAt: string): Listing => ({
+/* 交付方式預設由賣家類型推導：
+   玩家（u-*）掛的多半是抽到之後沒提領的卡，還在保管庫裡，成交只是過戶；
+   商家（s*）掛的是自己的庫存，要實際寄出。
+   少數玩家會先提領再上架，所以個別掛單可以覆寫成 'ship'。 */
+const mk = (
+  id: string, c: CardItem, ratio: number,
+  sellerId: string, sellerName: string, listedAt: string,
+  delivery?: 'vault' | 'ship'
+): Listing => ({
   id, card: c, price: Math.round((c.refPrice * ratio) / 10) * 10,
-  sellerId, sellerName, listedAt, status: 'live'
+  sellerId, sellerName, listedAt, status: 'live',
+  delivery: delivery ?? (sellerId.startsWith('u-') ? 'vault' : 'ship')
 })
 export const listings: Listing[] = [
   mk('l1', cards[1], 0.94, 'u-8823', 'VD-8823', '2 小時前'),
   mk('l2', cards[5], 0.88, 'u-41A0', 'VD-41A0', '5 小時前'),
   mk('l3', cards[3], 1.06, 's1', '保庫堂', '昨天'),
   mk('l4', cards[10], 0.9, 'u-C3E0', 'VD-C3E0', '昨天'),
-  mk('l5', cards[2], 0.92, 'u-77B1', 'VD-77B1', '2 天前'),
+  mk('l5', cards[2], 0.92, 'u-77B1', 'VD-77B1', '2 天前', 'ship'),
   mk('l6', cards[6], 1.04, 'u-2D9F', 'VD-2D9F', '2 天前'),
   mk('l7', cards[0], 1.04, 's3', '關都卡舖', '3 天前'),
   mk('l8', cards[12], 0.86, 'u-5E12', 'VD-5E12', '3 天前'),
   mk('l9', cards[21], 0.95, 'u-9A44', 'VD-9A44', '4 天前'),
   mk('l10', cards[15], 0.97, 'u-B071', 'VD-B071', '5 天前'),
-  mk('l11', cards[23], 0.91, 'u-3C88', 'VD-3C88', '6 天前'),
+  mk('l11', cards[23], 0.91, 'u-3C88', 'VD-3C88', '6 天前', 'ship'),
   mk('l12', cards[16], 1.02, 'u-6F20', 'VD-6F20', '6 天前')
 ]
 
