@@ -142,6 +142,13 @@ export const router = createRouter({
       component: () => import('@/pages/DesignPackPage.vue'),
       meta: { depth: 1, title: '寶貝球設計' }
     },
+    // 交易保護規格。不掛導覽列 —— 這頁是用連結分享出去給人看的，
+    // 不是使用者日常會用的功能
+    {
+      path: '/trade-protection', name: 'trade-protection',
+      component: () => import('@/pages/TradeProtectionPage.vue'),
+      meta: { depth: 1, title: '交易保護機制' }
+    },
     // 煙霧凝聚特效自己一頁：跟寶貝球示範擠在同一頁的話，
     // 量到的幀率不是這支 shader 的幀率，調不準
     {
