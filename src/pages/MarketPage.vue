@@ -16,12 +16,14 @@ import { useWalletStore } from '@/stores/wallet'
 import { useAuthStore } from '@/stores/auth'
 import CardArt from '@/components/CardArt.vue'
 import TradeGuard from '@/components/TradeGuard.vue'
+import { useOrdersStore } from '@/stores/orders'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { haptic } from '@/lib/haptics'
 import { track } from '@/lib/ga'
 
 const wallet = useWalletStore()
 const auth = useAuthStore()
+const orders = useOrdersStore()
 
 const listings = ref<Listing[]>([])
 const loading = ref(true)
@@ -83,6 +85,8 @@ const shown = computed(() => {
 const confirming = ref<string | null>(null)
 const busy = ref<string | null>(null)
 const bought = ref<Listing | null>(null)
+/* 走託管的那條路：買下之後錢是凍結不是扣掉，要引導去看訂單 */
+const escrowed = ref<Listing | null>(null)
 const error = ref('')
 
 function ask(l: Listing) {
@@ -91,24 +95,30 @@ function ask(l: Listing) {
 }
 
 async function buy(l: Listing) {
-  if (!wallet.canAfford(l.price)) {
-    error.value = '點數不足，請先儲值'
-    return
-  }
-  busy.value = l.id
+  if (busy.value) return
   error.value = ''
+  busy.value = l.id
   try {
     await api.buyListing(l.id)
-    wallet.spend(l.price)
+
+    /* 兩條通道在這裡分開。
+       庫內轉移是原子交換：點數直接扣、卡直接過戶，沒有中間狀態。
+       需寄送則建立託管訂單，點數只是「凍結」不是扣款 —— 錢還是買家的，
+       要等確認收貨或驗收期滿才真的付給賣家。 */
+    if (laneOf(l) === 'vault') {
+      wallet.spend(l.price)
+      bought.value = l
+    } else {
+      orders.createFromListing(l, auth.user?.name ?? '我')
+      escrowed.value = l
+    }
+
     markSold(l.id)
     confirming.value = null
-    bought.value = l
-    haptic('success')
     track('market_buy_success')
-    setTimeout(() => { bought.value = null }, 4500)
-  } catch {
-    error.value = '這張剛剛被買走了'
-    markSold(l.id)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '購買失敗'
+    if (String(error.value).includes('sold')) markSold(l.id)
   } finally {
     busy.value = null
   }
@@ -152,6 +162,11 @@ function markSold(id: string) {
     <p v-if="bought" class="ok" role="status">
       已買下 <strong>{{ bought.card.name }}</strong>，已收進卡冊。
       <RouterLink :to="{ name: 'cards' }">去看看 →</RouterLink>
+    </p>
+    <p v-if="escrowed" class="ok" role="status">
+      <strong>{{ escrowed.card.name }}</strong> 的 {{ escrowed.price.toLocaleString() }} 點已凍結，
+      賣家出貨後你會收到通知。
+      <RouterLink :to="{ name: 'orders' }">看訂單 →</RouterLink>
     </p>
     <p v-if="error" class="err" role="alert">{{ error }}</p>
 

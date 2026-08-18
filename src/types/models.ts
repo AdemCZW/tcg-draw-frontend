@@ -230,3 +230,52 @@ export interface WinnerEvent {
   cardName: string
   at: string
 }
+
+/* ---------------- 託管訂單 ----------------
+   只有 delivery: 'ship' 的交易會產生訂單。庫內轉移是原子交換，
+   成交當下就結束，沒有中間狀態可言。 */
+
+export type OrderStatus =
+  /** 已鎖點，等賣家出貨 */
+  | 'escrowed'
+  /** 已出貨，運送中 */
+  | 'shipped'
+  /** 已送達，驗收期內 */
+  | 'delivered'
+  /** 爭議處理中 */
+  | 'disputed'
+  /** 已放款給賣家 */
+  | 'completed'
+  /** 已退款給買家 */
+  | 'refunded'
+  /** 逾期未出貨，自動取消 */
+  | 'cancelled'
+
+export interface Order {
+  id: string
+  listingId: string
+  card: CardItem
+  /** 貨款，成立時從買家帳戶凍結的點數 */
+  price: number
+  /** 賣家保證金。爭議判賣家敗訴或逾期未出貨時沒收 */
+  deposit: number
+  buyerId: string
+  buyerName: string
+  sellerId: string
+  sellerName: string
+  status: OrderStatus
+  /** 以下都是毫秒時間戳，沒發生的階段是 undefined */
+  createdAt: number
+  shippedAt?: number
+  deliveredAt?: number
+  settledAt?: number
+  /** 物流單號。沒有通過驗證的單號就不能標記出貨 */
+  tracking?: string
+  /** 爭議：開立時間與買家主張 */
+  disputedAt?: number
+  disputeReason?: string
+  /** 買家是否已附開箱影片。沒有影片不受理索賠 */
+  hasUnboxingVideo?: boolean
+  /** 結案原因，供帳本與客服追溯 */
+  closedBy?: 'buyer-confirm' | 'auto-release' | 'ship-timeout' | 'delivery-timeout' | 'dispute-buyer' | 'dispute-seller'
+}

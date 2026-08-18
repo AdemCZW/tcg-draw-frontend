@@ -142,6 +142,11 @@ export const router = createRouter({
       component: () => import('@/pages/DesignPackPage.vue'),
       meta: { depth: 1, title: '寶貝球設計' }
     },
+    {
+      path: '/me/orders', name: 'orders',
+      component: () => import('@/pages/OrdersPage.vue'),
+      meta: { requiresAuth: true, depth: 2, title: '我的訂單' }
+    },
     // 交易保護規格。不掛導覽列 —— 這頁是用連結分享出去給人看的，
     // 不是使用者日常會用的功能
     {
