@@ -82,7 +82,7 @@ create table if not exists pools (
   id                  text primary key,
   seller_id           text not null references sellers(id),
   mode                text not null
-                      check (mode in ('classic', 'shitei', 'muteki', 'battle', 'niboichi', 'streak', 'auction')),
+                      check (mode in ('classic', 'shitei', 'muteki', 'streak', 'auction')),
   title               text not null,
   cover_file_id       text references files(id),
   ticket_price        bigint not null check (ticket_price > 0),

@@ -93,7 +93,6 @@ draft ──► committed ──► open ──► sold_out ──► revealed
 | muteki | 最後賞也在池裡可抽 |
 | streak | 付入場費，連續抽、暫持、收手落袋或爆掉。爆掉時暫持沒收但發保底卡（必得商品） |
 | auction | 最後 N 籤轉為競標，出價凍結點數，被超過即解凍，接近結束自動延長 60 秒 |
-| battle / niboichi | 規則待從 mock 補齊，籤位模型相同 |
 
 **所有模式共用同一份 `pool_seats`**，只是誰能抽、抽完發生什麼不同。
 
@@ -169,7 +168,7 @@ admin       POST /v1/admin/pools/:id/open  ;  /sellers/:id/verify  ;  /credit  ;
 1. ~~登入方式~~ → 已定：LINE 主、Email 備援
 2. ~~保管到期~~ → 已定：只通知不處理，管理費之後另外研究
 3. ~~金流~~ → 已定：先不接，點數由後台發放
-4. **battle / niboichi 的規則**：mock 裡只有名字沒有規則。battle 是兩人對戰？怎麼算輸贏？niboichi 是抽到後二選一還是兩個籤位選一個？沒有規則寫不出後端。不急，也可以先不做這兩種。
+4. ~~battle / niboichi~~ → 已定：不是正式玩法，已從 PoolMode 移除，不用再規劃
 
 ## 10. 實作階段與進度
 
@@ -181,4 +180,4 @@ admin       POST /v1/admin/pools/:id/open  ;  /sellers/:id/verify  ;  /credit  ;
 | 2b | 檔案（R2 presign）、賣家申請端點 | 待做 |
 | 3 | streak、auction 端點 | 待做 |
 | 4 | 前端從 mock 切到 API（VITE_API_URL 決定模式；連莊／競標仍走 mock 直到階段 3） | ✅ 已完成 |
-| 5 | battle / niboichi、LINE Login、金流 webhook、備份排程 | 待規格 |
+| 5 | 金流 webhook、備份排程 | 待規格 |

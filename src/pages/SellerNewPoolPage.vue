@@ -18,7 +18,7 @@ pools.ensureLoaded()
 const me = computed(() => sellers.me)
 const canList = computed(() => me.value && me.value.tier !== 'pending')
 
-const MODES: PoolMode[] = ['classic', 'shitei', 'muteki', 'battle', 'niboichi', 'streak', 'auction']
+const MODES: PoolMode[] = ['classic', 'shitei', 'muteki', 'streak', 'auction']
 const TIERS: Tier[] = ['A', 'B', 'C', 'D', 'LAST', 'BUST']
 
 const form = reactive({

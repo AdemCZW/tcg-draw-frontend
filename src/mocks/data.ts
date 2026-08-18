@@ -57,8 +57,8 @@ function seatsOf(total: number, taken: number, step = 7): number[] {
 /**
  * 還元率設計，全部以 computeEconomics() 實際跑過驗證（不是手算）：
  *
- *  p1 classic  87.6%    p2 battle   87.5%    p3 muteki 72.6%（已完抽）
- *  p4 shitei   83.8%    p5 niboichi 90.4%    p6 streak 84.4%（最佳策略 86.2%）
+ *  p1 classic  87.6%    p2 classic  87.5%    p3 muteki 72.6%（已完抽）
+ *  p4 shitei   83.8%    p5 classic  90.4%    p6 streak 84.4%（最佳策略 86.2%）
  *  p7 auction  85.0%    p8 classic  84.6%（低價入門池）
  *
  * 三個模式不能用「獎池總值 ÷ 票收」直接算，各有專屬模型：
@@ -240,7 +240,7 @@ export const pools: Pool[] = [
     id: 'p13',
     title: '官方入門場 · 一百點開一張',
     cover: ph(200),
-    mode: 'battle',
+    mode: 'classic',
     ticketPrice: 100,
     totalTickets: 150,
     remainingTickets: 96,
@@ -293,7 +293,7 @@ export const pools: Pool[] = [
     id: 'p2',
     title: '經典促販卡 大亂鬥',
     cover: ph(260),
-    mode: 'battle',
+    mode: 'classic',
     ticketPrice: 120,
     totalTickets: 40,
     remainingTickets: 40,
@@ -376,7 +376,7 @@ export const pools: Pool[] = [
     cover: ph(340),
     // 落選方改放 5,200 的皮卡丘 AR（票價 8,300 的 63%）——
     // 原本 4,980 對上 60 元安慰獎，對價關係太懸殊，屬「以小博大」的高風險設計
-    mode: 'niboichi',
+    mode: 'classic',
     ticketPrice: 8300,
     totalTickets: 2,
     remainingTickets: 2,

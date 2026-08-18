@@ -18,8 +18,6 @@ export type Tier = 'A' | 'B' | 'C' | 'D' | 'LAST' | 'BUST'
  * - classic  經典賞：最後賞送給抽走最後一籤的人（LAST 不佔籤位）
  * - shitei   指定賞：抽中指定賞 → 加送最後賞，整池立刻結束
  * - muteki   無敵賞：最後賞作為一般大獎放在籤池內，無額外贈獎
- * - battle   大亂鬥：無最後賞，純定量池
- * - niboichi 二選一：僅 2 籤，1 大獎 1 安慰獎
  * - streak   連莊爆賞：付一次入場費可連續免費抽，隨時可收手落袋；
  *            抽到 BUST 籤則該輪全數沒收（沒收品流入賣家下一池，不回本池，
  *            以免破壞開賣前封存的籤序）
@@ -35,7 +33,7 @@ export type Tier = 'A' | 'B' | 'C' | 'D' | 'LAST' | 'BUST'
  */
 export type PoolOrigin = 'official' | 'merchant' | 'personal'
 
-export type PoolMode = 'classic' | 'shitei' | 'muteki' | 'battle' | 'niboichi' | 'streak' | 'auction'
+export type PoolMode = 'classic' | 'shitei' | 'muteki' | 'streak' | 'auction'
 
 export type PoolStatus = 'committed' | 'open' | 'sold_out' | 'revealed'
 export type PrizeStatus = 'stashed' | 'listed' | 'ship_requested' | 'shipped' | 'recycled'

@@ -98,7 +98,7 @@ const PrizeIn = z.object({
   total: z.number().int().nonnegative()
 })
 const CreatePool = z.object({
-  mode: z.enum(['classic', 'shitei', 'muteki', 'battle', 'niboichi', 'streak', 'auction']),
+  mode: z.enum(['classic', 'shitei', 'muteki', 'streak', 'auction']),
   title: z.string().min(1).max(60),
   ticketPrice: z.number().int().positive(),
   totalTickets: z.number().int().positive().max(5000),
