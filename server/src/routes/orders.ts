@@ -184,6 +184,29 @@ orders.post('/:id/dispute', async c => {
   return c.json({ ...r, wallet: await walletOf(me) })
 })
 
+/**
+ * POST /orders/:id/delivered —— 物流簽收。
+ *
+ * 這條之後會變成物流商的 webhook 落點，不是使用者按的按鈕。
+ * 現在限定平台帳號呼叫，讓端到端測試跑得完整條流程。
+ * 接上真的物流之後改成驗簽名，並拿掉平台帳號這條路。
+ */
+orders.post('/:id/delivered', async c => {
+  const me = c.get('userId')
+  if (me !== PLATFORM_ID) return c.json(fail('NOT_PLATFORM', '只有平台能回報簽收', 403), 403)
+  const r = await sql.begin(async tx => {
+    const [row] = await tx`select * from orders where id = ${c.req.param('id')} for update`
+    if (!row) return fail('WRONG_STATE', '找不到這張訂單', 404)
+    const o = toOrder(row as Record<string, unknown>)
+    if (o.status !== 'shipped') return fail('WRONG_STATE', '這張訂單不在運送中')
+    const next: Order = { ...o, status: 'delivered', deliveredAt: Date.now() }
+    await save(tx, next)
+    return { order: next }
+  })
+  if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
+  return c.json(r)
+})
+
 const ResolveBody = z.object({ to: z.enum(['buyer', 'seller']), note: z.string().max(500).default('') })
 
 /** POST /orders/:id/resolve —— 平台裁決。只有平台帳號能呼叫 */

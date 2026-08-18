@@ -17,6 +17,25 @@ npm run dev
 `npm run selftest` 不需要資料庫 —— 它在 Node 裡直接跑共用模組的規則，
 用來確認 `src/shared` 沒有偷偷相依前端的東西。
 
+## 部署後一定要跑的驗證
+
+```bash
+npm run seed                                     # 塞測試用的使用者、點數、掛單
+npm run smoke -- https://你的服務.up.railway.app   # 對真的服務跑端到端
+```
+
+`smoke` 是這個專案**最重要的一支測試**。selftest 只驗規則（純函式），
+但這個系統真正會出事的地方是資料庫那一層 —— 交易邊界、`SELECT FOR UPDATE`、
+帳本一致性 —— 那些沒有真的 Postgres 驗不了。
+
+它會做的事：兩個請求**同時**買同一張卡（驗鎖有沒有真的鎖住）、
+確認貨款是凍結不是扣款、走完出貨→簽收→確認→放款、確認只扣一次錢、
+庫內轉移不產生訂單直接過戶。**會改資料，不要對正式環境跑。**
+
+種子跟煙霧測試都用 `DATABASE_URL`，所以要先在本機的 `.env` 填上
+Railway 那組連線字串（Railway 的 Postgres 頁面 → Connect → Public URL），
+或直接用 `railway run npm run seed`。
+
 ## 部署到 Railway
 
 1. 新建專案 → **Add Postgres**（會自動注入 `DATABASE_URL`）
@@ -55,6 +74,8 @@ tsup 打包時會把它一起 inline 進 `dist/index.js`。
 - **真正的登入。** 現在 `/v1/auth/login` 給 handle 就發 token，等同前端的 MOCK。
 - **物流單號查驗。** `looksLikeTracking()` 只擋格式，擋不掉「填別人的舊單號」。
   要打物流商 API 確認單號存在、交寄時間晚於訂單成立。
+- **簽收改成 webhook。** `POST /orders/:id/delivered` 現在限平台帳號呼叫（給測試用），
+  接上真的物流之後要改成驗物流商的簽名，並拿掉平台帳號這條路。
 - **出貨照與開箱影片的實際儲存。** 目前只驗 URL 格式，沒有上傳流程。
 - **平台裁決的後台。** `/resolve` 現在只認 `u-platform` 這個帳號，沒有權限系統。
 - **速率限制**與濫用防護。
