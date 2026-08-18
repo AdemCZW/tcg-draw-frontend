@@ -31,6 +31,7 @@ const tab = ref<Tab>('all')
 const TABS: { k: Tab; label: string }[] = [
   { k: 'all', label: '全部' },
   { k: 'stashed', label: '寄存中' },
+  { k: 'listed', label: '市場販售中' },
   { k: 'ship_requested', label: '待出貨' },
   { k: 'shipped', label: '已出貨' },
   { k: 'recycled', label: '已回收' }
@@ -41,6 +42,7 @@ const shown = computed(() => tab.value === 'all' ? prizes.value : prizes.value.f
 
 const statusLabel: Record<UserPrize['status'], string> = {
   stashed: '寄存中',
+  listed: '市場販售中',
   ship_requested: '待出貨',
   shipped: '已出貨',
   recycled: '已回收'
@@ -63,15 +65,20 @@ function askRecycle(p: UserPrize) {
   confirming.value = confirming.value === p.id ? null : p.id
 }
 
-function doRecycle(p: UserPrize) {
+async function doRecycle(p: UserPrize) {
   const q = recycleQuote(p.card)
   if (!q.eligible) return
-  wallet.creditRecycle(q.points, `回收 ${p.card.name}`)
-  p.status = 'recycled'
-  confirming.value = null
-  justRecycled.value = { id: p.id, points: q.points }
-  setTimeout(() => { justRecycled.value = null }, 4000)
-  track('recycle_success')
+  try {
+    // mock 直接入點；API 模式由後端結算（規則同一份 shared/recycle.ts）並回最新錢包
+    const r = await api.recyclePrize(p.id, q.points, `回收 ${p.card.name}`)
+    p.status = 'recycled'
+    confirming.value = null
+    justRecycled.value = { id: p.id, points: r.points }
+    setTimeout(() => { justRecycled.value = null }, 4000)
+    track('recycle_success')
+  } catch (e) {
+    alert(e instanceof Error ? e.message : '回收失敗')
+  }
 }
 </script>
 

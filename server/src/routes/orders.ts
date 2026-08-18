@@ -74,8 +74,12 @@ orders.post('/', async c => {
 
     // 庫內轉移：原子交換，沒有中間狀態，直接記帳過戶
     if (l.delivery === 'vault') {
-      await tx`insert into points_ledger (user_id, delta, reason) values (${me}, ${-price}, 'vault-buy')`
-      await tx`insert into points_ledger (user_id, delta, reason) values (${l.seller_id}, ${price}, 'vault-sell')`
+      await tx`insert into points_ledger (user_id, delta, reason, ref_id) values (${me}, ${-price}, 'vault-buy', ${listingId})`
+      await tx`insert into points_ledger (user_id, delta, reason, ref_id) values (${l.seller_id}, ${price}, 'vault-sell', ${listingId})`
+      // 卡還在保管庫：過戶就是改 owner，狀態回到保管中
+      if (l.prize_id) {
+        await tx`update prizes set user_id = ${me}, status = 'stashed' where id = ${l.prize_id}`
+      }
       return { order: null }
     }
 

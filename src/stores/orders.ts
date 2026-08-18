@@ -13,6 +13,18 @@ import { defineStore } from 'pinia'
 import type { CardItem, Listing, Order } from '@/types/models'
 import { applyDeadlines, depositFor, isOpen, looksLikeTracking } from '@/shared/escrow'
 import { useWalletStore } from '@/stores/wallet'
+import { MOCK } from '@/lib/config'
+import { http } from '@/lib/http'
+import { ORDER_ROUTES } from '@/shared/contract'
+
+/* API 模式：伺服器擁有訂單狀態。每個動作 = 打端點 → 重新載入。
+   時限的推進在伺服器（讀取時重算 + 排程），前端只顯示。 */
+type OrdersRes = { orders: Order[]; wallet: { points: number; locked: number }; serverTime: number }
+async function pull(): Promise<OrdersRes> {
+  const r = await http<OrdersRes>(ORDER_ROUTES.list())
+  useWalletStore().applyServer(r.wallet)
+  return r
+}
 
 const KEY = 'vd_orders_v1'
 /** demo 用的時間位移，讓人不用真的等 7 天就能看完整個流程 */
@@ -21,21 +33,30 @@ const OFFSET_KEY = 'vd_orders_offset'
 export const useOrdersStore = defineStore('orders', {
   state: () => ({
     orders: [] as Order[],
-    /** 加在真實時間上的毫秒偏移。正式版永遠是 0 */
-    offset: Number(localStorage.getItem(OFFSET_KEY) || 0),
+    /** demo 時鐘：加在真實時間上的毫秒偏移。API 模式永遠是 0 */
+    offset: MOCK ? Number(localStorage.getItem(OFFSET_KEY) || 0) : 0,
+    /** API 模式：伺服器時間與本機的差，倒數用伺服器時間算，不信使用者的裝置時鐘 */
+    serverOffset: 0,
     loaded: false
   }),
 
   getters: {
     /** demo 時鐘。所有時限判斷都走這裡，不直接用 Date.now() */
-    now: (s) => () => Date.now() + s.offset,
+    now: (s) => () => Date.now() + (MOCK ? s.offset : s.serverOffset),
     asBuyer: (s) => s.orders.filter(o => o.buyerId === 'me'),
     asSeller: (s) => s.orders.filter(o => o.sellerId === 'me'),
     openCount: (s) => s.orders.filter(isOpen).length
   },
 
   actions: {
-    load() {
+    async load() {
+      if (!MOCK) {
+        const r = await pull()
+        this.orders = r.orders
+        this.serverOffset = r.serverTime - Date.now()
+        this.loaded = true
+        return
+      }
       if (this.loaded) return
       const raw = localStorage.getItem(KEY)
       if (raw) {
@@ -47,6 +68,7 @@ export const useOrdersStore = defineStore('orders', {
     },
 
     persist() {
+      if (!MOCK) return
       localStorage.setItem(KEY, JSON.stringify(this.orders))
       localStorage.setItem(OFFSET_KEY, String(this.offset))
     },
@@ -55,7 +77,8 @@ export const useOrdersStore = defineStore('orders', {
      * 把所有到期的訂單補算到現在。
      * 結案的訂單要同時處理凍結的點數，否則餘額會跟訂單狀態對不起來。
      */
-    sweep() {
+    async sweep() {
+      if (!MOCK) { const r = await pull(); this.orders = r.orders; return }
       const t = Date.now() + this.offset
       let changed = false
       this.orders = this.orders.map(o => {
@@ -91,7 +114,14 @@ export const useOrdersStore = defineStore('orders', {
     },
 
     /** 買下需寄送的掛單 → 建立託管訂單並凍結點數 */
-    createFromListing(l: Listing, buyerName: string): Order {
+    async createFromListing(l: Listing, buyerName: string): Promise<Order> {
+      if (!MOCK) {
+        const r = await pull()
+        this.orders = r.orders
+        const o = r.orders.find(x => x.listingId === l.id)
+        if (!o) throw new Error('訂單尚未建立')
+        return o
+      }
       const t = Date.now() + this.offset
       const completed = this.orders.filter(o => o.sellerId === l.sellerId && o.status === 'completed').length
       const o: Order = {
@@ -140,7 +170,12 @@ export const useOrdersStore = defineStore('orders', {
      * 都必須受同一套約束。第一版只擋在按鈕上，直接呼叫 ship(id,'BAD')
      * 就進得去，訂單會帶著一個假單號變成運送中。
      */
-    ship(id: string, tracking: string): boolean {
+    async ship(id: string, tracking: string, photoUrls: string[] = []): Promise<boolean> {
+      if (!MOCK) {
+        await http(ORDER_ROUTES.ship(id), { method: 'POST', json: { tracking, photoUrls } })
+        await this.sweep()
+        return true
+      }
       const o = this.orders.find(x => x.id === id)
       if (!o || o.status !== 'escrowed') return false
       if (!looksLikeTracking(tracking)) return false
@@ -149,14 +184,21 @@ export const useOrdersStore = defineStore('orders', {
     },
 
     /** 物流簽收。真實情況是輪詢物流商回報，demo 由按鈕代打 */
-    markDelivered(id: string) {
+    async markDelivered(id: string) {
+      if (!MOCK) {
+        // 正式版是物流 webhook；測試用的端點限平台帳號
+        await http(`/v1/orders/${id}/delivered`, { method: 'POST' })
+        await this.sweep()
+        return
+      }
       const o = this.orders.find(x => x.id === id)
       if (!o || o.status !== 'shipped') return
       this.patch(id, { status: 'delivered', deliveredAt: Date.now() + this.offset })
     },
 
     /** 買家確認收貨，立即放款 */
-    confirm(id: string) {
+    async confirm(id: string) {
+      if (!MOCK) { await http(ORDER_ROUTES.confirm(id), { method: 'POST' }); await this.sweep(); return }
       const o = this.orders.find(x => x.id === id)
       if (!o || o.status !== 'delivered') return
       const next: Order = { ...o, status: 'completed', settledAt: Date.now() + this.offset, closedBy: 'buyer-confirm' }
@@ -166,7 +208,12 @@ export const useOrdersStore = defineStore('orders', {
     },
 
     /** 買家開爭議。沒有開箱影片不受理 —— 這是規格裡「舉證綁在索賠上」的實作 */
-    dispute(id: string, reason: string, hasVideo: boolean) {
+    async dispute(id: string, reason: string, hasVideo: boolean, videoUrl = '') {
+      if (!MOCK) {
+        await http(ORDER_ROUTES.dispute(id), { method: 'POST', json: { reason, videoUrl } })
+        await this.sweep()
+        return
+      }
       const o = this.orders.find(x => x.id === id)
       if (!o || o.status !== 'delivered' || !hasVideo) return
       this.patch(id, {
@@ -176,7 +223,8 @@ export const useOrdersStore = defineStore('orders', {
     },
 
     /** 平台裁決 */
-    resolve(id: string, to: 'buyer' | 'seller') {
+    async resolve(id: string, to: 'buyer' | 'seller') {
+      if (!MOCK) { await http(ORDER_ROUTES.resolve(id), { method: 'POST', json: { to, note: '' } }); await this.sweep(); return }
       const o = this.orders.find(x => x.id === id)
       if (!o || o.status !== 'disputed') return
       const next: Order = {
@@ -192,12 +240,14 @@ export const useOrdersStore = defineStore('orders', {
 
     /** demo：把時鐘往前撥，看時限到期會發生什麼 */
     travel(ms: number) {
+      if (!MOCK) return   // demo 時鐘只有 mock 有；伺服器的時間不能撥
       this.offset += ms
       this.sweep()
       this.persist()
     },
 
     reset() {
+      if (!MOCK) return
       this.orders = []
       this.offset = 0
       this.persist()

@@ -21,11 +21,34 @@ import ShaderSky from '@/components/ShaderSky.vue'
 import KineticTitle from '@/components/KineticTitle.vue'
 import { canonicalArt } from '@/lib/tcgdex'
 import { haptic } from '@/lib/haptics'
+import { MOCK } from '@/lib/config'
+import { ApiError } from '@/lib/http'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
-const busy = ref<'login' | 'register' | null>(null)
+const busy = ref<'login' | 'register' | 'line' | null>(null)
+
+/* API 模式的登入表單。mock 模式不顯示，一鍵進站照舊 */
+const showEmail = ref(false)
+const email = ref('')
+const password = ref('')
+const loginErr = ref('')
+
+function afterLogin() {
+  const back = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+  if (back && back.startsWith('/')) router.replace(back)
+  else router.replace({ name: 'home' })
+}
+
+/* LINE 登入回來時網址是 /login#token=…；收下 token 就直接進站。
+   LINE 那邊拒絕或驗證失敗會帶 ?line=denied|state|token|verify 回來。 */
+onMounted(async () => {
+  if (MOCK) return
+  if (await auth.consumeToken()) { afterLogin(); return }
+  const why = typeof route.query.line === 'string' ? route.query.line : ''
+  if (why) loginErr.value = why === 'denied' ? '你取消了 LINE 登入' : 'LINE 登入沒有完成，請再試一次'
+})
 
 /* ================= 場次導演機 =================
    之前每一層都各自無限循環，沒有開始也沒有收尾 —— 那是氛圍壁紙不是一部片。
@@ -187,16 +210,24 @@ onBeforeUnmount(() => {
 async function goIn(kind: 'login' | 'register') {
   if (busy.value) return
   haptic('tap')
+  loginErr.value = ''
   busy.value = kind
   try {
-    if (kind === 'register') await auth.register('', '')
-    else await auth.login('', '')
-    const back = typeof route.query.redirect === 'string' ? route.query.redirect : ''
-    if (back && back.startsWith('/')) router.replace(back)
-    else router.replace({ name: 'home' })
+    if (kind === 'register') await auth.register(email.value, password.value)
+    else await auth.login(email.value, password.value)
+    afterLogin()
+  } catch (e) {
+    loginErr.value = e instanceof ApiError ? e.message : '登入失敗，請再試一次'
   } finally {
     busy.value = null
   }
+}
+
+function goLine() {
+  if (busy.value) return
+  haptic('tap')
+  busy.value = 'line'
+  auth.loginWithLine()   // 整頁導向，不會回來這裡
 }
 </script>
 
@@ -342,16 +373,45 @@ async function goIn(kind: 'login' | 'register') {
       <p class="zh">每一支籤，開賣前就已封存</p>
       <p class="tag muted">PSA 鑑定卡 · 定量抽選 · 完抽可驗算</p>
 
-      <div class="acts">
-        <button type="button" class="btn primary big" :disabled="!!busy" @click="goIn('login')">
-          {{ busy === 'login' ? '進入中…' : '登入' }}
-        </button>
-        <button type="button" class="btn big" :disabled="!!busy" @click="goIn('register')">
-          {{ busy === 'register' ? '建立中…' : '註冊' }}
-        </button>
+      <!-- mock：一鍵進站 -->
+      <template v-if="MOCK">
+        <div class="acts">
+          <button type="button" class="btn primary big" :disabled="!!busy" @click="goIn('login')">
+            {{ busy === 'login' ? '進入中…' : '登入' }}
+          </button>
+          <button type="button" class="btn big" :disabled="!!busy" @click="goIn('register')">
+            {{ busy === 'register' ? '建立中…' : '註冊' }}
+          </button>
+          <RouterLink :to="{ name: 'home' }" class="peek muted">先逛逛 →</RouterLink>
+        </div>
+        <p class="demo mono">展示版：登入與註冊皆為模擬，按下即進站</p>
+      </template>
+
+      <!-- API：LINE 為主、Email 為備援 -->
+      <template v-else>
+        <div class="acts col">
+          <button type="button" class="btn big line" :disabled="!!busy" @click="goLine">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3C6.5 3 2 6.6 2 11c0 3.9 3.5 7.2 8.2 7.9.3.1.8.2.9.5.1.3.1.7 0 1l-.1.9c0 .3-.2 1 .9.6s5.9-3.5 8.1-6c1.5-1.6 2-3.3 2-4.9C22 6.6 17.5 3 12 3z"/></svg>
+            {{ busy === 'line' ? '前往 LINE…' : '用 LINE 登入' }}
+          </button>
+          <button v-if="!showEmail" type="button" class="peek muted asLink" @click="showEmail = true">用 Email 登入或註冊</button>
+        </div>
+
+        <form v-if="showEmail" class="emailForm" @submit.prevent="goIn('login')">
+          <input v-model="email" type="email" autocomplete="email" placeholder="Email" required />
+          <input v-model="password" type="password" autocomplete="current-password" placeholder="密碼（至少 8 碼）" required minlength="8" />
+          <div class="acts">
+            <button type="submit" class="btn primary big" :disabled="!!busy">
+              {{ busy === 'login' ? '登入中…' : '登入' }}
+            </button>
+            <button type="button" class="btn big" :disabled="!!busy" @click="goIn('register')">
+              {{ busy === 'register' ? '建立中…' : '註冊新帳號' }}
+            </button>
+          </div>
+        </form>
+        <p v-if="loginErr" class="loginErr" role="alert">{{ loginErr }}</p>
         <RouterLink :to="{ name: 'home' }" class="peek muted">先逛逛 →</RouterLink>
-      </div>
-      <p class="demo mono">展示版：登入與註冊皆為模擬，按下即進站</p>
+      </template>
     </main>
 
     <footer class="foot muted">
@@ -897,6 +957,16 @@ async function goIn(kind: 'login' | 'register') {
 .tag { margin: 6px 0 0; font-size: 13.5px; letter-spacing: .06em; }
 
 .acts { display: grid; grid-auto-flow: column; gap: 12px; align-items: center; margin-top: 8px; }
+.acts.col { grid-auto-flow: row; justify-items: start; gap: 10px; }
+.btn.line { background: #06C755; color: #fff; border-color: #06C755; display: inline-flex; align-items: center; gap: 10px; }
+.btn.line svg { width: 20px; height: 20px; fill: currentColor; }
+.asLink { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
+.emailForm { display: grid; gap: 10px; margin-top: 12px; max-width: 360px; }
+.emailForm input {
+  width: 100%; min-height: 46px; padding: 10px 14px; font-size: 15px;
+  background: var(--field); border: 1px solid var(--line); border-radius: var(--radius); color: var(--ink);
+}
+.loginErr { margin: 8px 0 0; font-size: 13px; color: var(--danger); }
 .btn.big { padding: 14px 32px; font-size: 16px; }
 /* 主鈕呼吸光暈 */
 @media (prefers-reduced-motion: no-preference) {

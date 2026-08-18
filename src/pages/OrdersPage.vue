@@ -12,6 +12,7 @@ import { useWalletStore } from '@/stores/wallet'
 import { actionsFor, deadlineOf, DAY, HOUR, isOpen, looksLikeTracking, remainText, STATUS_TEXT } from '@/shared/escrow'
 import type { Order } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
+import { MOCK } from '@/lib/config'
 
 const store = useOrdersStore()
 const wallet = useWalletStore()
@@ -22,6 +23,9 @@ const tracking = ref('')
 const disputeFor = ref<string | null>(null)
 const reason = ref('')
 const hasVideo = ref(false)
+/* API 模式：伺服器要影片的 URL 才受理。R2 直傳是下一階段，先讓使用者貼連結 */
+const videoUrl = ref('')
+const canDispute = () => MOCK ? hasVideo.value : /^https?:\/\/.+/.test(videoUrl.value.trim())
 
 /* 每分鐘重掃一次，讓倒數會動、到期的訂單自己結案。
    真正的推進靠時間戳，這個計時器只是讓畫面跟上，
@@ -42,18 +46,27 @@ const list = computed(() =>
 const roleOf = (o: Order) => (o.sellerId === 'me' ? 'seller' : 'buyer') as 'seller' | 'buyer'
 const canShip = computed(() => looksLikeTracking(tracking.value))
 
-function doShip(o: Order) {
+const err = ref('')
+async function doShip(o: Order) {
   if (!canShip.value) return
-  store.ship(o.id, tracking.value.trim())
-  shipFor.value = null
-  tracking.value = ''
+  err.value = ''
+  try {
+    // API 模式後端要出貨照；R2 直傳是下一階段，先給一個佔位 URL 讓流程走得通
+    await store.ship(o.id, tracking.value.trim(), MOCK ? [] : ['https://placeholder.invalid/ship-photo'])
+    shipFor.value = null
+    tracking.value = ''
+  } catch (e) { err.value = e instanceof Error ? e.message : '出貨失敗' }
 }
-function doDispute(o: Order) {
-  if (!hasVideo.value) return
-  store.dispute(o.id, reason.value.trim() || '未說明', true)
-  disputeFor.value = null
-  reason.value = ''
-  hasVideo.value = false
+async function doDispute(o: Order) {
+  if (!canDispute()) return
+  err.value = ''
+  try {
+    await store.dispute(o.id, reason.value.trim() || '未說明', true, videoUrl.value.trim())
+    disputeFor.value = null
+    reason.value = ''
+    hasVideo.value = false
+    videoUrl.value = ''
+  } catch (e) { err.value = e instanceof Error ? e.message : '申訴送出失敗' }
 }
 </script>
 
@@ -78,6 +91,7 @@ function doDispute(o: Order) {
         class="chip" :class="{ on: tab === 'done' }" @click="tab = 'done'">已結案</button>
     </div>
 
+    <p v-if="err" class="err" role="alert">{{ err }}</p>
     <p v-if="!list.length" class="empty muted">
       {{ tab === 'open' ? '目前沒有進行中的訂單。到市場買一張「需寄送」的卡就會建立託管訂單。' : '還沒有結案的訂單。' }}
     </p>
@@ -124,10 +138,10 @@ function doDispute(o: Order) {
         </template>
 
         <!-- demo：物流回報與平台裁決在正式版不是使用者按的 -->
-        <button v-if="o.status === 'shipped'" type="button" class="btn sm ghost" @click="store.markDelivered(o.id)">
+        <button v-if="MOCK && o.status === 'shipped'" type="button" class="btn sm ghost" @click="store.markDelivered(o.id)">
           模擬物流簽收
         </button>
-        <template v-if="o.status === 'disputed'">
+        <template v-if="MOCK && o.status === 'disputed'">
           <button type="button" class="btn sm ghost" @click="store.resolve(o.id, 'buyer')">裁決：判買家</button>
           <button type="button" class="btn sm ghost" @click="store.resolve(o.id, 'seller')">裁決：判賣家</button>
         </template>
@@ -152,20 +166,24 @@ function doDispute(o: Order) {
           發生什麼事
           <input v-model="reason" type="text" placeholder="例如：盒內是空的" />
         </label>
-        <label class="chk">
+        <label v-if="MOCK" class="chk">
           <input v-model="hasVideo" type="checkbox" />
           我有完整未剪輯的開箱影片（從封箱狀態開始、拍到面單與鑑定編號）
+        </label>
+        <label v-else>
+          開箱影片連結（完整未剪輯、從封箱狀態開始、拍到面單與鑑定編號）
+          <input v-model="videoUrl" type="url" placeholder="https://…" />
         </label>
         <p class="hint">沒有影片無法受理索賠 —— 買東西不強制錄影，但要申請退款必須附。</p>
         <div class="frow">
           <button type="button" class="btn sm" @click="disputeFor = null">取消</button>
-          <button type="button" class="btn primary sm" :disabled="!hasVideo" @click="doDispute(o)">送出申訴</button>
+          <button type="button" class="btn primary sm" :disabled="!canDispute()" @click="doDispute(o)">送出申訴</button>
         </div>
       </div>
     </article>
 
-    <!-- 時間旅行：不用真的等 7 天就能看完整條流程 -->
-    <section class="dev">
+    <!-- 時間旅行：不用真的等 7 天就能看完整條流程。只有 mock 有；伺服器的時間不能撥 -->
+    <section v-if="MOCK" class="dev">
       <h2>Demo 時鐘</h2>
       <p class="muted">
         時限是用時間戳算的，不是背景排程 —— 把時鐘往前撥，到期的訂單會立刻自己結案。
@@ -253,6 +271,7 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 .hint { font-size: 11.5px; line-height: 1.65; color: var(--muted); margin: 0 0 10px; }
 .frow { display: flex; gap: 8px; justify-content: flex-end; }
 
+.err { color: var(--danger); font-size: 13.5px; margin: 0 0 12px; }
 .dev { margin-top: 26px; padding: 14px 16px; background: var(--surface-2); border-radius: var(--radius-lg); }
 .dev h2 { font-size: 14px; margin: 0 0 6px; }
 .dev p { font-size: 12.5px; line-height: 1.7; margin: 0 0 10px; }

@@ -1,11 +1,14 @@
 import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
+import { MOCK } from '@/lib/config'
 import type { LedgerEntry } from '@/types/models'
 
 export const useWalletStore = defineStore('wallet', {
   state: () => ({
-    // demo 用：給足點數讓所有玩法都能試（正式版由後端回傳真實餘額）
-    points: 100_000_000,
+    /* mock 給足點數讓所有玩法都能試；API 模式從 0 開始，由伺服器回傳真實餘額。
+       API 模式下這裡的所有增減動作都是 no-op —— 頁面在呼叫 api 前後做的
+       樂觀更新（spend / topup）會被伺服器回傳的錢包覆蓋，伺服器才是真相。 */
+    points: MOCK ? 100_000_000 : 0,
     /**
      * 託管中的點數。
      *
@@ -40,10 +43,17 @@ export const useWalletStore = defineStore('wallet', {
       // 用可動用餘額判斷，不是總餘額 —— 託管中的點數不能再拿去買東西
       return this.points - this.locked >= cost
     },
+    /** API 模式：伺服器回傳的錢包直接套用 */
+    applyServer(w: { points: number; locked: number }) {
+      this.points = w.points
+      this.locked = w.locked
+    },
     spend(cost: number) {
+      if (!MOCK) return
       this.points -= cost
     },
     topup(amount: number) {
+      if (!MOCK) return
       this.points += amount
     },
     /**
@@ -55,10 +65,12 @@ export const useWalletStore = defineStore('wallet', {
      * 就不存在「兩份真相」的問題。
      */
     setLocked(total: number) {
+      if (!MOCK) return
       this.locked = Math.max(0, total)
     },
     /** 放款給賣家：這筆錢真的離開買家帳戶 */
     charge(amount: number) {
+      if (!MOCK) return
       this.points -= amount
     },
     /**
@@ -66,6 +78,7 @@ export const useWalletStore = defineStore('wallet', {
      * 使用者拿卡換點，事後一定會回來對帳「我那張卡換了多少」。
      */
     creditRecycle(points: number, note: string) {
+      if (!MOCK) return
       this.points += points
       this.ledger.unshift({
         id: `l-${Date.now()}`,

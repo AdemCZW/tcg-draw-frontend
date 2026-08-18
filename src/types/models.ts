@@ -38,7 +38,7 @@ export type PoolOrigin = 'official' | 'merchant' | 'personal'
 export type PoolMode = 'classic' | 'shitei' | 'muteki' | 'battle' | 'niboichi' | 'streak' | 'auction'
 
 export type PoolStatus = 'committed' | 'open' | 'sold_out' | 'revealed'
-export type PrizeStatus = 'stashed' | 'ship_requested' | 'shipped' | 'recycled'
+export type PrizeStatus = 'stashed' | 'listed' | 'ship_requested' | 'shipped' | 'recycled'
 
 
 export interface PoolPrize {

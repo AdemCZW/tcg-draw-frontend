@@ -22,8 +22,9 @@ const pid = (c: { req: { param: (k: 'id') => string | undefined } }) => c.req.pa
 function toPublic(p: Row, prizes: Row[], taken: number[]) {
   const revealed = p.status === 'revealed'
   return {
-    id: p.id, sellerId: p.seller_id, mode: p.mode, title: p.title,
-    coverFileId: p.cover_file_id,
+    id: p.id, sellerId: p.seller_id, sellerName: p.seller_name, origin: p.origin,
+    mode: p.mode, title: p.title,
+    coverFileId: p.cover_file_id, cover: '',
     ticketPrice: Number(p.ticket_price), totalTickets: Number(p.total_tickets),
     remainingTickets: Number(p.total_tickets) - taken.length,
     takenSeats: taken,
@@ -38,7 +39,9 @@ function toPublic(p: Row, prizes: Row[], taken: number[]) {
 }
 
 async function loadPublic(id: string) {
-  const [p] = await sql`select * from pools where id = ${id}`
+  const [p] = await sql`
+    select p.*, s.origin, s.name as seller_name from pools p join sellers s on s.id = p.seller_id where p.id = ${id}
+  `
   if (!p) return null
   const prizes = await sql`
     select pp.*, (pp.total - count(ps.taken_by))::int as remaining

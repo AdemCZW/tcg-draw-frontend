@@ -7,12 +7,14 @@ import { track } from '@/lib/ga'
 
 const wallet = useWalletStore()
 const presets = [300, 500, 1000, 3000]
+import { MOCK } from '@/lib/config'
 const amount = ref<number>(500)
 const done = ref(false)
 
 function pick(v: number) { amount.value = v }
 function pay() {
   track('click_topup')
+  if (!MOCK) return   // 金流還沒接，點數由平台發放；按鈕在模板裡已停用
   if (amount.value < 100) { track('topup_failed'); return }
   // mock：直接入點；正式版導向綠界
   wallet.topup(amount.value)
@@ -25,7 +27,15 @@ function pay() {
 <template>
   <div class="container page">
     <h1>儲值</h1>
-    <div class="card box">
+    <!-- 金流還沒接（需要跟供應商談合作）；測試期點數由平台發放 -->
+    <div v-if="!MOCK" class="card box">
+      <p class="notice">
+        測試期間<strong>點數由平台發放</strong>，尚未開放自行儲值。
+        需要點數請聯繫平台，發放後會直接出現在你的錢包與帳本。
+      </p>
+      <RouterLink :to="{ name: 'wallet' }" class="btn">回錢包</RouterLink>
+    </div>
+    <div v-else class="card box">
       <div class="presets">
         <button v-for="v in presets" :key="v" class="btn" :class="{ on: amount === v }" @click="pick(v)">
           {{ v.toLocaleString() }}
@@ -56,4 +66,6 @@ input:focus-visible { outline: 2px solid var(--holo-a); }
 .go { padding: 13px 0; font-size: 15px; }
 .fine { font-size: 12px; margin: 0; }
 .ok { color: var(--ok); margin: 0; }
+.notice { margin: 0; font-size: 14.5px; line-height: 1.8; color: var(--muted); }
+.notice strong { color: var(--ink); }
 </style>

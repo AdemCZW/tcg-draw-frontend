@@ -109,7 +109,7 @@ async function buy(l: Listing) {
       wallet.spend(l.price)
       bought.value = l
     } else {
-      orders.createFromListing(l, auth.user?.name ?? '我')
+      await orders.createFromListing(l, auth.user?.name ?? '我')
       escrowed.value = l
     }
 

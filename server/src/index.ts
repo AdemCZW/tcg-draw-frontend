@@ -16,6 +16,7 @@ import { pools } from './routes/pools.js'
 import { prizes } from './routes/prizes.js'
 import { line } from './routes/line.js'
 import { admin } from './routes/admin.js'
+import { pub } from './routes/public.js'
 import { sweep } from './orders-service.js'
 
 const app = new Hono()
@@ -46,7 +47,7 @@ app.get('/v1/listings', async c => {
     listings: rows.map(r => ({
       id: r.id, card: r.card, price: Number(r.price),
       sellerId: r.seller_id, sellerName: r.seller_name,
-      delivery: r.delivery, status: r.status, listedAt: r.listed_at
+      delivery: r.delivery, status: r.status, listedAt: r.listed_at, prizeId: r.prize_id
     }))
   })
 })
@@ -58,6 +59,7 @@ app.route('/v1/pools', pools)
 app.route('/v1/prizes', prizes)
 app.route('/v1/auth/line', line)
 app.route('/v1/admin', admin)
+app.route('/v1', pub)
 
 /* 逾期掃描。
    時限本身是用時間戳算的，所以這支排程不是唯一真相 —— 它掛掉不會讓狀態算錯，

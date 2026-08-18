@@ -25,7 +25,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # VITE_API_URL 是 repo 的 Variable（Settings → Secrets and variables → Actions → Variables）。
+      # 沒設就是 mock 模式；設成 Railway 的網址前端就打真的後端。切換不用改程式。
       - run: npm run build:pages
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
       # SPA 的深層連結退回。GitHub Pages 是靜態檔案伺服器，/design/smoke
       # 這種路徑在磁碟上沒有對應檔案，直接開會吃 404 —— 只有從首頁點進去才會動，
       # 因為那是 history.pushState 不是真的請求。
