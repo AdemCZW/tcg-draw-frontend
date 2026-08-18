@@ -1,0 +1,59 @@
+/**
+ * 伺服器入口。
+ */
+import { Hono } from 'hono'
+import { cors } from 'hono/cors'
+import { logger } from 'hono/logger'
+import { serve } from '@hono/node-server'
+import { z } from 'zod'
+import { corsOrigins, env } from './env.js'
+import { sql } from './db.js'
+import { ensureUser, issueToken } from './auth.js'
+import { orders } from './routes/orders.js'
+import { sweep } from './orders-service.js'
+
+const app = new Hono()
+app.use('*', logger())
+app.use('*', cors({ origin: corsOrigins, credentials: true }))
+
+app.get('/health', async c => {
+  await sql`select 1`
+  return c.json({ ok: true, time: Date.now() })
+})
+
+/* 開發用登入：給 handle 就發 token，跟前端目前的 MOCK 行為一致。
+   真正的註冊登入還沒做，開放註冊之前必須補上。 */
+const LoginBody = z.object({ handle: z.string().min(2).max(32), name: z.string().min(1).max(32) })
+app.post('/v1/auth/login', async c => {
+  const parsed = LoginBody.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '參數不合法' }, 400)
+  const id = await ensureUser(parsed.data.handle, parsed.data.name)
+  return c.json({ token: await issueToken(id), userId: id })
+})
+
+app.get('/v1/listings', async c => {
+  const rows = await sql`select * from listings where status = 'live' order by listed_at desc limit 100`
+  return c.json({
+    listings: rows.map(r => ({
+      id: r.id, card: r.card, price: Number(r.price),
+      sellerId: r.seller_id, sellerName: r.seller_name,
+      delivery: r.delivery, status: r.status, listedAt: r.listed_at
+    }))
+  })
+})
+
+app.route('/v1/orders', orders)
+
+/* 逾期掃描。
+   時限本身是用時間戳算的，所以這支排程不是唯一真相 —— 它掛掉不會讓狀態算錯，
+   只會讓「沒有人去看」的訂單晚一點結案。每五分鐘一次綽綽有餘。 */
+const SWEEP_MS = 5 * 60_000
+setInterval(() => {
+  sql.begin(tx => sweep(tx))
+    .then(n => { if (n) console.log(`[sweep] 結案 ${n} 張逾期訂單`) })
+    .catch(e => console.error('[sweep] 失敗', e))
+}, SWEEP_MS)
+
+serve({ fetch: app.fetch, port: env.PORT }, info => {
+  console.log(`vaultdraw-server listening on :${info.port}`)
+})
