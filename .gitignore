@@ -7,3 +7,4 @@ vaultdraw-dist
 tsconfig.app.tsbuildinfo
 tsconfig.node.tsbuildinfo
 *.zip
+.env.local

@@ -389,28 +389,33 @@ function goLine() {
 
       <!-- API：LINE 為主、Email 為備援 -->
       <template v-else>
-        <div class="acts col">
-          <button type="button" class="btn big line" :disabled="!!busy" @click="goLine">
+        <!-- 兩個登入入口是同一組決定，做成一樣寬高並列；
+             「先逛逛」是不登入直接看，屬於另一種動作，所以留在外面當唯一的文字連結 -->
+        <div class="authBox">
+          <button type="button" class="btn auth line" :disabled="!!busy" @click="goLine">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3C6.5 3 2 6.6 2 11c0 3.9 3.5 7.2 8.2 7.9.3.1.8.2.9.5.1.3.1.7 0 1l-.1.9c0 .3-.2 1 .9.6s5.9-3.5 8.1-6c1.5-1.6 2-3.3 2-4.9C22 6.6 17.5 3 12 3z"/></svg>
             {{ busy === 'line' ? '前往 LINE…' : '用 LINE 登入' }}
           </button>
-          <button v-if="!showEmail" type="button" class="peek muted asLink" @click="showEmail = true">用 Email 登入或註冊</button>
+          <button v-if="!showEmail" type="button" class="btn auth email" @click="showEmail = true">
+            用 Email 登入或註冊
+          </button>
+
+          <form v-if="showEmail" class="emailForm" @submit.prevent="goIn('login')">
+            <input v-model="email" type="email" autocomplete="email" placeholder="Email" required />
+            <input v-model="password" type="password" autocomplete="current-password" placeholder="密碼（至少 8 碼）" required minlength="8" />
+            <div class="formRow">
+              <button type="submit" class="btn auth primary" :disabled="!!busy">
+                {{ busy === 'login' ? '登入中…' : '登入' }}
+              </button>
+              <button type="button" class="btn auth" :disabled="!!busy" @click="goIn('register')">
+                {{ busy === 'register' ? '建立中…' : '註冊' }}
+              </button>
+            </div>
+          </form>
         </div>
 
-        <form v-if="showEmail" class="emailForm" @submit.prevent="goIn('login')">
-          <input v-model="email" type="email" autocomplete="email" placeholder="Email" required />
-          <input v-model="password" type="password" autocomplete="current-password" placeholder="密碼（至少 8 碼）" required minlength="8" />
-          <div class="acts">
-            <button type="submit" class="btn primary big" :disabled="!!busy">
-              {{ busy === 'login' ? '登入中…' : '登入' }}
-            </button>
-            <button type="button" class="btn big" :disabled="!!busy" @click="goIn('register')">
-              {{ busy === 'register' ? '建立中…' : '註冊新帳號' }}
-            </button>
-          </div>
-        </form>
         <p v-if="loginErr" class="loginErr" role="alert">{{ loginErr }}</p>
-        <RouterLink :to="{ name: 'home' }" class="peek muted">先逛逛 →</RouterLink>
+        <RouterLink :to="{ name: 'home' }" class="peek solo">先逛逛 →</RouterLink>
       </template>
     </main>
 
@@ -957,16 +962,56 @@ function goLine() {
 .tag { margin: 6px 0 0; font-size: 13.5px; letter-spacing: .06em; }
 
 .acts { display: grid; grid-auto-flow: column; gap: 12px; align-items: center; margin-top: 8px; }
-.acts.col { grid-auto-flow: row; justify-items: start; gap: 10px; }
-.btn.line { background: #06C755; color: #fff; border-color: #06C755; display: inline-flex; align-items: center; gap: 10px; }
-.btn.line svg { width: 20px; height: 20px; fill: currentColor; }
-.asLink { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
-.emailForm { display: grid; gap: 10px; margin-top: 12px; max-width: 360px; }
-.emailForm input {
-  width: 100%; min-height: 46px; padding: 10px 14px; font-size: 15px;
-  background: var(--field); border: 1px solid var(--line); border-radius: var(--radius); color: var(--ink);
+
+/* ===== 登入區 =====
+   三個層級要一眼分得出來，之前 Email 跟「先逛逛」共用同一個底線連結樣式，
+   兩條看起來一模一樣的字疊在一起，等於沒有主次：
+     1 LINE      主要入口 —— 品牌實心色
+     2 Email     同樣是真的入口，所以也是按鈕、同寬同高，但用描邊不搶主色
+     3 先逛逛     不登入直接看，是另一種動作 —— 唯一的文字連結，並且拉開距離
+   寬度收在 300px：按鈕橫拉太寬會失去「可按」的形狀感，變成一條色帶。 */
+.authBox {
+  display: grid;
+  gap: 10px;
+  width: min(300px, 100%);
+  margin: 26px auto 0;
 }
-.loginErr { margin: 8px 0 0; font-size: 13px; color: var(--danger); }
+.btn.auth {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 20px;
+  font-size: 15px;
+  letter-spacing: .01em;
+}
+.btn.auth.line { background: #06C755; border-color: #06C755; color: #fff; }
+.btn.auth.line svg { width: 19px; height: 19px; fill: currentColor; flex: none; }
+.btn.auth.email {
+  background: color-mix(in srgb, #cdbdf0 9%, transparent);
+  border-color: color-mix(in srgb, #cdbdf0 40%, transparent);
+  color: #e8e2f4;
+}
+@media (hover: hover) {
+  .btn.auth.line:hover { background: #05b34c; border-color: #05b34c; box-shadow: 0 10px 26px rgba(6, 199, 85, .3); }
+  .btn.auth.email:hover { background: color-mix(in srgb, #cdbdf0 12%, transparent); border-color: color-mix(in srgb, #cdbdf0 46%, transparent); }
+}
+
+.emailForm { display: grid; gap: 10px; }
+.emailForm input {
+  width: 100%; min-height: 50px; padding: 10px 16px; font-size: 15px;
+  background: color-mix(in srgb, #0b0716 55%, transparent);
+  border: 1px solid color-mix(in srgb, #cdbdf0 22%, transparent);
+  border-radius: var(--pill); color: #e8e2f4;
+}
+.emailForm input::placeholder { color: color-mix(in srgb, #cdbdf0 45%, transparent); }
+.emailForm input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, #cdbdf0 60%, transparent);
+  background: color-mix(in srgb, #0b0716 75%, transparent);
+}
+/* 登入／註冊是一組對等選擇，等寬並列比上下排更快讀 */
+.formRow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.loginErr { margin: 12px 0 0; font-size: 13px; color: var(--danger); }
 .btn.big { padding: 14px 32px; font-size: 16px; }
 /* 主鈕呼吸光暈 */
 @media (prefers-reduced-motion: no-preference) {
@@ -976,12 +1021,24 @@ function goLine() {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); }
   50%      { box-shadow: 0 0 0 12px color-mix(in srgb, var(--accent) 0%, transparent); }
 }
-.peek { font-size: 14px; margin-left: 6px; text-decoration: underline; text-underline-offset: 3px; }
+/* 文字連結。不加底線 —— 底線的視覺重量會讓它跟上面的按鈕搶層級，
+   它要明顯更輕才對。mock 模式是排在 .acts 那一列裡，維持行內間距。 */
+.peek { font-size: 14px; color: var(--muted); text-decoration: none; transition: color .18s; }
+.acts .peek { margin-left: 6px; }
+.peek.solo { display: inline-block; margin-top: 20px; font-size: 13.5px; }
+@media (hover: hover) { .peek:hover { color: #e8e2f4; } }
 .demo { margin: 2px 0 0; font-size: 11px; letter-spacing: .06em; color: var(--faint); }
 
-.foot { position: relative; z-index: 8; padding: 16px var(--pad) 22px; text-align: center; font-size: 12.5px; }
-.foot a { color: var(--muted); }
-.fine { display: block; margin: 8px auto 0; font-size: 11px; color: var(--faint); max-width: 64ch; }
+.foot { position: relative; z-index: 8; padding: 20px var(--pad) 26px; text-align: center; font-size: 12.5px; }
+.foot a { color: var(--muted); text-decoration: none; }
+@media (hover: hover) { .foot a:hover { color: #e8e2f4; } }
+/* 免責條款：11px 拉到 64ch 太密，一行太長眼睛會找不到下一行的開頭。
+   收窄到 46ch 並把行高拉開，讀起來才不像一團字。 */
+.fine {
+  display: block; margin: 12px auto 0;
+  font-size: 11px; line-height: 1.85; color: var(--faint);
+  max-width: 46ch;
+}
 
 /* ===== 進場編排：由後往前依序浮現 ===== */
 @media (prefers-reduced-motion: no-preference) {
@@ -1005,7 +1062,7 @@ function goLine() {
   .orbit { --k: .66; }
   .acts { grid-auto-flow: row; width: 100%; max-width: 320px; }
   .btn.big { width: 100%; }
-  .peek { margin: 4px 0 0; }
+  .acts .peek { margin: 4px 0 0; }
   .mote { width: 20px; height: 20px; }
   /* 觸控裝置沒有指標視差，把位移歸零免得殘留 */
   .stars, .orbit { translate: none; }
