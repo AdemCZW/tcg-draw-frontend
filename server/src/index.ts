@@ -19,6 +19,7 @@ import { admin } from './routes/admin.js'
 import { pub } from './routes/public.js'
 import { files } from './routes/files.js'
 import { sweep } from './orders-service.js'
+import { sweepAttempts } from './rate-limit.js'
 
 const app = new Hono()
 app.use('*', logger())
@@ -71,6 +72,8 @@ setInterval(() => {
   sql.begin(tx => sweep(tx))
     .then(n => { if (n) console.log(`[sweep] 結案 ${n} 張逾期訂單`) })
     .catch(e => console.error('[sweep] 失敗', e))
+  // 順手清掉過期的登入失敗紀錄，那張表不需要保留歷史
+  sweepAttempts().catch(e => console.error('[sweep] 清理登入紀錄失敗', e))
 }, SWEEP_MS)
 
 serve({ fetch: app.fetch, port: env.PORT }, info => {

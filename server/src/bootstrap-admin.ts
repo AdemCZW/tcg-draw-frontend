@@ -33,10 +33,15 @@ async function run() {
     console.error('缺少 ADMIN_EMAIL 或 ADMIN_PASSWORD 環境變數')
     process.exit(1)
   }
-  if (password.length < 12) {
-    // 這個帳號可以發點數、看所有人的帳本，門檻拉高一點
-    console.error('管理員密碼至少 12 碼')
+  if (password.length < 8) {
+    console.error('管理員密碼至少 8 碼')
     process.exit(1)
+  }
+  if (password.length < 12) {
+    // 不擋，但要講清楚：這個帳號能無上限發點數、看所有人的帳本、裁決爭議。
+    // 8 碼可接受的前提是登入端點有速率限制（見 rate-limit.ts），
+    // 沒有那層的話 8 碼等於可以被慢慢猜出來。
+    console.warn('⚠ 密碼短於 12 碼。這是能發點數與裁決爭議的帳號，建議用密碼管理器產一組長的。')
   }
 
   const [existing] = await sql`select id from users where email = ${email}`
