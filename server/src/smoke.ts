@@ -32,6 +32,15 @@ async function login(handle: string, name: string) {
   return (await json(r)).token as string
 }
 
+/**
+ * 用「有沒有帶 body」判斷 GET/POST。
+ *
+ * 陷阱：不需要 body 的 POST 端點（confirm、delivered）如果呼叫時省略第三個參數，
+ * 會被誤判成 GET，打到只註冊 POST 的路由上得到 Hono 預設的 404 —— 這個 404
+ * 又剛好滿足「不是 ok」，會讓用 !xxx.ok 判斷失敗與否的檢查誤判成功。
+ * 這個檔案曾經因為這個原因產生過一次完全看不出來是測試工具問題的假警報。
+ * 不需要 body 的 POST 呼叫時，一律明確傳 {}，不要省略第三個參數。
+ */
 const call = (token: string, path: string, body?: unknown) =>
   fetch(`${base}${path}`, {
     method: body === undefined ? 'GET' : 'POST',
@@ -109,13 +118,13 @@ async function run() {
   check('賣家出貨成功', shipped.ok, await shipped.clone().text())
 
   // 還沒送達，買家不能確認收貨
-  const early = await call(buyer, `/v1/orders/${order.id}/confirm`)
+  const early = await call(buyer, `/v1/orders/${order.id}/confirm`, {})
   check('未送達不能確認收貨', !early.ok)
 
-  const delivered = await call(platform, `/v1/orders/${order.id}/delivered`)
+  const delivered = await call(platform, `/v1/orders/${order.id}/delivered`, {})
   check('物流回報簽收', delivered.ok, await delivered.clone().text())
 
-  const confirmed = await call(buyer, `/v1/orders/${order.id}/confirm`)
+  const confirmed = await call(buyer, `/v1/orders/${order.id}/confirm`, {})
   check('買家確認收貨', confirmed.ok, await confirmed.clone().text())
 
   const w2 = await json(await call(buyer, '/v1/orders'))
@@ -125,7 +134,7 @@ async function run() {
     `${w0.wallet.points} → ${w2.wallet.points}，價 ${order.price}`)
 
   // 已結案的訂單不能再動
-  const again = await call(buyer, `/v1/orders/${order.id}/confirm`)
+  const again = await call(buyer, `/v1/orders/${order.id}/confirm`, {})
   check('已完成的訂單不能重複確認', !again.ok)
 
   // 庫內轉移：沒有訂單，直接過戶
