@@ -16,6 +16,8 @@ const auth = useAuthStore()
         <RouterLink :to="{ name: 'fairness' }">公平性驗證</RouterLink>
         <RouterLink :to="{ name: 'cards' }">我的卡冊</RouterLink>
         <RouterLink :to="{ name: 'seller-new' }" class="sell">＋ 我要開池</RouterLink>
+        <!-- 只有管理員看得到。這是便利性入口，不是權限控制——擋在路由守衛與後端 -->
+        <RouterLink v-if="auth.isAdmin" :to="{ name: 'admin' }" class="adminLink">後台</RouterLink>
       </nav>
       <div class="right">
         <RouterLink :to="{ name: 'topup' }" class="wallet mono" aria-label="點數餘額，前往儲值">
@@ -51,6 +53,12 @@ const auth = useAuthStore()
   background: var(--accent-wash);
   transition: background .15s;
 }
+/* 後台入口：管理員限定，用中性色不搶主導覽的注意力 */
+.adminLink {
+  font-size: 13px; padding: 6px 12px; border-radius: var(--pill);
+  background: var(--surface-3); color: var(--muted);
+}
+@media (hover: hover) { .adminLink:hover { color: var(--ink); } }
 .nav .sell:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
 .wallet {

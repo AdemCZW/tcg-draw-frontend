@@ -15,6 +15,7 @@ declare module 'vue-router' {
     chrome?: Chrome
     /** 要登入才能進；沒登入導回形象頁並記住原本要去哪 */
     requiresAuth?: boolean
+    requiresAdmin?: boolean
     /** 導覽深度，之後做轉場方向判斷用（往深層滑入、返回滑出） */
     depth?: number
     /** 分頁標題，afterEach 會套上 */
@@ -149,6 +150,11 @@ export const router = createRouter({
       component: () => import('@/pages/OrdersPage.vue'),
       meta: { requiresAuth: true, depth: 2, title: '我的訂單' }
     },
+    {
+      path: '/admin', name: 'admin',
+      component: () => import('@/pages/AdminPage.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true, depth: 1, title: '平台後台' }
+    },
     // 交易保護規格。不掛導覽列 —— 這頁是用連結分享出去給人看的，
     // 不是使用者日常會用的功能
     {
@@ -190,6 +196,13 @@ router.beforeEach(async (to) => {
   const auth = useAuthStore()
   if (to.meta.requiresAuth && !auth.isLoggedIn) {
     return { name: 'landing', query: { redirect: to.fullPath } }
+  }
+  /* 後台：重整後 user 是從 localStorage 還原的，role 可能是舊的（例如權限已被移除），
+     所以進後台前先跟伺服器確認一次身分再判斷。這只是避免看到一個按了全是 403 的畫面，
+     真正的權限在後端每個端點各自把關。 */
+  if (to.meta.requiresAdmin) {
+    await auth.refresh()
+    if (!auth.isAdmin) return { name: 'home' }
   }
   if (to.name === 'landing' && auth.isLoggedIn) {
     return { name: 'home' }

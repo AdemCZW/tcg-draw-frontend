@@ -81,6 +81,56 @@ admin.get('/users/:id/wallet', async c => {
   return c.json({ wallet: await walletOf(id), ledger: rows })
 })
 
+/* ---- 賣家 ----
+   後台要看的跟公開頁不同：這裡要的是「誰在等審核」，
+   還有平台自己關心的營運數字（開了幾池、爭議多少），不是行銷用的展示資料。 */
+admin.get('/sellers', async c => {
+  const rows = await sql`
+    select s.id, s.handle, s.name, s.origin, s.tier, s.joined_at,
+      (select count(*) from pools p where p.seller_id = s.id
+        and p.status in ('open','sold_out','revealed'))::int as pools_run,
+      (select count(*) from orders o where o.seller_id = s.id
+        and o.closed_by in ('dispute-buyer','ship-timeout'))::int as faults,
+      (select count(*) from seller_verifications v where v.seller_id = s.id
+        and v.status = 'pending')::int as pending_docs
+    from sellers s
+    order by
+      case s.tier when 'pending' then 0 when 'verified' then 1 else 2 end,
+      s.joined_at desc
+  `
+  return c.json({ sellers: rows })
+})
+
+/* ---- 總覽 ----
+   一次把要盯的數字撈齊。全部即時算，不存快取——這些查詢很輕，
+   而存下來就要面對「什麼時候失效」的問題，不值得。 */
+admin.get('/overview', async c => {
+  const [r] = await sql`
+    select
+      (select count(*) from users)::int as users,
+      (select count(*) from users where created_at > now() - interval '7 days')::int as users_7d,
+      (select count(*) from sellers where tier = 'pending')::int as sellers_pending,
+      (select count(*) from pools where status = 'open')::int as pools_open,
+      (select count(*) from orders where status in ('escrowed','shipped','delivered'))::int as orders_open,
+      (select count(*) from orders where status = 'disputed')::int as orders_disputed,
+      (select coalesce(sum(price),0) from orders
+        where status in ('escrowed','shipped','delivered','disputed'))::bigint as escrowed_points,
+      (select coalesce(sum(delta),0) from points_ledger)::bigint as points_outstanding
+  `
+  return c.json({ overview: r })
+})
+
+/* ---- 爭議 ----
+   需要人判的訂單。裁決本身走既有的 /v1/orders/:id/resolve（平台帳號限定）。 */
+admin.get('/disputes', async c => {
+  const rows = await sql`
+    select id, card, price, deposit, buyer_id, buyer_name, seller_id, seller_name,
+           disputed_at, dispute_reason, has_unboxing_video, tracking
+    from orders where status = 'disputed' order by disputed_at asc
+  `
+  return c.json({ disputes: rows })
+})
+
 /* ---- 稽核 ---- */
 admin.get('/actions', async c => {
   const rows = await sql`select * from admin_actions order by id desc limit 200`
