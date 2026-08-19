@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AppBottomNav from '@/components/AppBottomNav.vue'
@@ -23,14 +23,42 @@ const transitionName = ref('fade')
 watch(
   () => route.meta.depth ?? 0,
   (to, from) => {
+    /* 分頁看不見的時候完全不做轉場。
+       Vue 移除 *-enter-from 這個 class 是排在 requestAnimationFrame 裡的，
+       而 rAF 在隱藏／被節流的分頁不會執行 —— 轉場會永遠停在中途，
+       新頁面進不來，使用者看到的是「點了沒反應」。
+       :duration 只讓 Vue 用計時器呼叫 done()，救不了卡住的 class。
+
+       實測（正式站）：切到市場後元素停在
+       `lobby fade-enter-from push-leave-from push-leave-active` 超過 3 秒不動。
+
+       反正看不見的時候也沒有人在看動畫，直接跳過最安全。 */
+    if (document.hidden) transitionName.value = 'none'
     // 這次換頁若交給了 View Transitions（router 會在 <html> 上標記），Vue 的轉場讓路
-    if (document.documentElement.dataset.vt) transitionName.value = 'none'
+    else if (document.documentElement.dataset.vt) transitionName.value = 'none'
     else if (route.name === 'draw-result') transitionName.value = 'flash'
     else if (to > from) transitionName.value = 'push'
     else if (to < from) transitionName.value = 'pop'
     else transitionName.value = 'fade'
   }
 )
+
+/* 回到前景時，把可能卡在中途的轉場 class 清掉。
+   上面那條只擋「導航發生時分頁是隱藏的」；如果是導航開始後才被切走，
+   class 已經加上去了，回來時 rAF 雖然恢復，但 Vue 那次 nextFrame 的
+   callback 早就被丟掉，不會有人來收尾。 */
+function clearStuckTransition() {
+  if (document.hidden) return
+  document.querySelectorAll(
+    '[class*="-enter-from"], [class*="-leave-from"], [class*="-leave-active"]'
+  ).forEach(el => {
+    el.classList.forEach(c => {
+      if (/-(enter|leave)-(from|active|to)$/.test(c)) el.classList.remove(c)
+    })
+  })
+}
+document.addEventListener('visibilitychange', clearStuckTransition)
+onBeforeUnmount(() => document.removeEventListener('visibilitychange', clearStuckTransition))
 </script>
 
 <template>

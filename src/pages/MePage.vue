@@ -34,7 +34,12 @@ const rows = [
   { name: 'topup', t: '儲值', d: '購買點數', icon: 'plus' },
   { name: 'seller-new', t: '賣家專區 · 我要開池', d: '上架自己的抽選池', icon: 'box' },
   { name: 'fairness', t: '公平性驗證', d: '籤序怎麼封存、怎麼自己驗算', icon: 'shield' }
-] as const
+]
+
+/* 後台入口。原本只放在 AppHeader 的導覽列裡，但那一列在 720px 以下是
+   display:none（手機改用底部 tab bar），所以手機上根本看不到。
+   「我的」是手機上真的找得到後台的地方。 */
+const adminRow = { name: 'admin', t: '平台後台', d: '發點數、審賣家、裁決爭議', icon: 'shield' } as const
 
 const paths: Record<string, string> = {
   book: 'M5 4h11a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2zM18 16H7a2 2 0 0 0-2 2',
@@ -71,6 +76,18 @@ const paths: Record<string, string> = {
           <span class="txt">
             <strong>{{ r.t }}</strong>
             <span class="muted">{{ r.d }}</span>
+          </span>
+          <span class="chev" aria-hidden="true">›</span>
+        </RouterLink>
+        <RouterLink v-if="auth.isAdmin" :to="{ name: adminRow.name }" class="row admin">
+          <span class="ic" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path :d="paths[adminRow.icon]" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </span>
+          <span class="txt">
+            <strong>{{ adminRow.t }}</strong>
+            <span class="muted">{{ adminRow.d }}</span>
           </span>
           <span class="chev" aria-hidden="true">›</span>
         </RouterLink>
@@ -185,4 +202,8 @@ h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
   .page { padding-top: 16px; }
   .hero { padding: 16px; }
 }
+
+/* 後台列跟一般功能區隔開：它是平台營運用的，不是使用者功能 */
+.row.admin { box-shadow: inset 3px 0 0 var(--gold); }
+.row.admin strong { color: var(--gold); }
 </style>
