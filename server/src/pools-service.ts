@@ -3,12 +3,12 @@
  *
  * draft → committed → open → sold_out → revealed
  *
- * 規則在 ../../src/shared/fairness.ts（跟前端同一份）。這裡負責：
+ * 規則在 ./shared/fairness.ts（跟前端同一份）。這裡負責：
  * 產生並保管 server_seed、跟 drand 拿 client_seed、把籤序寫進 pool_seats、
  * 以及抽選時的搶佔。
  */
 import { randomBytes } from 'node:crypto'
-import { bytesToHex, commitOf, seatSequence } from '../../src/shared/fairness.js'
+import { bytesToHex, commitOf, seatSequence } from './shared/fairness.js'
 import type { Tx } from './db.js'
 import { credit } from './money.js'
 

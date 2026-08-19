@@ -1,11 +1,11 @@
 /**
  * 訂單的商業邏輯。
  *
- * 規則本身不在這裡 —— 在 ../../src/shared/escrow.ts，跟前端同一份。
+ * 規則本身不在這裡 —— 在 ./shared/escrow.ts，跟前端同一份。
  * 這個檔案只負責「把規則的判斷結果寫進資料庫，並且結算點數」。
  */
-import type { Order } from '../../src/shared/domain.js'
-import { applyDeadlines, depositFor } from '../../src/shared/escrow.js'
+import type { Order } from './shared/domain.js'
+import { applyDeadlines, depositFor } from './shared/escrow.js'
 import type { Tx } from './db.js'
 import { credit, OPEN } from './money.js'
 

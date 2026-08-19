@@ -2,8 +2,21 @@
 
 Railway + TypeScript + Postgres。託管訂單的後端。
 
-規則不在這裡 —— 在 `../src/shared/escrow.ts`，跟前端同一份。
-這個服務只負責把規則的判斷寫進資料庫、結算點數，並擋住併發。
+規則的真正來源在 repo 根目錄的 `src/shared/`，跟前端同一份。
+
+⚠️ **但 `server/src/shared/` 底下有一份實體複製本，且是 git 追蹤的**——
+這不是疏忽，是 Railway 部署這個服務時的實際限制逼出來的：Root Directory
+設成 `server` 之後，Railway 準備 build 用的 snapshot 只包含 `server/`
+這個子目錄，容器裡完全看不到 `../src/shared`（2026-08-19 實測到的，
+tsup 直接報 `Could not resolve "../../src/shared/escrow.js"`）。
+
+所以改了 `src/shared/*` 之後，一定要在 `server/` 底下跑一次：
+```bash
+npm run sync-shared
+```
+再一起 commit。忘記跑的話 `npm run check` 會失敗並告訴你哪個檔案不同步——
+這條檢查特意排除在 Railway 的 build/start 指令之外（那邊沒有 `../src/shared`
+可以比對），只在本機/CI 有意義。
 
 ## 跑起來
 

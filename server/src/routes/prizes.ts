@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { credit, walletOf } from '../money.js'
-import { recycleEligible, recyclePoints } from '../../../src/shared/recycle.js'
+import { recycleEligible, recyclePoints } from '../shared/recycle.js'
 
 export const prizes = new Hono()
 prizes.use('*', requireAuth)

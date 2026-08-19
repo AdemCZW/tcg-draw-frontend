@@ -12,8 +12,8 @@ import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { walletOf } from '../money.js'
 import { PLATFORM_ID, depositFor, save, settle, sweep, toOrder } from '../orders-service.js'
-import { actionsFor, looksLikeTracking } from '../../../src/shared/escrow.js'
-import type { Order } from '../../../src/shared/domain.js'
+import { actionsFor, looksLikeTracking } from '../shared/escrow.js'
+import type { Order } from '../shared/domain.js'
 
 export const orders = new Hono()
 orders.use('*', requireAuth)

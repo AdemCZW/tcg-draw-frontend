@@ -1,0 +1,95 @@
+/* ⚠️ 這個檔案是複製本，不要手動編輯。
+   真正的來源是 src/shared/（repo 根目錄），改那邊之後跑
+   `npm run sync-shared`（在 server/ 底下）重新產生這份複製。
+   為什麼需要複製一份見 scripts/sync-shared.mjs 開頭的說明。 */
+/**
+ * 交易領域的型別。前後端共用。
+ *
+ * 這個資料夾裡的東西不能 import 任何前端的東西 —— 不能有 Vue、不能有 '@/' 別名、
+ * 不能碰 window。後端會直接吃這些檔案，帶進一個瀏覽器 API 就是編譯失敗。
+ * 資料夾內部一律用相對路徑。
+ */
+
+export type Grader = 'PSA' | 'BGS' | 'ARS' | 'RAW'
+
+export interface CardItem {
+  id: string
+  name: string
+  setCode: string
+  cardNo: string
+  language: 'JP' | 'EN'
+  grader: Grader
+  /** RAW = null */
+  grade: number | null
+  /** 鑑定編號。整套爭議判定能成立的關鍵 —— 每個殼唯一，可對外查證 */
+  certNo: string | null
+  image: string
+  /** 市場參考價（顯示用） */
+  refPrice: number
+  /** TCGdex 卡片編號，例如 'SV4a-349' */
+  artId?: string
+}
+
+/**
+ * 交付方式。決定這筆交易要不要走託管：
+ *   vault 卡還在保管庫 —— 成交是一筆所有權異動，沒有運送、沒有驗收期
+ *   ship  卡在賣家手上 —— 要寄送，付款與交付之間有時間差，需要託管
+ */
+export type Delivery = 'vault' | 'ship'
+
+export interface Listing {
+  id: string
+  card: CardItem
+  price: number
+  sellerId: string
+  sellerName: string
+  listedAt: string
+  status: 'live' | 'sold'
+  fromPrizeId?: string
+  delivery?: Delivery
+}
+
+export type OrderStatus =
+  /** 已鎖點，等賣家出貨 */
+  | 'escrowed'
+  /** 已出貨，運送中 */
+  | 'shipped'
+  /** 已送達，驗收期內 */
+  | 'delivered'
+  /** 爭議處理中 */
+  | 'disputed'
+  /** 已放款給賣家 */
+  | 'completed'
+  /** 已退款給買家 */
+  | 'refunded'
+  /** 逾期未出貨，自動取消 */
+  | 'cancelled'
+
+export type ClosedBy =
+  | 'buyer-confirm' | 'auto-release' | 'ship-timeout'
+  | 'delivery-timeout' | 'dispute-buyer' | 'dispute-seller'
+
+export interface Order {
+  id: string
+  listingId: string
+  card: CardItem
+  /** 貨款，成立時從買家帳戶凍結的點數 */
+  price: number
+  /** 賣家保證金。爭議判賣家敗訴或逾期未出貨時沒收 */
+  deposit: number
+  buyerId: string
+  buyerName: string
+  sellerId: string
+  sellerName: string
+  status: OrderStatus
+  /** 毫秒時間戳。沒發生的階段是 undefined */
+  createdAt: number
+  shippedAt?: number
+  deliveredAt?: number
+  settledAt?: number
+  tracking?: string
+  disputedAt?: number
+  disputeReason?: string
+  hasUnboxingVideo?: boolean
+  closedBy?: ClosedBy
+}

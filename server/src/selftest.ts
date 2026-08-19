@@ -1,14 +1,14 @@
 /**
  * 不需要資料庫的自我檢查。
  *
- * 這支存在的理由很具體：共用模組（../../src/shared）原本是給瀏覽器用的，
+ * 這支存在的理由很具體：共用模組（src/shared/，本地是 sync-shared 複製過來的那份）原本是給瀏覽器用的，
  * 最大的風險是它偷偷相依了某個前端的東西，而那件事要等後端跑起來才會發現。
  * 這支在 Node 裡直接 import 並執行規則，把那個風險提前暴露。
  *
  * 需要資料庫的部分（交易邊界、併發、帳本）不在這裡 —— 那要真的連 Postgres。
  */
-import { applyDeadlines, actionsFor, depositFor, looksLikeTracking, DAY, HOUR } from '../../src/shared/escrow.js'
-import type { Order } from '../../src/shared/domain.js'
+import { applyDeadlines, actionsFor, depositFor, looksLikeTracking, DAY, HOUR } from './shared/escrow.js'
+import type { Order } from './shared/domain.js'
 
 const base: Order = {
   id: 'o1', listingId: 'l1', card: {} as Order['card'], price: 1000, deposit: 100,
@@ -45,7 +45,7 @@ check('壞單號擋下', !looksLikeTracking('BAD'))
 check('正常單號放行', looksLikeTracking('ABC12345678'))
 
 /* ---------------- 公平抽選 ---------------- */
-import { commitOf, seatSequence, verifyReveal, hexToBytes, bytesToHex } from '../../src/shared/fairness.js'
+import { commitOf, seatSequence, verifyReveal, hexToBytes, bytesToHex } from './shared/fairness.js'
 
 console.log('\nshared/fairness：')
 const seed = 'a'.repeat(64)

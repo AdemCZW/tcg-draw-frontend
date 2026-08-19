@@ -6,7 +6,7 @@
  */
 import { sql } from './db.js'
 import { PLATFORM_ID } from './orders-service.js'
-import { commitOf, seatSequence } from '../../src/shared/fairness.js'
+import { commitOf, seatSequence } from './shared/fairness.js'
 
 const users: [string, string, string][] = [
   [PLATFORM_ID, 'platform', 'VaultDraw 官方'],

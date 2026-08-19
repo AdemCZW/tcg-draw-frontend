@@ -22,7 +22,7 @@ VaultDraw 是台灣的鑑定寶可夢卡線上抽選（オリパ）平台。後�
 
 | 決策點 | 選擇 | 原因 / 放棄了什麼 |
 |---|---|---|
-| 語言 | TypeScript | 規則（`src/shared/`）跟前端同一份，不寫兩遍。Python 留給之後的影像處理小服務 |
+| 語言 | TypeScript | 規則（`src/shared/`）跟前端同一份，不寫兩遍。Python 留給之後的影像處理小服務。⚠️ Railway 部署時 Root Directory 的 build snapshot 只含 `server/`，所以 `server/src/shared/` 是 `npm run sync-shared` 產生的實體複製本，見 `server/README.md` |
 | 框架 | Hono | 小、快、型別友善、Node 上跑。不用 Express（型別差）不用 Nest（太重） |
 | 資料庫 | Postgres，raw SQL | 錢的正確性靠明確的交易邊界與 `FOR UPDATE`，ORM 會把這兩件事藏起來。表不多，抽象層的麻煩大於好處 |
 | 檔案 | Cloudflare R2，presigned URL 直傳 | Railway 檔案系統是暫時的；檔案不經過 API server；R2 出站免費 |
