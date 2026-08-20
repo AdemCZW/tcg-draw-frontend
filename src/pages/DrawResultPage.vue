@@ -70,6 +70,10 @@ const shortHash = computed(() => {
   const h = pool.value?.commitHash
   return h ? `${h.slice(0, 12)}…${h.slice(-8)}` : ''
 })
+/* 種子池用 fixture:<池id> 當來源（seed 不能等 drand 兩分鐘）。
+   那些池的結果不具備對外驗證的意義，畫面要講實話。 */
+const isFixture = computed(() => (pool.value?.clientSeedSource ?? '').startsWith('fixture:'))
+
 const copied = ref(false)
 async function copyHash() {
   const h = pool.value?.commitHash
@@ -94,6 +98,9 @@ onMounted(() => {
   <div class="container page" v-if="result">
     <!-- 蓄勢演出：全畫面覆蓋，播完自動退場；點一下任何地方直接跳到結果。
          按鈕而不是 div：鍵盤 Enter/Space 也要能跳過。 -->
+    <!-- 全畫面覆蓋，必須 Teleport 到 body：換頁轉場會在 .page 上加 transform，
+         祖先有 transform 時 position: fixed 會改以那個祖先為基準而錯位 -->
+    <Teleport to="body">
     <button
       v-if="!buildupDone"
       type="button"
@@ -104,6 +111,7 @@ onMounted(() => {
       <RevealBuildup :tier="bestTier" auto @done="skipBuildup" />
       <span class="skipHint mono">點一下跳過</span>
     </button>
+    </Teleport>
 
     <h1 class="display">抽選結果</h1>
     <p class="muted sub mono">draw {{ result.drawId }} · 共 {{ result.items.length }} 抽 · {{ result.cost.toLocaleString() }} 點</p>
@@ -150,9 +158,13 @@ onMounted(() => {
     <!-- 公平性：不要求信任，直接給驗算材料 -->
     <section v-if="pool" class="verify">
       <p class="claim">這個結果<strong>不需要你信任我們</strong></p>
+      <!-- 這段原本寫「籤序在開賣前就已洗好封存，當時公布的承諾雜湊如下」，
+           意思是承諾涵蓋的是籤序 —— 但 commitOf() 雜湊的是 server seed。
+           講錯自己的機制比不講更傷：懂的人一驗就發現對不上。 -->
       <p class="how">
-        籤序在開賣前就已洗好封存，當時公布的承諾雜湊如下。
-        完抽後我們公開種子，你可以自己重算一次，比對是否相符。
+        開賣前我們就公布了種子的雜湊，但不公布種子本身。籤序由那組種子決定，
+        所以雜湊一旦公布，我們就改不動籤序而不被發現。完抽後種子會公開，
+        你可以在自己的瀏覽器重算一次。
       </p>
       <dl class="facts">
         <div>
@@ -165,10 +177,19 @@ onMounted(() => {
         </div>
         <div>
           <dt>隨機來源</dt>
-          <dd class="mono src">{{ pool.clientSeedSource }}</dd>
+          <!-- 示範資料的來源字串是 fixture:<池id>，那不是真的第三方隨機。
+               直接把它原樣印出來，會在「不需要你信任我們」正下方
+               擺一個字面寫著 fixture 的值 —— 那是自相矛盾。
+               老實標示它是示範池，比假裝它可驗證好。 -->
+          <dd v-if="isFixture" class="mono src warn">示範池 · 非正式隨機來源</dd>
+          <dd v-else class="mono src">{{ pool.clientSeedSource }}</dd>
         </div>
       </dl>
-      <RouterLink :to="`/fairness/${result.poolId}`" class="btn verify-btn">自己驗算這一池 →</RouterLink>
+      <RouterLink v-if="!isFixture" :to="`/fairness/${result.poolId}`" class="btn verify-btn">自己驗算這一池 →</RouterLink>
+      <p v-else class="fixnote">
+        這是示範池，種子與籤序是固定的測試值，驗算頁對它沒有意義。
+        正式開的池會鎖定 drand 的未來輪次，那時這裡會是可驗證的。
+      </p>
     </section>
 
     <div class="actions">
@@ -182,6 +203,9 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.src.warn { color: #fcd34d; }
+.fixnote { font-size: 12px; line-height: 1.7; color: var(--muted); margin: 10px 0 0; }
+
 /* 煙霧演出的容器。按鈕的預設外觀全部拿掉 —— 它只是為了讓鍵盤能跳過 */
 .emergeWrap {
   display: block; width: 100%; max-width: 460px; margin: 0 auto 18px;

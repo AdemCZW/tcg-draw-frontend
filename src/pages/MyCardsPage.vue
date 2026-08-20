@@ -552,7 +552,13 @@ async function copyLink() {
     </div>
 
     <!-- 出貨申請。做成覆蓋層而不是行內展開，是因為它要一次呈現「寄哪幾張」
-         跟「寄到哪」兩件事，塞進單張卡片的位置會看不完整 -->
+         跟「寄到哪」兩件事，塞進單張卡片的位置會看不完整。
+
+         Teleport 到 body 是必要的，不是整潔問題：換頁轉場會在 .page 上加
+         transform，而**祖先只要有 transform，position: fixed 的定位基準就會
+         變成那個祖先而不是視窗** —— 面板會被推出畫面外並被裁掉。
+         實機上就是這樣壞的（左半邊整個看不到）。 -->
+    <Teleport to="body">
     <div v-if="shipOpen" class="sheetWrap" @click.self="shipOpen = false">
       <div class="sheet card" role="dialog" aria-label="申請出貨">
         <h2>申請出貨</h2>
@@ -588,9 +594,13 @@ async function copyLink() {
         </div>
       </div>
     </div>
+    </Teleport>
 
-    <!-- 送出後的回饋固定在畫面下方，不隨捲動跑掉。同一時間只有一則 -->
-    <p v-if="toast" class="toast" role="status">{{ toast }}</p>
+    <!-- 送出後的回饋固定在畫面下方，不隨捲動跑掉。同一時間只有一則。
+         同樣要 Teleport —— 理由見上面出貨面板的說明 -->
+    <Teleport to="body">
+      <p v-if="toast" class="toast" role="status">{{ toast }}</p>
+    </Teleport>
   </div>
 </template>
 
@@ -604,7 +614,10 @@ async function copyLink() {
   padding: 0;
 }
 .sheet {
-  width: 100%; max-width: 520px;
+  width: 100%; max-width: min(520px, 100vw);
+  /* 保險絲：就算之後有人加了壓不住的內容，也讓它自己橫捲，
+     不要把整個面板撐出視窗外被裁掉 */
+  overflow-x: hidden;
   max-height: min(88dvh, 720px); overflow-y: auto; overscroll-behavior: contain;
   border-radius: 18px 18px 0 0;
   padding: 18px 16px calc(18px + var(--safe-b, 0px));
@@ -620,8 +633,15 @@ async function copyLink() {
 .pickList .pn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 4px; }
-.fields label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--muted); }
+/* min-width: 0 不是可有可無的。grid 子元素預設是 min-width: auto ——
+   它不會縮到比「內容的固有寬度」更窄，所以 1fr 根本壓不住裡面的 input：
+   實測 393px 的螢幕上每欄該是 175px，實際卻是 206px，整個 .fields
+   從 359 撐到 420。而 .sheetWrap 是 justify-content: center，
+   溢出的部分左右對半切掉 —— 面板的左半邊直接看不到。
+   input 本身也要，因為它自己也是 flex 容器的子元素。 */
+.fields label { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 12.5px; color: var(--muted); }
 .fields label.wide { grid-column: 1 / -1; }
+.fields input { min-width: 0; }
 .fields input {
   padding: 10px 11px; font: inherit; font-size: 16px;
   border: 1px solid var(--line); border-radius: 10px;
@@ -631,7 +651,7 @@ async function copyLink() {
 
 .sellRow { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .sellRow input {
-  flex: 1; padding: 9px 11px; font: inherit; font-size: 16px;
+  flex: 1; min-width: 0;  /* flex 子元素預設也是 min-width: auto，見 .fields 的說明 */ padding: 9px 11px; font: inherit; font-size: 16px;
   border: 1px solid var(--line); border-radius: 10px;
   background: var(--field, var(--surface-2)); color: var(--ink);
 }

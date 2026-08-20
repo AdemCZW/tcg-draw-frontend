@@ -75,24 +75,44 @@ watch(
 
 /* ---- 頁面轉場 ----
    全部很短（180–260ms）：轉場是「換頁的手感」不是動畫秀，
-   太長會讓人覺得網站慢。 */
+   太長會讓人覺得網站慢。
+
+   ---- 為什麼用 @keyframes 而不是 transition + *-enter-from ----
+
+   Vue 的 Transition 是這樣運作的：先加上 `-enter-from`（初始狀態）與
+   `-enter-active`，然後在 **nextFrame()** 裡把 `-enter-from` 換成 `-enter-to`。
+   而 nextFrame 是 requestAnimationFrame 包兩層 —— **它不受 :duration 計時器保護**。
+   rAF 一旦沒跑（分頁在背景、iOS Safari 節流、系統低耗電），
+   `-enter-from` 就永遠不會被拿掉，頁面**永久停在初始狀態**。
+
+   實測到的後果：`.container.page` 卡在 `transform: matrix(1,0,0,1,28,0)`。
+   兩個症狀都由此而來：
+     1. 整頁往右偏 28px，看起來像跑版
+     2. **祖先有 transform 時，position: fixed 的定位基準會變成那個祖先而不是視窗** ——
+        頁面裡所有覆蓋層（出貨面板、手機版的結算列）全部被推出畫面外裁掉
+
+   改用 @keyframes 之後就不需要 `-enter-from` 了：初始狀態寫在 keyframe 裡，
+   動畫結束後元素回到自己的樣式（fill-mode 預設 none），
+   就算 class 沒被移除也不會殘留 transform。leave 同理 ——
+   mode="out-in" 下 leave 卡住的話新頁面根本進不來，那就是「點了沒反應」。 */
 @media (prefers-reduced-motion: no-preference) {
-  .fade-enter-active, .fade-leave-active { transition: opacity .18s ease; }
-  .fade-enter-from, .fade-leave-to { opacity: 0; }
+  .fade-enter-active { animation: pgFade .18s ease; }
+  .fade-leave-active { animation: pgFade .18s ease reverse; }
 
-  .push-enter-active, .push-leave-active,
-  .pop-enter-active, .pop-leave-active {
-    transition: opacity .22s ease, transform .26s cubic-bezier(.2, .8, .3, 1);
-  }
-  .push-enter-from { opacity: 0; transform: translateX(28px); }
-  .push-leave-to   { opacity: 0; transform: translateX(-16px); }
-  .pop-enter-from  { opacity: 0; transform: translateX(-28px); }
-  .pop-leave-to    { opacity: 0; transform: translateX(16px); }
+  .push-enter-active { animation: pgPushIn .26s cubic-bezier(.2, .8, .3, 1); }
+  .push-leave-active { animation: pgPushOut .22s ease; }
+  .pop-enter-active  { animation: pgPopIn .26s cubic-bezier(.2, .8, .3, 1); }
+  .pop-leave-active  { animation: pgPopOut .22s ease; }
 
-  /* 進開卡頁：從 94% 放大到 100%，帶一層白閃 —— 儀式的門 */
-  .flash-enter-active { transition: opacity .3s ease, transform .42s cubic-bezier(.2, .9, .3, 1); }
-  .flash-enter-from { opacity: 0; transform: scale(.94); }
-  .flash-leave-active { transition: opacity .16s ease; }
-  .flash-leave-to { opacity: 0; }
+  /* 進開卡頁：從 94% 放大到 100% —— 儀式的門 */
+  .flash-enter-active { animation: pgFlashIn .42s cubic-bezier(.2, .9, .3, 1); }
+  .flash-leave-active { animation: pgFade .16s ease reverse; }
 }
+
+@keyframes pgFade    { from { opacity: 0 } to { opacity: 1 } }
+@keyframes pgPushIn  { from { opacity: 0; transform: translateX(28px) }  to { opacity: 1; transform: none } }
+@keyframes pgPushOut { from { opacity: 1; transform: none } to { opacity: 0; transform: translateX(-16px) } }
+@keyframes pgPopIn   { from { opacity: 0; transform: translateX(-28px) } to { opacity: 1; transform: none } }
+@keyframes pgPopOut  { from { opacity: 1; transform: none } to { opacity: 0; transform: translateX(16px) } }
+@keyframes pgFlashIn { from { opacity: 0; transform: scale(.94) } to { opacity: 1; transform: none } }
 </style>
