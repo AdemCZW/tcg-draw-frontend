@@ -183,7 +183,7 @@ input, select { font-family: inherit; }
 .btn.primary {
   background: var(--accent);
   border-color: transparent;
-  color: #fff;
+  color: var(--on-accent);
 }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--accent); }
 .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }

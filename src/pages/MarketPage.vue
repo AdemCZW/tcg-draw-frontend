@@ -263,7 +263,7 @@ function markSold(id: string) {
         <div v-else class="confirm">
           <p class="cq">
             用 <strong class="mono">{{ l.price.toLocaleString() }}</strong> 點買下？<br>
-            餘額將剩 <span class="mono">{{ (wallet.points - l.price).toLocaleString() }}</span>
+            餘額將剩 <span class="mono">{{ (wallet.shown - l.price).toLocaleString() }}</span>
           </p>
           <!-- 錢會怎麼流，要在按下去之前講，不是在爭議發生之後才講 -->
           <p class="cnote">
@@ -285,7 +285,7 @@ function markSold(id: string) {
 
     <footer class="foot">
       <p class="muted">
-        餘額 <strong class="mono"><RollingNumber :value="wallet.points" /></strong> 點
+        餘額 <strong class="mono"><RollingNumber :value="wallet.shown" /></strong> 點
         <RouterLink :to="{ name: 'topup' }" class="tu">儲值 →</RouterLink>
       </p>
       <p class="fine muted">

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { MOCK } from '@/lib/config'
 import type { LedgerEntry } from '@/types/models'
+import { useAuthStore } from '@/stores/auth'
 
 export const useWalletStore = defineStore('wallet', {
   state: () => ({
@@ -22,7 +23,22 @@ export const useWalletStore = defineStore('wallet', {
   }),
   getters: {
     /** 真正能拿去花的餘額 */
-    available: (s) => s.points - s.locked
+    available: (s) => s.points - s.locked,
+
+    /**
+     * 對外顯示用的餘額。**畫面上一律用這個，不要直接用 points。**
+     *
+     * 沒有帳號的人不該看到餘額。mock 模式種了一億點是為了讓所有玩法都試得動，
+     * 但那是「已登入的測試帳號」的錢 —— 市場頁與池詳情頁都是公開的，
+     * 訪客在那裡看到「餘額 100,000,000」是假的，而且那顆膠囊還連到
+     * 需要登入的儲值頁，按下去只會被守衛彈回形象頁。
+     *
+     * API 模式下訪客本來就是 0，但顯示 0 跟顯示「請先登入」是兩件事，
+     * 讓呼叫端自己用 isLoggedIn 決定要不要畫這一塊。
+     */
+    shown(s): number {
+      return useAuthStore().isLoggedIn ? s.points : 0
+    }
   },
   actions: {
     /**

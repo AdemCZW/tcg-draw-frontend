@@ -65,7 +65,7 @@ const paths: Record<string, string> = {
       </div>
       <RouterLink :to="{ name: 'topup' }" class="balance">
         <span class="muted lbl">點數餘額</span>
-        <strong class="mono"><RollingNumber :value="wallet.points" /></strong>
+        <strong class="mono"><RollingNumber :value="wallet.shown" /></strong>
         <span class="muted unit">點 · 儲值 →</span>
       </RouterLink>
     </header>

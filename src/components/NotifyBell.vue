@@ -204,7 +204,7 @@ const hasRows = computed(() => rows.value.length > 0)
     </Transition>
 
     <button
-      type="button" class="bell" :class="{ on: open }"
+      type="button" class="bell" :class="{ on: open, hot: unread > 0 }"
       :aria-label="unread ? `通知，${unread} 則未讀` : '通知'"
       :aria-expanded="open"
       @click="toggle"
@@ -237,11 +237,36 @@ const hasRows = computed(() => rows.value.length > 0)
   display: grid; place-items: center;
   border-radius: 50%;
   border: 1px solid var(--line);
-  background: var(--surface-2);
+  /* 沒有未讀時安靜一點，但要比背景亮 —— 原本是 --surface-2，
+     深灰疊在深色頁面上等於隱形，使用者兩次回報「看不太到」 */
+  background: var(--surface-3);
   color: var(--ink);
-  box-shadow: var(--shadow);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .45);
   transition: transform .2s cubic-bezier(.2, .7, .3, 1), background .2s, color .2s, opacity .2s;
 }
+
+/* 有未讀就整顆變金色。
+   用金不用紅：紅色已經是底部導覽那顆寶貝球的，兩個紅色圓形在同一個角落
+   會互相稀釋；而金色在這個站上本來就代表點數與價值，「有值得看的事發生了」
+   剛好是這顆鈕要講的話。深底上的金是全畫面對比最強的組合。 */
+.bell.hot {
+  background: var(--gold);
+  border-color: transparent;
+  color: #1a1410;
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--gold) 45%, transparent),
+              0 2px 6px rgba(0, 0, 0, .4);
+}
+/* 出現時輕輕跳一下就停 —— 常駐的無限迴圈動畫會變成干擾，
+   這顆鈕在每一頁都在 */
+@media (prefers-reduced-motion: no-preference) {
+  .bell.hot { animation: bellPop .5s cubic-bezier(.34, 1.56, .64, 1); }
+}
+@keyframes bellPop {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(1.14); }
+  100% { transform: scale(1); }
+}
+
 .bell svg { width: 23px; height: 23px; }
 .bell:active { transform: scale(.92); transition-duration: 60ms; }
 .bell.on { background: var(--accent); border-color: transparent; color: #fff; }

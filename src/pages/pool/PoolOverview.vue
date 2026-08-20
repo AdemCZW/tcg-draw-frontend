@@ -77,7 +77,7 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
     </div>
 
     <p class="hint muted">
-      餘額 <span class="mono">{{ wallet.points.toLocaleString() }}</span> 點 ·
+      餘額 <span class="mono">{{ wallet.shown.toLocaleString() }}</span> 點 ·
       <RouterLink :to="{ name: 'pool-prizes', params: { id: pool.id } }" replace>看全部獎項 →</RouterLink>
     </p>
   </div>
