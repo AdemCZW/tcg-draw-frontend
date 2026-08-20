@@ -1,12 +1,25 @@
 <script setup lang="ts">
-// 抽選結果：Three.js 立體開卡演出，下方保留明細清單
+/**
+ * 抽選結果。
+ *
+ * 演出從 Three.js 的立體翻卡換成煙霧凝聚（CardEmerge）。換掉的理由有兩個：
+ *
+ * 1. Three.js 是 720 KB（gzip 後 188 KB），而它只被這一頁用到 ——
+ *    整個 app 情緒最高的那一刻，使用者要先等一包比整個網站還大的
+ *    函式庫下載完才看得到自己抽到什麼。CardEmerge 用的是原生 WebGL2，
+ *    跟首頁那支 shader 同一套，沒有額外相依。
+ * 2. 煙霧把卡「拼湊出來」比翻卡更有儀式感，也是這個網站想要的調性。
+ *
+ * 只播最高賞那一張：十抽播十次、每次八秒，沒有人看得完。
+ * 其餘的卡在下方明細一次揭曉。
+ */
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePoolStore } from '@/stores/pools'
 import CardArt from '@/components/CardArt.vue'
 import TierBadge from '@/components/TierBadge.vue'
 import CertTag from '@/components/CertTag.vue'
-import CardReveal3D from '@/components/CardReveal3D.vue'
+import CardEmerge from '@/components/CardEmerge.vue'
 import Tilt3D from '@/components/Tilt3D.vue'
 import RevealBuildup from '@/components/RevealBuildup.vue'
 import type { Tier } from '@/types/models'
@@ -30,6 +43,20 @@ const bestTier = computed<Tier>(() => {
   return result.items.reduce<Tier>((best, it) =>
     TIER_RANK[it.tier] > TIER_RANK[best] ? it.tier : best, 'D')
 })
+/* 煙霧演出的主角：最高賞的那一張。同賞別時取第一張 */
+const heroItem = computed(() =>
+  result?.items.length
+    ? result.items.reduce((best, it) => TIER_RANK[it.tier] > TIER_RANK[best.tier] ? it : best, result.items[0]!)
+    : null)
+
+/* 演出速度依賞別調。最高賞看完整段，低賞加速 ——
+   每抽一張 D 賞都播滿八秒只會讓人想關掉。
+   這跟 RevealBuildup 的分級是同一個原則：演出對應真的開出來的東西。 */
+const emergePace = computed(() => {
+  const r = TIER_RANK[bestTier.value]
+  return r >= 4 ? 1 : r === 3 ? 1.4 : 1.9
+})
+
 /* 動態偏好關動效的人直接看結果，不必先等一支動畫 */
 const reduceMotion = typeof matchMedia !== 'undefined'
   && matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -54,16 +81,12 @@ async function copyHash() {
   } catch { /* 剪貼簿被拒也不影響驗算，使用者仍可從驗算頁複製 */ }
 }
 
-// 兩張並排往下排：舞台高度隨列數成長，讓每張卡維持可辨識的大小
-const rows = computed(() => Math.ceil((result?.items.length ?? 1) / 2))
-const stageHeight = computed(() => 300 + (rows.value - 1) * 250)
-
 onMounted(() => {
   track('view_prize_result')
   /* 保險絲：明細清單原本只在 3D 演出發出 revealed 後才淡入，
      但 WebGL 中途失敗、或分頁在背景導致 rAF 暫停時，那個事件永遠不會來，
      使用者就再也看不到自己抽到什麼。時間到就強制顯示。 */
-  setTimeout(() => { revealed.value = true; buildupDone.value = true }, 14000)
+  setTimeout(() => { revealed.value = true; buildupDone.value = true }, 16000)
 })
 </script>
 
@@ -84,21 +107,27 @@ onMounted(() => {
 
     <h1 class="display">抽選結果</h1>
     <p class="muted sub mono">draw {{ result.drawId }} · 共 {{ result.items.length }} 抽 · {{ result.cost.toLocaleString() }} 點</p>
-    <!-- 3D 開卡舞台 -->
-    <div class="stage" :style="{ height: stageHeight + 'px' }">
-      <CardReveal3D v-if="buildupDone" :items="result.items" @revealed="revealed = true">
-        <template #fallback>
-          <div class="grid flat">
-            <div v-for="(item, i) in result.items" :key="i" class="slot">
-              <div class="face card">
-                <CardArt :image="item.card.image" :alt="item.card.name" :tier="item.tier" :cert-no="item.card.certNo" :art-id="item.card.artId" />
-                <div class="info"><TierBadge :tier="item.tier" /><strong>{{ item.card.name }}</strong></div>
-              </div>
-            </div>
-          </div>
-        </template>
-      </CardReveal3D>
-    </div>
+    <!-- 煙霧凝聚：只播最高賞那張，播完（或被點掉）就揭曉全部。
+         按鈕而不是 div：鍵盤也要能跳過。 -->
+    <button
+      v-if="buildupDone && !revealed && heroItem"
+      type="button" class="emergeWrap"
+      aria-label="跳過開卡演出"
+      @click="revealed = true"
+    >
+      <CardEmerge
+        :art-id="heroItem.card.artId"
+        :image="heroItem.card.image"
+        :name="heroItem.card.name"
+        :tier="heroItem.tier"
+        :pace="emergePace"
+        auto
+        @done="revealed = true"
+      />
+      <span class="skipHint mono">
+        {{ result.items.length > 1 ? `最高賞 · 其餘 ${result.items.length - 1} 張在下方` : '點一下跳過' }}
+      </span>
+    </button>
 
     <!-- 明細（3D 之外仍需可讀、可複製的文字資訊） -->
     <ul class="detail" :class="{ in: revealed }">
@@ -153,6 +182,17 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 煙霧演出的容器。按鈕的預設外觀全部拿掉 —— 它只是為了讓鍵盤能跳過 */
+.emergeWrap {
+  display: block; width: 100%; max-width: 460px; margin: 0 auto 18px;
+  padding: 0; border: 0; background: none; cursor: pointer;
+  position: relative;
+}
+.emergeWrap .skipHint {
+  display: block; margin-top: 10px;
+  font-size: 12px; color: var(--muted); text-align: center;
+}
+
 .page { padding-top: 40px; padding-bottom: 72px; text-align: center; }
 
 /* 蓄勢演出的全畫面舞台 */

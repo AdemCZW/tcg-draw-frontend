@@ -31,7 +31,15 @@ const props = withDefaults(defineProps<{
   tier?: Tier
   /** 掛載後自動播 */
   auto?: boolean
-}>(), { artId: null, image: '', name: '', tier: 'D', auto: true })
+  /**
+   * 演出速度倍率。1 = 完整八秒。
+   *
+   * 開卡結果頁會依實際開出的賞別調 —— 最高賞值得看完整段，
+   * 每抽一張 D 賞都播八秒只會讓人想關掉。這跟 RevealBuildup
+   * 「演出等級對應真的開出來的東西」是同一個原則。
+   */
+  pace?: number
+}>(), { artId: null, image: '', name: '', tier: 'D', auto: true, pace: 1 })
 
 const emit = defineEmits<{ (e: 'done'): void }>()
 
@@ -58,12 +66,14 @@ const SCRIPT: { k: Phase; ms: number }[] = [
 /* 演出可以整段放慢，用來逐格調動畫：?fxslow=8。
    跟 ?nogl=1 同一套除錯開關。正式流程不會帶這個參數，倍率就是 1。 */
 const SLOW = Math.min(20, Math.max(1, Number(new URLSearchParams(location.search).get('fxslow')) || 1))
+/** 每一拍實際的毫秒數 = 腳本值 × 除錯倍率 ÷ 速度倍率 */
+const rate = computed(() => SLOW / Math.max(0.2, props.pace))
 
 const phase = ref<Phase>('still')
 let timer: number | undefined
 
 /** 整段演出的總長 —— 煙的湧入與消散攤在這段時間上 */
-const TOTAL = SCRIPT.reduce((a, b) => a + b.ms, 0) * SLOW
+const TOTAL = computed(() => SCRIPT.reduce((a, b) => a + b.ms, 0) * rate.value)
 
 const TIER_HUE: Record<Tier, string> = {
   D: '#ef4040', C: '#3f7fd8', B: '#f5c400', A: '#d8b25a', LAST: '#8b4fd0', BUST: '#ef4040'
@@ -102,7 +112,7 @@ const reduce = () =>
 function run(i = 0) {
   if (i >= SCRIPT.length) { emit('done'); return }
   phase.value = SCRIPT[i].k
-  timer = window.setTimeout(() => run(i + 1), SCRIPT[i].ms * SLOW)
+  timer = window.setTimeout(() => run(i + 1), SCRIPT[i].ms * rate.value)
 }
 function play() {
   clearTimeout(timer)

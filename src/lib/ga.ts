@@ -15,6 +15,7 @@ type GaEvent =
   | 'click_draw_3'
   | 'click_draw_5'
   | 'click_draw_10'
+  | 'pick_random'
   | 'draw_success'
   | 'draw_failed_insufficient'
   | 'draw_failed_soldout'

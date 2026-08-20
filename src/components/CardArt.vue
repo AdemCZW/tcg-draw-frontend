@@ -11,6 +11,7 @@ import { computed, ref, watch } from 'vue'
 import type { Tier } from '@/types/models'
 import { certImages } from '@/lib/psa'
 import { artUrlById, canonicalArt } from '@/lib/tcgdex'
+import { useNearViewport } from '@/lib/near-viewport'
 
 const props = defineProps<{
   image: string
@@ -23,6 +24,13 @@ const props = defineProps<{
 }>()
 
 const remoteUrl = ref<string | null>(null)
+
+/* 只有接近畫面才去查圖。
+   查圖要打 PSA / TCGdex，一頁四十張卡就是開頁瞬間八十個請求 ——
+   畫面外的卡把頻寬吃光，正在看的那幾張反而最慢出來。
+   這是「載入慢一拍」的真正原因，`loading="lazy"` 管不到（那只管圖片本身，
+   網址早就查完了）。 */
+const { el: rootEl, near } = useNearViewport()
 
 const hue = computed(() => {
   const m = props.image.match(/^placeholder:(\d+)/)
@@ -42,10 +50,12 @@ const isPlaceholder = computed(() => !src.value)
 const tierClass = computed(() => (props.tier ? `t-${props.tier.toLowerCase()}` : ''))
 
 watch(
-  () => [props.certNo, props.alt, props.artId, hasOwnImage.value] as const,
-  async ([cert, alt, artId, own]) => {
+  () => [props.certNo, props.alt, props.artId, hasOwnImage.value, near.value] as const,
+  async ([cert, alt, artId, own, visible]) => {
     remoteUrl.value = null
     if (own) return
+    // 還沒接近畫面就先不查。near 變 true 時這個 watch 會再跑一次
+    if (!visible) return
 
     if (cert) {
       const imgs = await certImages(cert)
@@ -69,6 +79,7 @@ watch(
 <template>
   <div
     v-if="isPlaceholder"
+    ref="rootEl"
     class="art"
     :class="tierClass"
     :style="{ '--h': hue }"
@@ -86,7 +97,12 @@ watch(
     <div class="mark" aria-hidden="true">VD</div>
     <div v-if="caption" class="caption">{{ caption }}</div>
   </div>
-  <img v-else class="art-img" :src="src!" :alt="alt ?? '卡片圖'" loading="lazy" />
+  <!-- decoding="async" 讓解碼不擋主執行緒：一次進場十幾張卡時，
+       同步解碼會讓捲動卡住一拍 -->
+  <img
+    v-else ref="rootEl" class="art-img" :src="src!" :alt="alt ?? '卡片圖'"
+    loading="lazy" decoding="async"
+  />
 </template>
 
 <style scoped>

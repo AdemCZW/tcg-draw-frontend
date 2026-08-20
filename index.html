@@ -13,7 +13,36 @@
     <title>VAULT DRAW — 鑑定卡線上抽選</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Noto+Sans+TC:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <!-- 卡圖的來源。第一張卡要出現時才連的話，要先付 DNS + TLS 的錢；
+         提早握手，卡圖就少等一個往返 -->
+    <link rel="preconnect" href="https://assets.tcgdex.net" crossorigin />
+    <link rel="dns-prefetch" href="https://api.tcgdex.net" />
+
+    <!--
+      字體樣式表改成非阻擋載入。
+
+      原本是一般的 <link rel="stylesheet">，那會擋住首次繪製 —— 使用者要等
+      Google 的伺服器回應才看得到任何東西，而其中 Noto Sans TC 是中日韓字體，
+      本來就比較慢。改成先用 media="print"（瀏覽器視為非必要、不阻擋），
+      載完再切回 all。
+
+      畫面會先用系統字繪出來再換成網頁字（FOUT）—— 這是刻意接受的：
+      網址裡本來就帶著 display=swap，等於已經選了「先看得到字」這一邊，
+      現在只是讓這個選擇連樣式表本身也適用。
+      noscript 是給關掉 JS 的情況，那時就退回阻擋式載入。
+
+      拿掉了 Noto Sans TC 的 300 字重：全站沒有任何地方用它，
+      而中日韓字體每個字重都不便宜。
+    -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    </noscript>
     <!-- GA4: replace G-XXXXXXX with the production measurement ID -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXX"></script>
     <script>
