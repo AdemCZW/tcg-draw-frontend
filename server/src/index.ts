@@ -19,6 +19,7 @@ import { admin } from './routes/admin.js'
 import { pub } from './routes/public.js'
 import { files } from './routes/files.js'
 import { social, socialPublic } from './routes/social.js'
+import { sellers } from './routes/sellers.js'
 import { sweep } from './orders-service.js'
 import { sweepAttempts } from './rate-limit.js'
 
@@ -70,6 +71,10 @@ app.route('/v1/files', files)
    /v1/share 刻意不要登入 —— 分享連結要能給沒帳號的人看。 */
 app.route('/v1/social', social)
 app.route('/v1/share', socialPublic)
+/* 掛在單數 /v1/seller，不是 /v1/sellers —— 後者已經被 public.ts 佔用
+   （GET /v1/sellers 賣家列表、GET /v1/sellers/:id 賣家頁，兩個都是公開的）。
+   這支有 use('*', requireAuth)，掛同一個前綴會把那兩個公開端點一起變成要登入。 */
+app.route('/v1/seller', sellers)
 
 /* 逾期掃描。
    時限本身是用時間戳算的，所以這支排程不是唯一真相 —— 它掛掉不會讓狀態算錯，

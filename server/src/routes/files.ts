@@ -4,16 +4,18 @@
  *   POST /v1/files/presign   要一個可以直接 PUT 到 R2 的網址
  *   GET  /v1/files/:id       要一個可以讀這個檔案的網址（依用途決定誰能要）
  *
- * 讀取權限的現況（老實列出來，不是全部都做到位）：
+ * 讀取權限：
  *   pool-cover / avatar   公開，誰都能看——池封面跟頭像本來就要能在列表頁顯示
- *   ship-photo / unbox-video
- *                         要登入才能要連結。物件的 key 是隨機的、不會被列出來，
- *                         但目前沒有把檔案跟訂單綁在一起做「只有買賣雙方能看」，
- *                         任何登入使用者只要知道 fileId 就能要到讀取連結。
- *                         這是刻意先求「能用、夠擋住路人」，不是完整的存取控制——
- *                         真的要做到「只有這筆訂單的買賣雙方看得到」，
- *                         需要在 files 表加 order_id 或建關聯表，是之後的加強項目。
- *   seller-doc            身分文件，風險比照片高很多：只有上傳者本人或平台管理員能看。
+ *   其餘全部            只有上傳者本人或平台管理員
+ *
+ * ship-photo / unbox-video 原本是「任何登入使用者都能讀」，理由是「物件 key 隨機、
+ * 不會被列出來，先求夠擋住路人」。那個判斷是錯的：這兩種正好是最敏感的內容——
+ * 出貨照會拍到面單上的收件人姓名、電話、地址，開箱影片會拍到家裡。
+ * 只要註冊一個帳號、拿到 fileId 就看得到，而 fileId 會在 API 回應裡流動。
+ *
+ * 收緊的代價是爭議時當事人看不到對方的證據，只有裁決的管理員看得到。
+ * 要讓當事人互看，得先把 file id 真的存進 orders —— 目前 ship 端點收了 photos
+ * 卻沒有落地，所以那條路現在也不存在，收緊不會弄壞任何在用的東西。
  */
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -86,13 +88,19 @@ files.get('/:id', async c => {
   if (!PURPOSES[purpose].public) {
     const me = await optionalUserId(c)
     if (!me) return c.json({ error: 'UNAUTHORIZED', message: '請先登入' }, 401)
-    if (purpose === 'seller-doc') {
-      const [u] = await sql`select role from users where id = ${me}`
-      if (me !== f.owner_id && u?.role !== 'admin') {
-        return c.json({ error: 'NOT_PARTY', message: '沒有權限查看這份文件' }, 403)
-      }
+    /* 私有用途一律「本人或管理員」。
+       原本只有 seller-doc 這樣擋，ship-photo / unbox-video 是任何登入使用者都能讀 ——
+       但那兩種正是最敏感的：出貨照會拍到面單（收件人姓名、電話、地址），
+       開箱影片會拍到家裡。只要註冊一個帳號、猜到或撞到 file id 就看得到，
+       這個洞比「爭議時對方看不到證據」嚴重得多。
+
+       代價是爭議時當事人看不到對方的證據，只有裁決的管理員看得到。
+       要讓當事人互看，得先把 file id 真的存進 orders（現在根本沒存，
+       ship 端點收了 photos 卻沒有落地），那是另一件事。 */
+    const [u] = await sql`select role from users where id = ${me}`
+    if (me !== f.owner_id && u?.role !== 'admin') {
+      return c.json({ error: 'NOT_PARTY', message: '沒有權限查看這個檔案' }, 403)
     }
-    // ship-photo / unbox-video：任何登入使用者可讀，見檔頭說明的已知限制
   }
 
   const pub = PURPOSES[purpose].public ? publicUrlOf(f.key as string) : null

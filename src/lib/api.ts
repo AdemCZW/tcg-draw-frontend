@@ -181,7 +181,12 @@ export const api = {
   },
 
   async myPrizes(): Promise<UserPrize[]> {
-    if (MOCK) { await delay(150); return mock.userPrizes }
+    /* 回複本而不是 mock.userPrizes 本身。回同一個陣列參照的話，呼叫端
+       `prizes.value = await api.myPrizes()` 等於把同一個值指回去，ref 不會觸發，
+       依賴它的 computed 就吃快取 —— 症狀是上架之後「市場販售中」那個分頁
+       不會出現（但分頁上的數字會變，因為那是 render 時直接算的）。
+       API 模式每次都 map 出新陣列所以沒這個問題，mock 要跟它一致。 */
+    if (MOCK) { await delay(150); return [...mock.userPrizes] }
     const r = await http<{ prizes: Any[] }>('/v1/prizes')
     return r.prizes.map(toPrize)
   },
@@ -222,6 +227,11 @@ export const api = {
         fromPrizeId: input.prizeId
       }
       mock.listings.unshift(l)
+      /* 真後端的 POST /v1/listings 會把 prizes.status 改成 'listed'（卡鎖在市場上，
+         賣掉前不能出貨也不能回收）。mock 不跟著改的話，同一張卡可以重複上架，
+         而且卡冊的分頁永遠不會出現「市場販售中」—— 那是假的成功。 */
+      const src = mock.userPrizes.find(x => x.id === input.prizeId)
+      if (src) src.status = 'listed'
       return l
     }
     const r = await http<{ listing: Any }>('/v1/listings', { method: 'POST', json: { prizeId: input.prizeId, price: input.price } })
@@ -252,6 +262,48 @@ export const api = {
       `/v1/prizes/${prizeId}/recycle`, { method: 'POST' })
     applyWallet(r)
     return { points: r.points }
+  },
+
+  /**
+   * 申請把保管中的卡實體寄出。
+   *
+   * 這支之前不存在 —— 卡冊上的「申請出貨」按鈕只把本地物件的 status 改掉，
+   * 完全沒有打後端。在 API 模式下按了畫面會變、重新整理就打回原形，
+   * 而後台的出貨清單永遠收不到東西。
+   *
+   * 一次可以送多張：後端收 prizeIds 陣列，同一批合併成一張出貨單，
+   * 使用者只付一次運費、平台只包一次。
+   */
+  async shipPrizes(prizeIds: string[], address: {
+    name: string; phone: string; zip?: string; city: string; line1: string
+  }): Promise<{ shipmentId: string }> {
+    if (MOCK) {
+      await delay(300)
+      for (const p of mock.userPrizes) {
+        if (prizeIds.includes(p.id)) p.status = 'ship_requested'
+      }
+      return { shipmentId: 'sh-mock-' + Date.now().toString(36) }
+    }
+    return http<{ shipmentId: string }>('/v1/prizes/ship', {
+      method: 'POST', json: { prizeIds, address }
+    })
+  },
+
+  /** 我的賣家狀態。null = 還沒申請過 */
+  async sellerStatus(): Promise<{
+    seller: { id: string; name: string; tier: string; origin: string } | null
+    verification: { status: string; note: string | null } | null
+  }> {
+    if (MOCK) { await delay(120); return { seller: null, verification: null } }
+    return http('/v1/seller/me')
+  },
+
+  /** 申請成為賣家。通過審核前 tier = pending，開池會被擋 */
+  async applySeller(input: { name: string; origin: 'merchant' | 'personal'; bio?: string }) {
+    if (MOCK) { await delay(300); return { seller: { id: 'me', tier: 'pending' }, already: false } }
+    return http<{ seller: { id: string; tier: string }; already: boolean }>('/v1/seller/apply', {
+      method: 'POST', json: input
+    })
   },
 
   /** 目前錢包（API 模式用來初始化；mock 模式回 store 現值） */

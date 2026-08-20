@@ -10,9 +10,12 @@ import { useWalletStore } from '@/stores/wallet'
 import { recycleQuote, RECYCLE_RATE } from '@/lib/recycle'
 import { track } from '@/lib/ga'
 import { share, shareUrl } from '@/lib/social'
-import { ApiError } from '@/lib/http'
+import { ApiError, http } from '@/lib/http'
+import { MOCK } from '@/lib/config'
+import { useAuthStore } from '@/stores/auth'
 
 const wallet = useWalletStore()
+const auth = useAuthStore()
 const prizes = ref<UserPrize[]>([])
 onMounted(async () => { prizes.value = await api.myPrizes() })
 
@@ -50,10 +53,120 @@ const statusLabel: Record<UserPrize['status'], string> = {
   recycled: '已回收'
 }
 
-function requestShip(p: UserPrize) {
+/* ---- 申請出貨 ----
+   這段原本是假的：只把本地物件的 status 改掉，從來沒有打後端。
+   在 API 模式下按了畫面會變、重新整理就打回原形，而後台的出貨清單
+   永遠收不到東西 —— 使用者以為自己申請了，平台這邊什麼也沒有。
+
+   做成多選是因為這一頁本來就寫著「寄存中的卡可合併出貨（省運費）」。
+   一張一張送會產生多張出貨單，那句話就變成謊話。 */
+const shipOpen = ref(false)
+const shipPick = ref<string[]>([])
+const shipBusy = ref(false)
+const shipErr = ref('')
+/* 出貨與上架共用同一個提示槽。兩個各自 position: fixed 在同一個位置，
+   接連做兩件事就會疊在一起看不清楚 —— 同一時間只該有一則。 */
+const toast = ref('')
+function flash(msg: string) {
+  toast.value = msg
+  setTimeout(() => { if (toast.value === msg) toast.value = '' }, 5000)
+}
+
+const stashed = computed(() => prizes.value.filter(p => p.status === 'stashed'))
+
+const addr = ref({ name: '', phone: '', zip: '', city: '', line1: '' })
+const addrReady = computed(() =>
+  addr.value.name.trim().length >= 2 &&
+  addr.value.phone.trim().length >= 8 &&
+  addr.value.city.trim().length >= 2 &&
+  addr.value.line1.trim().length >= 4)
+
+/* 收件資料從會員資料帶過來，讓人不用每次重打。
+   但仍然可以改 —— 「這次要寄到哪」跟「我的預設地址」是兩件事
+   （後端 prizes.ts 的註解也是這樣說的）。 */
+async function openShip(p: UserPrize) {
   track('click_ship_request')
-  p.status = 'ship_requested'
-  track('ship_request_success')
+  shipErr.value = ''
+  shipPick.value = [p.id]
+  shipOpen.value = true
+  if (MOCK) return
+  try {
+    const r = await http<{ profile: {
+      realName?: string | null; phone?: string | null
+      addressZip?: string | null; addressCity?: string | null; addressLine1?: string | null
+    } }>('/v1/auth/profile')
+    const q = r.profile
+    addr.value = {
+      name: q.realName ?? '', phone: q.phone ?? '',
+      zip: q.addressZip ?? '', city: q.addressCity ?? '', line1: q.addressLine1 ?? ''
+    }
+  } catch { /* 帶不出來就讓使用者自己填，不要因此擋住出貨 */ }
+}
+
+function toggleShipPick(id: string) {
+  const i = shipPick.value.indexOf(id)
+  if (i === -1) shipPick.value.push(id)
+  else shipPick.value.splice(i, 1)
+}
+
+async function submitShip() {
+  if (!addrReady.value || !shipPick.value.length || shipBusy.value) return
+  shipBusy.value = true
+  shipErr.value = ''
+  try {
+    const ids = [...shipPick.value]
+    await api.shipPrizes(ids, {
+      name: addr.value.name.trim(), phone: addr.value.phone.trim(),
+      zip: addr.value.zip.trim() || undefined,
+      city: addr.value.city.trim(), line1: addr.value.line1.trim()
+    })
+    // 以伺服器為準重讀，不要自己猜狀態 —— 這正是先前那個 bug 的成因
+    prizes.value = await api.myPrizes()
+    flash(`已送出 ${ids.length} 張的出貨申請，平台處理後會通知你。`)
+    shipOpen.value = false
+    shipPick.value = []
+    track('ship_request_success')
+  } catch (e) {
+    shipErr.value = e instanceof ApiError ? e.message : '申請失敗，請稍後再試'
+  } finally {
+    shipBusy.value = false
+  }
+}
+
+/* ---- 上架出售 ----
+   api.createListing() 一直都在，但整個前端沒有任何地方呼叫它 ——
+   使用者拿到卡之後只有「出貨」跟「回收」兩條路，賣不掉。
+   市場頁上看得到別人的掛單，自己卻上不了架。 */
+const sellFor = ref<string | null>(null)
+const sellPrice = ref<number | null>(null)
+const sellBusy = ref(false)
+const sellErr = ref('')
+
+function askSell(p: UserPrize) {
+  sellFor.value = sellFor.value === p.id ? null : p.id
+  sellErr.value = ''
+  // 預設帶市值，讓人有個錨點；覺得不合理再自己改
+  sellPrice.value = p.card.refPrice || null
+}
+
+async function submitSell(p: UserPrize) {
+  const price = sellPrice.value
+  if (!price || price <= 0 || sellBusy.value) return
+  sellBusy.value = true
+  sellErr.value = ''
+  try {
+    await api.createListing({
+      prizeId: p.id, card: p.card, price,
+      sellerName: auth.user?.name || auth.user?.handle || '我'
+    })
+    prizes.value = await api.myPrizes()
+    flash(`「${p.card.name}」已上架，售價 ${price.toLocaleString()} 點`)
+    sellFor.value = null
+  } catch (e) {
+    sellErr.value = e instanceof ApiError ? e.message : '上架失敗'
+  } finally {
+    sellBusy.value = false
+  }
 }
 
 /* 回收是不可逆的（卡片交還平台換點數），所以一定要有一段確認，
@@ -283,7 +396,8 @@ async function copyLink() {
           </p>
 
           <div class="acts" v-if="p.status === 'stashed'">
-            <button class="btn primary sm" @click="requestShip(p)">申請出貨</button>
+            <button class="btn primary sm" @click="openShip(p)">申請出貨</button>
+            <button class="btn sm" @click="askSell(p)">上架出售</button>
             <button
               class="btn sm" @click="askRecycle(p)"
               :disabled="!recycleQuote(p.card).eligible"
@@ -291,6 +405,27 @@ async function copyLink() {
             >
               回收 +{{ recycleQuote(p.card).points.toLocaleString() }} 點
             </button>
+          </div>
+
+          <!-- 上架表單。定價預設帶市值當錨點，但一定讓人改得動 —— 市值只是參考 -->
+          <div v-if="sellFor === p.id && p.status === 'stashed'" class="confirm">
+            <label class="sellRow">
+              <span>售價（點）</span>
+              <input v-model.number="sellPrice" type="number" inputmode="numeric" min="1">
+            </label>
+            <p class="muted fine">
+              上架後這張卡會鎖在市場上，賣出前不能出貨也不能回收。買家下單即成交，
+              點數直接入帳（卡片在保管庫，不需要寄送）。
+            </p>
+            <p v-if="sellErr" class="warn">{{ sellErr }}</p>
+            <div class="acts">
+              <button class="btn sm" @click="sellFor = null">取消</button>
+              <button
+                class="btn primary sm"
+                :disabled="!sellPrice || sellPrice <= 0 || sellBusy"
+                @click="submitSell(p)"
+              >{{ sellBusy ? '上架中…' : '確認上架' }}</button>
+            </div>
           </div>
 
           <!-- 回收確認：不可逆，所以把報價與提現限制一次講完 -->
@@ -315,10 +450,103 @@ async function copyLink() {
         </div>
       </div>
     </div>
+
+    <!-- 出貨申請。做成覆蓋層而不是行內展開，是因為它要一次呈現「寄哪幾張」
+         跟「寄到哪」兩件事，塞進單張卡片的位置會看不完整 -->
+    <div v-if="shipOpen" class="sheetWrap" @click.self="shipOpen = false">
+      <div class="sheet card" role="dialog" aria-label="申請出貨">
+        <h2>申請出貨</h2>
+        <p class="muted fine">勾選要一起寄出的卡。合併成一張出貨單，只算一次運費。</p>
+
+        <ul class="pickList">
+          <li v-for="p in stashed" :key="p.id">
+            <label>
+              <input type="checkbox" :checked="shipPick.includes(p.id)" @change="toggleShipPick(p.id)">
+              <span class="pn">{{ p.card.name }}</span>
+              <span class="mono muted">{{ p.tier }}</span>
+            </label>
+          </li>
+        </ul>
+
+        <div class="fields">
+          <label><span>收件人</span><input v-model="addr.name" type="text" placeholder="真實姓名"></label>
+          <label><span>電話</span><input v-model="addr.phone" type="tel" inputmode="tel" placeholder="09xxxxxxxx"></label>
+          <label><span>郵遞區號</span><input v-model="addr.zip" type="text" inputmode="numeric" placeholder="選填"></label>
+          <label><span>縣市</span><input v-model="addr.city" type="text" placeholder="例：台北市"></label>
+          <label class="wide"><span>地址</span><input v-model="addr.line1" type="text" placeholder="區、路、號、樓"></label>
+        </div>
+        <p class="muted fine">預設帶入會員資料裡的收件資訊，這次要寄別的地方可以直接改。</p>
+
+        <p v-if="shipErr" class="warn">{{ shipErr }}</p>
+        <div class="acts">
+          <button class="btn sm" @click="shipOpen = false">取消</button>
+          <button
+            class="btn primary sm"
+            :disabled="!addrReady || !shipPick.length || shipBusy"
+            @click="submitShip"
+          >{{ shipBusy ? '送出中…' : `送出（${shipPick.length} 張）` }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 送出後的回饋固定在畫面下方，不隨捲動跑掉。同一時間只有一則 -->
+    <p v-if="toast" class="toast" role="status">{{ toast }}</p>
   </div>
 </template>
 
 <style scoped>
+/* ---- 出貨面板 ----
+   貼底而不是置中：手機上置中的對話框，鍵盤一彈出來就會把送出鍵推出畫面 */
+.sheetWrap {
+  position: fixed; inset: 0; z-index: 80;
+  display: flex; align-items: flex-end; justify-content: center;
+  background: #000a;
+  padding: 0;
+}
+.sheet {
+  width: 100%; max-width: 520px;
+  max-height: min(88dvh, 720px); overflow-y: auto; overscroll-behavior: contain;
+  border-radius: 18px 18px 0 0;
+  padding: 18px 16px calc(18px + var(--safe-b, 0px));
+}
+.sheet h2 { font-size: 17px; margin: 0 0 6px; }
+
+.pickList { list-style: none; margin: 12px 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.pickList label {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 10px; border-radius: 10px; background: var(--surface-2);
+  font-size: 13.5px; cursor: pointer;
+}
+.pickList .pn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 4px; }
+.fields label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--muted); }
+.fields label.wide { grid-column: 1 / -1; }
+.fields input {
+  padding: 10px 11px; font: inherit; font-size: 16px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--field, var(--surface-2)); color: var(--ink);
+}
+.fields input:focus { outline: none; border-color: var(--gold); }
+
+.sellRow { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.sellRow input {
+  flex: 1; padding: 9px 11px; font: inherit; font-size: 16px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--field, var(--surface-2)); color: var(--ink);
+}
+
+/* 送出後的回饋。固定在底部導覽上方，捲動時不會跑掉 */
+.toast {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(14px + max(var(--nav-total, 0px), var(--safe-b, 0px)));
+  z-index: 75; max-width: min(92vw, 460px);
+  margin: 0; padding: 11px 15px; border-radius: 12px;
+  background: var(--surface-3); color: var(--ink);
+  font-size: 13px; line-height: 1.6;
+  box-shadow: 0 8px 28px #0007;
+}
+
 /* ---- 收藏總覽 ---- */
 .overview {
   display: flex; align-items: center; gap: 26px; flex-wrap: wrap;

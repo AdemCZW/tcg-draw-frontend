@@ -226,7 +226,15 @@ async function run() {
     check('私密檔案（ship-photo）沒登入讀不到', anonRead.status === 401)
 
     const authRead = await call(buyer, `/v1/files/${fileId}`)
-    check('登入後可以讀到 ship-photo 的網址', authRead.ok)
+    check('上傳者本人可以讀到 ship-photo 的網址', authRead.ok)
+
+    /* 這條是修正過的行為：ship-photo / unbox-video 原本任何登入使用者都讀得到。
+       出貨照會拍到面單上的姓名電話地址，開箱影片會拍到家裡 —— 註冊一個帳號
+       就看得到別人的，那是實質的個資外洩。 */
+    const otherRead = await call(seller, `/v1/files/${fileId}`)
+    check('ship-photo 別的登入者讀不到', otherRead.status === 403, `${otherRead.status}`)
+    const adminShipRead = await call(platform, `/v1/files/${fileId}`)
+    check('ship-photo 管理員讀得到（裁決爭議需要）', adminShipRead.ok)
     const { url: readUrl } = await json(authRead)
     const fetched = await fetch(readUrl)
     check('讀到的網址真的能拿到剛才上傳的內容', fetched.ok, `${fetched.status}`)
@@ -321,6 +329,53 @@ async function run() {
   /* ---- 卡冊分享、交易邀約、通知 ----
      這三件事是同一條動線：分享卡冊 → 別人看到想要 → 出價 → 我收到通知。
      所以一起測，斷在哪一環都看得出來。 */
+  /* ---- 賣家申請 ----
+     這條路原本整段不存在：POST /v1/pools 回 NOT_SELLER 叫人「先申請成為賣家」，
+     但平台上沒有任何地方可以申請。 */
+  console.log('\n賣家申請：')
+  {
+    const anon = await fetch(`${base}/v1/seller/apply`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '路人商店', origin: 'personal' })
+    })
+    check('沒登入不能申請', anon.status === 401)
+
+    // buyer 在 seed 裡不是賣家，拿他來驗完整流程
+    const before = await json(await call(buyer, '/v1/seller/me'))
+    if (before.seller) {
+      check('（跳過申請：這個帳號已經是賣家了）', true)
+    } else {
+      const short = await call(buyer, '/v1/seller/apply', { name: 'x', origin: 'personal' })
+      check('賣家名稱太短被擋', short.status === 400)
+
+      const ok = await call(buyer, '/v1/seller/apply', { name: '煙霧測試小舖', origin: 'personal', bio: 'smoke' })
+      check('申請成功', ok.ok, `${ok.status}`)
+      check('申請後是待審核', (await json(ok)).seller?.tier === 'pending')
+
+      const again = await call(buyer, '/v1/seller/apply', { name: '煙霧測試小舖', origin: 'personal' })
+      check('重複送出不會變成錯誤', again.ok && (await json(again)).already === true)
+
+      const meNow = await json(await call(buyer, '/v1/seller/me'))
+      check('查得到自己的賣家狀態', meNow.seller?.tier === 'pending')
+
+      // pending 不能開池 —— 門檻在這裡，不在申請
+      const pool = await call(buyer, '/v1/pools', {
+        title: '不該開得成的池', mode: 'classic', ticketPrice: 100, totalTickets: 2,
+        prizes: [{ tier: 'D', card: { name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 2 }]
+      })
+      check('待審核的賣家開不了池', pool.status === 403, `${pool.status}`)
+
+      // 後台看得到這筆待審
+      const list = await json(await call(platform, '/v1/admin/sellers'))
+      check('後台賣家清單看得到新申請',
+        (list.sellers ?? []).some((x: { id: string; tier: string }) => x.id === 'u-buyer' && x.tier === 'pending'))
+    }
+
+    // 公開的賣家端點不能被 /v1/seller 的 requireAuth 波及
+    check('賣家列表仍然公開', (await fetch(`${base}/v1/sellers`)).ok)
+    check('賣家頁仍然公開', (await fetch(`${base}/v1/sellers/u-seller`)).ok)
+  }
+
   console.log('\n分享與交易邀約：')
   {
     // 沒公開之前，連結不該有效

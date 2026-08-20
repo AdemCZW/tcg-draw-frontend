@@ -1,9 +1,12 @@
 <script setup lang="ts">
 // 賣家開池。核心是「上架前就把經濟算清楚」——還元率超過 100% 或
 // 低於 55% 都擋下，避免賣家開賠本池、或開對玩家過苛的池砸平台招牌。
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSellerStore } from '@/stores/sellers'
+import { api } from '@/lib/api'
+import { ApiError } from '@/lib/http'
+import { MOCK } from '@/lib/config'
 import { usePoolStore } from '@/stores/pools'
 import { computeEconomics } from '@/lib/economics'
 import type { PoolMode, Tier } from '@/types/models'
@@ -16,7 +19,48 @@ sellers.ensureLoaded()
 pools.ensureLoaded()
 
 const me = computed(() => sellers.me)
-const canList = computed(() => me.value && me.value.tier !== 'pending')
+
+/* ---- 賣家身分 ----
+   這一頁原本只有一段「尚未通過身分驗證，請完成實名與金流帳戶驗證」加一顆
+   「回首頁」—— 但平台上根本沒有申請的地方，sellers 資料列只有 seed 產得出來。
+   等於叫使用者去做一件做不到的事。現在真的接上 /v1/seller/apply。
+
+   MOCK 模式仍然讀 sellers store：那是展示用的假資料，把它換成「你不是賣家」
+   會讓沒有後端時連開池表單都看不到。 */
+const remote = ref<{ seller: { tier: string } | null; verification: { status: string; note: string | null } | null } | null>(null)
+const loadingSeller = ref(!MOCK)
+onMounted(async () => {
+  if (MOCK) return
+  try { remote.value = await api.sellerStatus() }
+  catch { remote.value = { seller: null, verification: null } }
+  finally { loadingSeller.value = false }
+})
+
+const tier = computed(() => MOCK ? (me.value?.tier ?? null) : (remote.value?.seller?.tier ?? null))
+const canList = computed(() => !!tier.value && tier.value !== 'pending')
+const isPending = computed(() => tier.value === 'pending')
+
+/* ---- 申請成為賣家 ---- */
+const apply = reactive({ name: '', origin: 'personal' as 'personal' | 'merchant', bio: '' })
+const applyBusy = ref(false)
+const applyErr = ref('')
+const applyOk = ref(false)
+const canApply = computed(() => apply.name.trim().length >= 2 && !applyBusy.value)
+
+async function submitApply() {
+  if (!canApply.value) return
+  applyBusy.value = true
+  applyErr.value = ''
+  try {
+    await api.applySeller({ name: apply.name.trim(), origin: apply.origin, bio: apply.bio.trim() })
+    remote.value = await api.sellerStatus()
+    applyOk.value = true
+  } catch (e) {
+    applyErr.value = e instanceof ApiError ? e.message : '申請失敗，請稍後再試'
+  } finally {
+    applyBusy.value = false
+  }
+}
 
 const MODES: PoolMode[] = ['classic', 'shitei', 'muteki', 'streak', 'auction']
 const TIERS: Tier[] = ['A', 'B', 'C', 'D', 'LAST', 'BUST']
@@ -82,13 +126,50 @@ async function submit() {
   <div class="container page">
     <h1 class="display">開一個新的池</h1>
 
-    <div v-if="!canList" class="gate card">
-      <p class="big">尚未通過身分驗證</p>
+    <div v-if="loadingSeller" class="gate card"><p class="muted">確認賣家身分中…</p></div>
+
+    <!-- 審核中：講清楚在等什麼、通過之前能做什麼，不要只寫「審核中」讓人乾等 -->
+    <div v-else-if="isPending" class="gate card">
+      <p class="big">申請已送出，等待審核</p>
       <p class="muted">
-        平台不開放匿名上架。完成實名與金流帳戶驗證後才能開賣——
-        這是保護玩家不被詐騙的第一道防線。
+        平台不開放匿名上架，這是保護玩家不被詐騙的第一道防線。
+        審核通過後這一頁就會變成開池表單，通過時你會收到站內通知。
       </p>
-      <RouterLink to="/" class="btn">回首頁</RouterLink>
+      <p v-if="remote?.verification?.status === 'rejected'" class="muted warnLine">
+        上次送出的證件被退回{{ remote.verification.note ? '：' + remote.verification.note : '' }}。
+        補件後會重新審核。
+      </p>
+      <RouterLink :to="{ name: 'home' }" class="btn">先去逛逛</RouterLink>
+    </div>
+
+    <!-- 還不是賣家：直接給申請表，不要給死路 -->
+    <div v-else-if="!canList" class="gate card">
+      <p class="big">先申請成為賣家</p>
+      <p class="muted">
+        平台不開放匿名上架 —— 開池等於向別人收錢，平台要知道收錢的是誰。
+        送出後由平台審核，通過才能開池。
+      </p>
+
+      <div v-if="applyOk" class="muted okLine">申請已送出，審核結果會用站內通知告訴你。</div>
+      <template v-else>
+        <label class="field">
+          <span>賣家名稱</span>
+          <input v-model="apply.name" type="text" placeholder="會顯示在池卡與訂單上">
+        </label>
+        <span class="field-label">身分</span>
+        <div class="originRow">
+          <button type="button" class="mode-btn" :class="{ on: apply.origin === 'personal' }" @click="apply.origin = 'personal'">個人</button>
+          <button type="button" class="mode-btn" :class="{ on: apply.origin === 'merchant' }" @click="apply.origin = 'merchant'">商家</button>
+        </div>
+        <label class="field">
+          <span>簡介（選填）</span>
+          <input v-model="apply.bio" type="text" placeholder="例：主營朱紫系列鑑定卡">
+        </label>
+        <p v-if="applyErr" class="warnLine">{{ applyErr }}</p>
+        <button type="button" class="btn primary" :disabled="!canApply" @click="submitApply">
+          {{ applyBusy ? '送出中…' : '送出申請' }}
+        </button>
+      </template>
     </div>
 
     <form v-else class="layout" @submit.prevent="submit">
@@ -211,6 +292,10 @@ async function submit() {
 </template>
 
 <style scoped>
+.originRow { display: flex; gap: 8px; margin-bottom: 12px; }
+.warnLine { font-size: 13px; line-height: 1.7; color: #fcd34d; margin: 8px 0; }
+.okLine { font-size: 13.5px; line-height: 1.7; margin: 10px 0 0; }
+
 .page { padding-top: 28px; padding-bottom: 72px; }
 h1 { font-size: 28px; margin: 0 0 20px; }
 h2 { font-size: 15px; margin: 0 0 12px; }
