@@ -241,4 +241,14 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
   .avatar { width: 26px; height: 26px; font-size: 12px; }
   .pill { height: 34px; font-size: 13px; padding: 0 12px; }
 }
+
+/* 320px（iPhone SE 這種）上動作區會溢出 2px，最右邊的頭像被切到一角。
+   量到的差距很小，所以只收間距與內距，不動字級 —— 為了 2px 把字改小
+   會讓所有比它寬的機器都跟著變醜。 */
+@media (max-width: 360px) {
+  .row { gap: 8px; }
+  .actions { gap: 6px; }
+  .wallet { padding: 0 9px; }
+  .pill { padding: 0 10px; }
+}
 </style>

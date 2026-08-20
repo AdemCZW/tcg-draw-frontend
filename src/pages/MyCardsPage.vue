@@ -596,13 +596,18 @@ async function copyLink() {
   position: fixed; z-index: 78;
   top: calc(8px + var(--safe-t, 0px));
   left: 10px; right: 10px;
-  display: flex; align-items: center; gap: 10px;
+  /* 資訊自己一行、兩顆按鈕平分下一行。
+     原本是三個並排，資訊區靠 flex: 1 撐 —— 那要求按鈕會自己收斂，
+     但只要有任何規則把按鈕撐寬（這裡就是 .btn.sm 的 width: 100%），
+     資訊區就會被壓到 0。分兩行之後不管按鈕多寬都不會吃到資訊。 */
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
   padding: 10px 12px; border-radius: 14px;
   background: var(--surface-3); box-shadow: 0 10px 30px rgba(0,0,0,.5);
   animation: pickDrop .22s cubic-bezier(.2,.8,.3,1);
 }
+.pickBar .btn { flex: 1 1 0; min-width: 0; white-space: nowrap; }
 @keyframes pickDrop { from { opacity: 0; transform: translateY(-16px) } to { opacity: 1; transform: none } }
-.pickInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pickInfo { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .pickInfo strong { font-size: 14px; }
 .pickInfo span { font-size: 11.5px; color: var(--muted); }
 .acts .btn.on { background: var(--accent-wash); border-color: var(--accent); color: var(--accent); }
@@ -937,7 +942,10 @@ strong { font-size: 14px; }
   .exp { font-size: 10.5px; }
   /* 半寬放不下並排按鈕。grid 的水平拉伸要用 justify-self（align-self 是垂直軸） */
   .acts { flex-direction: column; justify-self: stretch; gap: 6px; }
-  .btn.sm { width: 100%; padding: 9px 6px; font-size: 12px; }
+  /* 只給卡片裡堆疊的那組動作鈕。原本寫成裸的 .btn.sm，於是 width: 100%
+     外溢到同一個 scope 下的每一顆小按鈕 —— 包括選取列的兩顆，
+     它們各吃掉一個 100%，把旁邊的資訊區壓成 0 寬，文字變成一個字一行。 */
+  .acts .btn.sm, .confirm .btn.sm { width: 100%; padding: 9px 6px; font-size: 12px; }
 
   /* 兩欄格線下每張卡內容區只剩約 115px，報價的標籤與數字並排會被折成四行。
      改成標籤在上、數字在下，數字本身禁止換行。 */
