@@ -151,6 +151,19 @@ export const router = createRouter({
       meta: { requiresAuth: true, depth: 2, title: '我的訂單' }
     },
     {
+      /* 交易邀約收發匣。要登入 —— 出價本身就是有金錢意義的動作 */
+      path: '/me/offers', name: 'offers',
+      component: () => import('@/pages/OffersPage.vue'),
+      meta: { requiresAuth: true, depth: 2, title: '交易邀約' }
+    },
+    /* 公開卡冊。刻意不要 requiresAuth：分享連結的意義就是給沒帳號的人看。
+       頁面內的「提出交易」按鈕才擋登入，看跟出價是兩件事。 */
+    {
+      path: '/u/:slug', name: 'public-cardbook',
+      component: () => import('@/pages/PublicCardbookPage.vue'),
+      meta: { depth: 1, title: '卡冊' }
+    },
+    {
       path: '/me/profile', name: 'profile',
       component: () => import('@/pages/ProfilePage.vue'),
       meta: { requiresAuth: true, depth: 2, title: '會員資料' }

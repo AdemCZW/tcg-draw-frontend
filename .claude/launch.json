@@ -4,19 +4,41 @@
     {
       "name": "tcg-draw-frontend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 5173
+    },
+    {
+      "name": "tcg-draw-mock",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "VITE_API_URL= npm run dev -- --port 5175"
+      ],
+      "port": 5175
     },
     {
       "name": "fengtian-clinic-demo",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["-y", "http-server", "/Users/adem/vue.tools/fengtian-clinic-demo", "-p", "4321", "-c-1"],
+      "runtimeArgs": [
+        "-y",
+        "http-server",
+        "/Users/adem/vue.tools/fengtian-clinic-demo",
+        "-p",
+        "4321",
+        "-c-1"
+      ],
       "port": 4321
     },
     {
       "name": "bosch-kitchen-dev",
       "runtimeExecutable": "sh",
-      "runtimeArgs": ["-c", "cd /Users/adem/vue.tools/bosch-ai-kitchen-studio && npx wrangler dev --port 4173"],
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/adem/vue.tools/bosch-ai-kitchen-studio && npx wrangler dev --port 4173"
+      ],
       "port": 4173
     }
   ]

@@ -34,6 +34,7 @@ function logout() {
 const rows = [
   { name: 'profile', t: '會員資料', d: '暱稱、收件人與地址', icon: 'user' },
   { name: 'wallet', t: '錢包', d: '點數餘額與明細', icon: 'wallet' },
+  { name: 'offers', t: '交易邀約', d: '別人想換你的卡、你出價的紀錄', icon: 'swap' },
   { name: 'topup', t: '儲值', d: '購買點數', icon: 'plus' },
   { name: 'seller-new', t: '賣家專區 · 我要開池', d: '上架自己的抽選池', icon: 'box' },
   { name: 'fairness', t: '公平性驗證', d: '籤序怎麼封存、怎麼自己驗算', icon: 'shield' }
@@ -46,6 +47,7 @@ const adminRow = { name: 'admin', t: '平台後台', d: '發點數、審賣家�
 
 const paths: Record<string, string> = {
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 20a8 8 0 0 1 16 0',
+  swap: 'M4 8h13l-3-3M20 16H7l3 3',
   wallet: 'M4 8a2 2 0 0 1 2-2h11a1 1 0 0 1 1 1v1M4 8v9a2 2 0 0 0 2 2h12a1 1 0 0 0 1-1v-3M4 8h14M20 11v4h-4a2 2 0 0 1 0-4z',
   plus: 'M12 5v14M5 12h14',
   box: 'M4 8l8-4 8 4-8 4-8-4zM4 8v8l8 4 8-4V8M12 12v8',

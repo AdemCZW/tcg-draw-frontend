@@ -13,10 +13,15 @@
  */
 import { Hono } from 'hono'
 import { randomBytes } from 'node:crypto'
+import { credit } from '../money.js'
+import { notify } from '../notify.js'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
 import { env } from '../env.js'
 import { sql } from '../db.js'
 import { issueToken } from '../auth.js'
+
+/** 測試期的註冊禮金。正式營運前移除，見下方 credit 呼叫處的說明 */
+const SIGNUP_BONUS = 1_000_000
 
 export const line = new Hono()
 
@@ -142,6 +147,19 @@ line.get('/callback', async c => {
     return id
   })
   void picture  // 頭像之後接 files 再存
+
+  /* 測試期：LINE 登入的帳號送一百萬點，讓人不用儲值就能把整條動線走完。
+     用 ledger_once（ref_id + user_id + reason 唯一）擋重複，所以：
+       - 每次登入都會嘗試發，但只會成功一次
+       - 在這個功能之前就已經用 LINE 登入過的人，下次登入自動補發
+     正式營運前要把這段拿掉 —— 它繞過了儲值，等於免費發行點數。 */
+  await credit(sql, userId, SIGNUP_BONUS, 'line-signup-bonus', userId)
+  await notify({
+    userId, kind: 'system',
+    title: '測試點數已入帳',
+    body: `LINE 登入送 ${SIGNUP_BONUS.toLocaleString('zh-TW')} 點，可以直接開始抽卡。`,
+    link: '/me/wallet', refId: userId
+  })
 
   const jwt = await issueToken(userId)
   // token 放 fragment 不放 query：fragment 不會進伺服器日誌、也不會被 Referer 帶走

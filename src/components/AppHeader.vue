@@ -72,6 +72,14 @@ const auth = useAuthStore()
 .wallet:hover { background: var(--surface-3); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .user { font-size: 14px; color: var(--muted); font-weight: 500; }
+/* 餘額膠囊與使用者名稱是「按鈕」不是「內容」，連點時不該被反白。
+   餘額特別要寫在這裡：它掛了 .mono，會吃到 touch.css 裡「驗算資料一定要能複製」
+   的逃生門而變回可選取 —— 那條是給雜湊、籤號用的，餘額沒人要複製。 */
+.wallet, .user {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
 @media (max-width: 720px) {
   /* 手機導覽改用底部 tab bar（AppBottomNav） */
   .nav { display: none; }

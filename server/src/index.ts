@@ -18,6 +18,7 @@ import { line } from './routes/line.js'
 import { admin } from './routes/admin.js'
 import { pub } from './routes/public.js'
 import { files } from './routes/files.js'
+import { social, socialPublic } from './routes/social.js'
 import { sweep } from './orders-service.js'
 import { sweepAttempts } from './rate-limit.js'
 
@@ -63,6 +64,12 @@ app.route('/v1/auth/line', line)
 app.route('/v1/admin', admin)
 app.route('/v1', pub)
 app.route('/v1/files', files)
+/* social 的兩半分開掛：需要登入的那半有 use('*', requireAuth)，
+   掛在 /v1 底下會把整個 /v1 都變成要登入（Hono 的 sub-app middleware
+   是以掛載前綴註冊的），所以各自給一個明確前綴。
+   /v1/share 刻意不要登入 —— 分享連結要能給沒帳號的人看。 */
+app.route('/v1/social', social)
+app.route('/v1/share', socialPublic)
 
 /* 逾期掃描。
    時限本身是用時間戳算的，所以這支排程不是唯一真相 —— 它掛掉不會讓狀態算錯，

@@ -566,6 +566,88 @@ export const pools: Pool[] = [
       { id: 'pr43', tier: 'D', card: cards[24], total: 45, remaining: 0 },
       { id: 'pr44', tier: 'LAST', card: cards[1], total: 1, remaining: 0 }
     ]
+  },
+  {
+    /* 促販實驗室的小池：36 籤、開得快也賣得快。
+       列表上要有「快滿了」的池，不然每個池看起來都像剛開沒人抽。
+       獎品總值 7,980 ÷ 票收 9,000 = 88.7%。 */
+    sellerId: 's2',
+    origin: 'personal',
+    id: 'p14',
+    title: '促販卡 大亂鬥 第 7 回',
+    cover: ph(260),
+    mode: 'classic',
+    ticketPrice: 250,
+    totalTickets: 36,
+    remainingTickets: 25,
+    takenSeats: seatsOf(36, 11, 5),
+    status: 'open',
+    commitHash: '4d17b9e0c8a25f36aa11bb22cc33dd44ee55ff66007711882299aa33bb44cc55',
+    clientSeedSource: 'BTC block #920588 hash',
+    openedAt: '2026-08-18T21:00:00+08:00',
+    escrow: escrowOf(11, 250),
+    prizes: [
+      { id: 'pr54', tier: 'A', card: cards[15], total: 1, remaining: 1 },
+      { id: 'pr55', tier: 'B', card: cards[17], total: 1, remaining: 1 },
+      { id: 'pr56', tier: 'C', card: cards[23], total: 3, remaining: 2 },
+      { id: 'pr57', tier: 'D', card: cards[30], total: 31, remaining: 21 }
+    ]
+  },
+  {
+    /* 250 籤的量產大池。籤牆一次要畫 250 格，這是滾動與點擊區的壓力測試對象 ——
+       只有小池的話，效能問題要等上線才會被發現。
+       LAST 賞照慣例不佔籤位（完抽時加贈），所以 prizes 加總會比 totalTickets 多 1。
+       獎品總值 75,120 ÷ 票收 87,500 = 85.9%。 */
+    sellerId: 's3',
+    origin: 'merchant',
+    id: 'p15',
+    title: '關都精選 · 伊布家族 250 抽',
+    cover: ph(140),
+    mode: 'classic',
+    ticketPrice: 350,
+    totalTickets: 250,
+    remainingTickets: 132,
+    takenSeats: seatsOf(250, 118),
+    status: 'open',
+    commitHash: '61c9a3f4d70b28e5ff44dd33cc22bb11aa009988776655443322110099887766',
+    clientSeedSource: 'BTC block #920440 hash',
+    openedAt: '2026-08-13T10:00:00+08:00',
+    escrow: escrowOf(118, 350),
+    prizes: [
+      { id: 'pr58', tier: 'LAST', card: cards[4], total: 1, remaining: 1 },
+      { id: 'pr59', tier: 'A', card: cards[8], total: 1, remaining: 1 },
+      { id: 'pr60', tier: 'B', card: cards[11], total: 2, remaining: 1 },
+      { id: 'pr61', tier: 'C', card: cards[14], total: 6, remaining: 3 },
+      { id: 'pr62a', tier: 'D', card: cards[28], total: 120, remaining: 63 },
+      { id: 'pr62b', tier: 'D', card: cards[30], total: 121, remaining: 64 }
+    ]
+  },
+  {
+    /* 已售完但還沒開獎。sold_out 與 revealed 是兩個不同的狀態，中間隔著賣家
+       按下開獎 —— 兩種都要有池，否則分不出前端把哪個狀態畫錯了。
+       獎品總值 63,800 ÷ 票收 75,000 = 85.1%。 */
+    sellerId: 's5',
+    origin: 'merchant',
+    id: 'p16',
+    title: '滿分場 #29 · 高額場（已售完）',
+    cover: ph(46),
+    mode: 'classic',
+    ticketPrice: 2500,
+    totalTickets: 30,
+    remainingTickets: 0,
+    takenSeats: Array.from({ length: 30 }, (_, i) => i + 1),
+    status: 'sold_out',
+    commitHash: '0b4e7c2a95d1f8630011223344556677889900aabbccddeeff0011223344aabb',
+    clientSeedSource: 'BTC block #920166 hash',
+    openedAt: '2026-08-08T20:00:00+08:00',
+    escrow: escrowOf(30, 2500),
+    prizes: [
+      { id: 'pr63', tier: 'LAST', card: cards[1], total: 1, remaining: 0 },
+      { id: 'pr64', tier: 'A', card: cards[2], total: 1, remaining: 0 },
+      { id: 'pr65', tier: 'B', card: cards[6], total: 1, remaining: 0 },
+      { id: 'pr66', tier: 'C', card: cards[15], total: 3, remaining: 0 },
+      { id: 'pr67', tier: 'D', card: cards[30], total: 25, remaining: 0 }
+    ]
   }
 ]
 

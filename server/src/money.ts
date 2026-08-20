@@ -43,7 +43,7 @@ export async function walletOf(userId: string, db: Db = root): Promise<Wallet> {
  * 同時觸發，沒有這層保護就會重複入帳。ON CONFLICT DO NOTHING 讓重試是安全的。
  */
 export async function credit(
-  db: Tx, userId: string, delta: number, reason: string, refId?: string
+  db: Db, userId: string, delta: number, reason: string, refId?: string
 ) {
   await db`
     insert into points_ledger (user_id, delta, reason, ref_id)

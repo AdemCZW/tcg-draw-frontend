@@ -4,7 +4,12 @@
     <meta charset="UTF-8" />
     <!-- viewport-fit=cover 是 env(safe-area-inset-*) 生效的前提。
          少了它，iOS 上那些 env() 一律回傳 0，全站的瀏海／Home 指示器讓位都是白寫的。 -->
+    <!-- 這裡刻意沒有 user-scalable=no / maximum-scale：關掉縮放是傷害無障礙的做法，
+         看不清楚字的人就沒救了。惱人的雙擊放大改用 touch-action 處理（styles/touch.css）。 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- iOS Safari 會把長串數字自動變成電話連結：這站到處是點數、籤號、訂單編號、
+         鑑定編號，誤點就跳出撥號確認，而且那些藍色底線也讓數字看起來像連結。 -->
+    <meta name="format-detection" content="telephone=no" />
     <title>VAULT DRAW — 鑑定卡線上抽選</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

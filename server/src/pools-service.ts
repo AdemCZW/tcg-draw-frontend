@@ -11,6 +11,7 @@ import { randomBytes } from 'node:crypto'
 import { bytesToHex, commitOf, seatSequence } from './shared/fairness.js'
 import type { Tx } from './db.js'
 import { credit } from './money.js'
+import { notify } from './notify.js'
 
 export const STASH_DAYS = 90
 const DAY = 86_400_000
@@ -160,6 +161,20 @@ export async function draw(
     won_at: now, stash_expires_at: now + STASH_DAYS * DAY
   }))
   await tx`insert into prizes ${tx(prizeIns as never)}`
+
+  /* 抽到高賞才通知。每抽一次都發通知會讓鈴鐺變成雜訊 ——
+     使用者剛剛才在開卡畫面上看過結果，重複告知一次沒有資訊量；
+     真正值得事後回頭看的是「我抽到了 LAST／A 賞」這種事。 */
+  const best = items.filter(i => i.tier === 'LAST' || i.tier === 'A')
+  if (best.length) {
+    const names = best.map(i => (i.card as { name?: string }).name ?? '卡片').join('、')
+    await notify({
+      userId, kind: 'draw',
+      title: best.some(i => i.tier === 'LAST') ? '抽到最後賞' : '抽到 A 賞',
+      body: `${names} 已經進到你的卡冊。`,
+      link: `/draw/${drawId}`, refId: drawId
+    }, tx)
+  }
 
   // 完抽 → sold_out
   const freeRows = await tx<{ free: string }[]>`

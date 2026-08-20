@@ -10,6 +10,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
+import { notify } from '../notify.js'
 import { walletOf } from '../money.js'
 import { PLATFORM_ID, depositFor, save, settle, sweep, toOrder } from '../orders-service.js'
 import { actionsFor, looksLikeTracking } from '../shared/escrow.js'
@@ -80,6 +81,13 @@ orders.post('/', async c => {
       if (l.prize_id) {
         await tx`update prizes set user_id = ${me}, status = 'stashed' where id = ${l.prize_id}`
       }
+      // 賣家不會一直盯著市場，卡賣掉了要主動告知
+      await notify({
+        userId: l.seller_id as string, kind: 'listing-sold',
+        title: '你的卡賣出了',
+        body: `「${(l.card as { name?: string }).name ?? '卡片'}」以 ${price.toLocaleString('zh-TW')} 點成交，點數已入帳。`,
+        link: '/me/wallet', refId: listingId
+      }, tx)
       return { order: null }
     }
 
@@ -101,6 +109,13 @@ orders.post('/', async c => {
       ) returning *
     `
     await tx`insert into idempotency (key, user_id, order_id) values (${idempotencyKey}, ${me}, ${id})`
+    // 需寄送的成交：賣家有 72 小時要出貨，這則通知是那個時限的起點
+    await notify({
+      userId: l.seller_id as string, kind: 'order',
+      title: '有人買了你的卡，該出貨了',
+      body: `「${(l.card as { name?: string }).name ?? '卡片'}」以 ${price.toLocaleString('zh-TW')} 點成交，請在 72 小時內寄出並填單號。`,
+      link: '/me/orders', refId: id
+    }, tx)
     return { order: toOrder(row as Record<string, unknown>) }
   })
 

@@ -9,6 +9,8 @@ import CertTag from '@/components/CertTag.vue'
 import { useWalletStore } from '@/stores/wallet'
 import { recycleQuote, RECYCLE_RATE } from '@/lib/recycle'
 import { track } from '@/lib/ga'
+import { share, shareUrl } from '@/lib/social'
+import { ApiError } from '@/lib/http'
 
 const wallet = useWalletStore()
 const prizes = ref<UserPrize[]>([])
@@ -80,6 +82,84 @@ async function doRecycle(p: UserPrize) {
     alert(e instanceof Error ? e.message : '回收失敗')
   }
 }
+
+/* ---- 公開卡冊 / 分享連結 ----
+   公開卡冊等於把持有內容攤開給任何拿到連結的人看（連鑑定編號都看得到），
+   而連結一旦貼進群組就收不回來。所以這一區的原則是：後果寫在動作旁邊，
+   不要藏進說明頁 —— 使用者按下開關前就該知道會被看到什麼。
+
+   收回的手段只有兩個，兩個都會讓舊網址立刻失效：關掉公開、或換一組新連結。
+   換連結是「分享錯對象」時唯一還能繼續分享給對的人的補救方式，
+   所以做成需要確認的動作，而不是一顆按了就換的按鈕。 */
+const shareOn = ref(false)
+const shareSlug = ref<string | null>(null)
+const shareBusy = ref(false)
+const shareErr = ref('')
+const copied = ref(false)
+const askRotate = ref(false)
+let copyTimer: ReturnType<typeof setTimeout> | undefined
+
+const shareLink = computed(() => (shareSlug.value ? shareUrl(shareSlug.value) : ''))
+
+onMounted(async () => {
+  try {
+    const s = await share.get()
+    shareOn.value = s.public
+    shareSlug.value = s.slug
+  } catch {
+    /* 讀不到分享設定就當作沒公開。這一區壞掉不該蓋掉卡冊本身，
+       所以不在這裡顯示錯誤 —— 真的要改設定時 set() 會再報一次 */
+  }
+})
+
+async function toggleShare() {
+  if (shareBusy.value) return
+  const next = !shareOn.value
+  shareBusy.value = true
+  shareErr.value = ''
+  askRotate.value = false
+  try {
+    const s = await share.set(next)
+    shareOn.value = s.public
+    shareSlug.value = s.slug
+    copied.value = false
+  } catch (e) {
+    shareErr.value = e instanceof ApiError ? e.message : '設定失敗，請稍後再試。'
+  } finally {
+    shareBusy.value = false
+  }
+}
+
+async function rotateLink() {
+  shareBusy.value = true
+  shareErr.value = ''
+  try {
+    // rotate=true：後端換一組新代號，舊網址當場失效
+    const s = await share.set(true, true)
+    shareOn.value = s.public
+    shareSlug.value = s.slug
+    askRotate.value = false
+    copied.value = false
+  } catch (e) {
+    shareErr.value = e instanceof ApiError ? e.message : '換連結失敗，請稍後再試。'
+  } finally {
+    shareBusy.value = false
+  }
+}
+
+async function copyLink() {
+  if (!shareLink.value) return
+  try {
+    await navigator.clipboard.writeText(shareLink.value)
+    copied.value = true
+    clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => { copied.value = false }, 2400)
+  } catch {
+    /* 非 HTTPS 或使用者拒絕權限時 clipboard 會直接 reject。
+       與其安靜地失敗，不如叫人自己長按複製 —— 網址本來就完整顯示在上面 */
+    shareErr.value = '這個瀏覽器不允許自動複製，請長按上面的網址手動複製。'
+  }
+}
 </script>
 
 <template>
@@ -104,6 +184,70 @@ async function doRecycle(p: UserPrize) {
           <strong>{{ bestCard.card.name }}</strong>
         </span>
       </div>
+    </section>
+
+    <!-- 公開卡冊：連結會被貼進群組，收不回來，所以每個動作的後果就寫在按鈕旁邊 -->
+    <section v-if="prizes.length" class="share card">
+      <div class="shareTop">
+        <div class="shareHead">
+          <strong class="shareTitle">公開卡冊</strong>
+          <p class="shareWhy">
+            打開之後，任何拿到連結的人<strong>不必登入、不必有帳號</strong>就能看到你卡冊裡的
+            每一張卡：卡名、賞別、參考價，以及 <strong>PSA / BGS 鑑定編號</strong>。
+            鑑定編號可以在鑑定機構官網反查，等於把這幾張卡的來歷一起公開。
+            你也不會知道誰看過。
+          </p>
+        </div>
+        <button
+          type="button" role="switch" :aria-checked="shareOn"
+          class="sw" :class="{ on: shareOn }"
+          :disabled="shareBusy"
+          @click="toggleShare"
+        >
+          <span class="track" aria-hidden="true"><span class="knob"></span></span>
+          <span class="sr-only">公開卡冊</span>
+        </button>
+      </div>
+
+      <div v-if="shareOn && shareLink" class="shareBody">
+        <div class="linkRow">
+          <span class="link mono">{{ shareLink }}</span>
+          <button type="button" class="btn sm" @click="copyLink">{{ copied ? '已複製' : '複製連結' }}</button>
+        </div>
+        <p v-if="copied" class="got" role="status">連結已複製，可以直接貼到 LINE 或訊息裡。</p>
+
+        <p class="warn">
+          把上面的開關關掉之後，這條連結會<strong>立刻失效</strong>：
+          已經分享出去的人再點，只會看到「這本卡冊已改成不公開」。
+        </p>
+
+        <div class="acts">
+          <RouterLink
+            class="btn sm"
+            :to="{ name: 'public-cardbook', params: { slug: shareSlug } }"
+          >預覽別人看到的樣子</RouterLink>
+          <button type="button" class="btn sm" :disabled="shareBusy" @click="askRotate = !askRotate">
+            換一組新連結
+          </button>
+        </div>
+
+        <!-- 換連結是不可逆的，跟回收一樣用行內確認：後果要跟按鈕在同一個畫面 -->
+        <div v-if="askRotate" class="confirm">
+          <p class="warn">
+            換新之後，<strong>現在這條舊連結會立刻失效</strong> ——
+            已經貼在群組、私訊裡的舊網址，任何人再點都只會看到「找不到卡冊」。
+            分享錯對象時，這是唯一能把卡冊收回來、又還能繼續分享給對的人的方法。
+          </p>
+          <div class="acts">
+            <button type="button" class="btn primary sm" :disabled="shareBusy" @click="rotateLink">
+              確認換新連結
+            </button>
+            <button type="button" class="btn sm" :disabled="shareBusy" @click="askRotate = false">取消</button>
+          </div>
+        </div>
+      </div>
+
+      <p v-if="shareErr" class="shareErr" role="alert">{{ shareErr }}</p>
     </section>
 
     <p class="muted note">寄存中的卡可合併出貨（省運費），寄存期限 90 天。</p>
@@ -219,6 +363,55 @@ async function doRecycle(p: UserPrize) {
   .ovBest { margin-left: 0; width: 100%; }
 }
 
+
+/* ---- 公開卡冊 ---- */
+.share { padding: 16px 18px; margin: 0 0 14px; display: grid; gap: 12px; }
+.shareTop { display: flex; align-items: flex-start; gap: 12px; }
+.shareHead { display: grid; gap: 5px; min-width: 0; }
+.shareTitle { font-size: 14px; }
+/* 這段警語不縮成灰字小號 —— 它是使用者決定要不要按開關的依據，
+   跟標題一樣要讀得下去 */
+.shareWhy { margin: 0; font-size: 12px; line-height: 1.65; color: var(--muted); }
+.shareWhy strong { color: var(--ink); font-weight: 600; }
+
+/* 開關本體 30px 高，但按鈕撐到 44px 觸控高度（touch.css 的門檻） */
+.sw {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 56px; height: 44px; padding: 0; border: 0; background: none; cursor: pointer;
+}
+.sw:disabled { opacity: .5; cursor: not-allowed; }
+.sw .track {
+  width: 52px; height: 30px; border-radius: var(--pill);
+  background: var(--surface-3); border: 1px solid var(--line);
+  position: relative; transition: background .18s, border-color .18s;
+}
+.sw .knob {
+  position: absolute; top: 3px; left: 3px; width: 22px; height: 22px;
+  border-radius: 50%; background: var(--muted);
+  transition: transform .18s, background .18s;
+}
+.sw.on .track { background: var(--accent); border-color: transparent; }
+.sw.on .knob { transform: translateX(22px); background: #fff; }
+.sw:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--pill); }
+
+.shareBody { display: grid; gap: 10px; }
+.linkRow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 8px 8px 14px;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px;
+}
+/* 網址整條顯示出來（不截斷成 …），使用者才能長按複製，也才看得出連結換過了 */
+.link { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.linkRow .btn { flex: none; }
+.shareErr { margin: 0; font-size: 12px; color: var(--danger); }
+.share .confirm { margin-top: 0; }
+
+@media (max-width: 720px) {
+  .share { padding: 14px; }
+  .shareWhy { font-size: 11.5px; }
+  /* 半寬螢幕塞不下「網址 + 按鈕」並排，網址換行後按鈕再撐滿一行 */
+  .linkRow { flex-direction: column; align-items: stretch; padding: 10px; gap: 8px; }
+}
 
 .page { padding-top: 36px; padding-bottom: 72px; }
 h1 { font-size: 22px; margin: 0 0 6px; }

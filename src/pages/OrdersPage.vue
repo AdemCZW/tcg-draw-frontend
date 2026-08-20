@@ -47,19 +47,27 @@ const roleOf = (o: Order) => (o.sellerId === 'me' ? 'seller' : 'buyer') as 'sell
 const canShip = computed(() => looksLikeTracking(tracking.value))
 
 const err = ref('')
+/* 送出中。這兩個動作都是不可逆的（出貨會啟動買家的驗收時鐘、申訴會把訂單
+   推進爭議狀態），手機上連點兩下就會送出兩次 —— 全域的連點守衛是保險絲，
+   這裡的旗標才是正解，而且它同時讓按鈕看得出「正在處理」。 */
+const busy = ref(false)
+
 async function doShip(o: Order) {
-  if (!canShip.value) return
+  if (!canShip.value || busy.value) return
   err.value = ''
+  busy.value = true
   try {
     // API 模式後端要出貨照；R2 直傳是下一階段，先給一個佔位 URL 讓流程走得通
     await store.ship(o.id, tracking.value.trim(), MOCK ? [] : ['https://placeholder.invalid/ship-photo'])
     shipFor.value = null
     tracking.value = ''
   } catch (e) { err.value = e instanceof Error ? e.message : '出貨失敗' }
+  finally { busy.value = false }
 }
 async function doDispute(o: Order) {
-  if (!canDispute()) return
+  if (!canDispute() || busy.value) return
   err.value = ''
+  busy.value = true
   try {
     await store.dispute(o.id, reason.value.trim() || '未說明', true, videoUrl.value.trim())
     disputeFor.value = null
@@ -67,6 +75,7 @@ async function doDispute(o: Order) {
     hasVideo.value = false
     videoUrl.value = ''
   } catch (e) { err.value = e instanceof Error ? e.message : '申訴送出失敗' }
+  finally { busy.value = false }
 }
 </script>
 
@@ -156,7 +165,7 @@ async function doDispute(o: Order) {
         <p class="hint">正式版會即時向物流查詢單號是否存在、交寄時間是否晚於訂單成立。目前只擋格式。</p>
         <div class="frow">
           <button type="button" class="btn sm" @click="shipFor = null">取消</button>
-          <button type="button" class="btn primary sm" :disabled="!canShip" @click="doShip(o)">確認出貨</button>
+          <button type="button" class="btn primary sm" :disabled="!canShip || busy" @click="doShip(o)">{{ busy ? '處理中…' : '確認出貨' }}</button>
         </div>
       </div>
 
@@ -177,7 +186,7 @@ async function doDispute(o: Order) {
         <p class="hint">沒有影片無法受理索賠 —— 買東西不強制錄影，但要申請退款必須附。</p>
         <div class="frow">
           <button type="button" class="btn sm" @click="disputeFor = null">取消</button>
-          <button type="button" class="btn primary sm" :disabled="!canDispute()" @click="doDispute(o)">送出申訴</button>
+          <button type="button" class="btn primary sm" :disabled="!canDispute() || busy" @click="doDispute(o)">{{ busy ? '處理中…' : '送出申訴' }}</button>
         </div>
       </div>
     </article>

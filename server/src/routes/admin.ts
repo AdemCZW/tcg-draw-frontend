@@ -11,6 +11,7 @@ import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { credit, walletOf } from '../money.js'
+import { notify } from '../notify.js'
 import { act } from './orders.js'
 import { PLATFORM_ID } from '../orders-service.js'
 
@@ -224,6 +225,12 @@ admin.post('/shipments/:id/status', async c => {
     // 卡片實際寄出後，它就不在保管庫了——之後上架只能走「需寄送」
     if (status === 'shipped') {
       await tx`update prizes set status = 'shipped' where id = any(${sh.prize_ids})`
+      await notify({
+        userId: sh.user_id as string, kind: 'shipment',
+        title: '你的卡已經寄出',
+        body: tracking ? `物流單號 ${tracking}` : '出貨單已寄出。',
+        link: '/me/cards', refId: id
+      }, tx)
     }
     return { ok: true }
   })

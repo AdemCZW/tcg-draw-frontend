@@ -41,9 +41,11 @@ async function login(handle: string, name: string) {
  * 這個檔案曾經因為這個原因產生過一次完全看不出來是測試工具問題的假警報。
  * 不需要 body 的 POST 呼叫時，一律明確傳 {}，不要省略第三個參數。
  */
-const call = (token: string, path: string, body?: unknown) =>
+const call = (token: string, path: string, body?: unknown, method?: 'GET' | 'POST' | 'PUT') =>
   fetch(`${base}${path}`, {
-    method: body === undefined ? 'GET' : 'POST',
+    // 沒指定 method 時沿用「有 body 就是 POST」的推斷（見上方說明）；
+    // PUT 的端點必須明寫，推斷不出來
+    method: method ?? (body === undefined ? 'GET' : 'POST'),
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) })
   })
@@ -314,6 +316,95 @@ async function run() {
     // 爭議裁決改走 admin 路由：理由是必填，因為它會實際移動點數且不可逆
     const noReason = await call(platform, '/v1/admin/disputes/o-nope/resolve', { to: 'buyer', note: 'x' })
     check('裁決理由太短 → 被擋', noReason.status === 400, `${noReason.status}`)
+  }
+
+  /* ---- 卡冊分享、交易邀約、通知 ----
+     這三件事是同一條動線：分享卡冊 → 別人看到想要 → 出價 → 我收到通知。
+     所以一起測，斷在哪一環都看得出來。 */
+  console.log('\n分享與交易邀約：')
+  {
+    // 沒公開之前，連結不該有效
+    const s0 = await json(await call(buyer, '/v1/social/cardbook/settings'))
+    check('卡冊預設不公開', s0.public === false)
+
+    const on = await json(await call(buyer, '/v1/social/cardbook/settings',
+      { public: true }, 'PUT'))
+    check('打開公開會拿到分享代號', on.public === true && typeof on.slug === 'string' && on.slug.length > 0)
+
+    // 公開頁不需要登入 —— 分享連結的意義就是給沒帳號的人看
+    const anon = await fetch(`${base}/v1/share/cardbook/${on.slug}`)
+    check('公開卡冊不用登入就看得到', anon.ok, `${anon.status}`)
+    const book = await json(anon)
+    check('公開卡冊帶出持有人與卡片', !!book.owner?.name && Array.isArray(book.prizes))
+    check('公開卡冊不外洩 user_id / email / 電話',
+      !JSON.stringify(book).includes('u-buyer') && !JSON.stringify(book).includes('@'))
+
+    // 關掉之後，已經流傳出去的連結要真的失效
+    await call(buyer, '/v1/social/cardbook/settings', { public: false }, 'PUT')
+    const closed = await fetch(`${base}/v1/share/cardbook/${on.slug}`)
+    check('關掉公開後舊連結立刻失效', closed.status === 403, `${closed.status}`)
+    await call(buyer, '/v1/social/cardbook/settings', { public: true }, 'PUT')
+
+    // 換代號：舊的失效、新的可用
+    const rot = await json(await call(buyer, '/v1/social/cardbook/settings',
+      { public: true, rotate: true }, 'PUT'))
+    check('換代號後拿到不一樣的代號', rot.slug !== on.slug)
+    check('舊代號失效', (await fetch(`${base}/v1/share/cardbook/${on.slug}`)).status === 404)
+    check('新代號可用', (await fetch(`${base}/v1/share/cardbook/${rot.slug}`)).ok)
+
+    // 賣家卡冊裡挑一張還在保管庫的卡，讓買家出價
+    const ownerBook = await json(await fetch(`${base}/v1/share/cardbook/${rot.slug}`))
+    const target = (ownerBook.prizes ?? []).find((p: { tradable: boolean }) => p.tradable)
+    if (!target) {
+      check('（跳過出價流程：卡冊裡沒有可交易的卡）', true)
+    } else {
+      const anonOffer = await fetch(`${base}/v1/social/trade-offers`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prizeId: target.id, points: 500 })
+      })
+      check('沒登入不能提出交易', anonOffer.status === 401, `${anonOffer.status}`)
+
+      const selfOffer = await call(buyer, '/v1/social/trade-offers', { prizeId: target.id, points: 500 })
+      check('不能對自己的卡出價', selfOffer.status === 409)
+
+      const made = await call(seller, '/v1/social/trade-offers',
+        { prizeId: target.id, points: 500, message: 'smoke 測試出價' })
+      check('登入後提得出交易', made.ok, `${made.status}`)
+      const { offerId } = await json(made)
+
+      const dup = await call(seller, '/v1/social/trade-offers', { prizeId: target.id, points: 600 })
+      check('同一張卡重複出價被擋', dup.status === 409)
+
+      // 對方收到通知了嗎
+      const sn = await json(await call(buyer, '/v1/social/notifications'))
+      check('卡冊持有人收到出價通知',
+        (sn.notifications ?? []).some((n: { kind: string; ref_id: string }) =>
+          n.kind === 'trade-offer' && n.ref_id === offerId))
+      check('未讀數大於零', sn.unread > 0)
+
+      // 成交：點數與卡片同時換手
+      const bBefore = (await json(await call(seller, '/v1/wallet'))).wallet.points
+      const acc = await call(buyer, `/v1/social/trade-offers/${offerId}/accept`, {})
+      check('持有人接受出價', acc.ok, `${acc.status}`)
+      const bAfter = (await json(await call(seller, '/v1/wallet'))).wallet.points
+      check('出價方被扣了出價的點數', bBefore - bAfter === 500, `${bBefore} → ${bAfter}`)
+
+      const takerBook = await json(await call(seller, '/v1/prizes'))
+      check('卡片過戶到出價方名下',
+        (takerBook.prizes ?? []).some((p: { id: string }) => p.id === target.id))
+
+      const again = await call(buyer, `/v1/social/trade-offers/${offerId}/accept`, {})
+      check('同一筆出價不能重複接受', again.status === 409)
+
+      const bn = await json(await call(seller, '/v1/social/notifications'))
+      check('出價方收到成交通知',
+        (bn.notifications ?? []).some((n: { kind: string; ref_id: string }) =>
+          n.kind === 'trade-result' && n.ref_id === offerId))
+
+      await call(seller, '/v1/social/notifications/read', {})
+      const after = await json(await call(seller, '/v1/social/notifications'))
+      check('全部已讀後未讀歸零', after.unread === 0)
+    }
   }
 
   console.log(`\n${pass} passed, ${fail} failed`)
