@@ -9,6 +9,7 @@
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import LoginMethods from '@/components/LoginMethods.vue'
 import { useWalletStore } from '@/stores/wallet'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { hapticsEnabled, hapticsSupported, setHaptics } from '@/lib/haptics'
@@ -105,6 +106,8 @@ const paths: Record<string, string> = {
         @click="toggleHaptics"
       ><span class="knob"></span></button>
     </div>
+
+    <LoginMethods />
 
     <button type="button" class="btn ghost logout" @click="logout">登出</button>
 
