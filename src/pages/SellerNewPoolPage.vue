@@ -155,33 +155,61 @@ async function submit() {
       <RouterLink :to="{ name: 'home' }" class="btn">先去逛逛</RouterLink>
     </div>
 
-    <!-- 還不是賣家：直接給申請表，不要給死路 -->
-    <div v-else-if="!canList" class="gate card">
-      <p class="big">先申請成為賣家</p>
-      <p class="muted">
-        平台不開放匿名上架 —— 開池等於向別人收錢，平台要知道收錢的是誰。
-        送出後由平台審核，通過才能開池。
-      </p>
+    <!-- 還不是賣家：直接給申請表，不要給死路。
+         不沿用 .gate —— 那個 class 是 text-align: center + justify-items: center，
+         給一段說明文字用剛好，塞進表單就變成標籤置中、輸入框不撐開、
+         身分那兩顆擠在中間看不出是可以選的。表單要自己的排版。 -->
+    <div v-else-if="!canList" class="apply card">
+      <header class="applyHead">
+        <h2>先申請成為賣家</h2>
+        <p>開池等於向別人收錢，平台要知道收錢的是誰。送出後由平台審核，通過才能開池。</p>
+      </header>
 
-      <div v-if="applyOk" class="muted okLine">申請已送出，審核結果會用站內通知告訴你。</div>
+      <p v-if="applyOk" class="okLine">申請已送出，審核結果會用站內通知告訴你。</p>
+
       <template v-else>
-        <label class="field">
-          <span>賣家名稱</span>
-          <input v-model="apply.name" type="text" placeholder="會顯示在池卡與訂單上">
+        <label class="af">
+          <span class="afLabel">賣家名稱<i>必填</i></span>
+          <input v-model="apply.name" type="text" placeholder="會顯示在池卡與訂單上" maxlength="30">
+          <span class="afHint">兩個字以上。之後買家在市場與訂單上看到的就是這個名字。</span>
         </label>
-        <span class="field-label">身分</span>
-        <div class="originRow">
-          <button type="button" class="mode-btn" :class="{ on: apply.origin === 'personal' }" @click="apply.origin = 'personal'">個人</button>
-          <button type="button" class="mode-btn" :class="{ on: apply.origin === 'merchant' }" @click="apply.origin = 'merchant'">商家</button>
+
+        <div class="af">
+          <span class="afLabel">身分</span>
+          <!-- 分段控制：兩顆等寬、選中的填色。原本是兩顆小膠囊擠在置中的一行，
+               看起來像兩個標籤而不是一組互斥選項 -->
+          <div class="seg" role="radiogroup" aria-label="身分">
+            <button
+              type="button" role="radio" :aria-checked="apply.origin === 'personal'"
+              class="segBtn" :class="{ on: apply.origin === 'personal' }"
+              @click="apply.origin = 'personal'"
+            >
+              個人
+              <small>自己的收藏</small>
+            </button>
+            <button
+              type="button" role="radio" :aria-checked="apply.origin === 'merchant'"
+              class="segBtn" :class="{ on: apply.origin === 'merchant' }"
+              @click="apply.origin = 'merchant'"
+            >
+              商家
+              <small>有店面或營業登記</small>
+            </button>
+          </div>
         </div>
-        <label class="field">
-          <span>簡介（選填）</span>
-          <input v-model="apply.bio" type="text" placeholder="例：主營朱紫系列鑑定卡">
+
+        <label class="af">
+          <span class="afLabel">簡介<i class="opt">選填</i></span>
+          <input v-model="apply.bio" type="text" placeholder="例：主營朱紫系列鑑定卡" maxlength="60">
         </label>
+
         <p v-if="applyErr" class="warnLine">{{ applyErr }}</p>
-        <button type="button" class="btn primary" :disabled="!canApply" @click="submitApply">
+
+        <button type="button" class="btn primary applyBtn" :disabled="!canApply" @click="submitApply">
           {{ applyBusy ? '送出中…' : '送出申請' }}
         </button>
+        <!-- 按鈕變灰時要講為什麼。使用者看到一顆按不動的鈕，第一個念頭是「壞了」 -->
+        <p v-if="!canApply && !applyBusy" class="afWhy">填好賣家名稱才能送出。</p>
       </template>
     </div>
 
@@ -308,6 +336,45 @@ async function submit() {
 </template>
 
 <style scoped>
+/* ---- 賣家申請表 ---- */
+.apply { padding: 20px; max-width: 460px; margin: 0 auto; }
+.applyHead { margin-bottom: 18px; }
+.applyHead h2 { font-size: 18px; margin: 0 0 6px; }
+.applyHead p { margin: 0; font-size: 13px; line-height: 1.75; color: var(--muted); }
+
+.af { display: block; margin-bottom: 16px; }
+.afLabel {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink); margin-bottom: 6px;
+}
+.afLabel i {
+  font-style: normal; font-size: 10.5px; font-weight: 700;
+  padding: 1px 6px; border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent);
+}
+.afLabel i.opt { background: var(--surface-3); color: var(--muted); }
+/* 輸入框撐滿。這一頁其他地方的 input 是在窄側欄裡，所以沒設寬度 —— 這裡要自己給 */
+.af input { width: 100%; padding: 11px 12px; font-size: 16px; border-radius: 10px; }
+.afHint { display: block; margin-top: 5px; font-size: 11.5px; line-height: 1.6; color: var(--faint); }
+
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.segBtn {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 11px 8px; min-width: 0;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface-2); color: var(--muted);
+  font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.segBtn small { font-size: 10.5px; font-weight: 400; }
+.segBtn.on {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: var(--accent); color: var(--accent);
+}
+
+.applyBtn { width: 100%; margin-top: 4px; }
+.afWhy { margin: 8px 0 0; font-size: 12px; color: var(--muted); text-align: center; }
+.okLine { font-size: 13.5px; line-height: 1.75; color: var(--ok); margin: 0; }
+
 .modeNote { font-size: 12.5px; line-height: 1.65; color: var(--muted); margin: 0 0 8px; }
 .mode-btn.off { opacity: .38; cursor: not-allowed; }
 
