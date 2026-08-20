@@ -39,7 +39,10 @@ const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, 
 
 /** 把該頁的 meta 塞進 </head> 之前。原本的 <title> 一併換掉，不要留兩個 */
 function inject(html, { path, title, description }) {
-  const url = origin + (path === '/' ? '/' : path)
+  /* 結尾要有斜線。GitHub Pages 會把 /market 用 301 導到 /market/
+     （目錄的正常行為），canonical 若指向沒有斜線的版本，等於告訴 Google
+     「正規網址是那個會轉址的」—— 自己跟自己打架。 */
+  const url = origin + (path === '/' ? '/' : path + '/')
   const full = path === '/' ? title : `${title} — ${site.name}`
   const tags = [
     `<meta name="description" content="${esc(description)}" />`,
@@ -107,7 +110,7 @@ const today = new Date().toISOString().slice(0, 10)
 await writeFile(join(dist, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${routes.map(r => `  <url>
-    <loc>${origin}${r.path === '/' ? '/' : r.path}</loc>
+    <loc>${origin}${r.path === '/' ? '/' : r.path + '/'}</loc>
     <lastmod>${today}</lastmod>
     <priority>${r.priority ?? '0.5'}</priority>
   </url>`).join('\n')}
