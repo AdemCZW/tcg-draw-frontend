@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api } from '@/lib/api'
-import type { UserPrize } from '@/types/models'
+import type { Tier, UserPrize } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 import Tilt3D from '@/components/Tilt3D.vue'
 import TierBadge from '@/components/TierBadge.vue'
 import CertTag from '@/components/CertTag.vue'
+import ValueCurve from '@/components/ValueCurve.vue'
 import { useWalletStore } from '@/stores/wallet'
 import { recycleQuote, RECYCLE_RATE } from '@/lib/recycle'
 import { track } from '@/lib/ga'
@@ -22,11 +23,35 @@ onMounted(async () => { prizes.value = await api.myPrizes() })
 /* ---- 收藏總覽 ----
    卡冊原本是一長串扁平清單，看不出「我收了多少、值多少」。
    對抽卡的人來說那是這一頁最想知道的事，所以拉到最上面。
-   已回收的不計入市值 —— 卡已經交還平台了，還算進總值是騙自己。 */
+   已回收的不計入市值 —— 卡已經交還平台了，還算進總值是騙自己。
+
+   排版上只認一件事：這一區有一個主角（收藏總值），其餘都是配角。
+   前一版把「持有 / 市值 / 最高價」三個並排成同樣份量的欄，於是三個都不是重點，
+   而且「持有 3 張」在 375px 底下被折成「持有 / 3 / 張」三行 ——
+   數字與單位被拆開就不再是一個量詞了。現在數字與單位鎖在同一個 inline 行內，
+   配角則降級成一行小字，靠層級而不是靠並排來分主次。 */
 const owned = computed(() => prizes.value.filter(p => p.status !== 'recycled'))
 const totalValue = computed(() => owned.value.reduce((s, p) => s + p.card.refPrice, 0))
 const bestCard = computed(() =>
   owned.value.reduce<UserPrize | null>((b, p) => (!b || p.card.refPrice > b.card.refPrice ? p : b), null))
+
+/* 賞別分佈。這是既有資料算得出來、又是別處看不到的一項 ——
+   狀態的分佈底下的分頁已經標了數字，再放一次只是重複。
+   賞別則只散落在每張卡的膠囊上，要自己數才知道「我這冊是靠一張 A 賞撐起來的
+   還是整體都不錯」。用一條堆疊條 + 一行圖例，佔不到 40px。 */
+const TIER_ORDER: Tier[] = ['A', 'B', 'C', 'D', 'LAST', 'BUST']
+const TIER_LABEL: Record<Tier, string> = {
+  A: 'A 賞', B: 'B 賞', C: 'C 賞', D: 'D 賞', LAST: '最後賞', BUST: '爆賞'
+}
+const tierMix = computed(() =>
+  TIER_ORDER
+    .map(t => ({ tier: t, n: owned.value.filter(p => p.tier === t).length }))
+    .filter(r => r.n > 0))
+/* 顏色只是「一眼看比例」的輔助，識別靠的是圖例上的文字。
+   賞別色是既有品牌權杖（TierBadge 一路用到底），D 賞刻意是灰的，
+   在色覺檢測下 C 賞與 D 賞的分離度偏低 —— 所以每一段都必須有文字圖例，
+   不能只靠顏色講話。也因此那條堆疊條對讀屏是 aria-hidden：
+   它講的事情圖例已經用文字講完，讀兩次只是噪音。 */
 
 /* ---- 狀態分頁 ----
    寄存中要出貨、待出貨要等、已出貨是歷史 —— 三種狀態的下一步動作完全不同，
@@ -45,12 +70,41 @@ const countOf = (k: Tab) => k === 'all' ? prizes.value.length : prizes.value.fil
 const tabs = computed(() => TABS.filter(t => countOf(t.k) > 0))
 const shown = computed(() => tab.value === 'all' ? prizes.value : prizes.value.filter(p => p.status === tab.value))
 
-const statusLabel: Record<UserPrize['status'], string> = {
+/* 卡圖上的膠囊放不下「市場販售中」五個字（兩欄格線下整張卡才 145px 寬），
+   而那裡本來就只需要回答「這張現在動不動得了」。
+   完整名稱留在上面的分頁 TABS，兩邊講的是同一件事 */
+const statusShort: Record<UserPrize['status'], string> = {
   stashed: '寄存中',
-  listed: '市場販售中',
+  listed: '販售中',
   ship_requested: '待出貨',
   shipped: '已出貨',
   recycled: '已回收'
+}
+
+/* ---- 一張卡佔多高 ----
+   前一版每張卡是「卡圖 + 賞別 + 狀態 + 卡名 + 鑑定 + 寄存期限 + 三顆通欄按鈕」
+   直式疊下來，375px 上單張 490px —— 比半個螢幕還高，六張要捲四個螢幕。
+   而且格線的列高由最高的那張決定，只有一張是寄存中時，其餘每張都陪著空 250px。
+
+   壓縮的原則是分兩類：
+   「隨時要看到的」＝ 賞別、狀態、卡名、市值 → 疊回卡圖上（卡圖本來就在，不額外佔高度）
+   「決定要不要動它時才需要的」＝ 鑑定編號、寄存期限、三個動作 → 收進展開區
+   一次只展開一張，收合時把該卡的定價表單與回收確認一起關掉，
+   否則下次展開會停在上次的半途，看起來像自己跳出來的。 */
+const openCard = ref<string | null>(null)
+/* wonAt 是帶時區的 ISO 字串，直接切前 10 碼會在 UTC+8 的深夜差一天。
+   解析不了就原樣回傳 —— 卡冊上少一個好看的日期，比顯示 Invalid Date 好。 */
+function wonDay(iso: string) {
+  const t = Date.parse(iso)
+  if (!Number.isFinite(t)) return iso
+  const d = new Date(t)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+function toggleCard(id: string) {
+  const next = openCard.value === id ? null : id
+  openCard.value = next
+  if (next !== id) { sellFor.value = null; confirming.value = null }
 }
 
 /* ---- 申請出貨 ----
@@ -279,24 +333,45 @@ async function copyLink() {
   <div class="container page">
     <h1>我的卡冊</h1>
 
-    <!-- 收藏總覽：這一頁最想被回答的問題就是「我收了多少、值多少」 -->
+    <!-- 收藏總覽：這一頁最想被回答的問題就是「我收了多少、值多少」。
+         一個主角（總值）+ 三個配角（張數、賞別分佈、最高價）+ 一張成長曲線 -->
     <section v-if="owned.length" class="overview card">
-      <div class="ovCell">
-        <span class="ovLabel">持有</span>
-        <strong class="ovNum mono">{{ owned.length }}</strong>
-        <span class="ovUnit">張</span>
+      <p class="ovLabel">收藏總值</p>
+      <div class="ovHero">
+        <!-- 數字與單位鎖在同一個 inline 盒子裡，永遠不會被折成兩行 -->
+        <p class="ovVal">
+          <strong class="ovNum">{{ totalValue.toLocaleString() }}</strong><span class="ovUnit">點</span>
+        </p>
+        <p class="ovHold">持有 <b class="mono">{{ owned.length }}</b> 張</p>
       </div>
-      <div class="ovCell">
-        <span class="ovLabel">市值合計</span>
-        <strong class="ovNum mono val">{{ totalValue.toLocaleString() }}</strong>
+
+      <!-- 賞別分佈。段與段之間留 2px 底色縫，不畫外框 —— 邊框是多餘的墨水。
+           只有一種賞別時整條都是同一色，那條長方形不含任何資訊，
+           下面那行圖例已經把話講完了，所以直接不畫 -->
+      <div v-if="tierMix.length > 1" class="mixBar" aria-hidden="true">
+        <span
+          v-for="m in tierMix" :key="m.tier"
+          class="seg" :class="`t-${m.tier.toLowerCase()}`"
+          :style="{ flexGrow: m.n }"
+        ></span>
       </div>
-      <div class="ovBest" v-if="bestCard">
-        <span class="ovLabel">最高價</span>
-        <span class="ovBestRow">
-          <TierBadge :tier="bestCard.tier" />
-          <strong>{{ bestCard.card.name }}</strong>
-        </span>
-      </div>
+      <ul class="mixKey">
+        <li v-for="m in tierMix" :key="m.tier">
+          <span class="kd" :class="`t-${m.tier.toLowerCase()}`" aria-hidden="true"></span>
+          {{ TIER_LABEL[m.tier] }}<b class="mono">{{ m.n }}</b><span class="sr-only">張</span>
+        </li>
+      </ul>
+
+      <!-- 只有一張卡時「最高價」就是總值本身，再列一次是廢話 -->
+      <p class="ovBest" v-if="bestCard && owned.length > 1">
+        <span class="bLabel">最高價</span>
+        <span class="kd" :class="`t-${bestCard.tier.toLowerCase()}`" aria-hidden="true"></span>
+        <span class="bName">{{ bestCard.card.name }}</span>
+        <span class="bVal mono">{{ bestCard.card.refPrice.toLocaleString() }}</span>
+      </p>
+
+      <!-- 成長曲線。放在總覽裡而不是另開一張卡：它回答的是同一個問題的時間版本 -->
+      <ValueCurve class="ovCurve" :prizes="owned" />
     </section>
 
     <!-- 公開卡冊：連結會被貼進群組，收不回來，所以每個動作的後果就寫在按鈕旁邊 -->
@@ -376,26 +451,51 @@ async function copyLink() {
         v-for="t in tabs" :key="t.k"
         type="button" role="tab" :aria-selected="tab === t.k"
         class="tab" :class="{ on: tab === t.k }"
-        @click="tab = t.k"
+        @click="tab = t.k; openCard = null"
       >{{ t.label }}<span class="tabN mono">{{ countOf(t.k) }}</span></button>
     </div>
 
     <div class="grid">
       <div v-for="p in shown" :key="p.id" class="item card" :class="{ dim: p.status === 'recycled' }">
-        <Tilt3D :max="14">
-          <CardArt :image="p.card.image" :alt="p.card.name" :tier="p.tier" :cert-no="p.card.certNo" :art-id="p.card.artId" :caption="`${p.card.setCode.toUpperCase()} · ${p.card.cardNo}`" />
+        <!-- 賞別、狀態、卡名、市值全部疊回卡圖上：卡圖本來就佔著這塊面積，
+             把字放上去等於不花額外高度。可讀性靠底部的漸層遮罩撐 -->
+        <Tilt3D :max="10" radius="12px">
+          <CardArt :image="p.card.image" :alt="p.card.name" :tier="p.tier" :cert-no="p.card.certNo" :art-id="p.card.artId" />
+          <div class="scrim">
+            <div class="sTags">
+              <TierBadge :tier="p.tier" />
+              <span class="sChip">{{ statusShort[p.status] }}</span>
+            </div>
+            <div class="sMain">
+              <strong class="sName">{{ p.card.name }}</strong>
+              <span class="sVal mono">{{ p.card.refPrice.toLocaleString() }}</span>
+            </div>
+          </div>
         </Tilt3D>
-        <div class="body">
-          <div class="row"><TierBadge :tier="p.tier" /><span class="chip">{{ statusLabel[p.status] }}</span></div>
-          <strong>{{ p.card.name }}</strong>
+
+        <p v-if="justRecycled?.id === p.id" class="got" role="status">
+          已入帳 <strong class="mono">+{{ justRecycled.points.toLocaleString() }}</strong> 點
+        </p>
+
+        <!-- 寄存中才有動作可做，收成一顆按鈕；其餘狀態只留一行取得日期，
+             讓每一列的高度不會被「有按鈕的那張」整列撐高 -->
+        <button
+          v-if="p.status === 'stashed'"
+          type="button" class="more" :class="{ on: openCard === p.id }"
+          :aria-expanded="openCard === p.id" :aria-label="`${p.card.name} 的操作`"
+          @click="toggleCard(p.id)"
+        >
+          <span>{{ openCard === p.id ? '收起' : '操作' }}</span>
+          <span class="chev" aria-hidden="true"></span>
+        </button>
+        <p v-else class="meta mono">取得 {{ wonDay(p.wonAt) }}</p>
+
+        <div v-if="openCard === p.id && p.status === 'stashed'" class="body">
+          <!-- 鑑定編號與寄存期限：決定要不要出貨／回收時才需要，所以收在這裡 -->
           <CertTag :card="p.card" />
-          <span class="mono muted exp" v-if="p.status === 'stashed'">寄存至 {{ p.stashExpiresAt }}</span>
+          <span class="mono muted exp">寄存至 {{ p.stashExpiresAt }}</span>
 
-          <p v-if="justRecycled?.id === p.id" class="got" role="status">
-            已入帳 <strong class="mono">+{{ justRecycled.points.toLocaleString() }}</strong> 點
-          </p>
-
-          <div class="acts" v-if="p.status === 'stashed'">
+          <div class="acts">
             <button class="btn primary sm" @click="openShip(p)">申請出貨</button>
             <button class="btn sm" @click="askSell(p)">上架出售</button>
             <button
@@ -408,7 +508,7 @@ async function copyLink() {
           </div>
 
           <!-- 上架表單。定價預設帶市值當錨點，但一定讓人改得動 —— 市值只是參考 -->
-          <div v-if="sellFor === p.id && p.status === 'stashed'" class="confirm">
+          <div v-if="sellFor === p.id" class="confirm">
             <label class="sellRow">
               <span>售價（點）</span>
               <input v-model.number="sellPrice" type="number" inputmode="numeric" min="1">
@@ -429,7 +529,7 @@ async function copyLink() {
           </div>
 
           <!-- 回收確認：不可逆，所以把報價與提現限制一次講完 -->
-          <div v-if="confirming === p.id && p.status === 'stashed'" class="confirm">
+          <div v-if="confirming === p.id" class="confirm">
             <dl class="quote">
               <div><dt>卡片市值</dt><dd class="mono">{{ p.card.refPrice.toLocaleString() }}</dd></div>
               <div><dt>回收率</dt><dd class="mono">{{ Math.round(RECYCLE_RATE * 100) }}%</dd></div>
@@ -547,22 +647,75 @@ async function copyLink() {
   box-shadow: 0 8px 28px #0007;
 }
 
-/* ---- 收藏總覽 ---- */
+/* ---- 收藏總覽 ----
+   底色維持純 var(--surface)，沒有漸層：曲線的端點靠一圈「底色描邊」跟線分離，
+   底下只要有漸層，那圈描邊就會在某個高度對不上底色而露出接縫。 */
 .overview {
-  display: flex; align-items: center; gap: 26px; flex-wrap: wrap;
+  display: grid; gap: 12px;
   padding: 16px 18px; margin: 14px 0 10px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 70%),
-    var(--surface);
 }
-.ovCell { display: grid; gap: 2px; }
-.ovLabel { font-size: 11.5px; color: var(--faint); letter-spacing: .04em; }
-.ovNum { font-size: 26px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; }
-.ovNum.val { color: var(--gold, #d8b25a); }
-.ovUnit { font-size: 11.5px; color: var(--muted); }
-.ovBest { display: grid; gap: 4px; margin-left: auto; min-width: 0; }
-.ovBestRow { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.ovBestRow strong { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ovLabel {
+  margin: 0; font-size: 11.5px; color: var(--faint); letter-spacing: .04em;
+}
+.ovHero { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: nowrap; }
+/* 主角數字。單位是行內元素、不換行，「53,380 點」永遠是一個量詞而不是兩段。
+   clamp 讓它在 320px 上自己縮到塞得下，不必等到折行才發現放不下 */
+.ovVal { margin: 0; white-space: nowrap; min-width: 0; }
+.ovNum {
+  font-size: clamp(25px, 7.6vw, 34px);
+  font-weight: 800; letter-spacing: -.025em; line-height: 1.05;
+  color: var(--gold-deep);
+  /* 大字用比例數字：tabular 會讓每個數字都佔 0 的寬度，整串看起來鬆散 */
+  font-variant-numeric: proportional-nums;
+}
+.ovUnit { margin-left: 4px; font-size: 12.5px; color: var(--muted); }
+.ovHold { margin: 0; flex: none; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.ovHold b { color: var(--ink); font-weight: 700; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+
+/* 賞別分佈條。2px 的縫是底色本身，不是描邊 —— 描邊會多一圈不是資料的墨水 */
+.mixBar {
+  display: flex; gap: 2px; height: 8px;
+  border-radius: var(--pill); overflow: hidden;
+  background: var(--surface);
+}
+.mixBar .seg { flex-basis: 0; min-width: 4px; }
+.seg.t-a { background: var(--tier-a); }
+.seg.t-b { background: var(--tier-b); }
+.seg.t-c { background: var(--tier-c); }
+.seg.t-d { background: var(--tier-d); }
+.seg.t-last { background: var(--tier-last); }
+.seg.t-bust { background: var(--ink); }
+
+/* 圖例才是識別的主要管道：C 賞的藍與 D 賞的灰在色覺檢測下分離度不足，
+   只靠顏色會有人分不出來，所以每一段都配文字 */
+.mixKey {
+  list-style: none; margin: -2px 0 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 4px 12px;
+  font-size: 11px; color: var(--muted);
+}
+.mixKey li { display: inline-flex; align-items: center; gap: 5px; }
+.mixKey b { font-weight: 600; color: var(--ink); margin-left: 3px; }
+.kd { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--tier-d); }
+.kd.t-a { background: var(--tier-a); }
+.kd.t-b { background: var(--tier-b); }
+.kd.t-c { background: var(--tier-c); }
+.kd.t-d { background: var(--tier-d); }
+.kd.t-last { background: var(--tier-last); }
+.kd.t-bust { background: var(--ink); }
+
+.ovBest {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  margin: 0; padding-top: 10px; border-top: 1px solid var(--line-soft);
+  font-size: 12.5px;
+}
+.bLabel { color: var(--faint); font-size: 11.5px; flex: none; }
+.bName {
+  color: var(--ink); font-weight: 600; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bVal { margin-left: auto; flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.ovCurve { padding-top: 10px; border-top: 1px solid var(--line-soft); }
 
 /* ---- 狀態分頁 ---- */
 .tabs {
@@ -586,9 +739,7 @@ async function copyLink() {
 @media (hover: hover) { .tab:not(.on):hover { color: var(--ink); border-color: var(--line); } }
 
 @media (max-width: 720px) {
-  .overview { gap: 18px; padding: 14px; }
-  .ovNum { font-size: 22px; }
-  .ovBest { margin-left: 0; width: 100%; }
+  .overview { padding: 14px; gap: 11px; }
 }
 
 
@@ -645,11 +796,72 @@ async function copyLink() {
 h1 { font-size: 22px; margin: 0 0 6px; }
 .note { font-size: 13px; margin: 0 0 22px; }
 .empty { padding: 40px; text-align: center; display: grid; gap: 12px; justify-items: center; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; }
-.item { padding: 12px; }
-.item.dim { opacity: .5; }
-.body { display: grid; gap: 8px; padding: 12px 4px 4px; justify-items: start; }
-.row { display: flex; gap: 8px; align-items: center; }
+/* align-items: start —— 沒有這行，整列的高度會被「展開中的那一張」拉高，
+   旁邊那些沒展開的卡就跟著長出一大塊空白（改版前每一列都在做這件事） */
+.grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px; align-items: start;
+}
+.item { padding: 8px; display: grid; gap: 8px; align-content: start; }
+.item.dim { opacity: .55; }
+
+/* ---- 疊在卡圖上的資訊 ----
+   卡圖是滿版彩色的：白字放在皮卡丘那種黃底上會整個消失。
+   底部鋪一層由透明轉深的遮罩，文字才有固定的對比可以依靠。
+   這幾個黑與白是「蓋在照片上的遮罩」不是介面表面色，兩套主題下卡圖都一樣亮，
+   所以刻意不走主題權杖 —— CardArt 自己的 .caption 也是同一個道理。
+   pointer-events: none 是必要的：不寫的話遮罩會吃掉 Tilt3D 的 pointermove，
+   手指滑過卡片下半部就不會傾斜。 */
+.scrim {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 28px 8px 8px;
+  display: grid; gap: 5px;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, .55) 38%, rgba(0, 0, 0, .88));
+  pointer-events: none;
+}
+.sTags { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.sTags :deep(.tier) { font-size: 10px; padding: 2px 8px; }
+.sChip {
+  font-size: 10px; font-weight: 600; line-height: 1.4;
+  padding: 2px 8px; border-radius: var(--pill);
+  color: #fff; background: rgba(255, 255, 255, .24);
+  white-space: nowrap;
+}
+.sMain { display: flex; align-items: baseline; gap: 6px; }
+.sName {
+  flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; line-height: 1.3;
+  color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .75);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sVal {
+  flex: none; font-size: 11px; color: rgba(255, 255, 255, .85);
+  font-variant-numeric: tabular-nums; text-shadow: 0 1px 3px rgba(0, 0, 0, .75);
+}
+
+/* ---- 展開鈕 ----
+   三顆通欄按鈕收成一顆。44px 是 touch.css 的觸控門檻，
+   在兩欄格線下這顆是整張卡唯一要按的東西，寧可給滿。 */
+.more {
+  width: 100%; min-height: 44px; padding: 0 10px;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  border: 1px solid var(--line); border-radius: var(--pill);
+  background: var(--surface-2); color: var(--ink);
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.more.on { background: var(--ink); color: var(--bg); border-color: transparent; }
+.more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chev {
+  width: 7px; height: 7px; flex: none;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform .18s;
+}
+.more.on .chev { transform: translateY(2px) rotate(-135deg); }
+/* 不能操作的卡沒有按鈕，改放取得日期 —— 剛好也是曲線圖上的橫軸 */
+.meta { margin: 0; min-height: 20px; display: flex; align-items: center; font-size: 11px; color: var(--faint); }
+
+.body { display: grid; gap: 8px; padding: 2px 2px 4px; justify-items: start; }
 strong { font-size: 14px; }
 .exp { font-size: 11.5px; }
 .acts { display: flex; gap: 8px; margin-top: 4px; }
@@ -688,11 +900,14 @@ strong { font-size: 14px; }
   .page { padding-top: 22px; padding-bottom: 40px; }
   h1 { font-size: 19px; }
   .note { font-size: 12px; margin: 0 0 16px; }
-  .grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
-  .item { padding: 8px; }
-  .body { gap: 6px; padding: 9px 2px 2px; }
-  .row { flex-wrap: wrap; gap: 5px; }
+  .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .item { padding: 6px; gap: 6px; }
+  .body { gap: 6px; padding: 2px 0 2px; }
   strong { font-size: 12.5px; line-height: 1.35; }
+  /* 半寬卡片只剩約 145px，卡名要再降一階才不會每一張都被截成「桃夕…」 */
+  .sName { font-size: 11.5px; }
+  .sVal { font-size: 10px; }
+  .scrim { padding: 24px 7px 7px; gap: 4px; }
   .exp { font-size: 10.5px; }
   /* 半寬放不下並排按鈕。grid 的水平拉伸要用 justify-self（align-self 是垂直軸） */
   .acts { flex-direction: column; justify-self: stretch; gap: 6px; }

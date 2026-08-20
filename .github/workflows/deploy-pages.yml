@@ -30,12 +30,11 @@ jobs:
       - run: npm run build:pages
         env:
           VITE_API_URL: ${{ vars.VITE_API_URL }}
-      # SPA 的深層連結退回。GitHub Pages 是靜態檔案伺服器，/design/smoke
-      # 這種路徑在磁碟上沒有對應檔案，直接開會吃 404 —— 只有從首頁點進去才會動，
-      # 因為那是 history.pushState 不是真的請求。
-      # Pages 找不到檔案時會送 404.html，把它做成 index.html 的複本，
-      # 應用程式就會照樣啟動，再由 vue-router 依網址決定顯示哪一頁。
-      - run: cp dist/index.html dist/404.html
+      # 404.html（SPA 深層連結的退回）現在由 scripts/seo.mjs 產生，
+      # build:pages 裡已經包含。這裡原本有一行 cp dist/index.html dist/404.html，
+      # 會把那份蓋掉 —— 連同它的 noindex 一起洗掉。
+      # 404.html 一定要 noindex：它是每一個不存在網址的內容，
+      # 被收錄等於在搜尋結果裡塞一堆重複頁。
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

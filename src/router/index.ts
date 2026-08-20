@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { applySeo } from '@/lib/seo'
 
 /**
  * 外框樣式。頁面自己宣告要不要全域的 header / 底部導覽 / 頁尾。
@@ -22,8 +23,6 @@ declare module 'vue-router' {
     title?: string
   }
 }
-
-const SITE = 'VAULT DRAW'
 
 export const router = createRouter({
   // 跟 vite.config.ts 的 base 同步，否則 GitHub Pages 的 /tcg-draw-frontend/
@@ -300,8 +299,12 @@ router.beforeResolve((to, from) => {
 })
 
 router.afterEach((to) => {
-  const t = to.meta.title
-  document.title = t ? `${t} — ${SITE}` : `${SITE} — 鑑定卡線上抽選`
+  /* 換頁後套 meta。SPA 換頁不會重載 HTML，meta 會停在上一頁 ——
+     這時候分享網址或被 Google 的 JS 渲染抓到，拿到的都是錯的。
+     私人頁（我的、後台、開卡結果、選籤）標 noindex：它們本來就要登入，
+     被收錄只會讓搜尋結果出現一堆導向登入頁的死連結。 */
+  const priv = !!to.meta.requiresAuth || !!to.meta.requiresAdmin
+  applySeo(to.fullPath, to.meta.title, !priv)
   // View Transition 在等新 DOM：下一個 tick 元件已掛上，通知它可以拍新畫面了
   if (vtSettle) { const done = vtSettle; vtSettle = null; setTimeout(done, 0) }
 })

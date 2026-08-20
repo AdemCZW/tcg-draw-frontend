@@ -69,11 +69,18 @@ admin.post('/sellers/:id/tier', async c => {
 /* ---- 使用者 ---- */
 admin.get('/users', async c => {
   const q = (c.req.query('q') ?? '').trim()
+  /* 會員編號是客服查人的主要依據，所以要好查：
+     打 VD-A3K7Q2、a3k7q2、甚至只記得後三碼都要找得到。
+     ilike 已經不分大小寫，再把使用者可能省略的 VD- 前綴補掉。 */
+  const bare = q.replace(/^vd-?/i, '')
   const rows = q
-    ? await sql`select id, handle, name, email, role, created_at from users
-                where handle ilike ${'%' + q + '%'} or name ilike ${'%' + q + '%'} or email ilike ${'%' + q + '%'}
+    ? await sql`select id, handle, member_no, name, email, role, created_at from users
+                where member_no ilike ${'%' + bare + '%'}
+                   or handle ilike ${'%' + q + '%'}
+                   or name ilike ${'%' + q + '%'}
+                   or email ilike ${'%' + q + '%'}
                 order by created_at desc limit 50`
-    : await sql`select id, handle, name, email, role, created_at from users order by created_at desc limit 50`
+    : await sql`select id, handle, member_no, name, email, role, created_at from users order by created_at desc limit 50`
   return c.json({ users: rows })
 })
 
@@ -245,7 +252,7 @@ admin.post('/shipments/:id/status', async c => {
 admin.get('/users/:id', async c => {
   const id = c.req.param('id') ?? ''
   const [u] = await sql`
-    select id, handle, name, email, role, created_at,
+    select id, handle, member_no, name, email, role, created_at,
            display_name, real_name, phone, address_zip, address_city, address_line1,
            to_char(birthday, 'YYYY-MM-DD') as birthday
     from users where id = ${id}

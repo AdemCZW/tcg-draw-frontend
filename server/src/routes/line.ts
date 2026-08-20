@@ -141,8 +141,15 @@ line.get('/callback', async c => {
     const [ex] = await tx`select user_id from auth_identities where provider = 'line' and provider_uid = ${sub} for update`
     if (ex) return ex.user_id as string
     const id = 'u-' + randomBytes(6).toString('hex')
-    const handle = 'VD-' + randomBytes(2).toString('hex').toUpperCase()
-    await tx`insert into users (id, handle, name) values (${id}, ${handle}, ${name})`
+    /* 會員編號由序列產生，結構上不可能撞號（見 008_member_no.sql）。
+       handle 直接沿用它 —— 原本 handle 是 randomBytes(2)，只有 65,536 種，
+       撞到就在這個交易裡拋錯變成 500，那個人永遠註冊不了。 */
+    const rows = await tx<{ member_no: string }[]>`
+      select member_no_of(nextval('member_seq')) as member_no
+    `
+    const memberNo = rows[0]!.member_no
+    await tx`insert into users (id, handle, member_no, name)
+             values (${id}, ${memberNo}, ${memberNo}, ${name})`
     await tx`insert into auth_identities (user_id, provider, provider_uid) values (${id}, 'line', ${sub})`
     return id
   })

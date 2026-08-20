@@ -236,6 +236,11 @@ h3 {
   .top { font-size: 10.5px; }
   .state { font-size: 10px; }
   .price { font-size: 14.5px; }
+  /* 320px 的兩欄格線下欄寬只剩約 139px，「1,280 點 / 抽」的「/ 抽」會掉到
+     第二行，價格看起來像被截斷。整串不換行，再把單位縮小讓它塞得下 —— 
+     寧可單位小一點，也不要一個看起來壞掉的價格 */
+  .price { white-space: nowrap; }
+  .price .per { font-size: .78em; }
   .per, .rest { font-size: 10px; }
   .mode-tag { top: 7px; left: 7px; transform: scale(.86); transform-origin: top left; }
   .origin-tag { top: 7px; right: 7px; transform: scale(.86); transform-origin: top right; }

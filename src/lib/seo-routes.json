@@ -1,0 +1,42 @@
+{
+  "site": {
+    "name": "VAULT DRAW",
+    "locale": "zh_TW",
+    "origin": "https://ademczw.github.io",
+    "base": "/tcg-draw-frontend",
+    "defaultTitle": "VAULT DRAW — 鑑定卡線上抽選",
+    "defaultDescription": "定量池鑑定卡線上抽選。籤序開賣前封存、開獎後可自行驗算；抽到的卡可在站內交易或申請寄送。"
+  },
+  "routes": [
+    {
+      "path": "/",
+      "title": "VAULT DRAW — 鑑定卡線上抽選",
+      "description": "定量池的鑑定卡抽選平台。每一池的籤序在開賣前就用雜湊封存，開獎後任何人都能在自己的瀏覽器重算驗證。",
+      "priority": "1.0"
+    },
+    {
+      "path": "/lobby",
+      "title": "抽選大廳",
+      "description": "看目前開放中的抽選池：官方池、商家池與個人開池，含每一池的獎品內容、剩餘籤數與還元率。",
+      "priority": "0.9"
+    },
+    {
+      "path": "/market",
+      "title": "卡片市場",
+      "description": "站內二級市場。點數先鎖在平台，賣家收不到；卡在保管庫的成交即完成過戶，需寄送的確認收貨後才放款。",
+      "priority": "0.8"
+    },
+    {
+      "path": "/fairness",
+      "title": "公平性驗證",
+      "description": "籤序怎麼封存、怎麼自己驗算。commit-reveal 加上第三方隨機源，開獎後可以在自己的瀏覽器重跑一次洗牌。",
+      "priority": "0.8"
+    },
+    {
+      "path": "/trade-protection",
+      "title": "交易保護機制",
+      "description": "從上架到買家收貨的每一步、各自的時限與該預防的風險：託管放款、出貨憑證、開箱影片與爭議裁決。",
+      "priority": "0.7"
+    }
+  ]
+}

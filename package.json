@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc -b && vite build",
-    "build:pages": "vue-tsc -b && GH_PAGES=true vite build && cp dist/index.html dist/404.html",
+    "build": "vue-tsc -b && vite build && node scripts/seo.mjs",
+    "build:pages": "vue-tsc -b && GH_PAGES=true vite build && GH_PAGES=true node scripts/seo.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

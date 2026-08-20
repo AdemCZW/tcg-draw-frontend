@@ -22,8 +22,12 @@ export async function issueToken(userId: string) {
 
 export async function ensureUser(handle: string, name: string) {
   const id = 'u-' + handle.toLowerCase()
+  /* 這條路是 dev-login 與 seed 用的，handle 刻意是寫死的測試名稱（buyer / seller
+     / platform），不要換成會員編號 —— 煙霧測試靠這些名字認帳號。
+     但會員編號還是要有，否則後台查不到這些帳號。 */
   await sql`
-    insert into users (id, handle, name) values (${id}, ${handle}, ${name})
+    insert into users (id, handle, member_no, name)
+    values (${id}, ${handle}, member_no_of(nextval('member_seq')), ${name})
     on conflict (handle) do nothing
   `
   return id

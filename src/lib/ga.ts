@@ -8,6 +8,7 @@ type GaEvent =
   | 'view_play'
   | 'view_lobby'
   | 'view_pool_list'
+  | 'lobby_only_official'
   | 'view_market'
   | 'market_buy_success'
   | 'view_pool_detail'

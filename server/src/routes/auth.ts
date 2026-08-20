@@ -48,16 +48,24 @@ auth.post('/register', async c => {
   }
 
   const id = 'u-' + randomBytes(6).toString('hex')
-  const handle = 'VD-' + randomBytes(2).toString('hex').toUpperCase()
+  /* 會員編號由序列產生（見 008_member_no.sql），handle 沿用它。
+     原本 handle 是 randomBytes(2) 只有 65,536 種，而下面的 catch 把所有唯一鍵
+     衝突都當成 email 重複 —— handle 撞號會讓一個 email 沒被註冊過的人
+     收到「這個 Email 已經註冊過」，而且他自己無解。現在 handle 不可能撞，
+     這個 catch 才真的只代表 email 重複。 */
+  const memberRows = await sql<{ member_no: string }[]>`
+    select member_no_of(nextval('member_seq')) as member_no
+  `
+  const memberNo = memberRows[0]!.member_no
   try {
-    await sql`insert into users (id, handle, name, email, password_hash)
-              values (${id}, ${handle}, ${name}, ${email.toLowerCase()}, ${await hash(password)})`
+    await sql`insert into users (id, handle, member_no, name, email, password_hash)
+              values (${id}, ${memberNo}, ${memberNo}, ${name}, ${email.toLowerCase()}, ${await hash(password)})`
   } catch {
     // 唯一索引衝突：這個 email 已經註冊過。不透露更多
     await bumpFail(regKeys)
     return c.json({ error: 'EMAIL_TAKEN', message: '這個 Email 已經註冊過' }, 409)
   }
-  return c.json({ token: await issueToken(id), userId: id, handle })
+  return c.json({ token: await issueToken(id), userId: id, handle: memberNo, memberNo })
 })
 
 const Login = z.object({ email: z.string().email(), password: z.string().min(1) })
@@ -163,14 +171,14 @@ const emptyToNull = (v: string | undefined) => (v === undefined || v === '' ? nu
 
 auth.get('/profile', requireAuth, async c => {
   const [u] = await sql`
-    select handle, name, display_name, real_name, phone,
+    select handle, member_no, name, display_name, real_name, phone,
            address_zip, address_city, address_line1,
            to_char(birthday, 'YYYY-MM-DD') as birthday
     from users where id = ${c.get('userId')}
   `
   if (!u) return c.json({ error: 'UNAUTHORIZED', message: '帳號不存在' }, 401)
   return c.json({ profile: {
-    handle: u.handle, name: u.name,
+    handle: u.handle, memberNo: u.member_no, name: u.name,
     displayName: u.display_name, realName: u.real_name, phone: u.phone,
     addressZip: u.address_zip, addressCity: u.address_city, addressLine1: u.address_line1,
     birthday: u.birthday
@@ -214,7 +222,7 @@ auth.put('/profile', requireAuth, async c => {
 })
 
 auth.get('/me', requireAuth, async c => {
-  const [u] = await sql`select id, handle, name, email, role from users where id = ${c.get('userId')}`
+  const [u] = await sql`select id, handle, member_no, name, email, role from users where id = ${c.get('userId')}`
   if (!u) return c.json({ error: 'UNAUTHORIZED', message: '帳號不存在' }, 401)
   const [s] = await sql`select id, tier, origin from sellers where id = ${u.id}`
   return c.json({ user: u, seller: s ?? null })

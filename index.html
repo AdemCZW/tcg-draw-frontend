@@ -11,6 +11,28 @@
          鑑定編號，誤點就跳出撥號確認，而且那些藍色底線也讓數字看起來像連結。 -->
     <meta name="format-detection" content="telephone=no" />
     <title>VAULT DRAW — 鑑定卡線上抽選</title>
+    <!-- 這一份是原始檔的預設值。建置後 scripts/seo.mjs 會替每一條路由
+         各產生一份 index.html 並換掉這些標籤 —— 爬蟲不執行 JS，
+         只看得到靜態的那一份，router 在執行期塞的 meta 對它們完全無效。 -->
+    <meta name="description" content="定量池鑑定卡線上抽選。籤序開賣前封存、開獎後可自行驗算；抽到的卡可在站內交易或申請寄送。" />
+    <meta name="theme-color" content="#17161a" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="VAULT DRAW" />
+    <meta property="og:locale" content="zh_TW" />
+
+    <!-- 結構化資料。搜尋結果裡的網站名稱與站內搜尋框靠它，
+         而且它是少數爬蟲一定讀得到、又不需要 SSR 的東西 -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "VAULT DRAW",
+        "alternateName": "VaultDraw 鑑定卡線上抽選",
+        "url": "https://ademczw.github.io/tcg-draw-frontend/",
+        "inLanguage": "zh-Hant-TW",
+        "description": "定量池鑑定卡線上抽選。籤序開賣前封存、開獎後可自行驗算。"
+      }
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <!-- 卡圖的來源。第一張卡要出現時才連的話，要先付 DNS + TLS 的錢；

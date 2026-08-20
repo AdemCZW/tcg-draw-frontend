@@ -21,6 +21,8 @@ export interface Overview {
 }
 export interface AdminUser {
   id: string; handle: string; name: string | null; email: string | null
+  /** 會員編號。客服查人的主要依據，舊帳號補號前可能是 null */
+  member_no: string | null
   role: string; created_at: string | number
 }
 export interface UserDetail {

@@ -65,7 +65,7 @@ const orderSide = (o: UserDetail['orders'][number]) => o.buyer_id === id.value ?
     <div class="c-head">
       <RouterLink class="c-btn" :to="{ name: 'console-users' }">← 會員</RouterLink>
       <h2 v-if="d">{{ d.user.name || d.user.handle }}</h2>
-      <span v-if="d" class="c-sub">{{ d.user.handle }}</span>
+      <span v-if="d" class="c-sub mono">{{ d.user.member_no || d.user.handle }}</span>
     </div>
 
     <p v-if="okMsg" class="c-ok">{{ okMsg }}</p>
@@ -85,6 +85,7 @@ const orderSide = (o: UserDetail['orders'][number]) => o.buyer_id === id.value ?
           <section class="c-card">
             <h3>身分</h3>
             <dl class="c-dl">
+              <dt>會員編號</dt><dd class="mono">{{ d.user.member_no || '（舊帳號未補號）' }}</dd>
               <dt>暱稱</dt><dd>{{ d.user.display_name || d.user.name || '—' }}</dd>
               <dt>Email</dt><dd>{{ d.user.email || '未綁定' }}</dd>
               <dt>登入</dt>

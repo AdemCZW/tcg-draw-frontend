@@ -17,7 +17,7 @@ import { http, ApiError } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
 
 interface Profile {
-  handle: string; name: string
+  handle: string; memberNo?: string | null; name: string
   displayName: string | null; realName: string | null; phone: string | null
   addressZip: string | null; addressCity: string | null; addressLine1: string | null
   birthday: string | null
@@ -32,6 +32,18 @@ const form = ref({
 })
 const handle = ref('')
 const loading = ref(true)
+const memberNo = ref('')
+const copiedNo = ref(false)
+async function copyMemberNo() {
+  const v = memberNo.value || handle.value
+  if (!v) return
+  try {
+    await navigator.clipboard.writeText(v)
+    copiedNo.value = true
+    setTimeout(() => { copiedNo.value = false }, 2000)
+  } catch { /* 剪貼簿被拒也沒關係，編號本來就看得到、也可以長按選取 */ }
+}
+
 const busy = ref(false)
 const err = ref('')
 const okMsg = ref('')
@@ -48,6 +60,7 @@ async function load() {
     const r = await http<{ profile: Profile }>('/v1/auth/profile')
     const p = r.profile
     handle.value = p.handle
+    memberNo.value = p.memberNo ?? ''
     form.value = {
       displayName: p.displayName ?? p.name ?? '',
       realName: p.realName ?? '', phone: p.phone ?? '',
@@ -84,10 +97,15 @@ onMounted(load)
   <div class="container page prof">
     <header class="head">
       <h1>會員資料</h1>
-      <p class="sub muted">
-        會員代號 <span class="mono">{{ handle || '—' }}</span> ——
-        這是別人在市場與得獎紀錄看到的代號，不會變動
-      </p>
+      <!-- 會員編號放在最上面而且可以一鍵複製：客服、出貨、爭議都靠它認人，
+           使用者被問到時要能立刻找得到、念得出來（編號刻意不含 I/L/O/U，
+           就是為了念的時候不會跟 1 和 0 搞混）。 -->
+      <button type="button" class="memberNo" @click="copyMemberNo">
+        <span class="lbl">會員編號</span>
+        <strong class="mono no">{{ memberNo || handle || '—' }}</strong>
+        <span class="act">{{ copiedNo ? '已複製' : '複製' }}</span>
+      </button>
+      <p class="sub muted">查詢訂單、出貨、客服都用這組編號，不會變動。</p>
     </header>
 
     <p v-if="MOCK" class="msg warn">展示模式沒有連後端，這頁的儲存不會生效。</p>
@@ -162,6 +180,22 @@ onMounted(load)
 </template>
 
 <style scoped>
+/* 會員編號：這頁最重要的一行，做成可點的複製鈕而不是一段小灰字 */
+.memberNo {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  margin: 4px 0 8px; padding: 11px 14px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface-2); color: var(--ink);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.memberNo:hover { background: var(--surface-3); }
+.memberNo .lbl { font-size: 12px; color: var(--muted); flex: none; }
+.memberNo .no {
+  flex: 1; min-width: 0; font-size: 17px; letter-spacing: .06em;
+  /* 編號要能長按選取複製 —— touch.css 的逃生門已經涵蓋 .mono，這裡不再壓制 */
+}
+.memberNo .act { flex: none; font-size: 12px; font-weight: 600; color: var(--accent); }
+
 .prof { padding-bottom: calc(48px + var(--safe-b)); max-width: 560px; }
 .head { margin-bottom: 16px; }
 h1 { font-size: 22px; margin: 0 0 6px; }

@@ -33,11 +33,11 @@ const open = (u: AdminUser) => router.push({ name: 'console-user', params: { id:
   <div>
     <div class="c-head">
       <h2>會員</h2>
-      <span class="c-sub">用代號、暱稱或 Email 搜尋</span>
+      <span class="c-sub">會員編號可以只打後幾碼，VD- 前綴可省略</span>
     </div>
 
     <form class="search" @submit.prevent="load">
-      <input v-model="q" class="c-in" placeholder="VD-62FB、adem、name@mail.com…">
+      <input v-model="q" class="c-in" placeholder="會員編號、暱稱或 Email">
       <button class="c-btn pri" type="submit" :disabled="loading">搜尋</button>
     </form>
 
@@ -49,7 +49,7 @@ const open = (u: AdminUser) => router.push({ name: 'console-user', params: { id:
       <div v-for="u in users" :key="u.id" class="c-row c-click" @click="open(u)">
         <div class="line">
           <span class="c-t">{{ u.name || '（未命名）' }}</span>
-          <span class="c-pill">{{ u.handle }}</span>
+          <span class="c-pill mono">{{ u.member_no || u.handle }}</span>
           <span v-if="u.role === 'admin'" class="c-pill go">管理員</span>
           <span class="c-m grow">{{ fmtTime(u.created_at) }} 加入</span>
         </div>
