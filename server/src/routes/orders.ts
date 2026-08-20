@@ -13,7 +13,7 @@ import { requireAuth } from '../auth.js'
 import { notify } from '../notify.js'
 import { walletOf } from '../money.js'
 import { PLATFORM_ID, depositFor, save, settle, sweep, toOrder } from '../orders-service.js'
-import { actionsFor, looksLikeTracking } from '../shared/escrow.js'
+import { actionsFor, validateTracking } from '../shared/escrow.js'
 import type { Order } from '../shared/domain.js'
 
 export const orders = new Hono()
@@ -153,7 +153,8 @@ export async function act(
 }
 
 const ShipBody = z.object({
-  tracking: z.string().min(8).max(24),
+  carrier: z.enum(['post', 'tcat', 'seven', 'family', 'hilife', 'shopee', 'other']),
+  tracking: z.string().min(6).max(24),
   photoUrls: z.array(z.string().url()).min(1, '出貨照至少一張，且需含可辨識的鑑定編號')
 })
 
@@ -162,18 +163,24 @@ orders.post('/:id/ship', async c => {
   const me = c.get('userId')
   const parsed = ShipBody.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return c.json(fail('BAD_REQUEST', parsed.error.issues[0]?.message ?? '參數不合法', 400), 400)
-  const { tracking } = parsed.data
+  const { carrier, tracking, photoUrls } = parsed.data
 
-  /* 這裡只驗格式。正式上線前必須改成真的打物流商 API：
-     確認單號存在、交寄時間晚於訂單成立、而且沒被其他訂單用過。
-     單號重複用會被 orders_tracking_uniq 唯一索引擋下，但那是最後一道，
-     不是第一道。 */
-  if (!looksLikeTracking(tracking)) {
-    return c.json(fail('BAD_TRACKING', '單號格式不正確'), 409)
-  }
+  /* 依物流商驗證，中華郵政那種有公開檢查碼規格的會真的驗檢查碼。
+     這是離線驗證 —— 擋得掉隨手編的號碼與打錯的字（實測單碼打錯抓到 98%），
+     但擋不掉「填一組別人的真單號」。要確認單號真的存在、交寄時間晚於訂單成立，
+     只能打物流商的 API，那需要跟各家申請帳號。
+     單號被別的訂單用過會被 orders_tracking_uniq 唯一索引擋下，那是最後一道。 */
+  const v = validateTracking(carrier, tracking)
+  if (!v.ok) return c.json(fail('BAD_TRACKING', v.reason ?? '單號格式不正確'), 409)
 
   const r = await act(me, c.req.param('id'), 'seller', 'ship',
-    o => ({ ...o, status: 'shipped', shippedAt: Date.now(), tracking }))
+    o => ({ ...o, status: 'shipped', shippedAt: Date.now(), tracking: tracking.trim().toUpperCase() }))
+  /* 出貨憑證另外寫。原本 photoUrls 收了卻直接丟掉 —— 平台要求賣家拍照存證，
+     然後把存證扔了，爭議發生時什麼都沒有。 */
+  if (!('error' in r)) {
+    await sql`update orders set carrier = ${carrier}, ship_photos = ${photoUrls as never}
+              where id = ${c.req.param('id')}`
+  }
   if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
   return c.json({ ...r, wallet: await walletOf(me) })
 })

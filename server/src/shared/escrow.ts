@@ -130,10 +130,91 @@ export function actionsFor(o: Order, role: 'buyer' | 'seller' | 'platform'): Act
 /**
  * 單號長相檢查。
  *
- * 真正該做的是打物流商的 API 確認單號存在、且交寄時間晚於訂單成立時間 ——
- * 光看格式擋不掉「填一組別人的舊單號」。這裡只做最低限度的格式擋，
- * 接上物流查詢之前，這個函式是佔位不是保護。
+ * 依物流商驗證單號。
+ *
+ * 原本只有一條 /^[A-Za-z0-9-]{8,24}$/ —— 什麼都收，連 ABCD1234 都算合法。
+ * 那條規則擋不住假單號，也擋不住**誠實賣家打錯字**，而打錯的後果一樣重：
+ * 訂單卡在運送中十四天，到期自動退款，買家的錢被鎖了兩週、賣家沒拿到錢、
+ * 貨其實已經寄出去了。所以這裡的第一個目的其實是防手誤，不是防詐騙。
+ *
+ * 中華郵政走萬國郵政聯盟的 S10 標準（2 英文字母 + 9 位數字 + 2 位國碼），
+ * 其中第 9 位數字是前 8 位的 mod-11 檢查碼 —— 這是有公開規格的，
+ * 隨手編一組數字幾乎不可能通過。其餘物流商的單號規則沒有公開的檢查碼演算法，
+ * 不要憑感覺發明一套，只驗字元集與長度，並在註解標明哪些是驗證過的、
+ * 哪些只是啟發式。
+ *
+ * 「其他」這個選項刻意保留寬鬆規則：我們沒有model到的物流商不該讓真的有寄貨的
+ * 賣家卡住。但訂單會記下 carrier，平台看得出這筆的單號沒有經過驗證。
+ *
+ * 這些都還是**離線**驗證。要確認「這組單號真的存在、而且交寄時間晚於訂單成立」
+ * 只能打物流商的 API，那需要跟各家申請帳號，是另一件事。
  */
+export type Carrier = 'post' | 'tcat' | 'seven' | 'family' | 'hilife' | 'shopee' | 'other'
+
+export const CARRIERS: { id: Carrier; label: string; hint: string }[] = [
+  { id: 'post',   label: '中華郵政',     hint: '例：RR123456785TW' },
+  { id: 'tcat',   label: '黑貓宅急便',   hint: '10 或 12 位數字' },
+  { id: 'seven',  label: '7-11 交貨便',  hint: '8～12 位數字' },
+  { id: 'family', label: '全家店到店',   hint: '10～12 位數字' },
+  { id: 'hilife', label: '萊爾富',       hint: '10～12 位數字' },
+  { id: 'shopee', label: '蝦皮店到店',   hint: '英數字混合' },
+  { id: 'other',  label: '其他',         hint: '單號不會被驗證' }
+]
+
+/**
+ * 萬國郵政聯盟 S10 的檢查碼。
+ * 前 8 位數字各乘權重 [8,6,4,2,3,5,9,7] 後加總，取 mod 11，
+ * 檢查碼 = 11 − 餘數；結果為 10 時記為 0、為 11 時記為 5。
+ */
+function s10CheckDigit(eight: string): number {
+  const w = [8, 6, 4, 2, 3, 5, 9, 7]
+  let sum = 0
+  for (let i = 0; i < 8; i++) sum += Number(eight[i]) * w[i]!
+  const r = 11 - (sum % 11)
+  return r === 10 ? 0 : r === 11 ? 5 : r
+}
+
+/** 驗證結果帶原因 —— 只回 false 的話畫面只能說「格式不正確」，使用者不知道錯在哪 */
+export function validateTracking(carrier: Carrier, raw: string): { ok: boolean; reason?: string } {
+  const s = raw.trim().toUpperCase()
+  if (!s) return { ok: false, reason: '請填單號' }
+
+  switch (carrier) {
+    case 'post': {
+      const m = /^([A-Z]{2})(\d{9})([A-Z]{2})$/.exec(s)
+      if (!m) return { ok: false, reason: '中華郵政單號是 2 個英文字母 + 9 位數字 + 2 位國碼，例如 RR123456785TW' }
+      const digits = m[2]!
+      if (s10CheckDigit(digits.slice(0, 8)) !== Number(digits[8])) {
+        return { ok: false, reason: '單號的檢查碼不對，請確認有沒有打錯字' }
+      }
+      return { ok: true }
+    }
+    case 'tcat':
+      return /^\d{10}$|^\d{12}$/.test(s)
+        ? { ok: true }
+        : { ok: false, reason: '黑貓的單號是 10 或 12 位數字' }
+    case 'seven':
+      return /^\d{8,12}$/.test(s)
+        ? { ok: true }
+        : { ok: false, reason: '7-11 交貨便的單號是 8～12 位數字' }
+    case 'family':
+    case 'hilife':
+      return /^\d{10,12}$/.test(s)
+        ? { ok: true }
+        : { ok: false, reason: '店到店的單號是 10～12 位數字' }
+    case 'shopee':
+      return /^[A-Z0-9]{10,20}$/.test(s)
+        ? { ok: true }
+        : { ok: false, reason: '蝦皮的單號是 10～20 位英數字' }
+    case 'other':
+      // 沒有 model 到的物流商：只做最低限度的字元檢查，不假裝驗證過
+      return /^[A-Z0-9-]{8,24}$/.test(s)
+        ? { ok: true }
+        : { ok: false, reason: '單號只能是英數字與連字號，長度 8～24' }
+  }
+}
+
+/** @deprecated 舊的純格式檢查。留著只為了不讓既有呼叫端一次全壞，新程式請用 validateTracking */
 export function looksLikeTracking(s: string): boolean {
   return /^[A-Za-z0-9-]{8,24}$/.test(s.trim())
 }

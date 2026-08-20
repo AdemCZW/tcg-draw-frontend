@@ -9,7 +9,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useOrdersStore } from '@/stores/orders'
 import { useWalletStore } from '@/stores/wallet'
-import { actionsFor, deadlineOf, DAY, HOUR, isOpen, looksLikeTracking, remainText, STATUS_TEXT } from '@/shared/escrow'
+import { actionsFor, deadlineOf, DAY, HOUR, isOpen, validateTracking, CARRIERS, remainText, STATUS_TEXT, type Carrier } from '@/shared/escrow'
 import type { Order } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 import { MOCK } from '@/lib/config'
@@ -44,12 +44,22 @@ const list = computed(() =>
   store.orders.filter(o => (tab.value === 'open' ? isOpen(o) : !isOpen(o)))
 )
 const roleOf = (o: Order) => (o.sellerId === 'me' ? 'seller' : 'buyer') as 'seller' | 'buyer'
-const canShip = computed(() => looksLikeTracking(tracking.value))
+const canShip = computed(() => validateTracking(carrier.value, tracking.value).ok)
 
 const err = ref('')
 /* 送出中。這兩個動作都是不可逆的（出貨會啟動買家的驗收時鐘、申訴會把訂單
    推進爭議狀態），手機上連點兩下就會送出兩次 —— 全域的連點守衛是保險絲，
    這裡的旗標才是正解，而且它同時讓按鈕看得出「正在處理」。 */
+const carrier = ref<Carrier>('post')
+/* 即時把驗證原因講出來，不要等按下去才說「格式不正確」——
+   賣家看不出哪裡錯，只會一直重打同一組。 */
+const trackErr = computed(() => {
+  const t = tracking.value.trim()
+  if (!t) return ''
+  const v = validateTracking(carrier.value, t)
+  return v.ok ? '' : (v.reason ?? '')
+})
+
 const busy = ref(false)
 
 async function doShip(o: Order) {
@@ -58,7 +68,7 @@ async function doShip(o: Order) {
   busy.value = true
   try {
     // API 模式後端要出貨照；R2 直傳是下一階段，先給一個佔位 URL 讓流程走得通
-    await store.ship(o.id, tracking.value.trim(), MOCK ? [] : ['https://placeholder.invalid/ship-photo'])
+    await store.ship(o.id, carrier.value, tracking.value.trim(), MOCK ? [] : ['https://placeholder.invalid/ship-photo'])
     shipFor.value = null
     tracking.value = ''
   } catch (e) { err.value = e instanceof Error ? e.message : '出貨失敗' }
@@ -159,10 +169,26 @@ async function doDispute(o: Order) {
       <!-- 出貨表單 -->
       <div v-if="shipFor === o.id" class="form">
         <label>
-          物流單號
-          <input v-model="tracking" type="text" placeholder="例如 ABC12345678" />
+          物流商
+          <select v-model="carrier">
+            <option v-for="c in CARRIERS" :key="c.id" :value="c.id">{{ c.label }}</option>
+          </select>
         </label>
-        <p class="hint">正式版會即時向物流查詢單號是否存在、交寄時間是否晚於訂單成立。目前只擋格式。</p>
+        <label>
+          物流單號
+          <input
+            v-model="tracking" type="text"
+            :placeholder="CARRIERS.find(c => c.id === carrier)?.hint"
+            :aria-invalid="!!trackErr"
+          />
+          <!-- 錯在哪要當場講。只說「格式不正確」的話賣家看不出問題，
+               只會一直重打同一組 -->
+          <span v-if="trackErr" class="warnLine">{{ trackErr }}</span>
+        </label>
+        <p class="hint">
+          中華郵政的單號會驗檢查碼（打錯字當場就知道）。其他物流商只驗長度與字元，
+          選「其他」則完全不驗。目前還沒有向物流商查詢單號是否真的存在。
+        </p>
         <div class="frow">
           <button type="button" class="btn sm" @click="shipFor = null">取消</button>
           <button type="button" class="btn primary sm" :disabled="!canShip || busy" @click="doShip(o)">{{ busy ? '處理中…' : '確認出貨' }}</button>
@@ -213,6 +239,13 @@ async function doDispute(o: Order) {
 </template>
 
 <style scoped>
+.warnLine { display: block; margin-top: 5px; font-size: 12.5px; line-height: 1.6; color: var(--warn, #fcd34d); }
+select {
+  padding: 10px 11px; font: inherit; font-size: 16px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--field, var(--surface-2)); color: var(--ink);
+}
+
 .head { margin-bottom: 14px; }
 h1 { font-size: 22px; margin: 0 0 4px; }
 .sub { font-size: 13px; margin: 0; }

@@ -101,23 +101,52 @@ async function run() {
   check('掛單賣掉後不能再買', !d1.ok && (await json(d1)).error === 'LISTING_TAKEN')
   check('重複的 idempotencyKey 不會爆炸', d2.status === d1.status)
 
+  const photo = ['https://example.com/a.jpg']
+
   // 買家不能替賣家出貨
   const wrongRole = await call(buyer, `/v1/orders/${order.id}/ship`,
-    { tracking: 'ABC12345678', photoUrls: ['https://example.com/a.jpg'] })
+    { carrier: 'other', tracking: 'ABC12345678', photoUrls: photo })
   check('買家不能替賣家出貨', wrongRole.status === 403, String(wrongRole.status))
 
-  // 單號驗證
-  const bad = await call(seller, `/v1/orders/${order.id}/ship`,
-    { tracking: 'BAD', photoUrls: ['https://example.com/a.jpg'] })
-  check('壞單號被擋', !bad.ok)
+  /* ---- 單號驗證 ----
+     中華郵政走萬國郵政聯盟的 S10：2 個英文字母 + 9 位數字 + 2 位國碼，
+     第 9 位是前 8 位的 mod-11 檢查碼。這幾條釘住「隨手編的過不了、
+     打錯一碼會被抓到」—— 後者其實比防詐騙更常派上用場，
+     誠實賣家打錯字的代價是訂單卡十四天然後自動退款。 */
+  const s10 = (eight: string) => {
+    const w = [8, 6, 4, 2, 3, 5, 9, 7]
+    let sum = 0
+    for (let i = 0; i < 8; i++) sum += Number(eight[i]) * w[i]!
+    const r = 11 - (sum % 11)
+    return eight + String(r === 10 ? 0 : r === 11 ? 5 : r)
+  }
+
+  const noCarrier = await call(seller, `/v1/orders/${order.id}/ship`,
+    { tracking: 'RR123456785TW', photoUrls: photo })
+  check('沒選物流商 → 被擋', noCarrier.status === 400, String(noCarrier.status))
+
+  const badDigit = await call(seller, `/v1/orders/${order.id}/ship`,
+    { carrier: 'post', tracking: 'RR' + s10('12345678').slice(0, 8) + '9TW', photoUrls: photo })
+  check('中華郵政：檢查碼不對的單號被擋', badDigit.status === 409, String(badDigit.status))
+
+  const wrongShape = await call(seller, `/v1/orders/${order.id}/ship`,
+    { carrier: 'tcat', tracking: 'ABCD1234', photoUrls: photo })
+  check('黑貓：非純數字被擋', wrongShape.status === 409)
+
+  const tooShort = await call(seller, `/v1/orders/${order.id}/ship`,
+    { carrier: 'other', tracking: 'X', photoUrls: photo })
+  check('「其他」仍然擋掉太短的單號', tooShort.status === 400 || tooShort.status === 409)
+
   const noPhoto = await call(seller, `/v1/orders/${order.id}/ship`,
-    { tracking: 'ABC12345678', photoUrls: [] })
+    { carrier: 'other', tracking: 'ABC12345678', photoUrls: [] })
   check('沒有出貨照被擋', !noPhoto.ok)
 
-  const tracking = 'SMOKE' + Date.now().toString(36).toUpperCase()
+  // 用一組真的算得出來的 S10 出貨，順便驗證正向路徑
+  const serial = String(Date.now() % 1e8).padStart(8, '0')
+  const tracking = 'RR' + s10(serial) + 'TW'
   const shipped = await call(seller, `/v1/orders/${order.id}/ship`,
-    { tracking, photoUrls: ['https://example.com/a.jpg'] })
-  check('賣家出貨成功', shipped.ok, await shipped.clone().text())
+    { carrier: 'post', tracking, photoUrls: photo })
+  check('檢查碼正確的中華郵政單號可以出貨', shipped.ok, await shipped.clone().text())
 
   // 還沒送達，買家不能確認收貨
   const early = await call(buyer, `/v1/orders/${order.id}/confirm`, {})

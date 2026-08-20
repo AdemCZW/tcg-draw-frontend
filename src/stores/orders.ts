@@ -11,7 +11,7 @@
  */
 import { defineStore } from 'pinia'
 import type { CardItem, Listing, Order } from '@/types/models'
-import { applyDeadlines, depositFor, isOpen, looksLikeTracking } from '@/shared/escrow'
+import { applyDeadlines, depositFor, isOpen, validateTracking, type Carrier } from '@/shared/escrow'
 import { useWalletStore } from '@/stores/wallet'
 import { MOCK } from '@/lib/config'
 import { http } from '@/lib/http'
@@ -170,15 +170,16 @@ export const useOrdersStore = defineStore('orders', {
      * 都必須受同一套約束。第一版只擋在按鈕上，直接呼叫 ship(id,'BAD')
      * 就進得去，訂單會帶著一個假單號變成運送中。
      */
-    async ship(id: string, tracking: string, photoUrls: string[] = []): Promise<boolean> {
+    async ship(id: string, carrier: Carrier, tracking: string, photoUrls: string[] = []): Promise<boolean> {
       if (!MOCK) {
-        await http(ORDER_ROUTES.ship(id), { method: 'POST', json: { tracking, photoUrls } })
+        await http(ORDER_ROUTES.ship(id), { method: 'POST', json: { carrier, tracking, photoUrls } })
         await this.sweep()
         return true
       }
       const o = this.orders.find(x => x.id === id)
       if (!o || o.status !== 'escrowed') return false
-      if (!looksLikeTracking(tracking)) return false
+      // mock 也走同一套驗證，不然只有正式環境才擋得到，開發時看不出規則
+      if (!validateTracking(carrier, tracking).ok) return false
       this.patch(id, { status: 'shipped', shippedAt: Date.now() + this.offset, tracking: tracking.trim() })
       return true
     },
