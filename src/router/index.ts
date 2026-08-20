@@ -155,10 +155,56 @@ export const router = createRouter({
       component: () => import('@/pages/ProfilePage.vue'),
       meta: { requiresAuth: true, depth: 2, title: '會員資料' }
     },
+    /* 後台：自己的外殼與子路由，不套前台的 header／底部導覽（chrome: 'none'）。
+       改成子路由而不是分頁狀態，是為了讓每一區有自己的網址 —— 客服要把
+       某個會員的檔案轉給別人接手時，能直接貼連結。 */
     {
-      path: '/admin', name: 'admin',
-      component: () => import('@/pages/AdminPage.vue'),
-      meta: { requiresAuth: true, requiresAdmin: true, depth: 1, title: '平台後台' }
+      path: '/admin',
+      component: () => import('@/pages/console/ConsoleShell.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true, chrome: 'none', depth: 1 },
+      children: [
+        { path: '', name: 'admin', redirect: { name: 'console-overview' } },
+        {
+          path: 'overview', name: 'console-overview',
+          component: () => import('@/pages/console/ConsoleOverview.vue'),
+          meta: { title: '後台總覽' }
+        },
+        {
+          path: 'shipments', name: 'console-shipments',
+          component: () => import('@/pages/console/ConsoleShipments.vue'),
+          meta: { title: '出貨' }
+        },
+        {
+          path: 'users', name: 'console-users',
+          component: () => import('@/pages/console/ConsoleUsers.vue'),
+          meta: { title: '會員' }
+        },
+        {
+          path: 'users/:id', name: 'console-user',
+          component: () => import('@/pages/console/ConsoleUserDetail.vue'),
+          meta: { title: '會員檔案' }
+        },
+        {
+          path: 'pools', name: 'console-pools',
+          component: () => import('@/pages/console/ConsolePools.vue'),
+          meta: { title: '池' }
+        },
+        {
+          path: 'sellers', name: 'console-sellers',
+          component: () => import('@/pages/console/ConsoleSellers.vue'),
+          meta: { title: '賣家審核' }
+        },
+        {
+          path: 'disputes', name: 'console-disputes',
+          component: () => import('@/pages/console/ConsoleDisputes.vue'),
+          meta: { title: '爭議' }
+        },
+        {
+          path: 'audit', name: 'console-audit',
+          component: () => import('@/pages/console/ConsoleAudit.vue'),
+          meta: { title: '稽核紀錄' }
+        }
+      ]
     },
     // 交易保護規格。不掛導覽列 —— 這頁是用連結分享出去給人看的，
     // 不是使用者日常會用的功能

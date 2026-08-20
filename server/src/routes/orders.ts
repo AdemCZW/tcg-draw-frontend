@@ -108,8 +108,10 @@ orders.post('/', async c => {
   return c.json({ ...result, wallet: await walletOf(me) })
 })
 
-/** 共用：在交易裡把訂單鎖起來、確認角色與動作合法 */
-async function act(
+/** 共用：在交易裡把訂單鎖起來、確認角色與動作合法。
+    admin 路由也用它裁決爭議 —— 規則只能有一份，複製一份到後台
+    等於之後改 escrow.ts 的時候會漏掉一邊。 */
+export async function act(
   meId: string, orderId: string, role: 'buyer' | 'seller' | 'platform',
   need: string, apply: (o: Order) => Order | { error: string; message: string; status: number }
 ) {

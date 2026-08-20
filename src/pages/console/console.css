@@ -1,0 +1,87 @@
+/**
+ * 後台共用樣式。不用 scoped：這些 class 要在八個頁面長得一模一樣，
+ * 各頁各自複製一份的結果就是三個月後它們慢慢長歪。
+ * 一律 c- 前綴，不會跟前台的樣式互相污染。
+ */
+
+.c-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.c-head h2 { font-size: 19px; margin: 0; }
+.c-head .c-sub { font-size: 12.5px; color: var(--muted); }
+.c-head .c-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+.c-card {
+  background: var(--surface); border: 1px solid var(--line-soft);
+  border-radius: 14px; padding: 14px; margin-bottom: 12px;
+}
+
+/* 資料列。桌機是表格、手機是卡片 —— 同一份 DOM，靠 grid 換排法，
+   不做兩套模板（兩套會有一套忘了更新）。 */
+.c-rows { display: flex; flex-direction: column; gap: 8px; }
+.c-row {
+  display: grid; gap: 4px 12px;
+  background: var(--surface); border: 1px solid var(--line-soft);
+  border-radius: 12px; padding: 12px 14px;
+}
+.c-row.c-click { cursor: pointer; }
+.c-row.c-click:hover { border-color: var(--line); background: var(--surface-2); }
+.c-row .c-t { font-size: 14px; font-weight: 600; }
+.c-row .c-m { font-size: 12.5px; color: var(--muted); }
+.c-row .c-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+
+/* 狀態徽章 */
+.c-pill {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; white-space: nowrap;
+  background: var(--surface-3); color: var(--muted);
+}
+.c-pill.wait { background: #78350f55; color: #fcd34d; }
+.c-pill.go   { background: #1e3a8a55; color: #93c5fd; }
+.c-pill.done { background: #14532d55; color: #86efac; }
+.c-pill.bad  { background: #7f1d1d55; color: #fca5a5; }
+
+/* 數字磚 */
+.c-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.c-stat {
+  background: var(--surface); border: 1px solid var(--line-soft);
+  border-radius: 14px; padding: 14px;
+}
+.c-stat .c-k { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+.c-stat .c-v { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.c-stat.alert { border-color: var(--gold); }
+.c-stat.alert .c-v { color: var(--gold); }
+
+/* 輸入 */
+.c-in {
+  width: 100%; padding: 10px 12px; font: inherit; font-size: 14px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--field, var(--surface-2)); color: var(--ink);
+}
+.c-in:focus { outline: none; border-color: var(--gold); }
+.c-lab { display: block; font-size: 12px; color: var(--muted); margin: 0 0 5px; }
+.c-field { margin-bottom: 10px; }
+
+.c-btn {
+  padding: 8px 13px; font: inherit; font-size: 13px; font-weight: 600;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface-2); color: var(--ink); cursor: pointer;
+}
+.c-btn:hover:not(:disabled) { background: var(--surface-3); }
+.c-btn:disabled { opacity: .45; cursor: not-allowed; }
+.c-btn.pri { background: var(--gold); border-color: var(--gold); color: #1a1410; }
+.c-btn.danger { background: #7f1d1d; border-color: #991b1b; color: #fecaca; }
+
+.c-empty { padding: 34px 16px; text-align: center; font-size: 13.5px; color: var(--muted); }
+.c-ok {
+  margin: 0 0 12px; padding: 10px 12px; border-radius: 10px;
+  background: #14532d55; color: #86efac; font-size: 13px;
+}
+.c-warn { font-size: 12.5px; color: #fcd34d; }
+
+/* 詳情頁的定義清單 */
+.c-dl { display: grid; grid-template-columns: 92px 1fr; gap: 6px 12px; font-size: 13.5px; }
+.c-dl dt { color: var(--muted); font-size: 12.5px; }
+.c-dl dd { margin: 0; word-break: break-all; }
+
+@media (min-width: 700px) {
+  .c-stats { grid-template-columns: repeat(4, 1fr); }
+}
