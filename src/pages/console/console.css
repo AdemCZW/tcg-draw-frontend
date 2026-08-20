@@ -18,7 +18,18 @@
    不做兩套模板（兩套會有一套忘了更新）。 */
 .c-rows { display: flex; flex-direction: column; gap: 8px; }
 .c-row {
-  display: grid; gap: 4px 12px;
+  /* 一定要明寫 minmax(0, 1fr)。省略 grid-template-columns 時隱含的欄是
+     auto，而 auto 的上界是 max-content —— 只要列裡有一段不能斷的長字串
+     （會員的 Email 最常見），整個軌道就跟著撐開，連帶把外面的 .console
+     一起撐爆。實測 320px 上 .c-row clientW 290 / scrollW 386，右邊的
+     加入日期整個跑到畫面外。 */
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px 12px;
+  /* minmax(0, …) 只讓軌道肯縮，字本身還是要能斷。後台列裡放的是 Email、
+     物流單號、訂單 ID 這種沒有空白可斷的機器字串，min-content 就等於整串
+     的寬度，欄再窄也壓不下去：實測 320px 上 .c-m clientW 262 / scrollW 372。
+     anywhere 只在「整個詞塞不下」時才斷，一般中文與短字不受影響。
+     （.c-dl dd 的 word-break: break-all 是同一個理由。） */
+  overflow-wrap: anywhere;
   background: var(--surface); border: 1px solid var(--line-soft);
   border-radius: 12px; padding: 12px 14px;
 }
@@ -34,19 +45,28 @@
   font-size: 11.5px; font-weight: 700; white-space: nowrap;
   background: var(--surface-3); color: var(--muted);
 }
-.c-pill.wait { background: #78350f55; color: #fcd34d; }
-.c-pill.go   { background: #1e3a8a55; color: #93c5fd; }
-.c-pill.done { background: #14532d55; color: #86efac; }
-.c-pill.bad  { background: #7f1d1d55; color: #fca5a5; }
+/* 走 tokens.css 的 wash / ink 權杖，不要寫死深色版的 hex。
+   原本這四行是 rgba 深色疊在底上，淺色主題會合成出淡粉彩，再配上
+   同樣很淡的字 —— 實測對比 1.01～1.29，四種狀態徽章全部讀不出來。 */
+.c-pill.wait { background: var(--warn-wash); color: var(--warn-ink); }
+.c-pill.go   { background: var(--info-wash); color: var(--info-ink); }
+.c-pill.done { background: var(--ok-wash); color: var(--ok-ink); }
+.c-pill.bad  { background: var(--danger-wash); color: var(--danger-ink); }
 
 /* 數字磚 */
-.c-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+/* minmax(0, …)：1fr 等同 minmax(auto, 1fr)，代管點數那種七位數字
+   （24px、800 粗體）的 max-content 會超過 320px 下每欄約 113px 的
+   可用寬度，於是自己撐開、把隔壁那塊擠扁。 */
+.c-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .c-stat {
   background: var(--surface); border: 1px solid var(--line-soft);
   border-radius: 14px; padding: 14px;
 }
 .c-stat .c-k { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
-.c-stat .c-v { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+/* 字級跟著視窗縮。代管點數是八位數加逗號，24px／800 粗體時要 121px，
+   但 320px 螢幕上兩欄的磚內寬只有 111px —— 數字會直接壓過磚的邊框。
+   數字磚的重點是「一眼看到多少」，寧可小一號也不要溢出。 */
+.c-stat .c-v { font-size: clamp(18px, 5.4vw, 24px); font-weight: 800; font-variant-numeric: tabular-nums; }
 .c-stat.alert { border-color: var(--gold); }
 .c-stat.alert .c-v { color: var(--gold); }
 
@@ -68,20 +88,26 @@
 .c-btn:hover:not(:disabled) { background: var(--surface-3); }
 .c-btn:disabled { opacity: .45; cursor: not-allowed; }
 .c-btn.pri { background: var(--gold); border-color: var(--gold); color: #1a1410; }
-.c-btn.danger { background: #7f1d1d; border-color: #991b1b; color: #fecaca; }
+.c-btn.danger { background: var(--danger-wash); border-color: var(--danger); color: var(--danger-ink); }
 
 .c-empty { padding: 34px 16px; text-align: center; font-size: 13.5px; color: var(--muted); }
 .c-ok {
   margin: 0 0 12px; padding: 10px 12px; border-radius: 10px;
-  background: #14532d55; color: #86efac; font-size: 13px;
+  background: var(--ok-wash); color: var(--ok-ink); font-size: 13px;
 }
-.c-warn { font-size: 12.5px; color: #fcd34d; }
+/* 錯誤橫幅。原本七個後台頁各自寫 class="c-ok" 再用 inline style 蓋成紅色，
+   同一串 hex 複製了七次而且一樣是深色專用。收成一個 class。 */
+.c-err {
+  margin: 0 0 12px; padding: 10px 12px; border-radius: 10px;
+  background: var(--danger-wash); color: var(--danger-ink); font-size: 13px;
+}
+.c-warn { font-size: 12.5px; color: var(--warn-ink); }
 
 /* 詳情頁的定義清單 */
-.c-dl { display: grid; grid-template-columns: 92px 1fr; gap: 6px 12px; font-size: 13.5px; }
+.c-dl { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px 12px; font-size: 13.5px; }
 .c-dl dt { color: var(--muted); font-size: 12.5px; }
 .c-dl dd { margin: 0; word-break: break-all; }
 
 @media (min-width: 700px) {
-  .c-stats { grid-template-columns: repeat(4, 1fr); }
+  .c-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }

@@ -69,12 +69,21 @@ const activeTab = computed(() => String(route.name))
     </header>
 
     <div class="layout">
-      <!-- 子頁：tab 之間淡入，鍵用 route.name 才不會每次 params 變都重播 -->
+      <!--
+        子頁刻意沒有轉場，理由跟 App.vue 拿掉全站換頁轉場完全一樣 ——
+        這裡是同一個 <Transition mode="out-in"> 漏掉沒改到的地方。
+
+        實測：在「總覽 / 獎項 / 驗證」之間切換時，網址與分頁標題都換了，
+        畫面卻停在上一個 tab（App.vue 註解裡的故障 3）。mode="out-in"
+        要等離場結束才讓新頁進場，而離場那一步靠 requestAnimationFrame
+        切 class，:duration 計時器保護不到它 —— rAF 一被節流（背景分頁、
+        iOS Safari 省電、系統忙碌）就永遠停在舊 tab。
+
+        :key 留著：params 換池時要重新建立子頁。
+      -->
       <div class="body">
         <RouterView v-slot="{ Component }">
-          <Transition name="tab" mode="out-in" :duration="{ enter: 180, leave: 120 }">
-            <component :is="Component" :key="route.name" :pool="pool" />
-          </Transition>
+          <component :is="Component" :key="route.name" :pool="pool" />
         </RouterView>
       </div>
 
@@ -141,11 +150,6 @@ h1 { font-size: 22px; margin: 0; letter-spacing: -.01em; }
 .done { padding: 20px; text-align: center; display: grid; gap: 10px; }
 .done p { margin: 0; }
 .done .fine { font-size: 12.5px; }
-
-/* tab 淡入 */
-.tab-enter-active, .tab-leave-active { transition: opacity .18s ease, transform .18s ease; }
-.tab-enter-from { opacity: 0; transform: translateY(6px); }
-.tab-leave-to { opacity: 0; }
 
 .skel { display: grid; gap: 12px; max-width: 520px; }
 .skel i { display: block; height: 18px; border-radius: 6px; background: var(--surface-2); }

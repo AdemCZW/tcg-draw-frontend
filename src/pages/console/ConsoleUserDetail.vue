@@ -69,7 +69,7 @@ const orderSide = (o: UserDetail['orders'][number]) => o.buyer_id === id.value ?
     </div>
 
     <p v-if="okMsg" class="c-ok">{{ okMsg }}</p>
-    <p v-if="err" class="c-ok" style="background:#7f1d1d55;color:#fca5a5">{{ err }}</p>
+    <p v-if="err" class="c-err">{{ err }}</p>
     <p v-if="loading && !d" class="c-empty">載入中…</p>
 
     <template v-if="d">
@@ -190,13 +190,18 @@ const orderSide = (o: UserDetail['orders'][number]) => o.buyer_id === id.value ?
 <style scoped>
 h3 { font-size: 14px; margin: 0 0 11px; display: flex; align-items: center; gap: 7px; }
 .c-stats { margin-bottom: 12px; }
-.cols { display: grid; gap: 12px; }
-@media (min-width: 900px) { .cols { grid-template-columns: 1fr 1fr; align-items: start; } }
+/* 兩段都要 minmax(0, …)：省略欄定義時隱含的欄是 auto，上界是 max-content，
+   會員檔案裡的 Email／地址／交易明細只要有一段不能斷就把欄撐開。實測 320px
+   上 .cols clientW 292 / scrollW 378，右邊的卡片被推出畫面。 */
+.cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+@media (min-width: 900px) { .cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; } }
 
 .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
 .list li { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-variant-numeric: tabular-nums; }
-.delta { font-weight: 700; font-variant-numeric: tabular-nums; color: #86efac; min-width: 74px; }
-.delta.neg { color: #fca5a5; }
+/* 走權杖。原本寫死的 #86efac / #fca5a5 是深色主題專用的淡綠淡紅，
+   在淺色主題的白底卡片上對比只有 1.5 左右，正負號分不出來。 */
+.delta { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ok-ink); min-width: 74px; }
+.delta.neg { color: var(--danger-ink); }
 </style>

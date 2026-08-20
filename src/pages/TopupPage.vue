@@ -54,7 +54,13 @@ function pay() {
 .page { padding-top: 40px; padding-bottom: 72px; max-width: 460px; }
 h1 { font-size: 22px; margin: 0 0 18px; }
 .box { padding: 22px; display: grid; gap: 14px; }
-.presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+/* 三處 min-width: 0 缺一不可，否則 320px 上這排會整個溢出到畫面外。
+   1fr 等同 minmax(auto, 1fr)，每一欄都壓不到比「3,000」這顆按鈕的
+   固有寬度更窄；而 .presets 自己是 .box（grid）的子元素，預設
+   min-width: auto 讓它也不肯縮。實測 320 螢幕上容器只有 278，
+   .presets 卻是 364，右邊直接被切掉 86px（連「3,000」整顆看不到）。 */
+.presets { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.presets .btn { min-width: 0; padding-inline: 4px; }
 .btn.on { border-color: var(--gold); color: var(--gold); }
 .lbl { font-size: 13px; color: var(--muted); }
 input {

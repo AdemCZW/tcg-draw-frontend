@@ -10,7 +10,7 @@ import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { walletOf } from '../money.js'
-import { commitPool, draw, openPool, revealPool } from '../pools-service.js'
+import { commitPool, draw, tryOpenPool, revealPool } from '../pools-service.js'
 
 export const pools = new Hono()
 
@@ -156,7 +156,7 @@ pools.post('/', requireAuth, async c => {
  */
 pools.post('/:id/open', requireAuth, async c => {
   try {
-    const opened = await sql.begin(tx => openPool(tx, pid(c)))
+    const opened = await tryOpenPool(pid(c))
     return c.json({ opened, message: opened ? '已開賣' : '外部亂數還沒到，稍後再試' })
   } catch (e) {
     return c.json({ error: 'WRONG_STATE', message: e instanceof Error ? e.message : '無法開池' }, 409)
@@ -213,6 +213,33 @@ const MSG: Record<string, string> = {
 }
 
 /** sold_out → revealed。賣家或平台都可以按 */
+/**
+ * open → cancelled（提前收攤）。
+ *
+ * 這條路原本不存在，而缺它的代價落在買家身上不是賣家：reveal 只接受
+ * sold_out，所以一個賣不完的池永遠不會揭曉 server_seed ——
+ * **已經在裡面抽過的人永遠無法驗證自己那一抽**。這個平台的賣點就是可驗證，
+ * 卻有一條路會讓它永遠驗不到。
+ *
+ * 收攤不需要退款：沒賣掉的籤本來就沒人付錢，已經抽過的人卡也拿到了。
+ * 收攤只是停止繼續賣，並讓揭曉變得可能。
+ */
+pools.post('/:id/close', requireAuth, async c => {
+  const me = c.get('userId')
+  const [p] = await sql`select seller_id, status from pools where id = ${pid(c)}`
+  if (!p) return c.json({ error: 'NOT_FOUND', message: '找不到這個池' }, 404)
+  const [u] = await sql`select role from users where id = ${me}`
+  if (p.seller_id !== me && u?.role !== 'admin') {
+    return c.json({ error: 'NOT_PARTY', message: '只有開池的賣家或平台可以收攤' }, 403)
+  }
+  if (p.status !== 'open') {
+    return c.json({ error: 'WRONG_STATE', message: `這個池目前是「${p.status}」，不能收攤` }, 409)
+  }
+  await sql`update pools set status = 'cancelled' where id = ${pid(c)}`
+  // 揭曉交給背景掃描 —— 它已經在處理 sold_out 與 cancelled 了
+  return c.json({ ok: true, message: '已收攤，稍後會自動揭曉並公開種子' })
+})
+
 pools.post('/:id/reveal', requireAuth, async c => {
   const me = c.get('userId')
   const [p] = await sql`select seller_id from pools where id = ${pid(c)}`

@@ -41,7 +41,7 @@ const open = (u: AdminUser) => router.push({ name: 'console-user', params: { id:
       <button class="c-btn pri" type="submit" :disabled="loading">搜尋</button>
     </form>
 
-    <p v-if="err" class="c-ok" style="background:#7f1d1d55;color:#fca5a5">{{ err }}</p>
+    <p v-if="err" class="c-err">{{ err }}</p>
     <p v-if="loading && !users.length" class="c-empty">載入中…</p>
     <p v-else-if="!users.length" class="c-empty">找不到符合的會員。</p>
 

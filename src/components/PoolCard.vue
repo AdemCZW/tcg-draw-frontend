@@ -164,7 +164,12 @@ function onLeave() {
 .body {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
   padding: 12px 12px 13px;
-  display: grid; gap: 6px;
+  /* 明寫 minmax(0, 1fr)。不寫的話隱含的欄是 auto，而 auto 的上界是
+     max-content —— h3 是 -webkit-box + line-clamp，它的 max-content 是
+     整串不換行的標題，於是整個軌道被撐寬。實測 320px 上 .body clientW 135
+     / scrollW 147，卡片本身 overflow: hidden，底下那排價格與「剩 n/N」
+     右邊 12px 就被切掉。minmax(0, …) 把上界壓回容器寬度。 */
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px;
   color: #fff;
 }
 /* 池標題是這張卡上最該先被讀到的東西，字級要壓過價格。
@@ -184,7 +189,12 @@ h3 {
 .meter { height: 4px; border-radius: var(--pill); background: rgba(255, 255, 255, .22); overflow: hidden; }
 .fill { height: 100%; border-radius: var(--pill); background: linear-gradient(90deg, var(--accent), var(--accent-soft)); }
 
-.foot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+/* 允許換行。價格與「剩 n/N」兩邊都是 white-space: nowrap（價格見下面
+   720px 區塊的說明），兩個都不肯縮的東西擺在同一條 flex 上，塞不下時就是
+   直接溢出：實測 320px 的兩欄格線下 .foot clientW 117 / scrollW 138，
+   .pool 是 overflow: hidden，「剩 37/80」的右邊 21px 被切掉。
+   換行之後擠不下的那一項自己掉到第二行，資訊完整。 */
+.foot { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; }
 .price { font-size: 17px; font-weight: 800; letter-spacing: -.01em; text-shadow: 0 2px 8px rgba(0, 0, 0, .7); }
 .per { font-size: 11px; font-weight: 400; opacity: .7; }
 .rest { font-size: 11px; opacity: .68; white-space: nowrap; }

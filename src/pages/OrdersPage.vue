@@ -35,10 +35,17 @@ onMounted(() => {
   store.load()
   timer = window.setInterval(() => store.sweep(), 60_000)
 })
-onUnmounted(() => clearInterval(timer))
 
 const now = ref(store.now())
-setInterval(() => { now.value = store.now() }, 1000)
+/* 這個每秒的計時器一定要跟著元件收掉。
+   之前它沒有被清掉，離開這一頁之後仍然每秒寫一次 now，而 now 是模板的
+   依賴 —— 等於持續替一個已經卸載的元件排重繪工作。Vue 去 patch 早就被
+   移除的節點，就在 renderer 裡炸開（parentNode of null、vnode is null），
+   而且是**整個 app 一起壞掉**：之後不管切到哪一頁，網址與標題都會變，
+   畫面卻永遠停在訂單頁。實測從 /me/orders 走到任何一頁都重現得到。 */
+let tick: number | undefined
+onMounted(() => { tick = window.setInterval(() => { now.value = store.now() }, 1000) })
+onUnmounted(() => { clearInterval(timer); clearInterval(tick) })
 
 const list = computed(() =>
   store.orders.filter(o => (tab.value === 'open' ? isOpen(o) : !isOpen(o)))

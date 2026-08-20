@@ -865,7 +865,11 @@ h1 { font-size: 22px; margin: 0 0 6px; }
   /* 見下方手機版的說明 */
   gap: 16px; align-items: start;
 }
-.item { padding: 8px; display: grid; gap: 8px; align-content: start; }
+/* minmax(0, 1fr)：省略欄定義時隱含的欄是 auto，上界是 max-content，
+   展開「操作」後裡面的鑑定編號膠囊（nowrap）就會把整張卡撐寬。
+   實測 320px 兩欄格線下 .item clientW 133 / scrollW 136，卡片邊框被
+   內容頂出去、壓到隔壁那張。 */
+.item { padding: 8px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; }
 .item.dim { opacity: .55; }
 
 /* ---- 疊在卡圖上的資訊 ----
@@ -878,7 +882,11 @@ h1 { font-size: 22px; margin: 0 0 6px; }
 .scrim {
   position: absolute; left: 0; right: 0; bottom: 0;
   padding: 28px 8px 8px;
-  display: grid; gap: 5px;
+  /* 明寫 minmax(0, 1fr)：省略時隱含的欄是 auto，上界等於 max-content，
+     .sMain 裡整串不換行的卡名就會把軌道撐開，.sName 的 ellipsis 根本
+     輪不到出場。實測 320px 上 .scrim clientW 121 / scrollW 124，卡片
+     overflow: hidden，右邊的賞別標籤與估價被切掉一角。 */
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px;
   background: linear-gradient(180deg, transparent, rgba(0, 0, 0, .55) 38%, rgba(0, 0, 0, .88));
   pointer-events: none;
 }
@@ -924,7 +932,7 @@ h1 { font-size: 22px; margin: 0 0 6px; }
 /* 不能操作的卡沒有按鈕，改放取得日期 —— 剛好也是曲線圖上的橫軸 */
 .meta { margin: 0; min-height: 20px; display: flex; align-items: center; font-size: 11px; color: var(--faint); }
 
-.body { display: grid; gap: 8px; padding: 2px 2px 4px; justify-items: start; }
+.body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 2px 2px 4px; justify-items: start; }  /* 同 .item 的理由 */
 strong { font-size: 14px; }
 .exp { font-size: 11.5px; }
 .acts { display: flex; gap: 8px; margin-top: 4px; }
@@ -975,6 +983,10 @@ strong { font-size: 14px; }
   .sVal { font-size: 10px; }
   .scrim { padding: 24px 7px 7px; gap: 4px; }
   .exp { font-size: 10.5px; }
+  /* 鑑定編號的膠囊是 white-space: nowrap，「PSA 10 #82345675」固有寬度
+     129.5px，但 320px 兩欄格線下卡片的內容區只有 121px —— 膠囊會直接
+     頂出卡片外緣。字級與左右內距各收一階就塞得下（實測 116px）。 */
+  .body :deep(.cert) { font-size: 10.5px; padding-inline: 8px; }
   /* 半寬放不下並排按鈕。grid 的水平拉伸要用 justify-self（align-self 是垂直軸） */
   .acts { flex-direction: column; justify-self: stretch; gap: 6px; }
   /* 只給卡片裡堆疊的那組動作鈕。原本寫成裸的 .btn.sm，於是 width: 100%

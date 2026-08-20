@@ -92,7 +92,7 @@ const isStale = (s: Shipment) => s.status === 'requested' && Date.now() - s.crea
     </div>
 
     <p v-if="okMsg" class="c-ok">{{ okMsg }}</p>
-    <p v-if="err" class="c-ok" style="background:#7f1d1d55;color:#fca5a5">{{ err }}</p>
+    <p v-if="err" class="c-err">{{ err }}</p>
 
     <p v-if="loading && !rows.length" class="c-empty">載入中…</p>
     <p v-else-if="!rows.length" class="c-empty">這個狀態下沒有出貨單。</p>

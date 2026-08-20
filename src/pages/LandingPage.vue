@@ -1008,8 +1008,11 @@ function goLine() {
   border-color: color-mix(in srgb, #cdbdf0 60%, transparent);
   background: color-mix(in srgb, #0b0716 75%, transparent);
 }
-/* 登入／註冊是一組對等選擇，等寬並列比上下排更快讀 */
-.formRow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* 登入／註冊是一組對等選擇，等寬並列比上下排更快讀。
+   minmax(0, …) 是預防性的：1fr 等同 minmax(auto, 1fr)，兩顆按鈕只要有一顆
+   的文字比欄寬長就會撐開自己、擠扁另一顆（.formRow 目前在展示版沒有掛上，
+   等 Email 表單接回來就會遇到）。 */
+.formRow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 
 .loginErr { margin: 12px 0 0; font-size: 13px; color: var(--danger); }
 .btn.big { padding: 14px 32px; font-size: 16px; }

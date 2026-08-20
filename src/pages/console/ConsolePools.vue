@@ -39,7 +39,7 @@ const pct = (p: Pool) => p.total_tickets ? Math.round(p.sold / p.total_tickets *
       </div>
     </div>
 
-    <p v-if="err" class="c-ok" style="background:#7f1d1d55;color:#fca5a5">{{ err }}</p>
+    <p v-if="err" class="c-err">{{ err }}</p>
     <p v-if="loading && !pools.length" class="c-empty">載入中…</p>
     <p v-else-if="!shown.length" class="c-empty">沒有符合的池。</p>
 

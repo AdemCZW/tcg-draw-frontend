@@ -62,7 +62,7 @@ const TIERS = ['pending', 'verified', 'trusted']
     </div>
 
     <p v-if="okMsg" class="c-ok">{{ okMsg }}</p>
-    <p v-if="err" class="c-ok" style="background:#7f1d1d55;color:#fca5a5">{{ err }}</p>
+    <p v-if="err" class="c-err">{{ err }}</p>
 
     <h3>證件文件</h3>
     <p v-if="!pending.length" class="c-empty">沒有待審核的文件。</p>

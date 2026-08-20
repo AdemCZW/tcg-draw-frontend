@@ -247,8 +247,13 @@ const liveText = computed(() => {
 .arrow:hover:not(:disabled) { background: var(--surface-3); }
 .arrow:disabled { opacity: .25; cursor: default; }
 .arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.prev { left: -6px; }
-.next { right: -6px; }
+/* 往內 6px，不是往外 -6px。SnapRail 是滿版元件（/play 的 .page 左右內距
+   是 0，讓卡片能貼邊捲動），所以「掛在軌道外面 6px」等於掛在視窗外面：
+   1280px 下實測 .prev left -6 / .next right 1286，兩顆圓鈕各被螢幕邊緣
+   切掉 6px。擺在軌道內側同樣壓在旁邊那張變暗的卡上，是輪播常見的樣子，
+   而且不管外層有沒有內距都成立。 */
+.prev { left: 6px; }
+.next { right: 6px; }
 @container (min-width: 860px) {
   .arrow { display: grid; place-items: center; }
 }

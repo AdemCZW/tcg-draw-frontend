@@ -136,7 +136,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
   display: flex; align-items: center; gap: 7px;
   font-size: 12px; color: var(--muted); margin: 0 0 10px; padding: 0 10px;
 }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: #4ade80; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
 
 .nav {
   display: flex; align-items: center; gap: 10px; width: 100%;
@@ -158,7 +158,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 }
 .err {
   margin: 0 0 12px; padding: 10px 12px; border-radius: 10px;
-  background: #7f1d1d33; color: #fca5a5; font-size: 13px;
+  background: var(--danger-wash); color: var(--danger-ink); font-size: 13px;
 }
 
 /* 桌機：側欄常駐，主內容讓開。到這個寬度表格才放得下多欄 */

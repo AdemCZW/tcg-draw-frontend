@@ -48,7 +48,7 @@ const payloadOf = (p: unknown) => {
 
     <input v-model="q" class="c-in" placeholder="用動作、對象或理由過濾…" style="margin-bottom:14px">
 
-    <p v-if="err" class="c-ok" style="background:#7f1d1d55;color:#fca5a5">{{ err }}</p>
+    <p v-if="err" class="c-err">{{ err }}</p>
     <p v-if="loading && !rows.length" class="c-empty">載入中…</p>
     <p v-else-if="!shown.length" class="c-empty">沒有符合的紀錄。</p>
 

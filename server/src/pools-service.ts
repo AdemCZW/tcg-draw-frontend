@@ -10,6 +10,7 @@
 import { randomBytes } from 'node:crypto'
 import { bytesToHex, commitOf, seatSequence } from './shared/fairness.js'
 import type { Tx } from './db.js'
+import { sql as sqlRoot } from './db.js'
 import { credit } from './money.js'
 import { notify } from './notify.js'
 
@@ -26,8 +27,16 @@ const DRAND = 'https://api.drand.sh'
 const DRAND_PERIOD_S = 30
 const FUTURE_ROUNDS = 4  // 大約兩分鐘後。太近會撞到「commit 那一刻 round 已經出了」
 
+/* 對外部服務的請求一律給逾時。沒有逾時的 fetch 在 Node 會等到 TCP 自己放棄，
+   而 openPool 曾經是在交易裡呼叫它的 —— drand 一慢，那筆交易就抓著
+   FOR UPDATE 的鎖不放，整個池被卡住。現在改在交易外先抓（見 tryOpenPool），
+   逾時仍然要有：這是對外部相依的基本防護。 */
+const DRAND_TIMEOUT_MS = 6000
+const drandFetch = (path: string) =>
+  fetch(`${DRAND}${path}`, { signal: AbortSignal.timeout(DRAND_TIMEOUT_MS) })
+
 export async function reserveClientSeedSource(): Promise<string> {
-  const r = await fetch(`${DRAND}/public/latest`)
+  const r = await drandFetch('/public/latest')
   if (!r.ok) throw new Error(`drand latest ${r.status}`)
   const { round } = (await r.json()) as { round: number }
   return `drand:${round + FUTURE_ROUNDS}`
@@ -37,7 +46,7 @@ export async function reserveClientSeedSource(): Promise<string> {
 export async function fetchClientSeed(source: string): Promise<string | null> {
   const m = /^drand:(\d+)$/.exec(source)
   if (!m) throw new Error(`unknown client seed source: ${source}`)
-  const r = await fetch(`${DRAND}/public/${m[1]}`)
+  const r = await drandFetch(`/public/${m[1]}`)
   if (r.status === 404) return null
   if (!r.ok) throw new Error(`drand round ${m[1]} ${r.status}`)
   const { randomness } = (await r.json()) as { randomness: string }
@@ -73,13 +82,17 @@ export async function commitPool(tx: Tx, poolId: string) {
  * committed → open。拿到 client_seed、算籤序、寫滿 pool_seats。
  * 回 false 表示 drand 的 round 還沒到，晚點再試。
  */
-export async function openPool(tx: Tx, poolId: string): Promise<boolean> {
+/**
+ * committed → open。**clientSeed 必須由呼叫端在交易外先取得**。
+ *
+ * 原本是在這個交易裡直接 fetch drand：那表示一筆持有 FOR UPDATE 鎖的交易
+ * 中途要等一個外部 HTTP 回應，drand 一慢整個池就被鎖住。
+ * 交易裡不要做外部 I/O —— 用 tryOpenPool() 這個包裝，它會先抓再開交易。
+ */
+export async function openPool(tx: Tx, poolId: string, clientSeed: string): Promise<boolean> {
   const [p] = await tx`select * from pools where id = ${poolId} for update`
   if (!p) throw new Error('pool not found')
   if (p.status !== 'committed') throw new Error(`pool is ${p.status}, not committed`)
-
-  const clientSeed = await fetchClientSeed(p.client_seed_source as string)
-  if (!clientSeed) return false
 
   const prizes = await tx<{ id: string; total: number }[]>`
     select id, total from pool_prizes where pool_id = ${poolId}
@@ -183,6 +196,77 @@ export async function draw(
   if (Number(freeRows[0]?.free ?? 0) === 0) await tx`update pools set status = 'sold_out' where id = ${poolId}`
 
   return { ok: true, drawId, items, cost }
+}
+
+/**
+ * 開池的正確入口：先在交易外跟 drand 拿值，拿到才開交易。
+ *
+ * 回傳 false 代表「那一輪的亂數還沒出現」—— 這不是錯誤，是還沒到時間，
+ * 呼叫端（背景掃描）稍後會再試一次。
+ */
+export async function tryOpenPool(poolId: string): Promise<boolean> {
+  /* 不收 db 參數：這支自己會開交易，如果呼叫端傳進一個現有交易，
+     就會變成交易裡開交易。直接用 root 連線，型別上就不可能誤用。 */
+  const [p] = await sqlRoot`select status, client_seed_source from pools where id = ${poolId}`
+  if (!p) throw new Error('pool not found')
+  if (p.status !== 'committed') throw new Error(`pool is ${p.status}, not committed`)
+
+  const clientSeed = await fetchClientSeed(p.client_seed_source as string)
+  if (!clientSeed) return false
+
+  // 交易裡會再鎖一次並重新確認狀態 —— 上面那次讀沒有鎖，中間可能有人先開了
+  return sqlRoot.begin(tx => openPool(tx, poolId, clientSeed))
+}
+
+/**
+ * 背景推進池的生命週期。
+ *
+ * 為什麼需要：commited → open → sold_out → revealed 這條鏈，中間兩步
+ * （開賣、揭曉）原本只有 HTTP 端點、**前端完全沒有任何地方呼叫**，
+ * 背景掃描也只掃訂單不掃池。結果是：
+ *   - 賣家建好的池永遠停在 committed，不會開賣
+ *   - 售完的池永遠停在 sold_out，server_seed 不公開，
+ *     公平性驗證因此永遠跑不到 —— 而那是這個平台的核心賣點
+ *
+ * 開池不需要權限（結果由已承諾的種子與 drand 決定，呼叫者影響不了），
+ * 所以交給伺服器自己推進是最自然的做法。
+ *
+ * 每輪限量處理：每個 committed 的池都要打一次 drand，池一多會拖慢整輪掃描。
+ */
+const SWEEP_LIMIT = 20
+
+export async function sweepPools(): Promise<{ opened: number; revealed: number }> {
+  let opened = 0
+  let revealed = 0
+
+  const committed = await sqlRoot<{ id: string }[]>`
+    select id from pools where status = 'committed' order by created_at limit ${SWEEP_LIMIT}
+  `
+  for (const p of committed) {
+    try {
+      // false 代表那一輪的 drand 還沒出現 —— 不是錯誤，下一輪再試
+      if (await tryOpenPool(p.id)) opened++
+    } catch (e) {
+      console.error(`[pools] 開池失敗 ${p.id}:`, (e as Error).message)
+    }
+  }
+
+  /* cancelled 也要揭曉：提前收攤的池，已經抽過的人一樣有權驗證自己那一抽。
+     revealPool 本來就接受這兩種狀態。 */
+  const soldOut = await sqlRoot<{ id: string }[]>`
+    select id from pools where status in ('sold_out', 'cancelled')
+    order by created_at limit ${SWEEP_LIMIT}
+  `
+  for (const p of soldOut) {
+    try {
+      await sqlRoot.begin(tx => revealPool(tx, p.id))
+      revealed++
+    } catch (e) {
+      console.error(`[pools] 揭曉失敗 ${p.id}:`, (e as Error).message)
+    }
+  }
+
+  return { opened, revealed }
 }
 
 /** sold_out → revealed。從此 server_seed 可以公開 */

@@ -69,6 +69,15 @@
   --warn-wash: #2a2114;
   --danger-wash: #2c1614;
   --ok-ink: #4fd8a0;
+  /* 補齊 warn / danger 的字色，並補一組「進行中」的藍。
+     原本只有 --ok-ink 一支，後台的四種狀態徽章因此各自寫死深色版的
+     hex（#fcd34d、#93c5fd…），換到淺色主題就是「淡黃字配淡黃底」——
+     實測對比只有 1.0～1.3，整排狀態徽章等於看不見。
+     wash 是底、ink 是字，兩套主題各給一組，元件只引用權杖。 */
+  --warn-ink: #f0a13a;
+  --danger-ink: #ff5a4d;
+  --info-wash: #14203a;
+  --info-ink: #6aa9f5;
 
   /* 表單欄位：比 surface 更暗，讀起來像凹陷的輸入區。
      這兩個頁面的 input 原本寫死 #0d1420（更早那版深色設計的殘留），
@@ -174,6 +183,12 @@
   --warn-wash: #fdf4e3;
   --danger-wash: #fdeceb;
   --ok-ink: #1c7d68;
+  /* 淺色的 wash 幾乎是白的，字色必須壓得比 --warn / --danger 更深才讀得到
+     （對比 5.9 / 5.8；直接用 --warn 只有 2.6）。深色版見上面。 */
+  --warn-ink: #8a5108;
+  --danger-ink: #b3251c;
+  --info-wash: #e8effa;
+  --info-ink: #1e4e8c;
   --field: #f6f2f0;
 
   /* type */

@@ -495,7 +495,12 @@ const bestDeal = computed(() =>
 
 .prizeCard {
   position: relative;
-  width: min(74vw, 268px);
+  /* 100% 一定要放在 min() 的第一項。.duo 在 720–960px 之間把左欄夾在
+     minmax(180px, 250px)，欄寬最多 250 —— 但 min(74vw, 268px) 只看視窗，
+     768px 時算出 268px，比欄還寬。實測 .prizeStage clientW 250 /
+     scrollW 270，卡片連同光暈壓到右邊那一欄的文字上。
+     加上 100% 之後上限跟著欄寬走，倒影同理。 */
+  width: min(100%, 74vw, 268px);
   aspect-ratio: 5 / 7;
   border-radius: 12px;
   transform-style: preserve-3d;
@@ -555,7 +560,7 @@ const bestDeal = computed(() =>
    高度只留實際看得到的那一段（遮罩之外全是透明），
    給滿版高度會多佔 190px 的空白，把主 CTA 推到摺線以下。 */
 .reflection {
-  width: min(74vw, 268px);
+  width: min(100%, 74vw, 268px);  /* 跟 .prizeCard 同寬，理由見上面 */
   height: 92px;
   overflow: hidden;
   margin-top: 4px;
@@ -820,7 +825,7 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
      少掉的 50px 不是為了「更緊湊」，是為了讓底下那條紅色底帶的
      標題剛好露在底部導覽上方 —— 使用者才知道再滑會換到另一種東西。
      推薦區佔滿整個第一屏的話，看起來就像整頁只有這一池。 */
-  .prizeCard, .reflection { width: min(55vw, 200px); }
+  .prizeCard, .reflection { width: min(100%, 55vw, 200px); }
   .reflection { height: 40px; }
   .prizeTag { margin-top: -44px; }
 

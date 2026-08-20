@@ -21,6 +21,7 @@ import { files } from './routes/files.js'
 import { social, socialPublic } from './routes/social.js'
 import { sellers } from './routes/sellers.js'
 import { sweep } from './orders-service.js'
+import { sweepPools } from './pools-service.js'
 import { sweepAttempts } from './rate-limit.js'
 
 const app = new Hono()
@@ -84,6 +85,15 @@ setInterval(() => {
   sql.begin(tx => sweep(tx))
     .then(n => { if (n) console.log(`[sweep] 結案 ${n} 張逾期訂單`) })
     .catch(e => console.error('[sweep] 失敗', e))
+
+  /* 池的生命週期也要有人推。原本這條掃描只掃訂單，而開賣與揭曉
+     只有 HTTP 端點、前端沒有任何地方呼叫 —— 池建好就停在 committed、
+     售完就停在 sold_out，server_seed 永遠不公開，公平性驗證跑不到。 */
+  sweepPools()
+    .then(({ opened, revealed }) => {
+      if (opened || revealed) console.log(`[pools] 開賣 ${opened} 池、揭曉 ${revealed} 池`)
+    })
+    .catch(e => console.error('[pools] 掃描失敗', e))
   // 順手清掉過期的登入失敗紀錄，那張表不需要保留歷史
   sweepAttempts().catch(e => console.error('[sweep] 清理登入紀錄失敗', e))
 }, SWEEP_MS)
