@@ -97,7 +97,9 @@ export const ORDER_ROUTES = {
   /** POST —— 買家開爭議（delivered → disputed，須附影片） */
   dispute: (id: string) => `/${API_VERSION}/orders/${id}/dispute`,
   /** POST —— 平台裁決（disputed → completed | refunded） */
-  resolve: (id: string) => `/${API_VERSION}/orders/${id}/resolve`
+  /* 裁決不在 orders 底下：它需要 role='admin' 與稽核紀錄，
+     走 POST /v1/admin/disputes/:id/resolve */
+  resolve: (id: string) => `/${API_VERSION}/admin/disputes/${id}/resolve`
 } as const
 
 /**

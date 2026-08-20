@@ -98,7 +98,12 @@ const PrizeIn = z.object({
   total: z.number().int().nonnegative()
 })
 const CreatePool = z.object({
-  mode: z.enum(['classic', 'shitei', 'muteki', 'streak', 'auction']),
+  /* 只收 classic。這個檔案的抽卡邏輯（pools-service.ts）完全沒有讀 pools.mode ——
+     收下其他模式等於讓賣家開一個標示著某種玩法、實際卻按一般池發獎的池，
+     streak / auction 甚至會讓前端把玩家導去沒有後端的流程。
+     前端也鎖了，但那只是不讓人誤按；直接打 API 的要在這裡擋。
+     補上模式邏輯時把 enum 加回來。 */
+  mode: z.enum(['classic']),
   title: z.string().min(1).max(60),
   ticketPrice: z.number().int().positive(),
   totalTickets: z.number().int().positive().max(5000),

@@ -62,7 +62,20 @@ async function submitApply() {
   }
 }
 
-const MODES: PoolMode[] = ['classic', 'shitei', 'muteki', 'streak', 'auction']
+/* 玩法。目前只有 classic 是真的能用的：pools-service.ts 完全沒有讀 pools.mode，
+   抽卡一律照籤位發獎。所以
+     - shitei / muteki 開得出來，但抽起來是一般池，畫面上的期望值會跟實際不符
+     - streak / auction 更糟：前端會把人導去連莊／競標流程，而那兩個在 API 模式下
+       沒有後端，是死路
+   讓賣家選得到等於讓他開一個對玩家壞掉的池，所以先鎖住，但仍然列出來 ——
+   藏起來的話賣家不會知道之後會有這些玩法。後端補上模式邏輯後把 enabled 打開即可。 */
+const MODES: { m: PoolMode; enabled: boolean }[] = [
+  { m: 'classic', enabled: true },
+  { m: 'shitei', enabled: false },
+  { m: 'muteki', enabled: false },
+  { m: 'streak', enabled: false },
+  { m: 'auction', enabled: false }
+]
 const TIERS: Tier[] = ['A', 'B', 'C', 'D', 'LAST', 'BUST']
 
 const form = reactive({
@@ -182,12 +195,15 @@ async function submit() {
           </label>
 
           <span class="field-label">玩法</span>
+          <p class="modeNote">目前開放一般池。指定賞、無敵賞、連莊、競標還在做，開放後會在這裡解鎖。</p>
           <div class="modes">
             <button
-              v-for="m in MODES" :key="m" type="button"
-              class="mode-btn" :class="{ on: form.mode === m }"
-              @click="form.mode = m"
-            ><PoolModeBadge :mode="m" /></button>
+              v-for="o in MODES" :key="o.m" type="button"
+              class="mode-btn" :class="{ on: form.mode === o.m, off: !o.enabled }"
+              :disabled="!o.enabled"
+              :title="o.enabled ? '' : '這個玩法還沒開放'"
+              @click="o.enabled && (form.mode = o.m)"
+            ><PoolModeBadge :mode="o.m" /></button>
           </div>
           <PoolModeBadge :mode="form.mode" detailed class="mode-rule" />
 
@@ -292,6 +308,9 @@ async function submit() {
 </template>
 
 <style scoped>
+.modeNote { font-size: 12.5px; line-height: 1.65; color: var(--muted); margin: 0 0 8px; }
+.mode-btn.off { opacity: .38; cursor: not-allowed; }
+
 .originRow { display: flex; gap: 8px; margin-bottom: 12px; }
 .warnLine { font-size: 13px; line-height: 1.7; color: #fcd34d; margin: 8px 0; }
 .okLine { font-size: 13.5px; line-height: 1.7; margin: 10px 0 0; }

@@ -57,7 +57,7 @@ import type { Order } from '../shared/domain'
 | `POST /orders/:id/ship` | `escrowed` → `shipped` | 賣家 |
 | `POST /orders/:id/confirm` | `delivered` → `completed` | 買家 |
 | `POST /orders/:id/dispute` | `delivered` → `disputed` | 買家（須附影片） |
-| `POST /orders/:id/resolve` | `disputed` → `completed`/`refunded` | 平台 |
+| `POST /admin/disputes/:id/resolve` | `disputed` → `completed`/`refunded` | 管理員（要填理由、寫稽核） |
 | 無 | `escrowed` → `cancelled`（逾 72h） | 伺服器 |
 | 無 | `shipped` → `refunded`（逾 14 天） | 伺服器 |
 | 無 | `delivered` → `completed`（逾 7 天） | 伺服器 |

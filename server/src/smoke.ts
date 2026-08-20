@@ -371,6 +371,14 @@ async function run() {
         (list.sellers ?? []).some((x: { id: string; tier: string }) => x.id === 'u-buyer' && x.tier === 'pending'))
     }
 
+    /* 後端只收 classic：抽卡邏輯不讀 mode，收下其他模式等於讓賣家開出
+       標示著某種玩法、實際卻不是那樣運作的池 */
+    const badMode = await call(seller, '/v1/pools', {
+      title: '連莊池', mode: 'streak', ticketPrice: 100, totalTickets: 1,
+      prizes: [{ tier: 'D', card: { name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 1 }]
+    })
+    check('後端不收 classic 以外的玩法', badMode.status === 400, `${badMode.status}`)
+
     // 公開的賣家端點不能被 /v1/seller 的 requireAuth 波及
     check('賣家列表仍然公開', (await fetch(`${base}/v1/sellers`)).ok)
     check('賣家頁仍然公開', (await fetch(`${base}/v1/sellers/u-seller`)).ok)

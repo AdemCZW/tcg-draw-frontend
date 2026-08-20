@@ -230,20 +230,9 @@ orders.post('/:id/delivered', async c => {
 
 const ResolveBody = z.object({ to: z.enum(['buyer', 'seller']), note: z.string().max(500).default('') })
 
-/** POST /orders/:id/resolve —— 平台裁決。只有平台帳號能呼叫 */
-orders.post('/:id/resolve', async c => {
-  const me = c.get('userId')
-  const parsed = ResolveBody.safeParse(await c.req.json().catch(() => null))
-  if (!parsed.success) return c.json(fail('BAD_REQUEST', '參數不合法', 400), 400)
-  const { to } = parsed.data
+/* POST /orders/:id/resolve 已移除。
+   它認的是寫死的 u-platform 帳號而不是 role='admin'（多開一個管理員就靜默 403），
+   而且不寫稽核 —— 對一個會實際移動點數且不可逆的動作來說那不能接受。
+   裁決改走 POST /v1/admin/disputes/:id/resolve：權限由 requireAdmin 認，
+   動作仍交給這個檔案的 act()（規則只留一份），並強制填理由、寫進 admin_actions。 */
 
-  const r = await act(me, c.req.param('id'), 'platform', to === 'buyer' ? 'resolve-buyer' : 'resolve-seller',
-    o => ({
-      ...o,
-      status: to === 'buyer' ? 'refunded' : 'completed',
-      settledAt: Date.now(),
-      closedBy: to === 'buyer' ? 'dispute-buyer' : 'dispute-seller'
-    }))
-  if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
-  return c.json(r)
-})
