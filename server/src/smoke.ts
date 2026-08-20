@@ -241,6 +241,81 @@ async function run() {
     check('seller-doc 平台帳號可以讀', adminRead.ok)
   }
 
+  /* ---- 後台：出貨與調閱 ----
+     出貨這條線之前沒有讀取端點，使用者申請完就沒人看得到。
+     這裡驗的是補上之後的完整迴路：申請 → 後台看得到 → 單向推進 → 卡片狀態跟著改。 */
+  console.log('\n後台：')
+  {
+    const notAdmin = await call(buyer, '/v1/admin/overview')
+    check('一般會員打後台端點被擋', notAdmin.status === 403, `${notAdmin.status}`)
+
+    const ov = await json(await call(platform, '/v1/admin/overview'))
+    check('總覽帶出待處理出貨數', typeof ov.overview?.ship_requested === 'number')
+
+    // 用買家保管庫裡任何一張還在庫的卡送出貨申請
+    const stash = await json(await call(buyer, '/v1/prizes'))
+    const free = (stash.prizes ?? []).find((p: { status: string }) => p.status === 'stashed')
+    if (!free) {
+      check('（跳過出貨流程：買家沒有庫存卡）', true)
+    } else {
+      const req = await call(buyer, '/v1/prizes/ship', {
+        prizeIds: [free.id],
+        address: { name: '測試收件', phone: '0900000000', zip: '106', city: '台北市', line1: '測試路 1 號' }
+      })
+      check('使用者送得出出貨申請', req.ok, `${req.status}`)
+      const { shipmentId } = await json(req)
+
+      const list = await json(await call(platform, '/v1/admin/shipments?status=requested'))
+      const found = (list.shipments ?? []).find((x: { id: string }) => x.id === shipmentId)
+      check('後台在待處理清單裡看得到這筆', !!found)
+      check('清單帶出收件人與卡片內容', !!found?.address?.phone && found?.prizes?.length === 1)
+
+      const packed = await call(platform, `/v1/admin/shipments/${shipmentId}/status`, { status: 'packed', note: 'smoke' })
+      check('推進到已包裝', packed.ok, `${packed.status}`)
+
+      const noTrack = await call(platform, `/v1/admin/shipments/${shipmentId}/status`, { status: 'shipped', note: 'smoke' })
+      check('標為已寄出但沒填單號 → 被擋', noTrack.status === 400)
+
+      const tn = 'SMOKE' + Date.now()
+      const shippedR = await call(platform, `/v1/admin/shipments/${shipmentId}/status`,
+        { status: 'shipped', tracking: tn, note: 'smoke' })
+      check('填了單號才寄得出', shippedR.ok, `${shippedR.status}`)
+
+      const back = await call(platform, `/v1/admin/shipments/${shipmentId}/status`, { status: 'packed', note: 'smoke' })
+      check('不能往回改狀態', back.status === 409)
+
+      const after = await json(await call(platform, '/v1/admin/shipments'))
+      const now = (after.shipments ?? []).find((x: { id: string }) => x.id === shipmentId)
+      check('單號有記下來', now?.tracking === tn)
+      check('寄出後卡片離開保管庫', now?.status === 'shipped')
+
+      const stash2 = await json(await call(buyer, '/v1/prizes'))
+      const moved = (stash2.prizes ?? []).find((p: { id: string }) => p.id === free.id)
+      check('卡片狀態同步成 shipped', moved?.status === 'shipped', moved?.status)
+    }
+
+    // 調閱會員資料：一次要帶回身分、餘額、卡、訂單、出貨、帳本
+    const users = await json(await call(platform, '/v1/admin/users?q=buyer'))
+    const uid = users.users?.[0]?.id
+    check('後台搜尋得到會員', !!uid)
+    if (uid) {
+      const d = await json(await call(platform, `/v1/admin/users/${uid}`))
+      check('會員檔案一次帶回六個區塊',
+        !!d.user && Array.isArray(d.providers) && !!d.wallet &&
+        Array.isArray(d.prizes) && Array.isArray(d.orders) && Array.isArray(d.ledger))
+      check('會員檔案含出貨紀錄', Array.isArray(d.shipments))
+    }
+    const missing = await call(platform, '/v1/admin/users/u-does-not-exist')
+    check('查不存在的會員回 404', missing.status === 404)
+
+    check('池清單讀得到', (await call(platform, '/v1/admin/pools')).ok)
+    check('驗證文件清單讀得到', (await call(platform, '/v1/admin/verifications')).ok)
+
+    // 爭議裁決改走 admin 路由：理由是必填，因為它會實際移動點數且不可逆
+    const noReason = await call(platform, '/v1/admin/disputes/o-nope/resolve', { to: 'buyer', note: 'x' })
+    check('裁決理由太短 → 被擋', noReason.status === 400, `${noReason.status}`)
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`)
   process.exit(fail ? 1 : 0)
 }
