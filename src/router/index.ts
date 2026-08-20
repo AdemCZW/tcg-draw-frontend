@@ -126,6 +126,13 @@ export const router = createRouter({
       meta: { requiresAuth: true, depth: 1, title: '我的卡冊' }
     },
     {
+      /* 上架到市場。定價獨立一頁而不是卡冊裡的行內表單 ——
+         輸入框塞進格線的一格會把那一格撐開、隔壁擠扁（見 SellListingPage 的說明） */
+      path: '/me/cards/sell', name: 'sell-cards',
+      component: () => import('@/pages/SellListingPage.vue'),
+      meta: { requiresAuth: true, depth: 2, title: '上架到市場' }
+    },
+    {
       path: '/me/wallet', name: 'wallet',
       component: () => import('@/pages/WalletPage.vue'),
       meta: { requiresAuth: true, depth: 1, title: '錢包' }

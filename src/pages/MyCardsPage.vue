@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { api } from '@/lib/api'
 import type { Tier, UserPrize } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
@@ -17,6 +18,7 @@ import { useAuthStore } from '@/stores/auth'
 
 const wallet = useWalletStore()
 const auth = useAuthStore()
+const router = useRouter()
 const prizes = ref<UserPrize[]>([])
 onMounted(async () => { prizes.value = await api.myPrizes() })
 
@@ -104,7 +106,7 @@ function wonDay(iso: string) {
 function toggleCard(id: string) {
   const next = openCard.value === id ? null : id
   openCard.value = next
-  if (next !== id) { sellFor.value = null; confirming.value = null }
+  if (next !== id) confirming.value = null
 }
 
 /* ---- 申請出貨 ----
@@ -190,42 +192,31 @@ async function submitShip() {
 /* ---- 上架出售 ----
    api.createListing() 一直都在，但整個前端沒有任何地方呼叫它 ——
    使用者拿到卡之後只有「出貨」跟「回收」兩條路，賣不掉。
-   市場頁上看得到別人的掛單，自己卻上不了架。 */
-const sellFor = ref<string | null>(null)
-const sellPrice = ref<number | null>(null)
-const sellBusy = ref(false)
-const sellErr = ref('')
 
-function askSell(p: UserPrize) {
-  sellFor.value = sellFor.value === p.id ? null : p.id
-  sellErr.value = ''
-  // 預設帶市值，讓人有個錨點；覺得不合理再自己改
-  sellPrice.value = p.card.refPrice || null
+   一開始做成卡片裡的行內表單，那是錯的：表單的輸入框有自己的固有寬度，
+   而 grid 的 1fr 等同 minmax(auto, 1fr) —— 那一格會被撐開，隔壁格被擠扁。
+   實測 393px 上兩欄從各 172px 變成 290px + 62.5px，整個卡冊看起來就壞了。
+
+   改成「選取 → 上架頁」：卡片上只負責勾選，定價在自己的頁面做。
+   順便支援多選 —— 一次整理好幾張卡本來就是常見的事。 */
+const sellPick = ref<string[]>([])
+
+function toggleSell(p: UserPrize) {
+  const i = sellPick.value.indexOf(p.id)
+  if (i === -1) sellPick.value.push(p.id)
+  else sellPick.value.splice(i, 1)
 }
 
-async function submitSell(p: UserPrize) {
-  const price = sellPrice.value
-  if (!price || price <= 0 || sellBusy.value) return
-  sellBusy.value = true
-  sellErr.value = ''
-  try {
-    await api.createListing({
-      prizeId: p.id, card: p.card, price,
-      sellerName: auth.user?.name || auth.user?.handle || '我'
-    })
-    prizes.value = await api.myPrizes()
-    flash(`「${p.card.name}」已上架，售價 ${price.toLocaleString()} 點`)
-    sellFor.value = null
-  } catch (e) {
-    sellErr.value = e instanceof ApiError ? e.message : '上架失敗'
-  } finally {
-    sellBusy.value = false
-  }
+const sellPicked = computed(() =>
+  prizes.value.filter(p => sellPick.value.includes(p.id)))
+const sellPickValue = computed(() =>
+  sellPicked.value.reduce((a, p) => a + (p.card.refPrice || 0), 0))
+
+function goSell() {
+  if (!sellPick.value.length) return
+  router.push({ name: 'sell-cards', query: { ids: sellPick.value.join(',') } })
 }
 
-/* 回收是不可逆的（卡片交還平台換點數），所以一定要有一段確認，
-   而且確認畫面要把「換多少點」和「點數不能提現」同時講清楚。
-   用行內展開而不是 window.confirm —— 原生對話框放不下這些資訊。 */
 const confirming = ref<string | null>(null)
 const justRecycled = ref<{ id: string; points: number } | null>(null)
 
@@ -497,7 +488,9 @@ async function copyLink() {
 
           <div class="acts">
             <button class="btn primary sm" @click="openShip(p)">申請出貨</button>
-            <button class="btn sm" @click="askSell(p)">上架出售</button>
+            <button class="btn sm" :class="{ on: sellPick.includes(p.id) }" @click="toggleSell(p)">
+              {{ sellPick.includes(p.id) ? '已選取' : '上架出售' }}
+            </button>
             <button
               class="btn sm" @click="askRecycle(p)"
               :disabled="!recycleQuote(p.card).eligible"
@@ -505,27 +498,6 @@ async function copyLink() {
             >
               回收 +{{ recycleQuote(p.card).points.toLocaleString() }} 點
             </button>
-          </div>
-
-          <!-- 上架表單。定價預設帶市值當錨點，但一定讓人改得動 —— 市值只是參考 -->
-          <div v-if="sellFor === p.id" class="confirm">
-            <label class="sellRow">
-              <span>售價（點）</span>
-              <input v-model.number="sellPrice" type="number" inputmode="numeric" min="1">
-            </label>
-            <p class="muted fine">
-              上架後這張卡會鎖在市場上，賣出前不能出貨也不能回收。買家下單即成交，
-              點數直接入帳（卡片在保管庫，不需要寄送）。
-            </p>
-            <p v-if="sellErr" class="warn">{{ sellErr }}</p>
-            <div class="acts">
-              <button class="btn sm" @click="sellFor = null">取消</button>
-              <button
-                class="btn primary sm"
-                :disabled="!sellPrice || sellPrice <= 0 || sellBusy"
-                @click="submitSell(p)"
-              >{{ sellBusy ? '上架中…' : '確認上架' }}</button>
-            </div>
           </div>
 
           <!-- 回收確認：不可逆，所以把報價與提現限制一次講完 -->
@@ -550,6 +522,20 @@ async function copyLink() {
         </div>
       </div>
     </div>
+
+    <!-- 上架選取列。從畫面上方滑出，Teleport 到 body ——
+         換頁轉場會在 .page 上加 transform，fixed 元素會跟著錯位（見出貨面板的說明）。
+         用 @keyframes 不用 transition：class 沒被移除也不會殘留位移。 -->
+    <Teleport to="body">
+      <div v-if="sellPick.length" class="pickBar" role="status">
+        <div class="pickInfo">
+          <strong>已選 {{ sellPick.length }} 張</strong>
+          <span class="mono">市值合計 {{ sellPickValue.toLocaleString() }} 點</span>
+        </div>
+        <button type="button" class="btn sm" @click="sellPick = []">取消</button>
+        <button type="button" class="btn primary sm" @click="goSell">上架 {{ sellPick.length }} 張 →</button>
+      </div>
+    </Teleport>
 
     <!-- 出貨申請。做成覆蓋層而不是行內展開，是因為它要一次呈現「寄哪幾張」
          跟「寄到哪」兩件事，塞進單張卡片的位置會看不完整。
@@ -605,6 +591,22 @@ async function copyLink() {
 </template>
 
 <style scoped>
+/* ---- 上架選取列 ---- */
+.pickBar {
+  position: fixed; z-index: 78;
+  top: calc(8px + var(--safe-t, 0px));
+  left: 10px; right: 10px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 14px;
+  background: var(--surface-3); box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  animation: pickDrop .22s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes pickDrop { from { opacity: 0; transform: translateY(-16px) } to { opacity: 1; transform: none } }
+.pickInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pickInfo strong { font-size: 14px; }
+.pickInfo span { font-size: 11.5px; color: var(--muted); }
+.acts .btn.on { background: var(--accent-wash); border-color: var(--accent); color: var(--accent); }
+
 /* ---- 出貨面板 ----
    貼底而不是置中：手機上置中的對話框，鍵盤一彈出來就會把送出鍵推出畫面 */
 .sheetWrap {
@@ -820,6 +822,7 @@ h1 { font-size: 22px; margin: 0 0 6px; }
    旁邊那些沒展開的卡就跟著長出一大塊空白（改版前每一列都在做這件事） */
 .grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  /* 見下方手機版的說明 */
   gap: 16px; align-items: start;
 }
 .item { padding: 8px; display: grid; gap: 8px; align-content: start; }
@@ -920,7 +923,10 @@ strong { font-size: 14px; }
   .page { padding-top: 22px; padding-bottom: 40px; }
   h1 { font-size: 19px; }
   .note { font-size: 12px; margin: 0 0 16px; }
-  .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  /* minmax(0, 1fr) 不是可有可無：1fr 等同 minmax(auto, 1fr)，
+     只要某一格的內容固有寬度超過軌道，那一格就會被撐開、隔壁被擠扁。
+     實測曾經從各 172px 變成 290px + 62.5px。 */
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .item { padding: 6px; gap: 6px; }
   .body { gap: 6px; padding: 2px 0 2px; }
   strong { font-size: 12.5px; line-height: 1.35; }

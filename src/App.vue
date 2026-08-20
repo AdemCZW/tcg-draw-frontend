@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AppBottomNav from '@/components/AppBottomNav.vue'
@@ -14,37 +14,35 @@ const route = useRoute()
 const chrome = computed(() => route.meta.chrome ?? 'full')
 const showChrome = computed(() => chrome.value !== 'none')
 
-/**
- * 頁面轉場方向。
- * 往深層（depth 變大）從右滑入，返回（depth 變小）從左滑入，同層淡入淡出。
- * 進開卡結果頁另有一支「白閃放大」—— 那是儀式的入口，不該跟一般換頁一樣。
- * 方向要在 route 變的那一刻決定並凍住，不能在 transition 進行中再變。
- */
-const transitionName = ref('fade')
-watch(
-  () => route.meta.depth ?? 0,
-  (to, from) => {
-    // 這次換頁若交給了 View Transitions（router 會在 <html> 上標記），Vue 的轉場讓路
-    if (document.documentElement.dataset.vt) transitionName.value = 'none'
-    else if (route.name === 'draw-result') transitionName.value = 'flash'
-    else if (to > from) transitionName.value = 'push'
-    else if (to < from) transitionName.value = 'pop'
-    else transitionName.value = 'fade'
-  }
-)
 </script>
 
 <template>
   <AppHeader v-if="showChrome" />
   <main>
-    <RouterView v-slot="{ Component }">
-      <!-- :duration 明寫：mode="out-in" 靠 transitionend 事件切頁，
-           在被節流的分頁裡那個事件可能永遠不來，新頁就永遠進不來。
-           給明確時長後 Vue 改用計時器，時間到一定切。 -->
-      <Transition :name="transitionName" mode="out-in" :duration="{ enter: 420, leave: 220 }">
-        <component :is="Component" :key="route.fullPath" />
-      </Transition>
-    </RouterView>
+    <!--
+      這裡刻意沒有換頁轉場。
+
+      原本包著一層 <Transition mode="out-in">，它造成過三種真實故障：
+
+        1. 頁面整個 opacity: 0 —— 有渲染但看不見（使用者回報「點下去沒任何反應」）
+        2. .page 卡在 transform: translateX(28px) —— 整頁偏移，
+           而且**祖先有 transform 時 position: fixed 會改以它為基準**，
+           頁面裡所有覆蓋層跟著錯位、被裁掉
+        3. 元件根本沒被換掉 —— mode="out-in" 要等離場結束才讓新頁進來，
+           離場一卡住，網址與標題都變了但畫面停在上一頁
+
+      根因是 Vue 的 Transition 依賴 requestAnimationFrame 來切換
+      `-enter-from` / `-leave-to`，而那一步**不受 :duration 計時器保護**。
+      rAF 一旦被節流（背景分頁、iOS Safari 省電、系統忙碌）就整個卡死。
+
+      我試過兩種修法（改寫 class 時序、改用 @keyframes），都還是脆弱。
+      換頁轉場買到的只有「手感」，賠掉的是「頁面到底看不看得見」——
+      這個交換不划算，所以拿掉。
+
+      池卡 → 池詳情那條共享元素轉場不受影響：它走 View Transitions API，
+      在 router 裡自己判斷、不支援就自動跳過（見 router/index.ts 的 beforeResolve）。
+    -->
+    <RouterView />
   </main>
   <AppBottomNav v-if="showChrome" />
   <!-- 通知鈴固定在右下角。跟著 showChrome 走：沉浸模式（開卡演出、選籤牆）
@@ -73,46 +71,7 @@ watch(
 /* 讓底部導覽不遮住頁尾。--nav-total 在桌機是 0，不需要再包一層斷點 */
 .foot { padding-bottom: calc(40px + var(--nav-total)); }
 
-/* ---- 頁面轉場 ----
-   全部很短（180–260ms）：轉場是「換頁的手感」不是動畫秀，
-   太長會讓人覺得網站慢。
-
-   ---- 為什麼用 @keyframes 而不是 transition + *-enter-from ----
-
-   Vue 的 Transition 是這樣運作的：先加上 `-enter-from`（初始狀態）與
-   `-enter-active`，然後在 **nextFrame()** 裡把 `-enter-from` 換成 `-enter-to`。
-   而 nextFrame 是 requestAnimationFrame 包兩層 —— **它不受 :duration 計時器保護**。
-   rAF 一旦沒跑（分頁在背景、iOS Safari 節流、系統低耗電），
-   `-enter-from` 就永遠不會被拿掉，頁面**永久停在初始狀態**。
-
-   實測到的後果：`.container.page` 卡在 `transform: matrix(1,0,0,1,28,0)`。
-   兩個症狀都由此而來：
-     1. 整頁往右偏 28px，看起來像跑版
-     2. **祖先有 transform 時，position: fixed 的定位基準會變成那個祖先而不是視窗** ——
-        頁面裡所有覆蓋層（出貨面板、手機版的結算列）全部被推出畫面外裁掉
-
-   改用 @keyframes 之後就不需要 `-enter-from` 了：初始狀態寫在 keyframe 裡，
-   動畫結束後元素回到自己的樣式（fill-mode 預設 none），
-   就算 class 沒被移除也不會殘留 transform。leave 同理 ——
-   mode="out-in" 下 leave 卡住的話新頁面根本進不來，那就是「點了沒反應」。 */
-@media (prefers-reduced-motion: no-preference) {
-  .fade-enter-active { animation: pgFade .18s ease; }
-  .fade-leave-active { animation: pgFade .18s ease reverse; }
-
-  .push-enter-active { animation: pgPushIn .26s cubic-bezier(.2, .8, .3, 1); }
-  .push-leave-active { animation: pgPushOut .22s ease; }
-  .pop-enter-active  { animation: pgPopIn .26s cubic-bezier(.2, .8, .3, 1); }
-  .pop-leave-active  { animation: pgPopOut .22s ease; }
-
-  /* 進開卡頁：從 94% 放大到 100% —— 儀式的門 */
-  .flash-enter-active { animation: pgFlashIn .42s cubic-bezier(.2, .9, .3, 1); }
-  .flash-leave-active { animation: pgFade .16s ease reverse; }
-}
-
-@keyframes pgFade    { from { opacity: 0 } to { opacity: 1 } }
-@keyframes pgPushIn  { from { opacity: 0; transform: translateX(28px) }  to { opacity: 1; transform: none } }
-@keyframes pgPushOut { from { opacity: 1; transform: none } to { opacity: 0; transform: translateX(-16px) } }
-@keyframes pgPopIn   { from { opacity: 0; transform: translateX(-28px) } to { opacity: 1; transform: none } }
-@keyframes pgPopOut  { from { opacity: 1; transform: none } to { opacity: 0; transform: translateX(16px) } }
-@keyframes pgFlashIn { from { opacity: 0; transform: scale(.94) } to { opacity: 1; transform: none } }
+/* 換頁轉場已移除（原因見上方 <main> 裡的說明）。
+   元件內部的小轉場（跑馬燈、通知面板、池的分頁切換）不受影響 ——
+   那些不會擋住整頁的顯示。 */
 </style>
