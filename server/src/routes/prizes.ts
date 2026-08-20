@@ -46,7 +46,13 @@ const ShipBody = z.object({
   })
 })
 
-/** 申請出貨：卡從保管庫離開。之後這些卡若要上架就是 delivery: 'ship' */
+/** 申請出貨：卡從保管庫離開。之後這些卡若要上架就是 delivery: 'ship'
+ *
+ *  address 目前由呼叫端整包傳進來。使用者的預設收件資料存在 users 表
+ *  （real_name / phone / address_*，見 006_profile.sql），前端做出貨表單時
+ *  應該用那些欄位預先填好，讓人不用每次重打；這裡仍然收完整的 address，
+ *  因為「這次要寄到哪」跟「我的預設地址」是兩件事，得允許單次覆寫。
+ */
 prizes.post('/ship', async c => {
   const me = c.get('userId')
   const parsed = ShipBody.safeParse(await c.req.json().catch(() => null))

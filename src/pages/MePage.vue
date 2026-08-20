@@ -29,8 +29,10 @@ function logout() {
   router.replace({ name: 'landing' })
 }
 
+/* 「我的卡冊」不放這裡 —— 底部選單已經有一顆卡冊，
+   同一個功能出現在兩個地方只會讓人猶豫哪個才對。 */
 const rows = [
-  { name: 'cards', t: '我的卡冊', d: '抽到的卡、出貨與回收', icon: 'book' },
+  { name: 'profile', t: '會員資料', d: '暱稱、收件人與地址', icon: 'user' },
   { name: 'wallet', t: '錢包', d: '點數餘額與明細', icon: 'wallet' },
   { name: 'topup', t: '儲值', d: '購買點數', icon: 'plus' },
   { name: 'seller-new', t: '賣家專區 · 我要開池', d: '上架自己的抽選池', icon: 'box' },
@@ -43,7 +45,7 @@ const rows = [
 const adminRow = { name: 'admin', t: '平台後台', d: '發點數、審賣家、裁決爭議', icon: 'shield' } as const
 
 const paths: Record<string, string> = {
-  book: 'M5 4h11a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2zM18 16H7a2 2 0 0 0-2 2',
+  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 20a8 8 0 0 1 16 0',
   wallet: 'M4 8a2 2 0 0 1 2-2h11a1 1 0 0 1 1 1v1M4 8v9a2 2 0 0 0 2 2h12a1 1 0 0 0 1-1v-3M4 8h14M20 11v4h-4a2 2 0 0 1 0-4z',
   plus: 'M12 5v14M5 12h14',
   box: 'M4 8l8-4 8 4-8 4-8-4zM4 8v8l8 4 8-4V8M12 12v8',

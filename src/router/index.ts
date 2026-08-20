@@ -151,6 +151,11 @@ export const router = createRouter({
       meta: { requiresAuth: true, depth: 2, title: '我的訂單' }
     },
     {
+      path: '/me/profile', name: 'profile',
+      component: () => import('@/pages/ProfilePage.vue'),
+      meta: { requiresAuth: true, depth: 2, title: '會員資料' }
+    },
+    {
       path: '/admin', name: 'admin',
       component: () => import('@/pages/AdminPage.vue'),
       meta: { requiresAuth: true, requiresAdmin: true, depth: 1, title: '平台後台' }

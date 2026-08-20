@@ -144,6 +144,75 @@ auth.get('/methods', requireAuth, async c => {
   })
 })
 
+/* ---- 會員基本資料 ----
+   全部欄位都可以留空：註冊當下不該逼人填完，要出貨時再要求補齊。
+   驗證只擋明顯不合理的值，不做嚴格的格式限制——
+   台灣地址、手機的寫法太多變體，擋太細只會讓正常使用者填不過。 */
+const Profile = z.object({
+  displayName: z.string().trim().max(20).optional(),
+  realName: z.string().trim().max(40).optional(),
+  phone: z.string().trim().max(20).optional(),
+  addressZip: z.string().trim().max(10).optional(),
+  addressCity: z.string().trim().max(40).optional(),
+  addressLine1: z.string().trim().max(120).optional(),
+  // 生日只收 YYYY-MM-DD。未滿 18 的判斷之後會用到這個欄位
+  birthday: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().or(z.literal(''))
+})
+
+const emptyToNull = (v: string | undefined) => (v === undefined || v === '' ? null : v)
+
+auth.get('/profile', requireAuth, async c => {
+  const [u] = await sql`
+    select handle, name, display_name, real_name, phone,
+           address_zip, address_city, address_line1,
+           to_char(birthday, 'YYYY-MM-DD') as birthday
+    from users where id = ${c.get('userId')}
+  `
+  if (!u) return c.json({ error: 'UNAUTHORIZED', message: '帳號不存在' }, 401)
+  return c.json({ profile: {
+    handle: u.handle, name: u.name,
+    displayName: u.display_name, realName: u.real_name, phone: u.phone,
+    addressZip: u.address_zip, addressCity: u.address_city, addressLine1: u.address_line1,
+    birthday: u.birthday
+  } })
+})
+
+auth.put('/profile', requireAuth, async c => {
+  const me = c.get('userId')
+  const parsed = Profile.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) {
+    return c.json({ error: 'BAD_REQUEST', message: parsed.error.issues[0]?.message ?? '資料格式不正確' }, 400)
+  }
+  const p = parsed.data
+
+  if (p.birthday) {
+    const d = new Date(p.birthday)
+    const now = new Date()
+    if (isNaN(d.getTime()) || d > now || d.getFullYear() < 1900) {
+      return c.json({ error: 'BAD_REQUEST', message: '生日日期不正確' }, 400)
+    }
+  }
+
+  /* display_name 同時寫進 users.name —— name 是全站顯示用的欄位
+     （得獎動態、賣家名稱、訂單上的買賣雙方都讀它），
+     如果只更新 display_name 會出現「改了暱稱但別的地方沒變」。 */
+  const display = emptyToNull(p.displayName)
+  await sql`
+    update users set
+      display_name = ${display},
+      name = coalesce(${display}, name),
+      real_name = ${emptyToNull(p.realName)},
+      phone = ${emptyToNull(p.phone)},
+      address_zip = ${emptyToNull(p.addressZip)},
+      address_city = ${emptyToNull(p.addressCity)},
+      address_line1 = ${emptyToNull(p.addressLine1)},
+      birthday = ${p.birthday ? p.birthday : null}::date,
+      profile_updated_at = now()
+    where id = ${me}
+  `
+  return c.json({ ok: true })
+})
+
 auth.get('/me', requireAuth, async c => {
   const [u] = await sql`select id, handle, name, email, role from users where id = ${c.get('userId')}`
   if (!u) return c.json({ error: 'UNAUTHORIZED', message: '帳號不存在' }, 401)
