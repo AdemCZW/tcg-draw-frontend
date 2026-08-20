@@ -3,10 +3,25 @@ import { onMounted } from 'vue'
 import { track } from '@/lib/ga'
 onMounted(() => track('view_fairness_page'))
 
+/* 這三段原本寫錯，而且錯得剛好把實際做法講成了比較弱的版本：
+   第一段說承諾的是「洗牌後的完整籤序」（實際是 server seed 本身的 SHA-256），
+   第二段說亂數來自「比特幣區塊 hash」（實際是 drand）。
+   後者差別很大 —— 區塊 hash 是礦工算出來的、理論上可被影響，
+   而 drand 是 League of Entropy 的門檻簽章信標，任何人都能獨立驗證某一輪的值。
+   文案講錯自己的機制，比沒有文案更傷：懂的人會發現對不上。 */
 const steps = [
-  { t: '開池前：承諾（Commit）', d: '我們產生 server seed，將洗牌後的完整籤序做 SHA-256，並在開賣前公布這個 hash。此後籤序不可能被更動而不被發現。' },
-  { t: '開賣時：外部亂數（Client seed）', d: '洗牌種子混入未來的比特幣區塊 hash。承諾當下沒有人知道這個值，因此我們無法挑選對自己有利的籤序。' },
-  { t: '完抽後：揭示（Reveal）', d: '公開 server seed 與原始籤序。任何人都能自行計算 SHA-256，比對開賣前公布的 hash 是否一致。' }
+  {
+    t: '開池前：承諾（Commit）',
+    d: '我們產生一組 server seed，公布它的 SHA-256，但不公布 seed 本身。籤序由這組 seed 決定，所以一旦公布了這個 hash，我們就改不動籤序而不被發現。'
+  },
+  {
+    t: '開賣時：鎖定外部亂數（Client seed）',
+    d: '開池的當下，我們鎖定 drand（League of Entropy）一個「還沒發生」的未來輪次。那一輪的值在承諾當下全世界都還不知道，包括我們 —— 所以我們無法挑一組對自己有利的籤序。輪次編號一併公布，事後誰都能去 drand 對答案。'
+  },
+  {
+    t: '完抽後：揭示（Reveal）',
+    d: '公開 server seed 與完整籤序。任何人都能在自己的瀏覽器重跑一次洗牌：先驗 seed 的 SHA-256 是否等於開賣前那個 hash，再用 seed 與 drand 的值重算籤序，逐一比對。'
+  }
 ]
 </script>
 
