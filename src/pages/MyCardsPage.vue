@@ -366,15 +366,19 @@ async function copyLink() {
     </section>
 
     <!-- 公開卡冊：連結會被貼進群組，收不回來，所以每個動作的後果就寫在按鈕旁邊 -->
+    <!-- 公開卡冊。
+         原本這一塊在手機上高約 800px：五行的隱私警告、兩行網址、
+         三顆通欄按鈕、再兩行說明 —— 一個「多數時候是關著」的開關佔掉一整屏。
+
+         壓縮的原則是「收起來」不是「刪掉」：隱私警告是誠實揭露，不能拿掉，
+         但把細節收進 details，摘要那一行仍然講出最關鍵的一句
+         （不必登入、看得到鑑定編號）。開關關著的時候整塊只有兩行。 -->
     <section v-if="prizes.length" class="share card">
       <div class="shareTop">
         <div class="shareHead">
           <strong class="shareTitle">公開卡冊</strong>
           <p class="shareWhy">
-            打開之後，任何拿到連結的人<strong>不必登入、不必有帳號</strong>就能看到你卡冊裡的
-            每一張卡：卡名、賞別、參考價，以及 <strong>PSA / BGS 鑑定編號</strong>。
-            鑑定編號可以在鑑定機構官網反查，等於把這幾張卡的來歷一起公開。
-            你也不會知道誰看過。
+            任何拿到連結的人<strong>不必登入</strong>就能看到你所有卡片與鑑定編號。
           </p>
         </div>
         <button
@@ -388,38 +392,42 @@ async function copyLink() {
         </button>
       </div>
 
+      <details class="more">
+        <summary>會公開哪些資訊</summary>
+        <p>
+          卡名、賞別、參考價，以及 <strong>PSA / BGS 鑑定編號</strong>。
+          鑑定編號可以在鑑定機構官網反查，等於把這幾張卡的來歷一起公開。
+          你也不會知道誰看過。關掉開關之後，已經分享出去的連結會<strong>立刻失效</strong>。
+        </p>
+      </details>
+
       <div v-if="shareOn && shareLink" class="shareBody">
         <div class="linkRow">
           <span class="link mono">{{ shareLink }}</span>
-          <button type="button" class="btn sm" @click="copyLink">{{ copied ? '已複製' : '複製連結' }}</button>
+          <button type="button" class="btn sm copyBtn" @click="copyLink">{{ copied ? '已複製' : '複製' }}</button>
         </div>
-        <p v-if="copied" class="got" role="status">連結已複製，可以直接貼到 LINE 或訊息裡。</p>
 
-        <p class="warn">
-          把上面的開關關掉之後，這條連結會<strong>立刻失效</strong>：
-          已經分享出去的人再點，只會看到「這本卡冊已改成不公開」。
-        </p>
-
-        <div class="acts">
+        <!-- 次要動作用文字鈕，不佔通欄。它們不是這一塊的主要用途 -->
+        <div class="miniActs">
           <RouterLink
-            class="btn sm"
+            class="mini"
             :to="{ name: 'public-cardbook', params: { slug: shareSlug } }"
-          >預覽別人看到的樣子</RouterLink>
-          <button type="button" class="btn sm" :disabled="shareBusy" @click="askRotate = !askRotate">
-            換一組新連結
+          >預覽</RouterLink>
+          <button type="button" class="mini" :disabled="shareBusy" @click="askRotate = !askRotate">
+            換新連結
           </button>
+          <span v-if="copied" class="miniOk" role="status">已複製</span>
         </div>
 
         <!-- 換連結是不可逆的，跟回收一樣用行內確認：後果要跟按鈕在同一個畫面 -->
         <div v-if="askRotate" class="confirm">
           <p class="warn">
-            換新之後，<strong>現在這條舊連結會立刻失效</strong> ——
-            已經貼在群組、私訊裡的舊網址，任何人再點都只會看到「找不到卡冊」。
-            分享錯對象時，這是唯一能把卡冊收回來、又還能繼續分享給對的人的方法。
+            換新之後<strong>舊連結立刻失效</strong> —— 已經貼在群組、私訊裡的網址
+            任何人再點都只會看到「找不到卡冊」。分享錯對象時這是唯一的補救。
           </p>
           <div class="acts">
             <button type="button" class="btn primary sm" :disabled="shareBusy" @click="rotateLink">
-              確認換新連結
+              確認換新
             </button>
             <button type="button" class="btn sm" :disabled="shareBusy" @click="askRotate = false">取消</button>
           </div>
@@ -812,11 +820,38 @@ async function copyLink() {
 .shareErr { margin: 0; font-size: 12px; color: var(--danger); }
 .share .confirm { margin-top: 0; }
 
+/* 細節收在 details 裡。隱私揭露不能刪，但也不該讓一個多半是關著的開關
+   在手機上先佔掉五行 */
+.more { margin-top: 8px; }
+.more summary {
+  font-size: 12px; color: var(--muted); cursor: pointer;
+  list-style: none; display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 0;
+}
+.more summary::-webkit-details-marker { display: none; }
+.more summary::before { content: '＋'; font-size: 11px; }
+.more[open] summary::before { content: '－'; }
+.more p { margin: 6px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.more p strong { color: var(--ink); font-weight: 600; }
+
+/* 次要動作用文字鈕：預覽與換連結不是這一塊的主要用途，
+   做成通欄按鈕會讓它們看起來跟「複製連結」一樣重要，也各吃掉一整行 */
+.miniActs { display: flex; align-items: center; gap: 16px; }
+.mini {
+  padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 12.5px; color: var(--accent); text-decoration: none;
+}
+.mini:disabled { opacity: .5; cursor: not-allowed; }
+.miniOk { margin-left: auto; font-size: 12px; color: var(--ok); }
+
 @media (max-width: 720px) {
   .share { padding: 14px; }
   .shareWhy { font-size: 11.5px; }
-  /* 半寬螢幕塞不下「網址 + 按鈕」並排，網址換行後按鈕再撐滿一行 */
-  .linkRow { flex-direction: column; align-items: stretch; padding: 10px; gap: 8px; }
+  /* 網址與複製鈕維持並排 —— 複製鈕收成短標籤就塞得下，
+     不必像原本那樣讓按鈕獨佔一行 */
+  .linkRow { padding: 8px 8px 8px 12px; gap: 8px; }
+  .link { font-size: 11px; }
+  .copyBtn { padding: 7px 12px; }
 }
 
 .page { padding-top: 36px; padding-bottom: 72px; }

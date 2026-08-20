@@ -221,7 +221,7 @@ export const pools: Pool[] = [
     takenSeats: seatsOf(100, 42),
     status: 'open',
     commitHash: 'a91c3f7e5d2b8064ff2233445566778899aabbccddeeff00112233445566aabb',
-    clientSeedSource: 'BTC block #920604 hash',
+    clientSeedSource: 'drand:5620604',
     openedAt: '2026-08-16T18:00:00+08:00',
     escrow: { held: 0, releaseAfterShipDays: 0, released: 53760 },
     prizes: [
@@ -247,7 +247,7 @@ export const pools: Pool[] = [
     takenSeats: seatsOf(150, 54),
     status: 'open',
     commitHash: 'ff8811aa22bb33cc44dd55ee66770099aabbccddeeff112233445566778899aa',
-    clientSeedSource: 'BTC block #920611 hash',
+    clientSeedSource: 'drand:5620611',
     openedAt: '2026-08-17T09:00:00+08:00',
     escrow: { held: 0, releaseAfterShipDays: 0, released: 5400 },
     prizes: [
@@ -271,7 +271,7 @@ export const pools: Pool[] = [
     takenSeats: seatsOf(80, 43),
     status: 'open',
     commitHash: '3f8a9c1d5e2b7a4f6c0d8e9b1a3c5d7e9f2b4a6c8d0e1f3a5b7c9d2e4f6a8b0c',
-    clientSeedSource: 'BTC block #920000 hash',
+    clientSeedSource: 'drand:5620000',
     openedAt: '2026-08-01T12:00:00+08:00',
     escrow: escrowOf(43, 650),
     prizes: [
@@ -300,7 +300,7 @@ export const pools: Pool[] = [
     takenSeats: [],
     status: 'open',
     commitHash: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
-    clientSeedSource: 'BTC block #920144 hash',
+    clientSeedSource: 'drand:5620144',
     openedAt: '2026-08-08T12:00:00+08:00',
     escrow: escrowOf(0, 120),
     prizes: [
@@ -325,7 +325,7 @@ export const pools: Pool[] = [
     takenSeats: seatsOf(60, 60),
     status: 'revealed',
     commitHash: 'deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb',
-    clientSeedSource: 'BTC block #918800 hash',
+    clientSeedSource: 'drand:5618800',
     openedAt: '2026-07-15T12:00:00+08:00',
     escrow: escrowOf(60, 700, 42000),
     prizes: [
@@ -357,7 +357,7 @@ export const pools: Pool[] = [
     takenSeats: seatsOf(50, 9, 5),
     status: 'open',
     commitHash: 'c0ffee9988776655443322110000ffeeddccbbaa99887766554433221100aabb',
-    clientSeedSource: 'BTC block #920302 hash',
+    clientSeedSource: 'drand:5620302',
     openedAt: '2026-08-10T12:00:00+08:00',
     escrow: escrowOf(9, 320),
     prizes: [
@@ -383,7 +383,7 @@ export const pools: Pool[] = [
     takenSeats: [],
     status: 'open',
     commitHash: 'ace1ace2ace3ace4ace5ace6ace7ace8ace9ace0ace1ace2ace3ace4ace5ace6',
-    clientSeedSource: 'BTC block #920310 hash',
+    clientSeedSource: 'drand:5620310',
     openedAt: '2026-08-11T12:00:00+08:00',
     escrow: escrowOf(0, 8300),
     prizes: [
@@ -408,7 +408,7 @@ export const pools: Pool[] = [
     takenSeats: seatsOf(66, 14, 5),
     status: 'open',
     commitHash: 'b00mb00mfeed1234567890abcdefb00mb00mfeed1234567890abcdefb00mb00m',
-    clientSeedSource: 'BTC block #920355 hash',
+    clientSeedSource: 'drand:5620355',
     openedAt: '2026-08-11T09:00:00+08:00',
     escrow: escrowOf(14, 500),
     prizes: [
@@ -442,7 +442,7 @@ export const pools: Pool[] = [
     takenSeats: Array.from({ length: 77 }, (_, i) => i + 1),
     status: 'open',
     commitHash: 'a0c7104ebeef55aa11bb22cc33dd44ee55ff6600771188229933aa44bb55cc66',
-    clientSeedSource: 'BTC block #920361 hash',
+    clientSeedSource: 'drand:5620361',
     openedAt: '2026-08-09T12:00:00+08:00',
     escrow: escrowOf(77, 300),
     prizes: [
@@ -478,7 +478,7 @@ export const pools: Pool[] = [
     takenSeats: Array.from({ length: 18 }, (_, i) => i + 1),
     status: 'open',
     commitHash: 'c3f81a09bb27de4455ff6611aa88cc7733dd0099eeff2244aa66bb88cc00dd11',
-    clientSeedSource: 'BTC block #920418 hash',
+    clientSeedSource: 'drand:5620418',
     openedAt: '2026-08-12T09:00:00+08:00',
     escrow: escrowOf(18, 35),
     prizes: [
@@ -505,7 +505,7 @@ export const pools: Pool[] = [
     takenSeats: Array.from({ length: 9 }, (_, i) => i + 1),
     status: 'open',
     commitHash: '9a1f4c7e2b8d6053ff11aa22bb33cc44dd55ee66ff7788990011223344556677',
-    clientSeedSource: 'BTC block #920512 hash',
+    clientSeedSource: 'drand:5620512',
     openedAt: '2026-08-15T20:00:00+08:00',
     escrow: escrowOf(9, 4800),
     prizes: [
@@ -531,7 +531,7 @@ export const pools: Pool[] = [
     takenSeats: Array.from({ length: 46 }, (_, i) => i + 1),
     status: 'open',
     commitHash: '5e2b8d6039a1f4c7ff99aa88bb77cc66dd55ee44ff3322110099887766554433',
-    clientSeedSource: 'BTC block #920533 hash',
+    clientSeedSource: 'drand:5620533',
     openedAt: '2026-08-16T11:30:00+08:00',
     escrow: escrowOf(46, 60),
     prizes: [
@@ -556,7 +556,7 @@ export const pools: Pool[] = [
     takenSeats: Array.from({ length: 60 }, (_, i) => i + 1),
     status: 'revealed',
     commitHash: '77aa33bb99cc11dd55ee22ff8800112233445566778899aabbccddeeff001122',
-    clientSeedSource: 'BTC block #919804 hash',
+    clientSeedSource: 'drand:5619804',
     openedAt: '2026-07-25T19:00:00+08:00',
     escrow: { held: 0, releaseAfterShipDays: 7, released: 52800 },
     prizes: [
@@ -583,7 +583,7 @@ export const pools: Pool[] = [
     takenSeats: seatsOf(36, 11, 5),
     status: 'open',
     commitHash: '4d17b9e0c8a25f36aa11bb22cc33dd44ee55ff66007711882299aa33bb44cc55',
-    clientSeedSource: 'BTC block #920588 hash',
+    clientSeedSource: 'drand:5620588',
     openedAt: '2026-08-18T21:00:00+08:00',
     escrow: escrowOf(11, 250),
     prizes: [
@@ -610,7 +610,7 @@ export const pools: Pool[] = [
     takenSeats: seatsOf(250, 118),
     status: 'open',
     commitHash: '61c9a3f4d70b28e5ff44dd33cc22bb11aa009988776655443322110099887766',
-    clientSeedSource: 'BTC block #920440 hash',
+    clientSeedSource: 'drand:5620440',
     openedAt: '2026-08-13T10:00:00+08:00',
     escrow: escrowOf(118, 350),
     prizes: [
@@ -638,7 +638,7 @@ export const pools: Pool[] = [
     takenSeats: Array.from({ length: 30 }, (_, i) => i + 1),
     status: 'sold_out',
     commitHash: '0b4e7c2a95d1f8630011223344556677889900aabbccddeeff0011223344aabb',
-    clientSeedSource: 'BTC block #920166 hash',
+    clientSeedSource: 'drand:5620166',
     openedAt: '2026-08-08T20:00:00+08:00',
     escrow: escrowOf(30, 2500),
     prizes: [

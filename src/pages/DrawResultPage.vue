@@ -21,7 +21,6 @@ import TierBadge from '@/components/TierBadge.vue'
 import CertTag from '@/components/CertTag.vue'
 import CardEmerge from '@/components/CardEmerge.vue'
 import Tilt3D from '@/components/Tilt3D.vue'
-import RevealBuildup from '@/components/RevealBuildup.vue'
 import type { Tier } from '@/types/models'
 import { track } from '@/lib/ga'
 
@@ -33,10 +32,9 @@ const pools = usePoolStore()
 const result = pools.resultById(String(route.params.drawId))
 const revealed = ref(false)
 
-/* ---- 開卡前的蓄勢演出 ----
-   整批抽選用「最高賞」的那支編排：一抽裡有 A 賞，就播豪華球的戲。
-   這是誠實的 —— 演出等級對應真的開出來的東西，不是先假裝再降級。
-   演出蓋在全畫面上，播完（或被跳過）才露出 3D 開卡。 */
+/* ---- 演出的等級 ----
+   整批抽選用「最高賞」決定演出強度：一抽裡有 A 賞就演得完整。
+   這是誠實的 —— 演出等級對應真的開出來的東西，不是先假裝再降級。 */
 const TIER_RANK: Record<Tier, number> = { BUST: 0, D: 1, C: 2, B: 3, A: 4, LAST: 5 }
 const bestTier = computed<Tier>(() => {
   if (!result?.items.length) return 'D'
@@ -57,11 +55,14 @@ const emergePace = computed(() => {
   return r >= 4 ? 1 : r === 3 ? 1.4 : 1.9
 })
 
-/* 動態偏好關動效的人直接看結果，不必先等一支動畫 */
+/* 原本煙霧前面還有一段光球蓄勢演出（RevealBuildup），已移除 ——
+   兩段動畫接連播要十秒以上，而且光球那段講的事情煙霧也在講。
+   現在開卡結果一進來就直接進煙霧。
+
+   動態偏好關動效的人直接看結果，不必先等一支動畫。 */
 const reduceMotion = typeof matchMedia !== 'undefined'
   && matchMedia('(prefers-reduced-motion: reduce)').matches
-const buildupDone = ref(reduceMotion || !result)
-function skipBuildup() { buildupDone.value = true }
+if (reduceMotion || !result) revealed.value = true
 
 /* 開獎當下是使用者最會懷疑「這是不是喬過的」的時刻，
    驗算入口放在這裡比藏在說明頁有意義得多。 */
@@ -90,35 +91,24 @@ onMounted(() => {
   /* 保險絲：明細清單原本只在 3D 演出發出 revealed 後才淡入，
      但 WebGL 中途失敗、或分頁在背景導致 rAF 暫停時，那個事件永遠不會來，
      使用者就再也看不到自己抽到什麼。時間到就強制顯示。 */
-  setTimeout(() => { revealed.value = true; buildupDone.value = true }, 16000)
+  /* 保險絲：WebGL 中途失敗、或分頁在背景導致動畫暫停時，
+     CardEmerge 的 done 事件永遠不會來，使用者就再也看不到自己抽到什麼。
+     煙霧最長八秒，這裡給到十二秒。 */
+  setTimeout(() => { revealed.value = true }, 12000)
 })
 </script>
 
 <template>
   <div class="container page" v-if="result">
-    <!-- 蓄勢演出：全畫面覆蓋，播完自動退場；點一下任何地方直接跳到結果。
-         按鈕而不是 div：鍵盤 Enter/Space 也要能跳過。 -->
-    <!-- 全畫面覆蓋，必須 Teleport 到 body：換頁轉場會在 .page 上加 transform，
-         祖先有 transform 時 position: fixed 會改以那個祖先為基準而錯位 -->
-    <Teleport to="body">
-    <button
-      v-if="!buildupDone"
-      type="button"
-      class="buildupWrap"
-      aria-label="跳過開卡演出"
-      @click="skipBuildup"
-    >
-      <RevealBuildup :tier="bestTier" auto @done="skipBuildup" />
-      <span class="skipHint mono">點一下跳過</span>
-    </button>
-    </Teleport>
-
     <h1 class="display">抽選結果</h1>
     <p class="muted sub mono">draw {{ result.drawId }} · 共 {{ result.items.length }} 抽 · {{ result.cost.toLocaleString() }} 點</p>
     <!-- 煙霧凝聚：只播最高賞那張，播完（或被點掉）就揭曉全部。
-         按鈕而不是 div：鍵盤也要能跳過。 -->
+         按鈕而不是 div：鍵盤也要能跳過。
+         Teleport 到 body —— 全螢幕的 position: fixed 不能住在會被 transform
+         的頁面子樹裡（見 MyCardsPage 出貨面板的說明）。 -->
+    <Teleport to="body">
     <button
-      v-if="buildupDone && !revealed && heroItem"
+      v-if="!revealed && heroItem"
       type="button" class="emergeWrap"
       aria-label="跳過開卡演出"
       @click="revealed = true"
@@ -136,6 +126,7 @@ onMounted(() => {
         {{ result.items.length > 1 ? `最高賞 · 其餘 ${result.items.length - 1} 張在下方` : '點一下跳過' }}
       </span>
     </button>
+    </Teleport>
 
     <!-- 明細（3D 之外仍需可讀、可複製的文字資訊） -->
     <ul class="detail" :class="{ in: revealed }">
@@ -206,15 +197,29 @@ onMounted(() => {
 .src.warn { color: #fcd34d; }
 .fixnote { font-size: 12px; line-height: 1.7; color: var(--muted); margin: 10px 0 0; }
 
-/* 煙霧演出的容器。按鈕的預設外觀全部拿掉 —— 它只是為了讓鍵盤能跳過 */
+/* 煙霧演出：整個視窗。按鈕的預設外觀全部拿掉 —— 它只是為了讓鍵盤能跳過。 */
 .emergeWrap {
-  display: block; width: 100%; max-width: 460px; margin: 0 auto 18px;
-  padding: 0; border: 0; background: none; cursor: pointer;
-  position: relative;
+  position: fixed; inset: 0; z-index: 80;
+  display: grid; place-items: center;
+  padding: 0; border: 0; cursor: pointer;
+  background: #05040b;
+  overflow: hidden;
+}
+
+/* CardEmerge 內部的 shader 座標是綁死 4:5 舞台算出來的
+   （見那支元件裡 cardHalf 的說明），改掉比例會讓煙聚出來的卡跟 DOM 那張錯位。
+   所以不改它的比例，而是整個放大到「蓋滿視窗」再把超出的裁掉 ——
+   煙本來就填滿整個畫面，裁邊看不出來。
+   max() 挑較大的那一邊：寬螢幕吃 100vw，窄長的手機吃 100dvh × 4/5。 */
+.emergeWrap :deep(.emerge) {
+  width: max(100vw, calc(100dvh * 4 / 5));
+  border-radius: 0;
 }
 .emergeWrap .skipHint {
-  display: block; margin-top: 10px;
-  font-size: 12px; color: var(--muted); text-align: center;
+  position: absolute; left: 0; right: 0;
+  bottom: calc(22px + var(--safe-b, 0px));
+  font-size: 12px; color: rgba(255, 255, 255, .6); text-align: center;
+  text-shadow: 0 1px 6px #000;
 }
 
 .page { padding-top: 40px; padding-bottom: 72px; text-align: center; }
