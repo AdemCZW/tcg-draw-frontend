@@ -19,7 +19,7 @@ export default defineRailway(() => {
   const db = postgres("postgres");
 
   const web = service("web", {
-    source: github("ademczw/tcg-draw-frontend", { branch: "main", rootDirectory: "server" }),
+    source: github("AdemCZW/tcg-draw-frontend", { branch: "main", rootDirectory: "server" }),
     env: {
       // 由這個檔案決定的值
       DATABASE_URL: db.env.DATABASE_URL,
