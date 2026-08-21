@@ -6,7 +6,9 @@
  * 只有一個地方會改到 —— 出貨的 shipped 在列表、詳情、會員檔案三個地方都要出現。
  */
 import { ref } from 'vue'
-import { http, ApiError } from '@/lib/http'
+import { http as rawHttp, ApiError } from '@/lib/http'
+import { MOCK } from '@/lib/config'
+import { mockAdmin } from './mock'
 
 /* ---------- 型別 ---------- */
 export interface Overview {
@@ -85,7 +87,10 @@ export const ORDER_LABEL: Record<string, string> = {
   completed: '已完成', disputed: '爭議中', cancelled: '已取消', refunded: '已退款'
 }
 export const POOL_LABEL: Record<string, string> = {
-  draft: '草稿', open: '開放中', sold_out: '已售完', revealed: '已開獎', closed: '已結束'
+  draft: '草稿', committed: '待開賣', open: '開放中', sold_out: '已售完',
+  /* cancelled 是「提前收攤」不是「取消」—— 已經抽過的人不受影響，
+     那些卡都還在他們手上。用「已收攤」才不會讓人以為抽過的也被作廢了。 */
+  cancelled: '已收攤', revealed: '已開獎', closed: '已結束'
 }
 
 /* ---------- 格式化 ---------- */
@@ -120,4 +125,23 @@ export function useAsync() {
   return { loading, err, okMsg, run, flash }
 }
 
-export { http }
+/**
+ * 後台專用的 http。
+ *
+ * 展示模式（沒設 VITE_API_URL）下改回假資料 —— 後台原本每一支呼叫都直接
+ * 走 http()，沒有後端的時候所有頁面都停在「載入中…」，等於這一整套介面
+ * 在展示模式下是不存在的。
+ *
+ * 認不出來的路徑照常打真的後端，不要靜默回空物件 ——
+ * 那會讓「忘了補假資料」看起來像「這個端點沒有資料」。
+ */
+export async function http<T>(path: string, init?: Parameters<typeof rawHttp>[1]): Promise<T> {
+  if (MOCK) {
+    const hit = mockAdmin(path)
+    if (hit !== null) {
+      await new Promise(r => setTimeout(r, 160))  // 讓載入狀態看得到
+      return hit as T
+    }
+  }
+  return rawHttp<T>(path, init)
+}
