@@ -9,9 +9,10 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { sql } from '../db.js'
+import type { Tx } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { notify } from '../notify.js'
-import { walletOf } from '../money.js'
+import { lockSpender, walletOf } from '../money.js'
 import { PLATFORM_ID, depositFor, save, settle, sweep, toOrder } from '../orders-service.js'
 import { actionsFor, validateTracking } from '../shared/escrow.js'
 import type { Order } from '../shared/domain.js'
@@ -68,6 +69,10 @@ orders.post('/', async c => {
     if (l.seller_id === me) return fail('WRONG_STATE', '不能買自己的掛單')
 
     const price = Number(l.price)
+    /* 先鎖住買家的帳戶再算餘額。少了這一行，同一個人同時買兩張不同的卡
+       會鎖到兩列不同的 listings、互不阻擋，兩邊各自讀到同一個 available
+       都判定「夠」，於是花掉兩份同一筆錢（見 money.ts 的 lockSpender）。 */
+    await lockSpender(tx, me)
     const w = await walletOf(me, tx)
     if (w.available < price) return fail('INSUFFICIENT_POINTS', '可動用點數不足')
 
@@ -128,7 +133,10 @@ orders.post('/', async c => {
     等於之後改 escrow.ts 的時候會漏掉一邊。 */
 export async function act(
   meId: string, orderId: string, role: 'buyer' | 'seller' | 'platform',
-  need: string, apply: (o: Order) => Order | { error: string; message: string; status: number }
+  need: string, apply: (o: Order) => Order | { error: string; message: string; status: number },
+  /* 跟這次狀態轉換綁在一起、但不屬於 Order 型別的欄位（目前只有出貨憑證）。
+     必須在同一筆交易裡寫，理由見 /ship 端點的說明。 */
+  alsoWrite?: (tx: Tx, o: Order) => Promise<void>
 ) {
   return sql.begin(async tx => {
     const [row] = await tx`select * from orders where id = ${orderId} for update`
@@ -147,6 +155,7 @@ export async function act(
     const next = apply(o)
     if ('error' in next) return next
     await save(tx, next)
+    if (alsoWrite) await alsoWrite(tx, next)
     await settle(tx, next)
     return { order: next }
   })
@@ -173,14 +182,17 @@ orders.post('/:id/ship', async c => {
   const v = validateTracking(carrier, tracking)
   if (!v.ok) return c.json(fail('BAD_TRACKING', v.reason ?? '單號格式不正確'), 409)
 
+  /* 憑證跟狀態轉換必須同生同死，所以走 act() 的第五個參數寫在同一筆交易裡。
+     原本是等 act() 回來之後再下一句 UPDATE ——那一句失敗（連線斷、程序被砍）
+     的話訂單已經是 shipped、賣家已經滿足 72 小時期限，但 carrier / ship_photos
+     是 null：平台要求賣家拍照存證，然後把存證弄丟了。而且沒有補救路徑，
+     因為賣家重打 /ship 會得到 WRONG_STATE（訂單已經不在 escrowed）。 */
   const r = await act(me, c.req.param('id'), 'seller', 'ship',
-    o => ({ ...o, status: 'shipped', shippedAt: Date.now(), tracking: tracking.trim().toUpperCase() }))
-  /* 出貨憑證另外寫。原本 photoUrls 收了卻直接丟掉 —— 平台要求賣家拍照存證，
-     然後把存證扔了，爭議發生時什麼都沒有。 */
-  if (!('error' in r)) {
-    await sql`update orders set carrier = ${carrier}, ship_photos = ${photoUrls as never}
-              where id = ${c.req.param('id')}`
-  }
+    o => ({ ...o, status: 'shipped', shippedAt: Date.now(), tracking: tracking.trim().toUpperCase() }),
+    async (tx, o) => {
+      await tx`update orders set carrier = ${carrier}, ship_photos = ${photoUrls as never}
+               where id = ${o.id}`
+    })
   if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
   return c.json({ ...r, wallet: await walletOf(me) })
 })

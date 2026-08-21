@@ -114,8 +114,13 @@ admin.get('/sellers', async c => {
 /* ---- 總覽 ----
    一次把要盯的數字撈齊。全部即時算，不存快取——這些查詢很輕，
    而存下來就要面對「什麼時候失效」的問題，不值得。 */
+/* 注意 ::text：postgres.js 只把 int2/int4/oid/float 解析成 JS number
+   （見 node_modules/postgres/src/types.js 的 from 清單，裡面沒有 int8），
+   bigint 會原封不動變成字串。下面這個物件本來一半是 number 一半是字串，
+   拿去做加總或格式化就會靜默出錯。統一用 ::text 撈、在 JS 這一側轉成數字，
+   跟這個專案其他地方（walletOf、sellerView）的作法一致。 */
 admin.get('/overview', async c => {
-  const [r] = await sql`
+  const [r] = await sql<(Record<string, number> & { escrowed_points: string; points_outstanding: string })[]>`
     select
       (select count(*) from users)::int as users,
       (select count(*) from users where created_at > now() - interval '7 days')::int as users_7d,
@@ -126,10 +131,16 @@ admin.get('/overview', async c => {
       (select count(*) from shipments where status = 'requested')::int as ship_requested,
       (select count(*) from shipments where status in ('packed','shipped'))::int as ship_active,
       (select coalesce(sum(price),0) from orders
-        where status in ('escrowed','shipped','delivered','disputed'))::bigint as escrowed_points,
-      (select coalesce(sum(delta),0) from points_ledger)::bigint as points_outstanding
+        where status in ('escrowed','shipped','delivered','disputed'))::text as escrowed_points,
+      (select coalesce(sum(delta),0) from points_ledger)::text as points_outstanding
   `
-  return c.json({ overview: r })
+  return c.json({
+    overview: {
+      ...r,
+      escrowed_points: Number(r?.escrowed_points ?? 0),
+      points_outstanding: Number(r?.points_outstanding ?? 0)
+    }
+  })
 })
 
 /* ---- 爭議 ----
@@ -229,13 +240,20 @@ admin.post('/shipments/:id/status', async c => {
         shipped_at = ${status === 'shipped' ? Date.now() : sh.shipped_at}
       where id = ${id}
     `
-    // 卡片實際寄出後，它就不在保管庫了——之後上架只能走「需寄送」
-    if (status === 'shipped') {
+    /* 卡片離開保管庫後狀態要跟著走，之後上架只能走「需寄送」。
+       'delivered' 也要做這件事：狀態只檢查不能往回走，所以
+       requested → delivered 是合法的一步（客服拿到簽收回報時直接標完成，
+       中間那步沒人按）。原本只有 'shipped' 這個分支會動 prizes，
+       跳過去的話那些卡就永遠停在 'ship_requested' ——
+       那個狀態上架不行（只收 stashed / shipped）、回收不行（只收 stashed）、
+       私下交易也不行，等於使用者的卡被鎖死而且沒有任何端點救得回來。 */
+    if (status === 'shipped' || status === 'delivered') {
       await tx`update prizes set status = 'shipped' where id = any(${sh.prize_ids})`
+      const shipped = status === 'shipped'
       await notify({
         userId: sh.user_id as string, kind: 'shipment',
-        title: '你的卡已經寄出',
-        body: tracking ? `物流單號 ${tracking}` : '出貨單已寄出。',
+        title: shipped ? '你的卡已經寄出' : '你的卡已送達',
+        body: tracking ? `物流單號 ${tracking}` : shipped ? '出貨單已寄出。' : '出貨單已送達。',
         link: '/me/cards', refId: id
       }, tx)
     }

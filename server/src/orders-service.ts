@@ -61,6 +61,43 @@ export async function settle(tx: Tx, o: Order) {
     await credit(tx, o.sellerId, -o.deposit, 'deposit-forfeit', o.id)
     await credit(tx, PLATFORM_ID, o.deposit, 'deposit-collect', o.id)
   }
+  await releasePrize(tx, o)
+}
+
+/**
+ * 結案時把掛單背後那張卡的歸屬結清。
+ *
+ * 原本這件事整段不存在：庫內轉移（orders.ts 的 delivery === 'vault'）當場改
+ * prizes.user_id，但**需寄送的訂單從頭到尾沒有動過 prizes**。後果有兩個，
+ * 兩個都會發生在正常使用者身上：
+ *
+ *   1 買家付了點數、收到實體卡，但他的卡冊裡什麼都沒有 —— 平台的紀錄上
+ *     那張卡仍然掛在賣家名下。
+ *   2 賣家可以一直重賣同一張卡。訂單完成後 listings.status 變成 'sold'，
+ *     listings_prize_live / listings_cert_live 兩條唯一索引都是
+ *     `where status = 'live'`，所以它們立刻不再擋 —— 再上架一次就過了。
+ *     沒有鑑定編號的卡（RAW，certNo = null）連「同時」都擋不住：
+ *     cert 索引跳過 null，所以同一張卡可以同時掛出好幾筆有效掛單，
+ *     好幾個買家的點數同時被凍結，而賣家只有一張卡。
+ *
+ * 這裡把兩件事一起補上。所有訂單都來自 delivery = 'ship' 的掛單
+ * （vault 在 orders.ts 當場過戶、根本不建訂單），所以卡的實體去向是確定的：
+ *   completed          → 卡寄到買家手上了，過戶給買家
+ *   refunded/cancelled → 交易沒成，卡還在賣家那邊
+ * 兩種情況狀態都回到 'shipped'（＝在人手上、不在保管庫），
+ * 之後要再上架就是「需寄送」那條路。
+ *
+ * 只動 status = 'listed' 的那一列：那是上架時標記的，代表這張卡確實是被
+ * 這筆掛單鎖住的。加這個條件讓重複呼叫不會覆蓋掉之後才發生的狀態變化。
+ */
+async function releasePrize(tx: Tx, o: Order) {
+  if (o.status !== 'completed' && o.status !== 'refunded' && o.status !== 'cancelled') return
+  const owner = o.status === 'completed' ? o.buyerId : o.sellerId
+  await tx`
+    update prizes p set user_id = ${owner}, status = 'shipped'
+    from listings l
+    where l.id = ${o.listingId} and p.id = l.prize_id and p.status = 'listed'
+  `
 }
 
 /** 把一張訂單寫回資料庫（只寫會變的欄位） */

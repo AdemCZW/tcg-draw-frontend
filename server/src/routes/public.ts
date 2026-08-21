@@ -107,11 +107,41 @@ pub.post('/listings', requireAuth, async c => {
       await tx`insert into listings (id, card, price, seller_id, seller_name, delivery, cert_no, prize_id)
                values (${id}, ${pz.card as never}, ${price}, ${me}, ${(u?.name as string) ?? (u?.handle as string) ?? '我'},
                        ${delivery}, ${card.certNo ?? null}, ${prizeId})`
-    } catch {
-      // listings_cert_live / listings_prize_live 唯一索引：同一張卡已經在賣
+    } catch (e) {
+      /* 依撞到的是哪一條索引分開講。
+         原本這個 catch 把所有錯誤都說成「這張卡已經在市場上了」，
+         而那句話對其中一種情況是假的：
+
+         listings_cert_live 是 unique(cert_no) where status='live'，
+         它擋的是「鑑定編號」不是「這一列卡」。同一個 pool_prizes 列如果
+         total > 1 而 card 又帶了 certNo（種子資料的「全 PSA 10」池就是這樣，
+         例如 flareonPSA 一個編號開 15 籤），那 15 位得主的卡在資料上
+         共用同一個鑑定編號 —— 第一個人上架之後，其餘 14 個人上架都會被擋，
+         而且被告知「這張卡已經在市場上了」。他們的卡根本沒上架過，
+         照著這句話去市場也找不到自己的卡，等於一個無解又指錯方向的錯誤。
+
+         真正的病灶在開池那一端（一個鑑定編號只對應一張實體卡，
+         不該允許 certNo + total > 1），那要在 pools 的建池驗證補。
+         這裡至少要說實話，並且不要把其他錯誤（連線斷、資料格式）
+         一起冒充成 409 —— 那會把伺服器的問題講成使用者的問題。 */
+      const pg = e as { code?: string; constraint_name?: string }
+      if (pg.code !== '23505') throw e
+      if (pg.constraint_name === 'listings_cert_live') {
+        return {
+          error: 'WRONG_STATE',
+          message: '這個鑑定編號目前已經有一筆有效掛單，同一個編號同時只能上架一張',
+          status: 409
+        }
+      }
       return { error: 'WRONG_STATE', message: '這張卡已經在市場上了', status: 409 }
     }
-    if (delivery === 'vault') await tx`update prizes set status = 'listed' where id = ${prizeId}`
+    /* 兩種交付方式都要把卡標成已上架。原本只有 vault 標 —— 需寄送的卡
+       上架後 prizes.status 還是 'shipped'，而上面那個 delivery 判斷正好
+       允許 'shipped' 上架，所以同一張卡可以一直重複上架。
+       沒有鑑定編號的卡（RAW）連唯一索引都擋不住（cert 索引跳過 null），
+       等於同一張實體卡同時賣給好幾個人。
+       結案時由 orders-service.ts 的 releasePrize() 把 'listed' 收回去。 */
+    await tx`update prizes set status = 'listed' where id = ${prizeId}`
     const [l] = await tx`select * from listings where id = ${id}`
     return { listing: l }
   })

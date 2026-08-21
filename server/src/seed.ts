@@ -282,8 +282,15 @@ const poolDefs: PoolDef[] = [
       { tier: 'LAST', card: C.terapagosPSA, total: 1 },
       { tier: 'A', card: C.pikachuPSA, total: 1 },
       { tier: 'B', card: C.charizardPSA, total: 1 },
-      { tier: 'C', card: C.dragapultPSA, total: 2 },
-      { tier: 'D', card: C.flareonPSA, total: 15 }
+      /* 有鑑定編號的卡一個編號只能開一籤 —— 一個編號對應一張實體卡。
+         原本 dragapultPSA 開 2 籤、flareonPSA 開 15 籤，等於宣告有 15 個人
+         會各自拿到「同一張 PSA #84120035」。那是平台聲稱要防的一卡多賣，
+         而且第一個得主上架之後其餘 14 人都會被 listings_cert_live 擋下。
+         這個池的賣點是「全部可查證」，就用不帶編號的卡湊籤數，
+         真正有編號的只開一籤。 */
+      { tier: 'C', card: C.dragapultPSA, total: 1 },
+      { tier: 'D', card: C.flareonPSA, total: 1 },
+      { tier: 'D', card: C.sandyShocks, total: 15 }
     ]
   },
   {

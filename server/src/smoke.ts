@@ -177,6 +177,48 @@ async function run() {
       v.ok ? `${w2.wallet.points} → ${vj.wallet.points}` : '')
   }
 
+  /* ---- 併發：同一個人同時花兩筆錢 ----
+     跟上面「兩個人搶同一張卡」不同，這裡兩筆交易鎖的是**不同**的 listings 列，
+     所以彼此完全不會互相阻擋。餘額不是欄位、是 SUM(points_ledger.delta) 推算的，
+     沒有任何一列可以鎖 —— 在 READ COMMITTED 下兩邊會讀到同一個 available、
+     各自判定「夠」，然後各自花掉同一筆錢，帳本因此變成負的。
+     防線是 money.ts 的 lockSpender()：拿 users 那一列當這個人的帳戶閘門。 */
+  console.log('\n併發花費：')
+  {
+    const all = (await json(await fetch(`${base}/v1/listings`))).listings as Any[]
+    const two = all.filter(l => l.delivery === 'ship' && l.status === 'live').slice(0, 2)
+    if (two.length < 2) {
+      check('（跳過併發花費：市場上剩不到兩筆需寄送的掛單）', true)
+    } else {
+      const spender = await login('dblspend', '併發測試')
+      const [la, lb] = two as [Any, Any]
+      // 剛好差一點，湊不出兩筆 —— 沒有鎖的話兩筆都會成立
+      const budget = la.price + lb.price - 1
+      const g = await call(platform, '/v1/admin/grant',
+        { userId: 'u-dblspend', points: budget, note: 'smoke 併發花費測試' })
+      check('發點數給測試帳號', g.ok, await g.clone().text())
+      const w = await json(await call(spender, '/v1/wallet'))
+      check('測試帳號的餘額剛好差一點湊不出兩筆',
+        w.wallet.available === budget, `${w.wallet.available} vs ${budget}`)
+
+      const [ra, rb] = await Promise.all([
+        call(spender, '/v1/orders', { listingId: la.id, idempotencyKey: 'smoke-ds-' + Date.now() + '-a' }),
+        call(spender, '/v1/orders', { listingId: lb.id, idempotencyKey: 'smoke-ds-' + Date.now() + '-b' })
+      ])
+      const okCount = [ra, rb].filter(r => r.ok).length
+      check('同時買兩張不同的卡，只有一筆成立（點數不夠買兩筆）',
+        okCount === 1, `實際 ${okCount} 筆成功`)
+      const rejected = await Promise.all([ra, rb].filter(r => !r.ok).map(json))
+      check('另一筆回 INSUFFICIENT_POINTS',
+        rejected[0]?.error === 'INSUFFICIENT_POINTS', JSON.stringify(rejected[0]))
+
+      const w2 = await json(await call(spender, '/v1/wallet'))
+      check('凍結沒有超過餘額（available 不能是負的）',
+        w2.wallet.available >= 0,
+        `points ${w2.wallet.points} / locked ${w2.wallet.locked} / available ${w2.wallet.available}`)
+    }
+  }
+
   /* ---- 抽選 ---- */
   console.log('\n抽選：')
   const poolsRes = await json(await fetch(`${base}/v1/pools`))
@@ -293,7 +335,8 @@ async function run() {
 
     // 用買家保管庫裡任何一張還在庫的卡送出貨申請
     const stash = await json(await call(buyer, '/v1/prizes'))
-    const free = (stash.prizes ?? []).find((p: { status: string }) => p.status === 'stashed')
+    const frees = (stash.prizes ?? []).filter((p: { status: string }) => p.status === 'stashed')
+    const [free, free2] = frees
     if (!free) {
       check('（跳過出貨流程：買家沒有庫存卡）', true)
     } else {
@@ -331,6 +374,76 @@ async function run() {
       const stash2 = await json(await call(buyer, '/v1/prizes'))
       const moved = (stash2.prizes ?? []).find((p: { id: string }) => p.id === free.id)
       check('卡片狀態同步成 shipped', moved?.status === 'shipped', moved?.status)
+
+      /* ---- 需寄送的二手轉賣：卡真的要換手 ----
+         這一段釘住的是一個原本整段不存在的行為。庫內轉移會改 prizes.user_id，
+         但需寄送的訂單從頭到尾沒有動過 prizes，於是：
+           1 買家付了點數、收到實體卡，卡冊裡卻什麼都沒有
+           2 賣家可以把同一張卡一直重新上架再賣一次 —— 訂單完成後
+             listings.status 變 'sold'，兩條 `where status='live'` 的唯一索引
+             立刻不再擋，而沒有鑑定編號的 RAW 卡連同時掛兩筆都擋不住。 */
+      const relistPrice = 300
+      const listed = await call(buyer, '/v1/listings', { prizeId: free.id, price: relistPrice })
+      check('已寄出的卡可以再上架（需寄送）', listed.ok, await listed.clone().text())
+      const listing2 = (await json(listed)).listing
+
+      const stash3 = await json(await call(buyer, '/v1/prizes'))
+      const nowListed = (stash3.prizes ?? []).find((p: { id: string }) => p.id === free.id)
+      check('上架後卡片標成 listed（需寄送也要標，否則擋不住重複上架）',
+        nowListed?.status === 'listed', nowListed?.status)
+
+      const relist = await call(buyer, '/v1/listings', { prizeId: free.id, price: relistPrice })
+      check('同一張卡不能同時掛兩筆', relist.status === 409, `${relist.status}`)
+
+      // 讓賣家買下來，走完整條託管流程
+      await call(platform, '/v1/admin/grant',
+        { userId: 'u-seller', points: relistPrice * 4, note: 'smoke 轉賣測試' })
+      const buy2 = await call(seller, '/v1/orders',
+        { listingId: listing2.id, idempotencyKey: 'smoke-relist-' + Date.now() })
+      check('另一個人買得下這張二手卡', buy2.ok, await buy2.clone().text())
+      const order2 = (await json(buy2)).order
+
+      const serial2 = String((Date.now() + 7) % 1e8).padStart(8, '0')
+      const shipped2 = await call(buyer, `/v1/orders/${order2.id}/ship`,
+        { carrier: 'post', tracking: 'RR' + s10(serial2) + 'TW', photoUrls: photo })
+      check('原持有人出貨', shipped2.ok, await shipped2.clone().text())
+      await call(platform, `/v1/orders/${order2.id}/delivered`, {})
+      const done2 = await call(seller, `/v1/orders/${order2.id}/confirm`, {})
+      check('新買家確認收貨', done2.ok, await done2.clone().text())
+
+      const sellerCards = await json(await call(seller, '/v1/prizes'))
+      check('成交後卡片過戶到新買家名下',
+        (sellerCards.prizes ?? []).some((p: { id: string; status: string }) =>
+          p.id === free.id && p.status === 'shipped'))
+      const oldOwner = await json(await call(buyer, '/v1/prizes'))
+      check('原持有人的卡冊裡不再有這張卡',
+        !(oldOwner.prizes ?? []).some((p: { id: string }) => p.id === free.id))
+
+      // 賣掉之後不能再上架一次 —— 卡已經不是他的了
+      const resell = await call(buyer, '/v1/listings', { prizeId: free.id, price: relistPrice })
+      check('賣掉之後原持有人不能再上架同一張卡', resell.status === 404, `${resell.status}`)
+    }
+
+    /* ---- 出貨單直接跳到已送達 ----
+       狀態只擋往回走，所以 requested → delivered 是合法的一步
+       （客服拿到簽收回報時直接標完成，中間那步沒人按）。
+       原本只有 'shipped' 那個分支會把卡片標成離開保管庫，跳過去的話
+       卡就永遠停在 'ship_requested' —— 上架不行、回收不行、交易也不行，
+       而且沒有任何端點救得回來。 */
+    if (free2) {
+      const req2 = await call(buyer, '/v1/prizes/ship', {
+        prizeIds: [free2.id],
+        address: { name: '測試收件', phone: '0900000000', zip: '106', city: '台北市', line1: '測試路 2 號' }
+      })
+      check('第二筆出貨申請送得出', req2.ok, `${req2.status}`)
+      const sid2 = (await json(req2)).shipmentId
+      const jump = await call(platform, `/v1/admin/shipments/${sid2}/status`,
+        { status: 'delivered', note: 'smoke 直接標送達' })
+      check('可以從 requested 直接標成 delivered', jump.ok, `${jump.status}`)
+      const after2 = await json(await call(buyer, '/v1/prizes'))
+      const p2 = (after2.prizes ?? []).find((p: { id: string }) => p.id === free2.id)
+      check('跳過 shipped 的出貨單也要把卡片放出 ship_requested',
+        p2?.status === 'shipped', p2?.status)
     }
 
     // 調閱會員資料：一次要帶回身分、餘額、卡、訂單、出貨、帳本

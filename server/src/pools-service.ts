@@ -137,7 +137,15 @@ export async function draw(
   if (uniq.some(s => s > Number(p.total_tickets))) return { ok: false, error: 'BAD_SEATS' }
 
   const cost = Number(p.ticket_price) * uniq.length
-  const { walletOf } = await import('./money.js')
+  const { walletOf, lockSpender } = await import('./money.js')
+  /* 先鎖住這個帳戶再算餘額。
+     walletOf 是推算的（帳本 SUM 減進行中訂單），**沒有任何一列可以鎖** ——
+     這裡原本只鎖了 pools 那一列，所以同一個人同時抽兩個**不同**的池
+     會鎖到不同的列、完全不互相阻擋，兩邊各自 SUM 到同一批已提交的帳本
+     都判定「夠」，等於同一筆點數花兩次。
+     拿 users 那一列當這個帳戶的閘門。鎖序固定「其他資料列 → 使用者列」、
+     每筆交易只鎖一個使用者，不會形成死結環。 */
+  await lockSpender(tx, userId)
   const w = await walletOf(userId, tx)
   if (w.available < cost) return { ok: false, error: 'INSUFFICIENT_POINTS' }
 

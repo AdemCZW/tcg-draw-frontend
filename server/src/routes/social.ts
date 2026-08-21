@@ -12,7 +12,7 @@ import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
-import { walletOf } from '../money.js'
+import { lockSpender, walletOf } from '../money.js'
 import { notify } from '../notify.js'
 
 /* =====================================================================
@@ -184,6 +184,12 @@ social.post('/trade-offers/:id/accept', async c => {
 
     // 出價到現在可能過了幾天，這一刻的餘額才算數
     const price = Number(o.points)
+    /* 鎖的是出價方（付錢的那一邊）而不是我。待回應的出價不算凍結，
+       所以同一個人可以同時掛好幾筆出價；兩個持有人同時按下接受時，
+       兩筆交易鎖到的是不同的 trade_offers 與 prizes 列，互不阻擋，
+       兩邊都會讀到同一個 available 而都判定「夠」—— 對方的餘額就被花了兩次
+       （見 money.ts 的 lockSpender）。 */
+    await lockSpender(tx, o.from_user as string)
     const w = await walletOf(o.from_user as string, tx)
     if (w.available < price) {
       return { error: 'INSUFFICIENT_POINTS', message: '對方的可動用點數已經不足，無法成交', status: 409 }
