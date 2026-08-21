@@ -7,6 +7,7 @@
 import { sql } from './db.js'
 import { PLATFORM_ID } from './orders-service.js'
 import { commitV2, manifestHashOf, seatSequence } from './shared/fairness.js'
+import { returnRatio } from './shared/economics.js'
 
 const users: [string, string, string][] = [
   [PLATFORM_ID, 'platform', 'VaultDraw 官方'],
@@ -193,7 +194,9 @@ const poolDefs: PoolDef[] = [
        在一般池裡它會變成一張可以被正常抽走的廢卡。那 20 席併進 D 賞。 */
     id: 'p-shop-3', sellerId: 'u-shop', mode: 'classic',
     title: '夢幻 精選 66 抽',
-    ticketPrice: 500, status: 'open', serverSeed: 'b3'.repeat(32), sold: 14, openedDaysAgo: 2,
+    /* 票價 500 → 640。原本是連莊爆賞，抽到 BUST 的人暫持獎品會被沒收，
+       那部分不用發出去。改成 classic 之後每一格都要真的發，還元率變成 108%。 */
+    ticketPrice: 640, status: 'open', serverSeed: 'b3'.repeat(32), sold: 14, openedDaysAgo: 2,
     prizes: [ // 66 籤
       { tier: 'A', card: C.dragapultSAR, total: 1 },
       { tier: 'B', card: C.pidgeotSAR, total: 3 },
@@ -261,7 +264,9 @@ const poolDefs: PoolDef[] = [
        沒有出價端點，開出來只會是一個按了沒反應的池。改回 classic。 */
     id: 'p-vault-2', sellerId: 'u-vaultkeeper', mode: 'classic',
     title: '保庫堂 · 噴火龍 80 抽',
-    ticketPrice: 300, status: 'open', serverSeed: 'd2'.repeat(32), sold: 77, soldLayout: 'head',
+    /* 票價 300 → 580。這個池原本是尾籤競標，收入有一部分來自喊標；
+       改成 classic 之後只剩固定票價，還元率變成 164%。調價回到 ~85%。 */
+    ticketPrice: 580, status: 'open', serverSeed: 'd2'.repeat(32), sold: 77, soldLayout: 'head',
     openedDaysAgo: 9,
     prizes: [ // 80 籤
       { tier: 'A', card: C.charizardSAR, total: 1 },
@@ -310,7 +315,10 @@ const poolDefs: PoolDef[] = [
        都必須維持原值 —— 換掉就等於偷改了已公布的籤序。 */
     id: 'p-seed-1', sellerId: 'u-seller', mode: 'classic',
     title: '測試池：閃色寶藏 100 抽',
-    ticketPrice: 300, status: 'open', serverSeed: '11'.repeat(32), clientSeed: 'fixture:seed-1',
+    /* 票價從 300 調到 3250。原本的獎品總值是 276,120，用 300 × 100 籤賣
+       等於還元率 920% —— 賣一池賠九池，而且過不了平台自己的護欄。
+       獎品組成不動（那是這個池的賣點），調票價讓它落在 85% 左右。 */
+    ticketPrice: 3250, status: 'open', serverSeed: '11'.repeat(32), clientSeed: 'fixture:seed-1',
     sold: 0, openedDaysAgo: 0,
     prizes: [
       { tier: 'LAST', card: pcard('噴火龍 ex UR', 'SV4a-349', 43680), total: 1 },
@@ -372,15 +380,22 @@ async function seedPool(d: PoolDef) {
   })
   const manifestHash = await manifestHashOf(manifest)
 
+  /* 種子池也要有還元率，否則示範資料上看不到這個數字，
+     而它正是買家判斷值不值得抽最直接的依據。 */
+  const { ratio } = returnRatio(
+    prizeDefs.map(p => ({ tier: p.tier, qty: p.total, unitValue: (p.card as { refPrice?: number }).refPrice ?? 0 })),
+    total, d.ticketPrice
+  )
+
   await sql`
     insert into pools (id, seller_id, mode, title, ticket_price, total_tickets, status,
                        server_seed, commit_hash, manifest_hash, client_seed_source, client_seed,
-                       shitei_tier, auction_seats, opened_at, revealed_at)
+                       shitei_tier, auction_seats, opened_at, revealed_at, return_ratio)
     values (${d.id}, ${d.sellerId}, ${d.mode}, ${d.title}, ${d.ticketPrice}, ${total}, ${d.status},
             ${d.serverSeed}, ${await commitV2(d.serverSeed, manifestHash)}, ${manifestHash},
             ${clientSeed}, ${clientSeed},
             ${d.shiteiTier ?? null}, ${d.auctionSeats ?? null}, ${openedAt},
-            ${d.status === 'revealed' ? new Date() : null})
+            ${d.status === 'revealed' ? new Date() : null}, ${ratio.toFixed(2)})
   `
   await sql`insert into pool_prizes ${sql(prizeDefs.map(p => ({ id: p.id, pool_id: d.id, tier: p.tier, card: p.card, total: p.total })) as never)}`
 

@@ -34,7 +34,10 @@ const pool = computed(() => pools.byId(String(route.params.poolId)))
 
 const loading = ref(false)
 const err = ref('')
-const reveal = ref<Reveal & { clientSeedSource?: string; manifestHash?: string | null } | null>(null)
+interface SeatRow { seat: number; prizeId: string; takenAt: number | null }
+const reveal = ref<Reveal & {
+  clientSeedSource?: string; manifestHash?: string | null; seats?: SeatRow[]
+} | null>(null)
 const result = ref<{ ok: boolean; reason?: string; version: 1 | 2 } | null>(null)
 /** 自己重算出來的 commit，跟開賣前公布的並排給使用者看 */
 const recomputed = ref('')
@@ -57,7 +60,9 @@ async function run() {
       err.value = d.message ?? '取不到公布資料'
       return
     }
-    const r = await res.json() as Reveal & { clientSeedSource?: string; manifestHash?: string | null }
+    const r = await res.json() as Reveal & {
+      clientSeedSource?: string; manifestHash?: string | null; seats?: SeatRow[]
+    }
     reveal.value = r
     /* 重算 commit 的方式要跟這個池的版本一致，否則會在畫面上並排兩個
        必然不一樣的雜湊，看起來像出事了 */
@@ -71,6 +76,31 @@ async function run() {
     loading.value = false
   }
 }
+
+/* 把籤位、獎品清單、抽走時間接起來。
+   清單缺項時退回 prizeId —— 寧可顯示得醜，也不要因為一項對不上就整段消失。 */
+const history = computed(() => {
+  const r = reveal.value
+  if (!r?.seats?.length) return []
+  const byId = new Map((r.manifest ?? []).map(m => [m.prizeId, m]))
+  return r.seats.map(s => {
+    const m = byId.get(s.prizeId)
+    return {
+      seat: s.seat,
+      tier: m?.tier ?? '—',
+      name: m?.name ?? s.prizeId,
+      takenAt: s.takenAt
+    }
+  })
+})
+
+/* 摘要只列最高的兩個賞別。250 格的池全部攤開沒有人看得完，
+   而大家真正想確認的是「大獎在哪、什麼時候出的」。 */
+const topHits = computed(() =>
+  history.value.filter(h => h.tier === 'LAST' || h.tier === 'A').slice(0, 12))
+
+const fmt = (ms: number) =>
+  new Date(ms).toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 
 // 已開獎的池直接算給他看，不用等他按
 onMounted(async () => {
@@ -132,6 +162,40 @@ onMounted(async () => {
           </ul>
         </details>
 
+        <!-- 排出履歷。
+             在「大獎真的在池裡」這件事上，它比雜湊更直接：
+             一般人看不懂 SHA-256，但看得懂「第 47 號在 8/12 開出了噴火龍」。
+             日本業者用的就是這一套，而它其實比 commit-reveal 更有說服力 ——
+             因為它證明的是結果，不是過程。 -->
+        <section v-if="history.length" class="hist">
+          <h2>排出履歷</h2>
+          <p class="muted note">
+            每一格開出什麼、什麼時候被抽走。沒有標示時間的是這一池收攤時還沒賣掉的籤。
+            這裡不顯示是誰抽到的。
+          </p>
+
+          <ul class="top">
+            <li v-for="h in topHits" :key="h.seat">
+              <span class="mono seat">#{{ h.seat }}</span>
+              <span class="tier">{{ h.tier }}</span>
+              <span class="nm">{{ h.name }}</span>
+              <span class="mono when">{{ h.takenAt ? fmt(h.takenAt) : '未售出' }}</span>
+            </li>
+          </ul>
+
+          <details>
+            <summary>全部 {{ history.length }} 格</summary>
+            <ul class="all">
+              <li v-for="h in history" :key="h.seat" :class="{ unsold: !h.takenAt }">
+                <span class="mono seat">#{{ h.seat }}</span>
+                <span class="tier">{{ h.tier }}</span>
+                <span class="nm">{{ h.name }}</span>
+                <span class="mono when">{{ h.takenAt ? fmt(h.takenAt) : '未售出' }}</span>
+              </li>
+            </ul>
+          </details>
+        </section>
+
         <dl v-if="reveal">
           <dt>開賣前公布的 commit</dt>
           <dd class="mono">{{ reveal.commitHash }}</dd>
@@ -158,6 +222,22 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.hist { border-top: 1px solid var(--line-soft); padding-top: 14px; }
+.hist h2 { font-size: 15px; margin: 0 0 6px; }
+.hist ul { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.hist li { display: flex; align-items: center; gap: 9px; font-size: 12.5px; }
+.hist li.unsold { opacity: .45; }
+.hist .seat { flex: none; color: var(--muted); min-width: 46px; }
+.hist .tier {
+  flex: none; padding: 1px 7px; border-radius: 999px;
+  background: var(--surface-3); color: var(--muted); font-size: 11px;
+}
+.hist .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist .when { flex: none; color: var(--faint); font-size: 11.5px; }
+.hist details { margin-top: 12px; }
+.hist summary { cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 6px 0; }
+.hist .all { max-height: 420px; overflow-y: auto; overscroll-behavior: contain; }
+
 .man { font-size: 12.5px; }
 .man summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
 .man ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }

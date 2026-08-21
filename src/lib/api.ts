@@ -33,6 +33,7 @@ function toPool(p: Any): Pool {
     shiteiTier: p.shiteiTier as Tier | undefined, auctionSeats: p.auctionSeats as number | undefined,
     ticketPrice: Number(p.ticketPrice), totalTickets: Number(p.totalTickets),
     remainingTickets: Number(p.remainingTickets),
+    returnRatio: p.returnRatio === null || p.returnRatio === undefined ? null : Number(p.returnRatio),
     takenSeats: (p.takenSeats as number[]) ?? [],
     status: p.status as PoolStatus,
     commitHash: String(p.commitHash ?? ''), clientSeedSource: String(p.clientSeedSource ?? ''),

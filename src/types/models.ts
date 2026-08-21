@@ -112,6 +112,8 @@ export interface Pool {
   ticketPrice: number      // streak 模式為「入場費」，續抽不再收費
   totalTickets: number
   remainingTickets: number
+  /** 開賣當下算的還元率（獎品總值 ÷ 票收 × 100）。舊池沒有這個數字就是 null */
+  returnRatio?: number | null
   takenSeats: number[]     // 已被抽走的籤位（1-based）
   status: PoolStatus
   commitHash: string       // SHA256(server_seed)，開賣前公布

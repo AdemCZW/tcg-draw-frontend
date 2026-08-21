@@ -25,9 +25,11 @@ export interface PoolEconomics {
   message: string
 }
 
-const LOSS = 100      // 超過即賠本
-const THIN = 95       // 接近打平，利潤太薄
-const PREDATORY = 55  // 低於此值對玩家過苛
+/* 門檻從 shared 引用，不要在這裡再寫一份。
+   後端建池時用的是同一組數字（shared/economics.ts）—— 兩邊各寫一份的話，
+   賣家會在畫面上看到「合理」然後送出時被伺服器擋掉，
+   而且沒有人會發現是門檻漂掉了。 */
+import { RETURN_LOSS as LOSS, RETURN_THIN as THIN, RETURN_PREDATORY as PREDATORY } from '@/shared/economics'
 
 /** 一般定量池：所有非 BUST 獎品最終都會發出去 */
 function flatRatio(prizes: PrizeSpec[], seats: number, price: number) {

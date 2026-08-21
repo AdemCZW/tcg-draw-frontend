@@ -6,6 +6,7 @@
  */
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { returnRatio, poolAllowed } from '../shared/economics.js'
 import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
@@ -27,6 +28,10 @@ function toPublic(p: Row, prizes: Row[], taken: number[]) {
     coverFileId: p.cover_file_id, cover: '',
     ticketPrice: Number(p.ticket_price), totalTickets: Number(p.total_tickets),
     remainingTickets: Number(p.total_tickets) - taken.length,
+    /* 開賣當下算的還元率。買家判斷一個池值不值得抽最直接的依據，
+       而同業幾乎沒有人公開它。舊池沒有這個欄位就給 null，
+       前端要能分辨「沒有這個數字」與「這個池還元率是 0」。 */
+    returnRatio: p.return_ratio === null || p.return_ratio === undefined ? null : Number(p.return_ratio),
     takenSeats: taken,
     status: p.status,
     commitHash: p.commit_hash, clientSeedSource: p.client_seed_source,
@@ -76,8 +81,11 @@ pools.get('/:id/reveal', async c => {
   const [p] = await sql`select * from pools where id = ${pid(c)}`
   if (!p) return c.json({ error: 'NOT_FOUND', message: '找不到這個池' }, 404)
   if (p.status !== 'revealed') return c.json({ error: 'NOT_REVEALED', message: '這個池還沒公布 seed' }, 409)
-  const seq = await sql<{ seat: number; prize_id: string }[]>`
-    select seat, prize_id from pool_seats where pool_id = ${p.id} order by seat
+  /* taken_at 一起帶出來給「排出履歷」用。不帶 taken_by ——
+     誰抽到什麼是個人資訊，履歷要證明的是「大獎真的在池裡、什麼時候被抽走」，
+     不需要指名道姓。 */
+  const seq = await sql<{ seat: number; prize_id: string; taken_at: string | null }[]>`
+    select seat, prize_id, taken_at from pool_seats where pool_id = ${p.id} order by seat
   `
   const prizes = await sql<{
     id: string; total: number; tier: string; card: Record<string, unknown>
@@ -108,7 +116,16 @@ pools.get('/:id/reveal', async c => {
     manifestHash: p.manifest_hash ?? null,
     manifest,
     prizes: prizes.map(x => ({ prizeId: x.id, total: Number(x.total) })),
-    publishedSequence: seq.map(s => s.prize_id)
+    publishedSequence: seq.map(s => s.prize_id),
+    /* 排出履歷：每一格開出什麼、什麼時候被抽走（沒被抽走的是 null）。
+       日本業者的做法 —— 在「證明大獎真的在池裡」這件事上，
+       它比雜湊更直接：一般人看不懂 SHA-256，但看得懂
+       「第 47 號在 8/12 開出了噴火龍」。 */
+    seats: seq.map(s => ({
+      seat: Number(s.seat),
+      prizeId: s.prize_id,
+      takenAt: s.taken_at ? Number(s.taken_at) : null
+    }))
   })
 })
 
@@ -162,13 +179,31 @@ pools.post('/', requireAuth, async c => {
     return c.json({ error: 'BAD_REQUEST', message: `獎品總數 ${sum} 必須等於籤數 ${b.totalTickets}` }, 400)
   }
 
+  /* 還元率護欄。原本這套判斷只存在於前端的 lib/economics.ts —— 也就是說
+     「還元率不合理就不給開」**只在瀏覽器裡**，直接打這支 API 就能繞過。
+     門檻與前端共用 shared/economics.ts，不會分岔。 */
+  const { ratio } = returnRatio(
+    b.prizes.map(p => ({ tier: p.tier, qty: p.total, unitValue: p.card.refPrice })),
+    b.totalTickets, b.ticketPrice
+  )
+  const gate = poolAllowed(ratio)
+  if (!gate.allowed) {
+    return c.json({
+      error: 'BAD_ECONOMICS',
+      message: gate.verdict === 'loss'
+        ? `${gate.message}最常見的原因是獎品的參考價填錯了。`
+        : `${gate.message}平台不接受這樣的池。`
+    }, 400)
+  }
+
   const id = 'p-' + randomBytes(5).toString('hex')
   try {
     const result = await sql.begin(async tx => {
       await tx`
-        insert into pools (id, seller_id, mode, title, cover_file_id, ticket_price, total_tickets, shitei_tier, auction_seats)
+        insert into pools (id, seller_id, mode, title, cover_file_id, ticket_price, total_tickets,
+                           shitei_tier, auction_seats, return_ratio)
         values (${id}, ${me}, ${b.mode}, ${b.title}, ${b.coverFileId ?? null}, ${b.ticketPrice}, ${b.totalTickets},
-                ${b.shiteiTier ?? null}, ${b.auctionSeats ?? null})
+                ${b.shiteiTier ?? null}, ${b.auctionSeats ?? null}, ${ratio.toFixed(2)})
       `
       const rows = b.prizes.map((p, i) => ({
         id: `${id}-pr${i}`, pool_id: id, tier: p.tier, card: p.card, total: p.total

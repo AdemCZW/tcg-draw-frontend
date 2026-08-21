@@ -333,12 +333,29 @@ async function run() {
     const ov = await json(await call(platform, '/v1/admin/overview'))
     check('總覽帶出待處理出貨數', typeof ov.overview?.ship_requested === 'number')
 
-    // 用買家保管庫裡任何一張還在庫的卡送出貨申請
-    const stash = await json(await call(buyer, '/v1/prizes'))
-    const frees = (stash.prizes ?? []).filter((p: { status: string }) => p.status === 'stashed')
+    /* 自己抽到有卡為止，不要靠前面的段落留下庫存。
+       依賴殘留狀態的結果是：前面段落一改順序，這一整段就被靜默跳過，
+       看起來全綠其實什麼都沒驗到（下架那一段先前就是這樣）。 */
+    const ensureStash = async (want: number) => {
+      for (let round = 0; round < 4; round++) {
+        const cur = await json(await call(buyer, '/v1/prizes'))
+        const have = (cur.prizes ?? []).filter((p: { status: string }) => p.status === 'stashed')
+        if (have.length >= want) return have
+        const snap = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+        const taken = new Set<number>(snap.pool?.takenSeats ?? [])
+        const seats = Array.from({ length: 100 }, (_, i) => i + 1)
+          .filter(n => !taken.has(n)).slice(0, want - have.length)
+        if (!seats.length) return have
+        await call(buyer, '/v1/pools/p-seed-1/draw',
+          { seats, idempotencyKey: 'smoke-ship-' + round + '-' + Date.now() })
+      }
+      const last = await json(await call(buyer, '/v1/prizes'))
+      return (last.prizes ?? []).filter((p: { status: string }) => p.status === 'stashed')
+    }
+    const frees = await ensureStash(2)
     const [free, free2] = frees
     if (!free) {
-      check('（跳過出貨流程：買家沒有庫存卡）', true)
+      check('（跳過出貨流程：抽不到可用的卡）', false, '這一段沒有驗到任何東西')
     } else {
       const req = await call(buyer, '/v1/prizes/ship', {
         prizeIds: [free.id],
@@ -476,6 +493,15 @@ async function run() {
      但平台上沒有任何地方可以申請。 */
   /* ---- 下架 ----
      這條路原本不存在，上架之後只能等人買，卡也跟著卡在 listed。 */
+  /* 還元率要能被買家看到 —— 那是判斷一個池值不值得抽最直接的依據 */
+  {
+    const snap = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+    check('池快照帶出還元率', typeof snap.pool?.returnRatio === 'number',
+      `returnRatio=${snap.pool?.returnRatio}`)
+    check('種子池的還元率落在護欄之內',
+      snap.pool.returnRatio >= 55 && snap.pool.returnRatio < 100, `${snap.pool?.returnRatio}`)
+  }
+
   console.log('\n下架：')
   {
     /* 自己抽一張來測，不要靠前面的段落留下庫存 ——
@@ -564,6 +590,23 @@ async function run() {
       check('後台賣家清單看得到新申請',
         (list.sellers ?? []).some((x: { id: string; tier: string }) => x.id === 'u-buyer' && x.tier === 'pending'))
     }
+
+    /* ---- 還元率護欄 ----
+       這套判斷原本只存在於前端，也就是說「不合理就不給開」只在瀏覽器裡，
+       直接打 API 就能繞過。 */
+    const cheapCard = { id: 'c-econ', name: '測試卡', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }
+    const mkPool = (title: string, price: number, tickets: number) => call(seller, '/v1/pools', {
+      title, mode: 'classic', ticketPrice: price, totalTickets: tickets,
+      prizes: [{ tier: 'D', card: cheapCard, total: tickets }]
+    })
+
+    const harsh = await mkPool('苛刻池', 100, 10)          // 還元 10%
+    check('還元率過低的池開不了', harsh.status === 400, `${harsh.status}`)
+    check('而且講得出原因', (await harsh.clone().text()).includes('過於不利'))
+
+    const lossy = await mkPool('賠本池', 2, 10)            // 還元 500%
+    check('還元率超過 100% 的池也開不了', lossy.status === 400)
+    check('賠本的訊息提示可能是參考價填錯', (await lossy.clone().text()).includes('參考價'))
 
     /* 後端只收 classic：抽卡邏輯不讀 mode，收下其他模式等於讓賣家開出
        標示著某種玩法、實際卻不是那樣運作的池 */
