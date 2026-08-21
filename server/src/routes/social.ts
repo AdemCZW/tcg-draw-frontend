@@ -124,13 +124,21 @@ social.post('/trade-offers', async c => {
     if (w.available < points) return { error: 'INSUFFICIENT_POINTS', message: '可動用點數不足', status: 409 }
 
     const id = 'to-' + randomBytes(6).toString('hex')
-    try {
-      await tx`
-        insert into trade_offers (id, prize_id, from_user, to_user, points, message, created_at)
-        values (${id}, ${prizeId}, ${me}, ${p.user_id}, ${points}, ${message}, ${Date.now()})
-      `
-    } catch {
-      // trade_offers_one_open：同一張卡對同一個人只能有一筆待回應
+    /* 用 ON CONFLICT DO NOTHING 判斷重複，不要靠 try/catch 接唯一索引的例外。
+       Postgres 只要有一句失敗，**整個交易就進入 aborted 狀態** —— 就算把例外
+       catch 住並提早 return，postgres.js 接著要 COMMIT 一樣會失敗，
+       結果是使用者拿到 500 而不是「你已經出過價了」。
+       這個寫法從一開始就是錯的，但這條路徑直到煙霧測試真的跑起來才被走到。
+
+       沒有回傳列 = 撞到 trade_offers_one_open（同一張卡對同一個人只能有一筆
+       待回應）。交易全程健康，也不需要先 SELECT 再 INSERT 那種有競態的檢查。 */
+    const ins = await tx<{ id: string }[]>`
+      insert into trade_offers (id, prize_id, from_user, to_user, points, message, created_at)
+      values (${id}, ${prizeId}, ${me}, ${p.user_id}, ${points}, ${message}, ${Date.now()})
+      on conflict do nothing
+      returning id
+    `
+    if (!ins.length) {
       return { error: 'OFFER_EXISTS', message: '你對這張卡已經有一筆還沒回應的出價', status: 409 }
     }
 

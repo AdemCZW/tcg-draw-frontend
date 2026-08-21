@@ -474,6 +474,58 @@ async function run() {
   /* ---- 賣家申請 ----
      這條路原本整段不存在：POST /v1/pools 回 NOT_SELLER 叫人「先申請成為賣家」，
      但平台上沒有任何地方可以申請。 */
+  /* ---- 下架 ----
+     這條路原本不存在，上架之後只能等人買，卡也跟著卡在 listed。 */
+  console.log('\n下架：')
+  {
+    /* 自己抽一張來測，不要靠前面的段落留下庫存 ——
+       出貨與交易那兩段會把買家的卡用掉，靠殘留的話這一整段會被靜默跳過，
+       看起來是 ok 其實什麼都沒驗到（第一版就是這樣）。 */
+    let mine = await json(await call(buyer, '/v1/prizes'))
+    let free = (mine.prizes ?? []).find((p: { status: string }) => p.status === 'stashed')
+    if (!free) {
+      const snap = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+      const taken = new Set<number>(snap.pool?.takenSeats ?? [])
+      const seat = Array.from({ length: 100 }, (_, i) => i + 1).find(n => !taken.has(n))
+      if (seat) {
+        await call(buyer, '/v1/pools/p-seed-1/draw',
+          { seats: [seat], idempotencyKey: 'smoke-delist-' + Date.now() })
+        mine = await json(await call(buyer, '/v1/prizes'))
+        free = (mine.prizes ?? []).find((p: { status: string }) => p.status === 'stashed')
+      }
+    }
+    if (!free) {
+      check('（跳過下架：抽不到可用的卡）', false, '這一段沒有驗到任何東西')
+    } else {
+      const made = await call(buyer, '/v1/listings', { prizeId: free.id, price: 1234 })
+      check('上架成功', made.ok, `${made.status}`)
+      const { listing } = await json(made)
+
+      const afterList = await json(await call(buyer, '/v1/prizes'))
+      check('上架後卡標成 listed',
+        (afterList.prizes ?? []).find((p: { id: string }) => p.id === free.id)?.status === 'listed')
+
+      const notMine = await call(seller, `/v1/listings/${listing.id}/delist`, {})
+      check('別人不能下架我的掛單', notMine.status === 403, `${notMine.status}`)
+
+      const off = await call(buyer, `/v1/listings/${listing.id}/delist`, {})
+      check('下架成功', off.ok, `${off.status}`)
+
+      const afterOff = await json(await call(buyer, '/v1/prizes'))
+      check('下架後卡回到保管中',
+        (afterOff.prizes ?? []).find((p: { id: string }) => p.id === free.id)?.status === 'stashed')
+
+      const again = await call(buyer, `/v1/listings/${listing.id}/delist`, {})
+      check('已下架的不能再下架', again.status === 409)
+
+      // 下架之後要能重新上架 —— 唯一索引是 where status='live'，應該已經放行
+      const relist = await call(buyer, '/v1/listings', { prizeId: free.id, price: 2345 })
+      check('下架後可以重新上架', relist.ok, `${relist.status}`)
+      const { listing: l2 } = await json(relist)
+      await call(buyer, `/v1/listings/${l2.id}/delist`, {})
+    }
+  }
+
   console.log('\n賣家申請：')
   {
     const anon = await fetch(`${base}/v1/seller/apply`, {
@@ -503,7 +555,7 @@ async function run() {
       // pending 不能開池 —— 門檻在這裡，不在申請
       const pool = await call(buyer, '/v1/pools', {
         title: '不該開得成的池', mode: 'classic', ticketPrice: 100, totalTickets: 2,
-        prizes: [{ tier: 'D', card: { name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 2 }]
+        prizes: [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 2 }]
       })
       check('待審核的賣家開不了池', pool.status === 403, `${pool.status}`)
 
@@ -517,7 +569,7 @@ async function run() {
        標示著某種玩法、實際卻不是那樣運作的池 */
     const badMode = await call(seller, '/v1/pools', {
       title: '連莊池', mode: 'streak', ticketPrice: 100, totalTickets: 1,
-      prizes: [{ tier: 'D', card: { name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 1 }]
+      prizes: [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 1 }]
     })
     check('後端不收 classic 以外的玩法', badMode.status === 400, `${badMode.status}`)
 
@@ -588,7 +640,7 @@ async function run() {
       const { offerId } = await json(made)
 
       const dup = await call(seller, '/v1/social/trade-offers', { prizeId: target.id, points: 600 })
-      check('同一張卡重複出價被擋', dup.status === 409)
+      check('同一張卡重複出價被擋', dup.status === 409, `${dup.status} ${await dup.clone().text()}`)
 
       /* 出價之後那筆錢要真的被凍住 —— 這是「未入帳／已承諾的點數不能再花」的防線 */
       const wAfterOffer = (await json(await call(seller, '/v1/wallet'))).wallet

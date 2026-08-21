@@ -53,8 +53,12 @@ const PresignBody = z.object({
 })
 
 files.post('/presign', requireAuth, async c => {
-  if (!configured()) return notReady(c)
   const me = c.get('userId')
+  /* 先驗請求，再看服務有沒有設定。
+     順序原本是相反的，於是 R2 沒設定的環境（本機、剛部署還沒填金鑰）
+     會把「mime 不在白名單」「檔案太大」這種請求端的錯誤一律回成 503 ——
+     呼叫端被告知「服務尚未就緒」，實際上是他自己送錯了。
+     請求格式不對就是不對，跟服務有沒有設定無關。 */
   const parsed = PresignBody.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '參數不合法' }, 400)
   const { purpose, mime, bytes } = parsed.data
@@ -66,6 +70,9 @@ files.post('/presign', requireAuth, async c => {
   if (bytes > rule.maxBytes) {
     return c.json({ error: 'TOO_LARGE', message: `檔案太大，上限 ${Math.floor(rule.maxBytes / MB)}MB` }, 400)
   }
+
+  // 請求本身沒問題，這才輪到「後端有沒有能力處理」
+  if (!configured()) return notReady(c)
 
   const id = 'f-' + randomBytes(6).toString('hex')
   const ext = EXT[mime] ?? 'bin'

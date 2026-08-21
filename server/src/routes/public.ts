@@ -89,6 +89,37 @@ pub.get('/winners', async c => {
 
 /* ---- 上架：把名下的卡掛到市場 ---- */
 const ListBody = z.object({ prizeId: z.string().min(1), price: z.number().int().positive() })
+/**
+ * 下架自己的掛單。
+ *
+ * 這條路原本不存在：上架之後只能等人買，賣家改變主意（想留著、想自己出貨、
+ * 定價打錯）都沒有出路，而且卡會一直卡在 prizes.status = 'listed'，
+ * 出貨與回收也一起被鎖住。
+ *
+ * 卡要放回上架前的狀態：庫內轉移的回 'stashed'、需寄送的回 'shipped'
+ * （那就是它上架前的樣子，見上架時的 delivery 判斷）。
+ */
+pub.post('/listings/:id/delist', requireAuth, async c => {
+  const me = c.get('userId')
+  const id = c.req.param('id') ?? ''
+  const r = await sql.begin(async tx => {
+    const [l] = await tx`select * from listings where id = ${id} for update`
+    if (!l) return { error: 'NOT_FOUND', message: '找不到這筆掛單', status: 404 }
+    if (l.seller_id !== me) return { error: 'NOT_PARTY', message: '這不是你的掛單', status: 403 }
+    if (l.status !== 'live') {
+      return { error: 'WRONG_STATE', message: `這筆掛單目前是「${l.status}」，不能下架`, status: 409 }
+    }
+    await tx`update listings set status = 'delisted' where id = ${id}`
+    if (l.prize_id) {
+      const back = l.delivery === 'vault' ? 'stashed' : 'shipped'
+      await tx`update prizes set status = ${back} where id = ${l.prize_id} and status = 'listed'`
+    }
+    return { ok: true }
+  })
+  if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
+  return c.json(r)
+})
+
 pub.post('/listings', requireAuth, async c => {
   const me = c.get('userId')
   const parsed = ListBody.safeParse(await c.req.json().catch(() => null))
