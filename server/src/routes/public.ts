@@ -208,6 +208,29 @@ pub.get('/listings/highlights', async c => {
   })
 })
 
+/**
+ * 單筆掛單。市場的卡片詳情頁靠這一支。
+ *
+ * 為什麼不從 /listings 撈回來自己挑：市場已經是游標分頁的，要的那一筆
+ * 完全可能落在第五頁。而且分享連結、重新整理、直接輸入網址這三件事
+ * 都拿不到列表頁的狀態，詳情頁必須自己有辦法把資料補齊。
+ *
+ * 註冊順序要在 /listings/highlights 之後 —— highlights 是靜態路徑，
+ * 排在 :id 後面會被當成一個 id 吃掉。
+ *
+ * 已下架（delisted）的當成不存在：那是賣家收回的掛單，連結不該再打得開。
+ * 已售出（sold）的仍然回傳，讓頁面能說「這張已經被買走了」，
+ * 那比一句「不存在」誠實得多。
+ */
+pub.get('/listings/:id', async c => {
+  const [row] = await sql<Row[]>`
+    select *, listed_at::text as listed_at_text, ${DEAL_RATIO} as deal_ratio
+    from listings where id = ${c.req.param('id') ?? ''} and status in ('live', 'sold')
+  `
+  if (!row) return c.json({ error: 'NOT_FOUND', message: '這筆掛單不存在或已下架' }, 404)
+  return c.json({ listing: toListing(row) })
+})
+
 /* ---- 上架：把名下的卡掛到市場 ---- */
 const ListBody = z.object({ prizeId: z.string().min(1), price: z.number().int().positive() })
 /**

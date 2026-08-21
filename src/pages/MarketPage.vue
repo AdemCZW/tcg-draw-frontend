@@ -8,24 +8,25 @@
  *
  * 成交幣別是點數，且點數永不可提現（見 lib/recycle.ts 的完整理由）。
  * 玩家互相買賣仍在站內閉環，這是整套合規論述的地基。
+ *
+ * 這一頁只負責「逛」。點任何一張卡都是進 /market/:id 由那一頁成交 ——
+ * 購買原本是這裡的行內確認框，而那個框是渲染在主列表的那一格裡的：
+ * 從上方的橫向捲軸點一張，確認框會跑到下面某一格去長出來；主列表改成
+ * 游標分頁之後，那一格甚至可能還沒載入，點了完全沒有反應。
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { api, type MarketSort } from '@/lib/api'
 import type { Listing } from '@/types/models'
+import { deliveryOf } from '@/shared/domain'
 import { useWalletStore } from '@/stores/wallet'
-import { useAuthStore } from '@/stores/auth'
 import CardArt from '@/components/CardArt.vue'
 import TradeGuard from '@/components/TradeGuard.vue'
 import ListSentinel from '@/components/ListSentinel.vue'
 import { useInfiniteList } from '@/composables/useInfiniteList'
-import { useOrdersStore } from '@/stores/orders'
 import RollingNumber from '@/components/RollingNumber.vue'
-import { haptic } from '@/lib/haptics'
 import { track } from '@/lib/ga'
 
 const wallet = useWalletStore()
-const auth = useAuthStore()
-const orders = useOrdersStore()
 
 /* 排序而不是篩選：市場的品項還不多，先給「怎麼排」比「濾掉什麼」有用。
    低於市值放第一個 —— 那是使用者真正在找的東西。 */
@@ -75,14 +76,11 @@ onMounted(async () => {
   } catch { /* 精選區拿不到不該擋住主清單，那只是兩條輔助捲軸 */ }
 })
 
-/** 掛價相對市值的折數。負數＝比市值便宜 */
-/* 這筆走哪一條通道。
-   後端還沒接，listing.delivery 多半是空的，先由來源推導：
-   玩家抽到的卡跟平台自營的卡都還在保管庫，成交只是過戶。
-   使用者可以先提領再上架，那時候推導會失準 —— 所以 delivery 一旦有值就以它為準。 */
-const laneOf = (l: Listing): 'vault' | 'ship' =>
-  l.delivery ?? (l.fromPrizeId || l.sellerId === 'platform' ? 'vault' : 'ship')
+/* 這筆走哪一條通道。推導的理由見 shared/domain.ts 的 deliveryOf ——
+   放在共用層是因為列表徽章、詳情頁與 mock 的成交邏輯必須是同一個判斷。 */
+const laneOf = deliveryOf
 
+/** 掛價相對市值的折數。負數＝比市值便宜 */
 const diffPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card.refPrice) * 100)
 
 /* ---- 分區 ----
@@ -94,59 +92,6 @@ const diffPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card
 /* 已載入的掛單。只濾掉「剛剛在這一頁被買走的」—— 排序已經由後端排好，
    這裡再排一次會把跨批次的順序打亂。 */
 const shown = computed(() => listings.value.filter(l => l.status === 'live'))
-
-/* 買 —— 不可逆（點數扣掉、卡片入卡冊），所以要一段確認。
-   行內展開而不是 window.confirm：要把價格、市值、餘額變化一起講清楚。 */
-const confirming = ref<string | null>(null)
-const busy = ref<string | null>(null)
-const bought = ref<Listing | null>(null)
-/* 走託管的那條路：買下之後錢是凍結不是扣掉，要引導去看訂單 */
-const escrowed = ref<Listing | null>(null)
-const error = ref('')
-
-function ask(l: Listing) {
-  error.value = ''
-  confirming.value = confirming.value === l.id ? null : l.id
-}
-
-async function buy(l: Listing) {
-  if (busy.value) return
-  error.value = ''
-  busy.value = l.id
-  try {
-    await api.buyListing(l.id)
-
-    /* 兩條通道在這裡分開。
-       庫內轉移是原子交換：點數直接扣、卡直接過戶，沒有中間狀態。
-       需寄送則建立託管訂單，點數只是「凍結」不是扣款 —— 錢還是買家的，
-       要等確認收貨或驗收期滿才真的付給賣家。 */
-    if (laneOf(l) === 'vault') {
-      wallet.spend(l.price)
-      bought.value = l
-    } else {
-      await orders.createFromListing(l, auth.user?.name ?? '我')
-      escrowed.value = l
-    }
-
-    markSold(l.id)
-    confirming.value = null
-    track('market_buy_success')
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '購買失敗'
-    if (String(error.value).includes('sold')) markSold(l.id)
-  } finally {
-    busy.value = null
-  }
-}
-
-/* 換掉整個陣列，而不是改 item.status。
-   mock 的 api.buyListing 會直接改共用的 mock 陣列，等這裡再寫一次
-   l.status = 'sold' 時值已經是 'sold' —— Vue 的 setter 看到沒變就不觸發，
-   賣掉的卡不會消失，使用者可以再買一次被重複扣款。
-   重建陣列讓「畫面更新」不依賴那次寫入到底有沒有變動。 */
-function markSold(id: string) {
-  listings.value = listings.value.map(x => (x.id === id ? { ...x, status: 'sold' as const } : x))
-}
 </script>
 
 <template>
@@ -174,17 +119,6 @@ function markSold(id: string) {
 
     <TradeGuard />
 
-    <p v-if="bought" class="ok" role="status">
-      已買下 <strong>{{ bought.card.name }}</strong>，已收進卡冊。
-      <RouterLink :to="{ name: 'cards' }">去看看 →</RouterLink>
-    </p>
-    <p v-if="escrowed" class="ok" role="status">
-      <strong>{{ escrowed.card.name }}</strong> 的 {{ escrowed.price.toLocaleString() }} 點已凍結，
-      賣家出貨後你會收到通知。
-      <RouterLink :to="{ name: 'orders' }">看訂單 →</RouterLink>
-    </p>
-    <p v-if="error" class="err" role="alert">{{ error }}</p>
-
     <!-- 撿便宜：橫向捲動的小方塊，密度高，跟下面的大格線形成對比 -->
     <section v-if="deals.length && sort === 'deal'" class="band">
       <header class="bh">
@@ -192,9 +126,9 @@ function markSold(id: string) {
         <span class="muted bhNote">低於市值 8% 以上</span>
       </header>
       <div class="rail">
-        <button
+        <RouterLink
           v-for="l in deals" :key="l.id"
-          type="button" class="dealCard" @click="ask(l)"
+          class="dealCard" :to="{ name: 'market-listing', params: { id: l.id } }"
         >
           <CardArt class="dealArt" :image="''" :alt="l.card.name" :art-id="l.card.artId" />
           <span class="dealPct">{{ diffPct(l) }}%</span>
@@ -202,7 +136,7 @@ function markSold(id: string) {
             <span class="mono dealPrice">{{ l.price.toLocaleString() }}</span>
             <span class="dealRef mono">市值 {{ l.card.refPrice.toLocaleString() }}</span>
           </span>
-        </button>
+        </RouterLink>
       </div>
     </section>
 
@@ -213,9 +147,9 @@ function markSold(id: string) {
         <span class="muted bhNote">附鑑定編號，可自行到鑑定機構查證</span>
       </header>
       <div class="rail">
-        <button
+        <RouterLink
           v-for="l in graded" :key="l.id"
-          type="button" class="gradedCard" @click="ask(l)"
+          class="gradedCard" :to="{ name: 'market-listing', params: { id: l.id } }"
         >
           <CardArt class="gradedArt" :image="''" :alt="l.card.name" :art-id="l.card.artId" />
           <span class="gradedInfo">
@@ -223,7 +157,7 @@ function markSold(id: string) {
             <span class="gCert mono">{{ l.card.grader }} {{ l.card.grade }} · #{{ l.card.certNo }}</span>
             <span class="mono gPrice">{{ l.price.toLocaleString() }} 點</span>
           </span>
-        </button>
+        </RouterLink>
       </div>
     </section>
 
@@ -268,31 +202,15 @@ function markSold(id: string) {
           <p class="by">{{ l.sellerName }} · {{ l.listedAt }}</p>
         </div>
 
-        <!-- 買下鍵疊在右下角，不佔卡圖的高度 -->
-        <button
-          v-if="confirming !== l.id"
-          type="button" class="buy" :disabled="l.status !== 'live'" @click="ask(l)"
-        >買下</button>
-
-        <!-- 確認時整格覆蓋，避免在小格子裡擠兩層資訊 -->
-        <div v-else class="confirm">
-          <p class="cq">
-            用 <strong class="mono">{{ l.price.toLocaleString() }}</strong> 點買下？<br>
-            餘額將剩 <span class="mono">{{ (wallet.shown - l.price).toLocaleString() }}</span>
-          </p>
-          <!-- 錢會怎麼流，要在按下去之前講，不是在爭議發生之後才講 -->
-          <p class="cnote">
-            {{ laneOf(l) === 'vault'
-              ? '卡在保管庫，成交立刻過戶到你名下。'
-              : '點數先凍結，你確認收貨或 7 天後才放款給賣家。' }}
-          </p>
-          <div class="crow">
-            <button type="button" class="btn sm" @click="confirming = null">取消</button>
-            <button type="button" class="btn primary sm" :disabled="busy === l.id" @click="buy(l)">
-              {{ busy === l.id ? '處理中…' : '確定' }}
-            </button>
-          </div>
-        </div>
+        <!-- 整格都是連結（撐滿的透明 <a>），而不是只有「買下」那顆鍵可以點：
+             使用者的直覺是「點卡片就進去看」。連結放在資訊層下面，
+             文字才選得到；「買下」是純視覺的標籤，pointer-events: none
+             讓點在它身上的手指落到下面這條連結上。 -->
+        <RouterLink
+          class="open" :to="{ name: 'market-listing', params: { id: l.id } }"
+          :aria-label="`${l.card.name}，${l.price.toLocaleString()} 點`"
+        />
+        <span class="buy" aria-hidden="true">買下</span>
       </article>
     </div>
 
@@ -365,11 +283,6 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 @media (hover: hover) { .chip:not(.on):hover { color: var(--ink); border-color: var(--line); } }
 .chip:active { transform: scale(.96); }
 
-.ok, .err { margin: 0 0 14px; font-size: 13.5px; padding: 11px 14px; border-radius: var(--radius); }
-.ok { background: var(--ok-wash); color: var(--ok); }
-.ok a { color: inherit; text-decoration: underline; }
-.err { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); font-weight: 600; }
-
 /* ---- 分區 ---- */
 .band { margin-bottom: 22px; }
 .bh { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 11px; }
@@ -393,11 +306,12 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 
 /* 撿便宜：小方塊，整頁密度最高 */
 .dealCard {
-  position: relative; flex: 0 0 104px;
+  position: relative; display: block; flex: 0 0 104px;
   scroll-snap-align: start;
   padding: 0; border: none; cursor: pointer;
   border-radius: var(--radius); overflow: hidden;
   background: var(--surface-2);
+  color: inherit; text-decoration: none;
   transition: transform .2s;
 }
 @media (hover: hover) { .dealCard:hover { transform: translateY(-3px); } }
@@ -430,7 +344,7 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   border-radius: var(--radius);
   border: 1px solid color-mix(in srgb, #d8b25a 32%, transparent);
   background: linear-gradient(100deg, color-mix(in srgb, #d8b25a 10%, transparent), var(--surface) 60%);
-  text-align: left;
+  text-align: left; color: inherit; text-decoration: none;
   transition: transform .2s, border-color .2s;
 }
 @media (hover: hover) { .gradedCard:hover { transform: translateY(-3px); border-color: #d8b25a; } }
@@ -509,10 +423,11 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .meta { font-size: 11px; opacity: .78; margin: 1px 0 0; }
 .by { font-size: 10.5px; opacity: .6; margin: 0; }
 
-/* 買下鍵：右下角，不佔卡圖高度 */
-/* 通道徽章：疊在卡圖左上角，不跟價格搶 .info 的空間 */
+/* 通道徽章：疊在卡圖左上角，不跟價格搶 .info 的空間。
+   pointer-events: none —— 它蓋在整格的連結上面，不能把點擊吃掉 */
 .lane {
   position: absolute; left: 8px; top: 8px; z-index: 2;
+  pointer-events: none;
   font-size: 10px; font-weight: 700; line-height: 1;
   padding: 4px 7px; border-radius: var(--pill);
   letter-spacing: .02em;
@@ -521,39 +436,23 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .lane.vault { background: rgba(22, 130, 90, .82); color: #fff; }
 .lane.ship { background: rgba(10, 10, 14, .62); color: rgba(255, 255, 255, .92); }
 
-.cnote {
-  font-size: 11px; line-height: 1.55;
-  color: var(--muted);
-  margin: 6px 0 0;
-  max-width: 22ch;
-}
+/* 撐滿整格的連結：整張卡都可以點進詳情頁，不是只有右下角那顆鍵 */
+.open { position: absolute; inset: 0; z-index: 3; border-radius: var(--radius); }
+.open:focus-visible { outline: 2px solid #fff; outline-offset: -3px; }
 
+/* 「買下」現在只是視覺標籤，真正的連結是 .open。
+   pointer-events: none 讓點在它身上的手指直接落到那條連結上 */
 .buy {
-  position: absolute; right: 10px; bottom: 11px; z-index: 2;
+  position: absolute; right: 10px; bottom: 11px; z-index: 4;
+  pointer-events: none;
   padding: 9px 16px;
-  border: none; border-radius: var(--pill);
+  border-radius: var(--pill);
   background: var(--accent); color: #fff;
-  font-size: 13.5px; font-weight: 700; cursor: pointer;
+  font-size: 13.5px; font-weight: 700; line-height: 1.25;
   box-shadow: 0 4px 14px rgba(0, 0, 0, .45);
-  transition: transform .12s, background .15s;
+  transition: background .15s;
 }
-@media (hover: hover) { .buy:hover { background: var(--accent-soft); } }
-.buy:active { transform: scale(.94); }
-.buy:disabled { opacity: .45; cursor: default; }
-.buy:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-
-/* 確認：整格覆蓋，小格子裡塞不下兩層資訊 */
-.confirm {
-  position: absolute; inset: 0; z-index: 3;
-  display: grid; align-content: center; gap: 12px;
-  padding: 16px;
-  background: rgba(8, 6, 14, .93);
-  backdrop-filter: blur(3px);
-}
-.cq { margin: 0; font-size: 13px; line-height: 1.6; color: #fff; text-align: center; }
-.crow { display: flex; gap: 8px; }
-.crow .btn { flex: 1; }
-.btn.sm { padding: 9px 8px; font-size: 13px; }
+@media (hover: hover) { .lot:hover .buy { background: var(--accent-soft); } }
 
 .sk { aspect-ratio: 5 / 7; border-radius: var(--radius); background: var(--surface-2); }
 @media (prefers-reduced-motion: no-preference) {

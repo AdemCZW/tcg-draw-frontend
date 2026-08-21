@@ -93,3 +93,19 @@ export interface Order {
   hasUnboxingVideo?: boolean
   closedBy?: ClosedBy
 }
+
+/**
+ * 這筆掛單走哪一條通道。
+ *
+ * 後端建立掛單時一定會寫 delivery，但舊資料與 mock 的種子不一定有，
+ * 所以留一條推導：抽到之後沒提領的卡（帶 fromPrizeId）與平台自營的卡
+ * 都還躺在保管庫裡，成交只是過戶；其餘當成賣家手上的實體卡，要寄送。
+ * delivery 一旦有值就以它為準 —— 使用者可以先提領再上架，那時候推導會失準。
+ *
+ * 放在共用層而不是各頁自己寫一份：買下之後錢是「扣掉」還是「凍結」全看這個
+ * 判斷，市場列表、掛單詳情、mock 的成交邏輯三邊只要有一邊走岔，
+ * 使用者看到的通道徽章就會跟實際發生的事對不起來。
+ */
+export const deliveryOf = (
+  l: Pick<Listing, 'delivery' | 'fromPrizeId' | 'sellerId'>
+): Delivery => l.delivery ?? (l.fromPrizeId || l.sellerId === 'platform' ? 'vault' : 'ship')

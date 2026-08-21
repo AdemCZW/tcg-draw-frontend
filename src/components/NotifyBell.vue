@@ -15,13 +15,19 @@
  * 手機上用小小的下拉選單是桌機思維，拇指按不準。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { notifications, type Notification, type NotifyKind } from '@/lib/social'
 import { ApiError } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
+
+/* 有些頁面的右下角是自己的（例如市場卡片頁貼底的購買列），鈴浮在上面會
+   壓住那一頁最重要的按鈕。由路由的 meta.hideBell 決定，不在這裡寫死路由名，
+   也不去改鈴自己的定位 —— 那條 bottom 是每一頁共用的。 */
+const hidden = computed(() => !!route.meta.hideBell)
 
 const open = ref(false)
 const loading = ref(false)
@@ -153,7 +159,7 @@ const hasRows = computed(() => rows.value.length > 0)
 
 <template>
   <!-- 沒登入不顯示：通知全部是個人的，訪客按下去只會看到空面板 -->
-  <div v-if="auth.isLoggedIn" class="bell-root">
+  <div v-if="auth.isLoggedIn && !hidden" class="bell-root">
     <!-- 遮罩：手機上壓暗背景（面板是主角），桌機只當「點空白處關閉」的接收面 -->
     <Transition name="veil">
       <div v-if="open" class="veil" @click="open = false" />

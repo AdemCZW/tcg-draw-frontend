@@ -11,9 +11,10 @@ import type {
   Pool, DrawResult, UserPrize, LedgerEntry, WinnerEvent, StreakRun, AuctionLot,
   Seller, Listing, CardItem, PoolStatus, Tier
 } from '@/types/models'
+import { deliveryOf } from '@/shared/domain'
 import * as mock from '@/mocks/data'
 import { MOCK } from './config'
-import { http, idem } from './http'
+import { ApiError, http, idem } from './http'
 import { useWalletStore } from '@/stores/wallet'
 
 export { MOCK }
@@ -296,6 +297,27 @@ export const api = {
     const r = await http<{ deals: Any[]; graded: Any[]; total: number }>('/v1/listings/highlights')
     return { deals: r.deals.map(toListing), graded: r.graded.map(toListing), total: r.total }
   },
+  /**
+   * 單筆掛單。市場的卡片詳情頁靠這一支載入。
+   *
+   * 刻意不做成「撈整個市場再挑一筆」：市場是游標分頁的，要的那筆多半不在第一頁。
+   * 而且分享出去的連結與重新整理都拿不到列表頁的狀態，詳情頁必須自己補得齊資料。
+   * 找不到回 null（不是丟例外），讓頁面自己畫「不存在或已下架」——
+   * 那是預期中的結果，不是錯誤。
+   */
+  async getListing(id: string): Promise<Listing | null> {
+    if (MOCK) {
+      await delay(140)
+      return mock.listings.find(l => l.id === id) ?? null
+    }
+    try {
+      const r = await http<{ listing: Any }>(`/v1/listings/${id}`)
+      return toListing(r.listing)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null
+      throw e
+    }
+  },
   async buyListing(id: string): Promise<Listing> {
     if (MOCK) {
       await delay(300)
@@ -303,6 +325,23 @@ export const api = {
       if (!l) throw new Error('listing not found')
       if (l.status === 'sold') throw new Error('already sold')
       l.status = 'sold'
+      /* 庫內轉移在後端是「卡真的過戶」（orders.ts 把 prizes.user_id 換成買家、
+         status 改回 stashed）。mock 少了這一步的話，買完跳進卡冊會看不到那張卡 ——
+         使用者回報的「買了沒進卡冊」在 mock 模式下就會是真的，而 mock 是本機
+         開發與展示唯一的資料來源，這條路走不完等於整個流程沒被驗過。
+         需寄送的不進卡冊：那是託管訂單，卡還在賣家手上，還不是買家的。 */
+      if (deliveryOf(l) === 'vault') {
+        const p = l.card.refPrice
+        mock.userPrizes.unshift({
+          id: 'up-' + l.id,
+          card: l.card,
+          // 市場買來的卡沒有賞別可言，這裡只是讓 mock 的卡冊有東西可畫
+          tier: p >= 20_000 ? 'A' : p >= 5_000 ? 'B' : p >= 1_500 ? 'C' : 'D',
+          status: 'stashed',
+          wonAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
+          stashExpiresAt: new Date(Date.now() + 90 * 864e5).toISOString().slice(0, 10)
+        })
+      }
       return l
     }
     // 真的買：回 { order | null, wallet }。order 為 null 表示庫內轉移，成交即完成
