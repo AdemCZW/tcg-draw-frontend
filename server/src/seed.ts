@@ -455,6 +455,30 @@ async function run() {
 
   for (const d of poolDefs) await seedPool(d)
 
+  /* vault 掛單一定要有對應的 prizes 那一列 —— 「庫內轉移」的交付就是把那一列改 owner。
+     原本種子只寫 listings 不寫 prizes，買家付了錢、賣家入了帳，卡卻不存在。
+     （orders.ts 現在會擋掉這種掛單，但種子本來就不該產生它。）
+     ship 通道不需要：那是託管訂單，卡由賣家實體寄送，平台手上沒有東西可以過戶。
+
+     這一輪必須排在 seedPool 之後 —— prizes.pool_id 是 not null 外鍵，
+     池還沒建好的時候查不到可掛的池，這正是上面那個迴圈不能順手做掉的原因。 */
+  for (const [id, c, , sellerId, , delivery] of listings) {
+    if (delivery !== 'vault') continue
+    const [pool] = await sql<{ id: string }[]>`
+      select id from pools where seller_id = ${sellerId} order by id limit 1
+    `
+    if (!pool) throw new Error(`vault 掛單 ${id} 的賣家 ${sellerId} 沒有任何池，無法建立對應的卡`)
+    const prizeId = 'pz-' + id
+    const wonAt = Date.now() - 3 * 86_400_000
+    await sql`
+      insert into prizes (id, user_id, pool_id, card, tier, status, won_at, stash_expires_at)
+      values (${prizeId}, ${sellerId}, ${pool.id}, ${c as never}, 'B', 'listed',
+              ${wonAt}, ${wonAt + 90 * 86_400_000})
+      on conflict (id) do nothing
+    `
+    await sql`update listings set prize_id = ${prizeId} where id = ${id} and prize_id is null`
+  }
+
   const [n] = await sql<{ count: string }[]>`select count(*)::text as count from listings where status = 'live'`
   const [pc] = await sql<{ count: string }[]>`select count(*)::text as count from pools`
   console.log(`seed done — ${n?.count ?? 0} 筆有效掛單、${pc?.count ?? 0} 個池`)

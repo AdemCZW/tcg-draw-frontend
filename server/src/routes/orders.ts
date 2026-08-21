@@ -67,6 +67,13 @@ orders.post('/', async c => {
     if (!l) return fail('LISTING_NOT_FOUND', '這筆掛單不存在')
     if (l.status !== 'live') return fail('LISTING_TAKEN', '這張卡剛剛被買走了')
     if (l.seller_id === me) return fail('WRONG_STATE', '不能買自己的掛單')
+    /* 庫內轉移的「交付」就是把 prizes 那一列改 owner —— 沒有那一列就沒有東西可以交付。
+       原本下面是 if (l.prize_id) 包住過戶，不成立時就跳過，但點數的兩筆帳
+       已經記下去了：買家被扣、賣家入帳、卡片不存在。錢動了貨沒動是最壞的一種失敗，
+       寧可整筆擋掉。（種子資料的 vault 掛單就沒有 prize_id，實際被買到過。） */
+    if (l.delivery === 'vault' && !l.prize_id) {
+      return fail('LISTING_BROKEN', '這筆掛單沒有對應的卡片，已下架，請聯絡客服')
+    }
 
     const price = Number(l.price)
     /* 先鎖住買家的帳戶再算餘額。少了這一行，同一個人同時買兩張不同的卡
@@ -82,10 +89,8 @@ orders.post('/', async c => {
     if (l.delivery === 'vault') {
       await tx`insert into points_ledger (user_id, delta, reason, ref_id) values (${me}, ${-price}, 'vault-buy', ${listingId})`
       await tx`insert into points_ledger (user_id, delta, reason, ref_id) values (${l.seller_id}, ${price}, 'vault-sell', ${listingId})`
-      // 卡還在保管庫：過戶就是改 owner，狀態回到保管中
-      if (l.prize_id) {
-        await tx`update prizes set user_id = ${me}, status = 'stashed' where id = ${l.prize_id}`
-      }
+      // 卡還在保管庫：過戶就是改 owner，狀態回到保管中（prize_id 為空的已在上面擋掉）
+      await tx`update prizes set user_id = ${me}, status = 'stashed' where id = ${l.prize_id}`
       // 賣家不會一直盯著市場，卡賣掉了要主動告知
       await notify({
         userId: l.seller_id as string, kind: 'listing-sold',
