@@ -471,9 +471,9 @@ async function run() {
     const prizeId = 'pz-' + id
     const wonAt = Date.now() - 3 * 86_400_000
     await sql`
-      insert into prizes (id, user_id, pool_id, card, tier, status, won_at, stash_expires_at)
+      insert into prizes (id, user_id, pool_id, card, tier, status, won_at, acquired_at, stash_expires_at)
       values (${prizeId}, ${sellerId}, ${pool.id}, ${c as never}, 'B', 'listed',
-              ${wonAt}, ${wonAt + 90 * 86_400_000})
+              ${wonAt}, ${wonAt}, ${wonAt + 90 * 86_400_000})
       on conflict (id) do nothing
     `
     await sql`update listings set prize_id = ${prizeId} where id = ${id} and prize_id is null`

@@ -75,6 +75,13 @@ const shortHash = computed(() => {
    那些池的結果不具備對外驗證的意義，畫面要講實話。 */
 const isFixture = computed(() => (pool.value?.clientSeedSource ?? '').startsWith('fixture:'))
 
+/* 帶著剛拿到的卡片 id 過去，卡冊才標得出「就是這幾張」。
+   舊的結果（reload 前存進 sessionStorage 的）沒有 stashId，那就只導頁不標記。 */
+const cardbookLink = computed(() => {
+  const ids = (result?.items ?? []).map(i => i.stashId).filter(Boolean)
+  return ids.length ? `/me/cards?new=${ids.join(',')}` : '/me/cards'
+})
+
 const copied = ref(false)
 async function copyHash() {
   const h = pool.value?.commitHash
@@ -183,8 +190,14 @@ onMounted(() => {
       </p>
     </section>
 
+    <!-- 這一行是重點：卡在抽完的當下就已經寫進卡冊了（後端在同一個交易裡），
+         底下那顆按鈕只是帶你過去看。原本的文案是「收進卡冊」，
+         讀起來像「要按了才會進去」—— 沒按的人就以為自己抽到的卡不見了。 -->
+    <p class="stashed">
+      {{ result.items.length > 1 ? `這 ${result.items.length} 張` : '這張' }}已經在你的卡冊裡了，不必再收。
+    </p>
     <div class="actions">
-      <RouterLink to="/me/cards" class="btn primary">收進卡冊</RouterLink>
+      <RouterLink :to="cardbookLink" class="btn primary">去卡冊看這{{ result.items.length > 1 ? '幾' : '' }}張</RouterLink>
       <RouterLink :to="`/pools/${result.poolId}`" class="btn">再抽一次</RouterLink>
     </div>
   </div>
@@ -194,6 +207,11 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 「已經在卡冊裡」的說明。按鈕上方，比按鈕先讀到 */
+.stashed {
+  margin: 18px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted);
+}
+
 .src.warn { color: #fcd34d; }
 .fixnote { font-size: 12px; line-height: 1.7; color: var(--muted); margin: 10px 0 0; }
 

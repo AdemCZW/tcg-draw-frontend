@@ -89,8 +89,12 @@ orders.post('/', async c => {
     if (l.delivery === 'vault') {
       await tx`insert into points_ledger (user_id, delta, reason, ref_id) values (${me}, ${-price}, 'vault-buy', ${listingId})`
       await tx`insert into points_ledger (user_id, delta, reason, ref_id) values (${l.seller_id}, ${price}, 'vault-sell', ${listingId})`
-      // 卡還在保管庫：過戶就是改 owner，狀態回到保管中（prize_id 為空的已在上面擋掉）
-      await tx`update prizes set user_id = ${me}, status = 'stashed' where id = ${l.prize_id}`
+      /* 卡還在保管庫：過戶就是改 owner，狀態回到保管中（prize_id 為空的已在上面擋掉）。
+         acquired_at 一定要一起改：卡冊是照它排的，不改的話這張卡帶著賣家當初
+         抽到的時間進買家的卡冊，排在幾天前的位置 —— 卡冊超過一頁時買家在第一頁
+         根本看不到自己剛買的卡。won_at 不動，那是「這張卡被抽出來」的事實，
+         公開的最近開出動態還要照它排。 */
+      await tx`update prizes set user_id = ${me}, status = 'stashed', acquired_at = ${Date.now()} where id = ${l.prize_id}`
       // 賣家不會一直盯著市場，卡賣掉了要主動告知
       await notify({
         userId: l.seller_id as string, kind: 'listing-sold',
@@ -98,7 +102,9 @@ orders.post('/', async c => {
         body: `「${(l.card as { name?: string }).name ?? '卡片'}」以 ${price.toLocaleString('zh-TW')} 點成交，點數已入帳。`,
         link: '/me/wallet', refId: listingId
       }, tx)
-      return { order: null }
+      /* 回傳過戶到手的那張卡的 id：買家會被導去卡冊，卡冊要靠它把
+         「剛買到的是這張」標出來。少了它，買家在一整面卡裡認不出多了哪一張。 */
+      return { order: null, stashId: String(l.prize_id) }
     }
 
     const done = await tx<{ count: string }[]>`

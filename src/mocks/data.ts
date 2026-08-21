@@ -874,12 +874,12 @@ export function mockDraw(poolId: string, seats: number[]): DrawResult {
 }
 
 export const userPrizes: UserPrize[] = [
-  { id: 'up1', card: cards[1], tier: 'B', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03' },
-  { id: 'up2', card: cards[4], tier: 'D', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03' },
-  { id: 'up3', card: cards[5], tier: 'C', status: 'shipped', wonAt: '2026-07-20T14:02:00+08:00', stashExpiresAt: '—' },
-  { id: 'up4', card: cards[16], tier: 'A', status: 'stashed', wonAt: '2026-08-09T18:40:00+08:00', stashExpiresAt: '2026-11-07' },
-  { id: 'up5', card: cards[19], tier: 'D', status: 'ship_requested', wonAt: '2026-08-10T11:05:00+08:00', stashExpiresAt: '2026-11-08' },
-  { id: 'up6', card: cards[21], tier: 'C', status: 'stashed', wonAt: '2026-08-11T09:30:00+08:00', stashExpiresAt: '2026-11-09' }
+  { id: 'up1', card: cards[1], tier: 'B', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03' },
+  { id: 'up2', card: cards[4], tier: 'D', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03' },
+  { id: 'up3', card: cards[5], tier: 'C', status: 'shipped', wonAt: '2026-07-20T14:02:00+08:00', acquiredAt: '2026-07-20T14:02:00+08:00', stashExpiresAt: '—' },
+  { id: 'up4', card: cards[16], tier: 'A', status: 'stashed', wonAt: '2026-08-09T18:40:00+08:00', acquiredAt: '2026-08-09T18:40:00+08:00', stashExpiresAt: '2026-11-07' },
+  { id: 'up5', card: cards[19], tier: 'D', status: 'ship_requested', wonAt: '2026-08-10T11:05:00+08:00', acquiredAt: '2026-08-10T11:05:00+08:00', stashExpiresAt: '2026-11-08' },
+  { id: 'up6', card: cards[21], tier: 'C', status: 'stashed', wonAt: '2026-08-11T09:30:00+08:00', acquiredAt: '2026-08-11T09:30:00+08:00', stashExpiresAt: '2026-11-09' }
 ]
 
 export const ledger: LedgerEntry[] = [

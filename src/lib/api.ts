@@ -51,7 +51,10 @@ function toPrize(r: Any): UserPrize {
   return {
     id: String(r.id), card: r.card as CardItem, tier: r.tier as Tier,
     status: r.status as UserPrize['status'],
-    wonAt: ts(r.won_at), stashExpiresAt: ts(r.stash_expires_at)
+    wonAt: ts(r.won_at),
+    /* 舊資料（或還沒跑 014 的後端）沒有 acquired_at，退回 won_at ——
+       第一手持有者的兩個時間本來就相同，退回去不會讓畫面說錯話 */
+    acquiredAt: ts(r.acquired_at ?? r.won_at), stashExpiresAt: ts(r.stash_expires_at)
   }
 }
 
@@ -163,7 +166,10 @@ export const api = {
     applyWallet(r)
     return {
       drawId: r.drawId, poolId, cost: r.cost,
-      items: r.items.map(it => ({ ticketSeq: Number(it.seat), tier: it.tier as Tier, card: it.card as CardItem }))
+      items: r.items.map(it => ({
+        ticketSeq: Number(it.seat), tier: it.tier as Tier, card: it.card as CardItem,
+        stashId: it.stashId ? String(it.stashId) : undefined
+      }))
     }
   },
 
@@ -318,7 +324,9 @@ export const api = {
       throw e
     }
   },
-  async buyListing(id: string): Promise<Listing> {
+  /** 回傳裡的 stashId 是「剛過戶到手的那張卡在卡冊裡的 id」，只有庫內轉移才有。
+      買完要導去卡冊，卡冊靠它把剛買到的那張標出來。 */
+  async buyListing(id: string): Promise<{ listing: Listing; stashId?: string }> {
     if (MOCK) {
       await delay(300)
       const l = mock.listings.find(x => x.id === id)
@@ -332,26 +340,31 @@ export const api = {
          需寄送的不進卡冊：那是託管訂單，卡還在賣家手上，還不是買家的。 */
       if (deliveryOf(l) === 'vault') {
         const p = l.card.refPrice
+        const stashId = 'up-' + l.id
         mock.userPrizes.unshift({
-          id: 'up-' + l.id,
+          id: stashId,
           card: l.card,
           // 市場買來的卡沒有賞別可言，這裡只是讓 mock 的卡冊有東西可畫
           tier: p >= 20_000 ? 'A' : p >= 5_000 ? 'B' : p >= 1_500 ? 'C' : 'D',
           status: 'stashed',
+          /* wonAt 是「這張卡被抽出來」的時間、acquiredAt 是「我什麼時候拿到的」。
+             買來的卡兩者不同，而卡冊是照 acquiredAt 排的（見後端 migrations/014）。 */
           wonAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
+          acquiredAt: new Date().toISOString(),
           stashExpiresAt: new Date(Date.now() + 90 * 864e5).toISOString().slice(0, 10)
         })
+        return { listing: l, stashId }
       }
-      return l
+      return { listing: l }
     }
     // 真的買：回 { order | null, wallet }。order 為 null 表示庫內轉移，成交即完成
-    const r = await http<{ order: Any | null; wallet: { points: number; locked: number } }>(
+    const r = await http<{ order: Any | null; stashId?: string; wallet: { points: number; locked: number } }>(
       '/v1/orders', { method: 'POST', json: { listingId: id, idempotencyKey: idem() } })
     applyWallet(r)
     /* 原本這裡會把整個市場再撈一次只為了找回那一筆。掛單改成分頁之後那個做法
        既錯（要的那筆可能不在第一頁）又浪費，而且呼叫端根本沒用這個回傳值 ——
        成交與否看的是有沒有丟例外。 */
-    return { id, status: 'sold' } as Listing
+    return { listing: { id, status: 'sold' } as Listing, stashId: r.stashId }
   },
   async createListing(input: { prizeId: string; card: CardItem; price: number; sellerName: string }): Promise<Listing> {
     if (MOCK) {

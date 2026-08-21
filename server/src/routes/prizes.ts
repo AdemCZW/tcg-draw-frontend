@@ -41,15 +41,19 @@ prizes.get('/', async c => {
     after = [p[0]!, p[1]!]
   }
 
-  const rows = await sql<{ id: string; won_at: string }[]>`
+  /* 排序鍵是 acquired_at（進到這個人卡冊的時間）而不是 won_at（這張卡被抽出來的時間）。
+     庫內轉移只換 owner，被買走的卡帶著賣家當初抽到的時間 —— 用 won_at 排的話，
+     剛買到的卡會落在幾天前的位置，卡冊一超過一頁它就不在第一頁上，
+     使用者看到的就是「我買的卡沒進卡冊」。見 migrations/014_acquired_at.sql。 */
+  const rows = await sql<{ id: string; acquired_at: string }[]>`
     select * from prizes
     where user_id = ${c.get('userId')}
       ${status ? sql`and status = ${status}` : sql``}
-      ${after ? sql`and (won_at, id) < (${after[0]}::bigint, ${after[1]}::text)` : sql``}
-    order by won_at desc, id desc
+      ${after ? sql`and (acquired_at, id) < (${after[0]}::bigint, ${after[1]}::text)` : sql``}
+    order by acquired_at desc, id desc
     limit ${limit + 1}
   `
-  return c.json(slicePage(rows, limit, r => encodeCursor([String(r.won_at), String(r.id)])))
+  return c.json(slicePage(rows, limit, r => encodeCursor([String(r.acquired_at), String(r.id)])))
 })
 
 /**
@@ -80,10 +84,10 @@ prizes.get('/summary', async c => {
       where user_id = ${me} and status <> 'recycled'
       order by (card->>'refPrice')::numeric desc nulls last limit 1
     `,
-    sql<{ won_at: string; name: string | null; ref: string | null }[]>`
-      select won_at, card->>'name' as name, card->>'refPrice' as ref
+    sql<{ acquired_at: string; name: string | null; ref: string | null }[]>`
+      select acquired_at, card->>'name' as name, card->>'refPrice' as ref
       from prizes where user_id = ${me} and status <> 'recycled'
-      order by won_at asc, id asc
+      order by acquired_at asc, id asc
     `
   ])
 
@@ -100,7 +104,9 @@ prizes.get('/summary', async c => {
     total, counts: byStatus, owned, totalValue,
     best: b ? { name: b.card?.name ?? '', tier: b.tier, refPrice: Number(b.card?.refPrice) || 0 } : null,
     tierMix: mix.map(r => ({ tier: r.tier, n: Number(r.n) })),
-    curve: curve.map(r => ({ wonAt: Number(r.won_at), name: r.name ?? '', refPrice: Number(r.ref) || 0 }))
+    /* 曲線畫的是「這本卡冊怎麼累積起來的」，所以 x 軸是取得時間。
+       用 won_at 的話，今天買到的一張舊卡會把曲線的起點往回拉到賣家抽中它的那天。 */
+    curve: curve.map(r => ({ wonAt: Number(r.acquired_at), name: r.name ?? '', refPrice: Number(r.ref) || 0 }))
   })
 })
 

@@ -128,6 +128,9 @@ export interface DrawResultItem {
   tier: Tier
   card: CardItem
   bonus?: boolean          // 最後賞加贈（不佔籤位，classic 完抽/shitei 觸發時附加）
+  /** 這張卡在卡冊裡那一列的 id。用來把「剛拿到的是哪幾張」帶到卡冊標出來。
+      mock 與 reload 前存下的舊結果沒有，所以是選填 */
+  stashId?: string
 }
 
 export interface DrawResult {
@@ -176,7 +179,11 @@ export interface UserPrize {
   card: CardItem
   tier: Tier
   status: PrizeStatus
+  /** 這張卡被抽出來的時間。轉手不會改它 —— 那是既成事實，也是公開動態的依據 */
   wonAt: string
+  /** 這張卡進到「我的」卡冊的時間。抽到時等於 wonAt，買來的是成交那一刻。
+      卡冊的排序與累積曲線都看這個，不看 wonAt（見 server migrations/014） */
+  acquiredAt: string
   stashExpiresAt: string
 }
 

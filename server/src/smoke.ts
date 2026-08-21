@@ -206,6 +206,27 @@ async function run() {
     check('庫內轉移不產生訂單', v.ok && vj.order === null, JSON.stringify(vj).slice(0, 120))
     check('庫內轉移直接扣點', v.ok && vj.wallet.points === w2.wallet.points - vault.price,
       v.ok ? `${w2.wallet.points} → ${vj.wallet.points}` : '')
+    check('庫內轉移回傳過戶到手那張卡的 id', v.ok && typeof vj.stashId === 'string' && vj.stashId.length > 0,
+      String(vj.stashId))
+
+    /* 使用者回報的「買到的卡沒馬上跑到卡冊」就是這一條。
+       卡確實在同一個交易裡就過戶了，但卡冊照時間排，而過戶只換 owner ——
+       買到的卡帶著賣家當初抽到的時間，排在幾天前的位置。卡冊一超過一頁，
+       它就不在第一頁上，使用者看到的畫面裡真的沒有那張卡。
+       所以要驗的不是「查得到」，是「排在最前面」。 */
+    if (v.ok) {
+      const book = await json(await call(buyer, '/v1/prizes'))
+      check('剛買到的卡排在卡冊第一筆',
+        book.items[0]?.id === vj.stashId,
+        `第一筆是 ${book.items[0]?.id}，剛買到的是 ${vj.stashId}`)
+      check('剛買到的卡狀態回到保管中',
+        book.items[0]?.status === 'stashed', String(book.items[0]?.status))
+      /* won_at 不該被過戶改掉：公開的「最近開出」動態照它排，
+         改了等於讓一張買來的舊卡出現在「剛剛有人抽到」裡。 */
+      check('過戶沒有竄改這張卡被抽出來的時間',
+        Number(book.items[0]?.acquired_at) > Number(book.items[0]?.won_at),
+        `acquired=${book.items[0]?.acquired_at} won=${book.items[0]?.won_at}`)
+    }
   }
 
   /* ---- 併發：同一個人同時花兩筆錢 ----
@@ -771,6 +792,27 @@ async function run() {
       if (!seats.length) break
       await call(buyer, '/v1/pools/p-seed-1/draw',
         { seats, idempotencyKey: `smoke-page-${round}-${Date.now()}` })
+    }
+
+    /* 使用者回報的「買到的卡沒馬上跑到卡冊」在這裡才驗得出來 ——
+       買家手上已經有一疊剛抽到的卡了。庫內轉移只換 owner，如果卡冊照
+       won_at（這張卡被抽出來的時間）排，買到的卡帶著賣家當初抽到的時間，
+       會排到這一疊剛抽的卡**後面**去；卡冊超過一頁時它根本不在第一頁上。
+       所以這一條驗的是排序，不是「查不查得到」—— 資料一直都在，是看不到。 */
+    {
+      const live = (await allListings()).find(l => l.delivery === 'vault' && l.status === 'live')
+      if (!live) {
+        check('（跳過買到的卡排序：市場上沒有剩下的庫內轉移掛單）', true)
+      } else {
+        const before = (await allPrizes(buyer)).length
+        const bought = await json(await call(buyer, '/v1/orders',
+          { listingId: live.id, idempotencyKey: 'smoke-order-' + Date.now() }))
+        const page1 = await json(await call(buyer, '/v1/prizes?limit=3'))
+        check('剛買到的卡排在卡冊最前面（不是排到抽卡那疊後面）',
+          page1.items[0]?.id === bought.stashId,
+          `第一頁第一筆是 ${page1.items[0]?.id}，剛買到的是 ${bought.stashId}`)
+        check('買到的卡真的多出一張', (await allPrizes(buyer)).length === before + 1)
+      }
     }
 
     const full = await allPrizes(buyer)

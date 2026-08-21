@@ -82,6 +82,10 @@ const buyable = computed(() => !!listing.value && !sold.value && auth.isLoggedIn
 /* 導去卡冊的計時器要收乾淨：使用者可能在這 1.4 秒內自己按了按鈕或返回，
    讓一個已經卸載的頁面再導一次會把他從別的地方拽走。 */
 let jump: ReturnType<typeof setTimeout> | null = null
+/* 剛買到的那張卡在卡冊裡的 id。自動導頁與手動點按鈕走的是同一個目的地，
+   兩邊都要帶著它，否則手動點過去就少了標記。 */
+const boughtStashId = ref<string | undefined>()
+const boughtQuery = computed(() => (boughtStashId.value ? { new: boughtStashId.value } : undefined))
 onBeforeUnmount(() => { if (jump) clearTimeout(jump) })
 
 function ask() {
@@ -97,7 +101,7 @@ async function buy() {
   busy.value = true
   error.value = ''
   try {
-    await api.buyListing(l.id)
+    const bought = await api.buyListing(l.id)
 
     /* 兩條通道在這裡分開。
        庫內轉移是原子交換：點數直接扣、卡直接過戶，沒有中間狀態。
@@ -107,8 +111,11 @@ async function buy() {
       wallet.spend(l.price)
       done.value = 'vault'
       /* 使用者的期待就是「買了就該在卡冊裡」，所以真的把他送過去。
-         停一拍再走，是為了讓「買到什麼」看得到一眼，不是憑空的延遲。 */
-      jump = setTimeout(() => router.replace({ name: 'cards' }), 1400)
+         停一拍再走，是為了讓「買到什麼」看得到一眼，不是憑空的延遲。
+         帶著剛過戶到手的卡片 id 過去 —— 卡冊會把它標成「剛收進卡冊」，
+         否則到了卡冊還是要自己在一整面卡裡找剛買的是哪一張。 */
+      boughtStashId.value = bought.stashId
+      jump = setTimeout(() => router.replace({ name: 'cards', query: boughtQuery.value }), 1400)
     } else {
       await orders.createFromListing(l, auth.user?.name ?? '我')
       done.value = 'ship'
@@ -226,7 +233,7 @@ async function buy() {
       <div v-if="done === 'vault'" class="result ok" role="status">
         <strong>已買下 {{ listing.card.name }}</strong>
         <p>卡片已經過戶到你名下，收進卡冊了。正在帶你過去…</p>
-        <RouterLink :to="{ name: 'cards' }" class="btn primary">去看我的卡冊</RouterLink>
+        <RouterLink :to="{ name: 'cards', query: boughtQuery }" class="btn primary">去看我的卡冊</RouterLink>
       </div>
 
       <div v-else-if="done === 'ship'" class="result ok" role="status">

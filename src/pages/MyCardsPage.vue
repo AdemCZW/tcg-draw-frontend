@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api, type PrizeSummary } from '@/lib/api'
 import type { Tier, UserPrize } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
@@ -21,6 +21,18 @@ import { useAuthStore } from '@/stores/auth'
 const wallet = useWalletStore()
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
+
+/* ---- 剛拿到的卡 ----
+   抽完與市場成交都會導到這一頁，網址帶著剛入手的卡片 id。
+   卡本來就已經在卡冊裡（後端在同一個交易裡就寫進 prizes），問題是「看不出來」——
+   一整面長得差不多的卡裡多了一張，沒有任何東西告訴你是哪一張，
+   使用者的結論就是「我抽到的那片沒進卡冊」。標出來才算真的送達。
+
+   排序那一半在後端：卡冊照 acquired_at 排（見 server migrations/014），
+   剛拿到的一定在最前面，不必捲。 */
+const justGot = computed(() => new Set(
+  String(route.query.new ?? '').split(',').map(v => v.trim()).filter(Boolean)))
 
 /* ---- 卡片清單 ----
    卡冊是整個站成長最快的列表：每抽一次就多一張，只會變長不會變短。
@@ -141,8 +153,10 @@ const statusShort: Record<UserPrize['status'], string> = {
    一次只展開一張，收合時把該卡的定價表單與回收確認一起關掉，
    否則下次展開會停在上次的半途，看起來像自己跳出來的。 */
 const openCard = ref<string | null>(null)
-/* wonAt 是帶時區的 ISO 字串，直接切前 10 碼會在 UTC+8 的深夜差一天。
-   解析不了就原樣回傳 —— 卡冊上少一個好看的日期，比顯示 Invalid Date 好。 */
+/* 帶時區的 ISO 字串，直接切前 10 碼會在 UTC+8 的深夜差一天。
+   解析不了就原樣回傳 —— 卡冊上少一個好看的日期，比顯示 Invalid Date 好。
+   讀的是 acquiredAt 不是 wonAt：買來的卡「取得」的是成交那天，
+   不是賣家當初抽到它的那天。 */
 function wonDay(iso: string) {
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return iso
@@ -358,6 +372,10 @@ const shareLink = computed(() => (shareSlug.value ? shareUrl(shareSlug.value) : 
 onMounted(() => {
   list.reset()
   void refreshSummary()
+  /* 卡是後端在抽選／成交的同一個交易裡就寫進去的，這裡不做任何「收進去」的動作，
+     只是把已經發生的事說出來 —— 沒有這句話，使用者得自己數卡片才知道有沒有進來。 */
+  const n = justGot.value.size
+  if (n > 0) flash(n > 1 ? `${n} 張新卡已經在你的卡冊裡` : '這張卡已經在你的卡冊裡')
 })
 
 onMounted(async () => {
@@ -572,7 +590,8 @@ async function copyLink() {
         :class="{
           dim: p.status === 'recycled',
           sel: sellPick.includes(p.id),
-          off: selecting && !canSell(p)
+          off: selecting && !canSell(p),
+          fresh: justGot.has(p.id)
         }"
       >
         <!-- 賞別、狀態、卡名、市值全部疊回卡圖上：卡圖本來就佔著這塊面積，
@@ -606,6 +625,8 @@ async function copyLink() {
           </button>
         </Tilt3D>
 
+        <p v-if="justGot.has(p.id)" class="fresh-tag" role="status">剛收進卡冊</p>
+
         <p v-if="justRecycled?.id === p.id" class="got" role="status">
           已入帳 <strong class="mono">+{{ justRecycled.points.toLocaleString() }}</strong> 點
         </p>
@@ -621,7 +642,7 @@ async function copyLink() {
           <span>{{ openCard === p.id ? '收起' : '操作' }}</span>
           <span class="chev" aria-hidden="true"></span>
         </button>
-        <p v-else class="meta mono">取得 {{ wonDay(p.wonAt) }}</p>
+        <p v-else class="meta mono">取得 {{ wonDay(p.acquiredAt) }}</p>
 
         <div v-if="openCard === p.id && p.status === 'stashed' && !selecting" class="body">
           <!-- 鑑定編號與寄存期限：決定要不要出貨／回收時才需要，所以收在這裡 -->
@@ -1161,6 +1182,16 @@ strong { font-size: 14px; }
 .exp { font-size: 11.5px; }
 .acts { display: flex; gap: 8px; margin-top: 4px; }
 .btn.sm { padding: 6px 12px; font-size: 12.5px; }
+
+/* 剛拿到的那張：外框 + 一行字。只靠外框不夠 ——
+   色覺檢測下強調色與底色的分離度不保證，一定要有文字把話講完。 */
+.item.fresh { outline: 2px solid var(--accent); outline-offset: -1px; }
+.fresh-tag {
+  margin: 0; font-size: 12px; font-weight: 700;
+  color: var(--accent); letter-spacing: .04em;
+  /* 格線子元素：長卡名不該把整欄撐寬 */
+  min-width: 0;
+}
 
 .got {
   margin: 0; font-size: 12.5px; color: var(--ok);

@@ -193,14 +193,19 @@ export async function draw(
   const byId = new Map(prizeRows.map(r => [r.id as string, r]))
   const items = claimed.map(c => {
     const pr = byId.get(c.prize_id)!
-    return { seat: Number(c.seat), prizeId: c.prize_id, tier: pr.tier as string, card: pr.card }
+    const seat = Number(c.seat)
+    /* stashId 是這張卡在使用者卡冊裡那一列的 id（prizeId 是池裡的獎項定義，是兩回事）。
+       回給前端是為了讓開卡結果導到卡冊時能指名「剛剛拿到的是這幾張」——
+       少了它，前端只能自己拼 `pz-<drawId>-<seat>`，等於把主鍵的組法變成契約。 */
+    return { seat, prizeId: c.prize_id, stashId: `pz-${drawId}-${seat}`, tier: pr.tier as string, card: pr.card }
   })
 
   // 發到使用者名下的保管庫
   const prizeIns = items.map(it => ({
-    id: `pz-${drawId}-${it.seat}`, user_id: userId, pool_id: poolId, seat: it.seat,
+    id: it.stashId, user_id: userId, pool_id: poolId, seat: it.seat,
     draw_id: drawId, card: it.card, tier: it.tier, status: 'stashed',
-    won_at: now, stash_expires_at: now + STASH_DAYS * DAY
+    /* 抽到的當下兩個時間一樣；分開記是為了轉手 —— 見 migrations/014 */
+    won_at: now, acquired_at: now, stash_expires_at: now + STASH_DAYS * DAY
   }))
   await tx`insert into prizes ${tx(prizeIns as never)}`
 

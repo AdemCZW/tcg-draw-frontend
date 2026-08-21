@@ -262,7 +262,9 @@ social.post('/trade-offers/:id/accept', async c => {
              values (${o.from_user}, ${-price}, 'trade-buy', ${id}) on conflict do nothing`
     await tx`insert into points_ledger (user_id, delta, reason, ref_id)
              values (${me}, ${price}, 'trade-sell', ${id}) on conflict do nothing`
-    await tx`update prizes set user_id = ${o.from_user} where id = ${o.prize_id}`
+    /* 跟市場的庫內轉移同一件事：卡冊照 acquired_at 排，過戶要一起更新，
+       否則買方的卡冊裡這張卡排在賣方抽到它的那天（見 routes/orders.ts 的說明） */
+    await tx`update prizes set user_id = ${o.from_user}, acquired_at = ${Date.now()} where id = ${o.prize_id}`
 
     // 同一張卡上其他人還在等的出價全部作廢：卡已經不是我的了，不可能再答應
     const dropped = await tx`
