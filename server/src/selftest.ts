@@ -45,7 +45,7 @@ check('壞單號擋下', !looksLikeTracking('BAD'))
 check('正常單號放行', looksLikeTracking('ABC12345678'))
 
 /* ---------------- 公平抽選 ---------------- */
-import { commitOf, seatSequence, verifyReveal, hexToBytes, bytesToHex } from './shared/fairness.js'
+import { commitOf, seatSequence, verifyReveal, commitV2, manifestHashOf, hexToBytes, bytesToHex } from './shared/fairness.js'
 
 console.log('\nshared/fairness：')
 const seed = 'a'.repeat(64)
@@ -85,6 +85,53 @@ check('換過 seed 的 reveal 被抓到',
 const tampered = [...s1]; tampered[0] = tampered[0] === 'D' ? 'LAST' : 'D'
 check('竄改一個籤位被抓到',
   !(await verifyReveal({ serverSeed: seed, commitHash: commit, clientSeed: 'drand:12345', prizes, publishedSequence: tampered })).ok)
+
+/* ---- v2：獎品內容也在承諾裡 ----
+   v1 的 commit 只涵蓋種子，所以改「第 3 個獎項是哪張卡」籤序不變、
+   驗算照樣回 ok —— 開賣後把噴火龍換成同賞別的廉價卡抓不到。
+   下面這幾條就是釘住「現在抓得到了」。 */
+const manifest = [
+  { prizeId: 'LAST', tier: 'LAST', total: 1, name: '噴火龍 ex UR', setCode: 'SV4a', cardNo: '349', grader: 'PSA', grade: 10, certNo: '84120033', refPrice: 43680 },
+  { prizeId: 'A', tier: 'A', total: 2, name: '奇樹 SAR', setCode: 'SV4a', cardNo: '350', grader: 'PSA', grade: 10, certNo: null, refPrice: 26320 },
+  { prizeId: 'D', tier: 'D', total: 7, name: '謎擬Ｑ SAR', setCode: 'SV4a', cardNo: '341', grader: 'RAW', grade: null, certNo: null, refPrice: 380 }
+]
+const mPrizes = manifest.map(m => ({ prizeId: m.prizeId, total: m.total }))
+const mSeq = await seatSequence(seed, 'drand:v2', mPrizes)
+const mHash = await manifestHashOf(manifest)
+const commit2 = await commitV2(seed, mHash)
+const baseV2 = {
+  serverSeed: seed, commitHash: commit2, clientSeed: 'drand:v2',
+  prizes: mPrizes, publishedSequence: mSeq, manifest
+}
+
+check('v2：正確的 reveal 通過驗證', (await verifyReveal(baseV2)).ok)
+check('v2：回報的版本是 2', (await verifyReveal(baseV2)).version === 2)
+check('v1：沒帶 manifest 時回報版本 1',
+  (await verifyReveal({ ...baseV2, commitHash: commit, manifest: undefined })).version === 1)
+
+/* 這一條是整個 v2 的目的：籤序一個字都沒動，只換掉一張卡的身分 */
+const swapped = manifest.map(m => m.prizeId === 'LAST' ? { ...m, name: '謎擬Ｑ SAR', refPrice: 380 } : m)
+const rSwapped = await verifyReveal({ ...baseV2, manifest: swapped })
+check('v2：偷換獎品的卡名與價值被抓到（籤序完全沒動）', !rSwapped.ok)
+
+const certSwapped = manifest.map(m => m.prizeId === 'LAST' ? { ...m, certNo: '99999999' } : m)
+check('v2：偷換鑑定編號被抓到',
+  !(await verifyReveal({ ...baseV2, manifest: certSwapped })).ok)
+
+const tierSwapped = manifest.map(m => m.prizeId === 'D' ? { ...m, tier: 'A' } : m)
+check('v2：偷改賞別被抓到',
+  !(await verifyReveal({ ...baseV2, manifest: tierSwapped })).ok)
+
+/* 清單與籤序用的張數必須對得起來 —— 否則伺服器可以兩邊各說各話 */
+const countMismatch = manifest.map(m => m.prizeId === 'A' ? { ...m, total: 3 } : m)
+const rCount = await verifyReveal({ ...baseV2, manifest: countMismatch })
+check('v2：清單張數跟籤序用的不一致被抓到', !rCount.ok)
+check('v2：而且講得出是哪一項', (rCount.reason ?? '').includes('奇樹'))
+
+check('v2：manifest 的排序不影響雜湊',
+  (await manifestHashOf([...manifest].reverse())) === mHash)
+check('v2：換過 seed 一樣被抓到',
+  !(await verifyReveal({ ...baseV2, serverSeed: seed2 })).ok)
 
 // 分布粗檢：跑 400 個不同 seed，LAST 落在每個位置的次數應該接近均勻。
 // 這不是嚴格統計檢定，只是抓「明顯偏向某一端」這種實作錯誤（例如取餘數偏差、迴圈方向寫錯）。

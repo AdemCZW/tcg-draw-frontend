@@ -24,7 +24,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePoolStore } from '@/stores/pools'
-import { verifyReveal, commitOf, type Reveal } from '@/shared/fairness'
+import { verifyReveal, commitOf, commitV2, manifestHashOf, type Reveal } from '@/shared/fairness'
 import { API_URL, MOCK } from '@/lib/config'
 import { track } from '@/lib/ga'
 
@@ -34,8 +34,8 @@ const pool = computed(() => pools.byId(String(route.params.poolId)))
 
 const loading = ref(false)
 const err = ref('')
-const reveal = ref<Reveal & { clientSeedSource?: string } | null>(null)
-const result = ref<{ ok: boolean; reason?: string } | null>(null)
+const reveal = ref<Reveal & { clientSeedSource?: string; manifestHash?: string | null } | null>(null)
+const result = ref<{ ok: boolean; reason?: string; version: 1 | 2 } | null>(null)
 /** 自己重算出來的 commit，跟開賣前公布的並排給使用者看 */
 const recomputed = ref('')
 
@@ -57,9 +57,13 @@ async function run() {
       err.value = d.message ?? '取不到公布資料'
       return
     }
-    const r = await res.json() as Reveal & { clientSeedSource?: string }
+    const r = await res.json() as Reveal & { clientSeedSource?: string; manifestHash?: string | null }
     reveal.value = r
-    recomputed.value = await commitOf(r.serverSeed)
+    /* 重算 commit 的方式要跟這個池的版本一致，否則會在畫面上並排兩個
+       必然不一樣的雜湊，看起來像出事了 */
+    recomputed.value = r.manifest
+      ? await commitV2(r.serverSeed, await manifestHashOf(r.manifest))
+      : await commitOf(r.serverSeed)
     result.value = await verifyReveal(r)
   } catch {
     err.value = '連線失敗，請稍後再試'
@@ -82,8 +86,8 @@ onMounted(async () => {
     <div class="card box">
       <p class="intro">
         這一頁在<strong>你的瀏覽器裡</strong>重跑一次洗牌，不經過我們的伺服器。
-        三件事都要成立才算通過：開賣前公布的 commit 對得上、重算的籤序跟公布的完全一樣、
-        獎品數量跟開賣前宣告的相符。
+        開賣前公布的 commit 要對得上、重算的籤序要跟公布的完全一樣、
+        獎品數量要跟宣告的相符 —— 三件事都成立才算通過。
       </p>
 
       <p v-if="pool.status !== 'revealed'" class="muted note">
@@ -99,12 +103,34 @@ onMounted(async () => {
 
         <template v-if="result">
           <p v-if="result.ok" class="ok" role="status">
-            通過。籤序與開賣前的承諾一致，沒有被更動過。
+            通過。<template v-if="result.version === 2">籤序<strong>與獎品內容</strong>都跟開賣前的承諾一致</template><template v-else>籤序與開賣前的承諾一致</template>，沒有被更動過。
           </p>
           <p v-else class="bad" role="alert">
             不一致：{{ result.reason }}。請保留這個畫面並聯繫客服。
           </p>
         </template>
+
+        <!-- 版本差在哪要講清楚。v1 的池只保證籤序沒被動，
+             獎品內容換掉是抓不到的 —— 那是事實，不該讓使用者以為驗過就萬無一失 -->
+        <p v-if="result && result.version === 1" class="muted note">
+          這是舊版承諾的池：只涵蓋籤序，不涵蓋「每個獎項是哪張卡」。
+          之後開的池會把獎品清單一起綁進承諾，換掉任何一張卡都會讓驗算不一致。
+        </p>
+
+        <!-- 承諾涵蓋的獎品清單。這是 v2 真正多出來的東西：
+             它就是開賣前宣告的內容，被改過就驗不過 -->
+        <details v-if="reveal?.manifest?.length" class="man">
+          <summary>承諾涵蓋的獎品清單（{{ reveal.manifest.length }} 項）</summary>
+          <ul>
+            <li v-for="m in reveal.manifest" :key="m.prizeId">
+              <span class="c-tier mono">{{ m.tier }}</span>
+              <span class="c-name">{{ m.name }}</span>
+              <span class="mono muted">×{{ m.total }}</span>
+              <span v-if="m.certNo" class="mono muted">#{{ m.certNo }}</span>
+              <span v-if="m.refPrice" class="mono muted">{{ m.refPrice.toLocaleString() }}</span>
+            </li>
+          </ul>
+        </details>
 
         <dl v-if="reveal">
           <dt>開賣前公布的 commit</dt>
@@ -117,6 +143,8 @@ onMounted(async () => {
           <dd class="mono">{{ reveal.clientSeedSource || '—' }}</dd>
           <dt>籤數</dt>
           <dd class="mono">{{ reveal.publishedSequence.length }}</dd>
+          <dt v-if="reveal.manifestHash">獎品清單雜湊</dt>
+          <dd v-if="reveal.manifestHash" class="mono">{{ reveal.manifestHash }}</dd>
         </dl>
 
         <p class="muted note">
@@ -130,6 +158,16 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.man { font-size: 12.5px; }
+.man summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
+.man ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.man li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.man .c-tier {
+  flex: none; padding: 1px 7px; border-radius: 999px;
+  background: var(--surface-3); color: var(--muted); font-size: 11px;
+}
+.man .c-name { flex: 1; min-width: 0; }
+
 .page { padding-top: 40px; padding-bottom: 72px; max-width: 680px; }
 h1 { font-size: 20px; margin: 0 0 18px; }
 .box { padding: 20px; display: grid; gap: 12px; }

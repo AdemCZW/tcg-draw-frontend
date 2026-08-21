@@ -6,7 +6,7 @@
  */
 import { sql } from './db.js'
 import { PLATFORM_ID } from './orders-service.js'
-import { commitOf, seatSequence } from './shared/fairness.js'
+import { commitV2, manifestHashOf, seatSequence } from './shared/fairness.js'
 
 const users: [string, string, string][] = [
   [PLATFORM_ID, 'platform', 'VaultDraw 官方'],
@@ -355,12 +355,30 @@ async function seedPool(d: PoolDef) {
   const total = prizeDefs.reduce((a, p) => a + p.total, 0)
   const openedAt = new Date(Date.now() - d.openedDaysAgo * 86_400_000)
 
+  /* 種子池也走 v2 的承諾（把獎品清單綁進 commit）——
+     示範資料如果停在 v1，那「開賣後換卡抓不到」的洞在展示與測試裡就永遠碰不到，
+     而那正是最需要被測到的一條。 */
+  const manifest = prizeDefs.map(p => {
+    const c = p.card as {
+      name?: string; setCode?: string | null; cardNo?: string | null
+      grader?: string | null; grade?: number | null; certNo?: string | null; refPrice?: number | null
+    }
+    return {
+      prizeId: p.id, tier: p.tier, total: p.total,
+      name: c.name ?? '', setCode: c.setCode ?? null, cardNo: c.cardNo ?? null,
+      grader: c.grader ?? null, grade: c.grade ?? null,
+      certNo: c.certNo ?? null, refPrice: c.refPrice ?? null
+    }
+  })
+  const manifestHash = await manifestHashOf(manifest)
+
   await sql`
     insert into pools (id, seller_id, mode, title, ticket_price, total_tickets, status,
-                       server_seed, commit_hash, client_seed_source, client_seed,
+                       server_seed, commit_hash, manifest_hash, client_seed_source, client_seed,
                        shitei_tier, auction_seats, opened_at, revealed_at)
     values (${d.id}, ${d.sellerId}, ${d.mode}, ${d.title}, ${d.ticketPrice}, ${total}, ${d.status},
-            ${d.serverSeed}, ${await commitOf(d.serverSeed)}, ${clientSeed}, ${clientSeed},
+            ${d.serverSeed}, ${await commitV2(d.serverSeed, manifestHash)}, ${manifestHash},
+            ${clientSeed}, ${clientSeed},
             ${d.shiteiTier ?? null}, ${d.auctionSeats ?? null}, ${openedAt},
             ${d.status === 'revealed' ? new Date() : null})
   `

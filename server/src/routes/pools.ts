@@ -79,12 +79,34 @@ pools.get('/:id/reveal', async c => {
   const seq = await sql<{ seat: number; prize_id: string }[]>`
     select seat, prize_id from pool_seats where pool_id = ${p.id} order by seat
   `
-  const prizes = await sql<{ id: string; total: number }[]>`
-    select id, total from pool_prizes where pool_id = ${p.id}
-  `
+  const prizes = await sql<{
+    id: string; total: number; tier: string; card: Record<string, unknown>
+  }[]>`select id, total, tier, card from pool_prizes where pool_id = ${p.id}`
+
+  /* v2 的池要一起吐出獎品清單，驗算端才重算得出 commit。
+     這裡刻意**現在**從 pool_prizes 讀，不是讀一份存起來的快照 ——
+     如果有人在開賣後改了獎品內容，這裡吐出來的就是改過的版本，
+     重算的 commit 對不上，驗算就會抓到。存快照反而會把證據蓋掉。 */
+  const manifest = p.manifest_hash
+    ? prizes.map(x => {
+        const cd = x.card as {
+          name?: string; setCode?: string | null; cardNo?: string | null
+          grader?: string | null; grade?: number | null; certNo?: string | null; refPrice?: number | null
+        }
+        return {
+          prizeId: x.id, tier: x.tier, total: Number(x.total),
+          name: cd.name ?? '', setCode: cd.setCode ?? null, cardNo: cd.cardNo ?? null,
+          grader: cd.grader ?? null, grade: cd.grade ?? null,
+          certNo: cd.certNo ?? null, refPrice: cd.refPrice ?? null
+        }
+      })
+    : undefined
+
   return c.json({
     serverSeed: p.server_seed, commitHash: p.commit_hash,
     clientSeedSource: p.client_seed_source, clientSeed: p.client_seed,
+    manifestHash: p.manifest_hash ?? null,
+    manifest,
     prizes: prizes.map(x => ({ prizeId: x.id, total: Number(x.total) })),
     publishedSequence: seq.map(s => s.prize_id)
   })
