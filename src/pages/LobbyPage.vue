@@ -210,14 +210,11 @@ function onlyOfficial() {
    所以它搬到整頁最後，並且用綠色系與高密度小方塊，
    跟上面的紅／中性色卡片拉開，讀起來像「另一個地方的入口」而不是又一批池。 */
 const marketPicks = ref<Listing[]>([])
+/* 排序與取前幾張都交給後端。原本是把整個市場撈回來再自己排 ——
+   掛單改成游標分頁之後那個做法只排得到第一批，選出來的「最殺」是假的。 */
 onMounted(async () => {
-  const all = await api.listMarket()
-  marketPicks.value = all
-    .filter(l => l.status === 'live')
-    .map(l => ({ l, d: (l.price - l.card.refPrice) / l.card.refPrice }))
-    .sort((a, b) => a.d - b.d)
-    .slice(0, 8)
-    .map(x => x.l)
+  const page = await api.listMarket({ sort: 'deal', limit: 8 })
+  marketPicks.value = page.items
 })
 const dealPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card.refPrice) * 100)
 /** 標頭的數據籤直接寫「最多 -14%」，比「8 張」更接近使用者想知道的事 */

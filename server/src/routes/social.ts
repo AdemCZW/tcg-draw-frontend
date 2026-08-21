@@ -14,6 +14,7 @@ import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { lockSpender, walletOf } from '../money.js'
 import { notify } from '../notify.js'
+import { PageQuery, decodeCursor, encodeCursor, isNumeric, slicePage } from '../pagination.js'
 
 /* =====================================================================
    公開：不需要登入
@@ -27,8 +28,18 @@ export const socialPublic = new Hono()
  * 也不含 user_id。分享連結會被轉貼到群組裡，任何從這裡漏出去的欄位
  * 等於公開，所以這裡是白名單而不是「把 user 撈出來刪幾個欄位」。
  */
+/* 賞別的展示順序。寫成 SQL 片段而不是字串，才能同時給 order by 與游標比較用 ——
+   兩邊只要有一邊漏改，分頁就會在賞別交界處漏卡或重複。 */
+const TIER_RANK = sql`case tier when 'LAST' then 0 when 'A' then 1 when 'B' then 2 when 'C' then 3 else 4 end`
+
 socialPublic.get('/cardbook/:slug', async c => {
   const slug = c.req.param('slug') ?? ''
+  const parsed = PageQuery.safeParse(c.req.query())
+  if (!parsed.success) {
+    return c.json({ error: 'BAD_REQUEST', message: '分頁參數不合法（limit 介於 1 到 100）' }, 400)
+  }
+  const { limit, cursor } = parsed.data
+
   const [u] = await sql`
     select id, coalesce(display_name, name) as name, handle, cardbook_public
     from users where share_slug = ${slug}
@@ -37,24 +48,57 @@ socialPublic.get('/cardbook/:slug', async c => {
   // 已經分享出去又關掉的連結要真的失效，不能只是前端不顯示
   if (!u.cardbook_public) return c.json({ error: 'CARDBOOK_PRIVATE', message: '這本卡冊已經改成不公開' }, 403)
 
+  /* 游標是 (賞別序, -won_at, id)。
+     列值比較只能表達「全部同方向」的排序，而這裡要的是賞別由高到低、
+     同賞別內時間由新到舊 —— 方向是混的。把 won_at 取負號就把「時間遞減」
+     翻成「-won_at 遞增」，三個鍵全部變成遞增，一個 (a,b,c) > (x,y,z) 就寫得完。
+     order by 也用同一組表達式，兩邊必須逐字對應。 */
+  let after: [string, string, string] | null = null
+  if (cursor) {
+    const p = decodeCursor(cursor, 3)
+    if (!p || !isNumeric(p[0]!) || !isNumeric(p[1]!)) {
+      return c.json({ error: 'BAD_CURSOR', message: '分頁游標不合法' }, 400)
+    }
+    after = [p[0]!, p[1]!, p[2]!]
+  }
+
   // 只列還在保管庫或已上架的卡：已寄出、已回收的不算「持有」
-  const prizes = await sql`
-    select id, card, tier, status, won_at from prizes
+  const rows = await sql<{ id: string; tier: string; status: string; won_at: string; rank: number }[]>`
+    select id, card, tier, status, won_at, ${TIER_RANK} as rank from prizes
     where user_id = ${u.id} and status in ('stashed', 'listed')
-    order by
-      case tier when 'LAST' then 0 when 'A' then 1 when 'B' then 2 when 'C' then 3 else 4 end,
-      won_at desc
+      ${after
+        ? sql`and (${TIER_RANK}, -won_at, id) > (${after[0]}::int, ${after[1]}::bigint, ${after[2]}::text)`
+        : sql``}
+    order by ${TIER_RANK}, -won_at, id
+    limit ${limit + 1}
   `
+  const page = slicePage(rows, limit, r => encodeCursor([r.rank, -Number(r.won_at), String(r.id)]))
+
   return c.json({
     owner: { name: u.name, handle: u.handle },
     // 提出交易要登入，但「有幾張、長什麼樣」不用 —— 不然分享出去沒人看得到
-    prizes: prizes.map(p => ({
-      id: p.id, card: p.card, tier: p.tier,
+    items: page.items.map(p => ({
+      id: p.id, card: (p as unknown as { card: unknown }).card, tier: p.tier,
       // 已上架的卡不能私下出價，要走市場，前端得看得出來
       tradable: p.status === 'stashed'
-    }))
+    })),
+    nextCursor: page.nextCursor,
+    /* 頭部的「收藏 N 張／可談交易 N 張／市值合計」講的是整本卡冊，
+       不能拿載進來的那一頁去數 —— 那個數字會隨著捲動一直長大。 */
+    ...(cursor ? {} : { summary: await cardbookSummary(u.id as string) })
   })
 })
+
+async function cardbookSummary(userId: string) {
+  const [r] = await sql<{ n: string; tradable: string; value: string }[]>`
+    select
+      count(*)::text as n,
+      count(*) filter (where status = 'stashed')::text as tradable,
+      coalesce(sum((card->>'refPrice')::numeric), 0)::text as value
+    from prizes where user_id = ${userId} and status in ('stashed', 'listed')
+  `
+  return { count: Number(r?.n ?? 0), tradable: Number(r?.tradable ?? 0), totalValue: Number(r?.value ?? 0) }
+}
 
 /* =====================================================================
    需要登入

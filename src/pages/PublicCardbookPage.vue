@@ -11,50 +11,74 @@
  */
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { share, offers, type PublicCard, type PublicCardbook } from '@/lib/social'
+import { share, offers, type PublicCard } from '@/lib/social'
 import { ApiError } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
+import { useInfiniteList } from '@/composables/useInfiniteList'
 import CardArt from '@/components/CardArt.vue'
 import TierBadge from '@/components/TierBadge.vue'
 import CertTag from '@/components/CertTag.vue'
+import ListSentinel from '@/components/ListSentinel.vue'
 import type { Tier } from '@/types/models'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
-const book = ref<PublicCardbook | null>(null)
-const loading = ref(true)
+/* 卡冊本身是分批載入的（別人的收藏可能有幾百張，一次全塞進格線的是卡圖不是資料）。
+   持有人與總覽只有第一批帶回來，所以存在列表之外 —— 它們不隨捲動改變。 */
+type Owner = { name: string; handle: string }
+type Summary = { count: number; tradable: number; totalValue: number }
+const owner = ref<Owner | null>(null)
+const summary = ref<Summary | null>(null)
+
 /* 錯誤存兩份：message 給人看，code 決定畫面長什麼樣。
    這頁最常見的「錯誤」不是壞掉，而是連結還在群組裡流傳、但持有人已經關掉公開，
    那種情況要講成一句人話，不能丟一個通用的失敗訊息讓人以為是網站壞了。 */
 const err = ref('')
 const errCode = ref('')
 
-async function load(slug: string) {
-  loading.value = true
+const list = useInfiniteList<PublicCard>(async (cursor, signal) => {
+  const slug = String(route.params.slug ?? '')
+  const page = await share.view(slug, { cursor, signal })
+  // 第一批才帶持有人與總覽；後續批次不動它們，免得換頁時頭部閃一下
+  if (!cursor) { owner.value = page.owner; summary.value = page.summary ?? null }
+  return { items: page.items, nextCursor: page.nextCursor }
+})
+
+/* 用 watch 而不是 onMounted：從一本卡冊的連結直接點到另一本時元件會被重用，
+   onMounted 不會再跑一次，畫面會停在上一個人的卡片。
+   reset() 會把游標歸零、清空既有卡片，並且讓上一本還在飛的請求作廢 ——
+   沒有這一步，慢回來的舊卡冊會蓋到新卡冊上。 */
+watch(() => route.params.slug, s => {
+  if (typeof s !== 'string' || !s) return
+  owner.value = null
+  summary.value = null
   err.value = ''
   errCode.value = ''
-  try {
-    book.value = await share.view(slug)
-  } catch (e) {
-    book.value = null
-    errCode.value = e instanceof ApiError ? e.code : ''
-    err.value = e instanceof ApiError ? e.message : '連線失敗，請稍後再試。'
-  } finally {
-    loading.value = false
-  }
-}
-// 用 watch 而不是 onMounted：從一本卡冊的連結直接點到另一本時元件會被重用，
-// onMounted 不會再跑一次，畫面會停在上一個人的卡片
-watch(() => route.params.slug, s => { if (typeof s === 'string' && s) load(s) }, { immediate: true })
+  list.reset()
+}, { immediate: true })
 
-const prizes = computed(() => book.value?.prizes ?? [])
-const tradableCount = computed(() => prizes.value.filter(p => p.tradable).length)
-const totalValue = computed(() => prizes.value.reduce((s, p) => s + (p.card.value ?? 0), 0))
+/* 列表的錯誤要分兩種看待：第一批失敗＝整頁打不開（連結失效、卡冊關閉），
+   要用整頁的錯誤畫面把話講清楚；載到一半失敗只是這一批沒拿到，
+   由 ListSentinel 給一顆重試鍵就好，已經看到的卡片不該消失。 */
+watch(list.error, msg => {
+  if (!msg || owner.value) return
+  const e = list.lastError.value
+  errCode.value = e instanceof ApiError ? e.code : ''
+  err.value = msg
+})
+
+const loading = computed(() => list.loading.value && !list.ready.value)
+const prizes = list.items
+const tradableCount = computed(() => summary.value?.tradable ?? 0)
+const totalValue = computed(() => summary.value?.totalValue ?? 0)
+const totalCount = computed(() => summary.value?.count ?? prizes.value.length)
 // 頭像沒有實際圖檔，用名字第一個字 + 由 handle 推出的色相，至少每個人長得不一樣
-const initial = computed(() => (book.value?.owner.name ?? '?').trim().slice(0, 1) || '?')
-const avatarHue = computed(() => hueOf(book.value?.owner.handle ?? ''))
+const initial = computed(() => (owner.value?.name ?? '?').trim().slice(0, 1) || '?')
+const avatarHue = computed(() => hueOf(owner.value?.handle ?? ''))
+// 模板 ref 名稱要跟這個變數一致，composable 才拿得到哨兵元素
+const sentinelRef = list.sentinel
 
 function hueOf(seed: string) {
   let h = 0
@@ -141,21 +165,22 @@ async function submitOffer(p: PublicCard) {
       <RouterLink :to="{ name: 'home' }" class="btn primary">看看有什麼可以抽</RouterLink>
     </section>
 
-    <template v-else-if="book">
+    <template v-else-if="owner">
       <!-- 持有人 + 總覽。這頁會被轉貼，第一眼要回答「這是誰、收了什麼」 -->
       <header class="hero card">
         <div class="who">
           <span class="avatar" :style="{ '--h': avatarHue }" aria-hidden="true">{{ initial }}</span>
           <div class="whoText">
-            <h1>{{ book.owner.name }}</h1>
-            <p class="handle mono">{{ book.owner.handle }}</p>
+            <h1>{{ owner.name }}</h1>
+            <p class="handle mono">{{ owner.handle }}</p>
           </div>
         </div>
 
         <dl class="stats">
           <div>
+            <!-- 整本卡冊的張數，不是已經捲出來的張數 —— 後者會隨著捲動一直長大 -->
             <dt>收藏</dt>
-            <dd class="mono">{{ prizes.length }}<span class="unit">張</span></dd>
+            <dd class="mono">{{ totalCount }}<span class="unit">張</span></dd>
           </div>
           <div v-if="totalValue > 0">
             <dt>市值合計</dt>
@@ -168,7 +193,7 @@ async function submitOffer(p: PublicCard) {
         </dl>
 
         <p class="lead muted">
-          這是 {{ book.owner.name }} 在 VaultDraw 的公開卡冊。
+          這是 {{ owner.name }} 在 VaultDraw 的公開卡冊。
           <template v-if="tradableCount">
             標示「可提出交易」的卡片可以直接出價，出價要先登入；看卡冊不用。
           </template>
@@ -178,7 +203,7 @@ async function submitOffer(p: PublicCard) {
         </p>
       </header>
 
-      <p v-if="!prizes.length" class="state card">
+      <p v-if="list.ready.value && !prizes.length && !list.error.value" class="state card">
         <span class="muted">這本卡冊目前還沒有卡片。</span>
       </p>
 
@@ -240,6 +265,20 @@ async function submitOffer(p: PublicCard) {
           </div>
         </article>
       </div>
+
+      <!-- 哨兵擺在格線外面當兄弟節點：塞進 grid 裡的話它會佔掉一格，
+           而且 grid 子元素預設 min-width: auto，長錯誤訊息會把整欄撐開 -->
+      <ListSentinel
+        ref="sentinelRef"
+        :loading="list.loading.value"
+        :done="list.done.value"
+        :error="list.error.value"
+        :manual="list.manual.value"
+        :empty="!prizes.length"
+        done-text="已經是全部的卡片了"
+        @retry="list.retry()"
+        @more="list.load()"
+      />
     </template>
   </div>
 </template>

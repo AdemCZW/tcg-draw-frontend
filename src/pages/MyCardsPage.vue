@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { api } from '@/lib/api'
+import { api, type PrizeSummary } from '@/lib/api'
 import type { Tier, UserPrize } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 import Tilt3D from '@/components/Tilt3D.vue'
 import TierBadge from '@/components/TierBadge.vue'
 import CertTag from '@/components/CertTag.vue'
 import ValueCurve from '@/components/ValueCurve.vue'
+import ListSentinel from '@/components/ListSentinel.vue'
+import { useInfiniteList } from '@/composables/useInfiniteList'
 import { useWalletStore } from '@/stores/wallet'
 import { recycleQuote, RECYCLE_RATE } from '@/lib/recycle'
 import { track } from '@/lib/ga'
@@ -19,8 +21,18 @@ import { useAuthStore } from '@/stores/auth'
 const wallet = useWalletStore()
 const auth = useAuthStore()
 const router = useRouter()
-const prizes = ref<UserPrize[]>([])
-onMounted(async () => { prizes.value = await api.myPrizes() })
+
+/* ---- 卡片清單 ----
+   卡冊是整個站成長最快的列表：每抽一次就多一張，只會變長不會變短。
+   所以列表分批載入，捲到接近底部才抓下一批（見 composables/useInfiniteList.ts）。
+
+   跟著要搬的是**狀態過濾**：它以前是前端 filter，分批之後只濾得到已載入的那批，
+   使用者會看到「寄存中 0 張」而真正的寄存中卡片躺在第 3 批。現在 tab 直接
+   當成 API 參數送出去，由 SQL 過濾。 */
+const list = useInfiniteList<UserPrize>((cursor, signal) =>
+  api.myPrizes({ cursor, signal, status: tab.value === 'all' ? undefined : tab.value }))
+const sentinelRef = list.sentinel
+const prizes = list.items
 
 /* ---- 收藏總覽 ----
    卡冊原本是一長串扁平清單，看不出「我收了多少、值多少」。
@@ -31,11 +43,27 @@ onMounted(async () => { prizes.value = await api.myPrizes() })
    前一版把「持有 / 市值 / 最高價」三個並排成同樣份量的欄，於是三個都不是重點，
    而且「持有 3 張」在 375px 底下被折成「持有 / 3 / 張」三行 ——
    數字與單位被拆開就不再是一個量詞了。現在數字與單位鎖在同一個 inline 行內，
-   配角則降級成一行小字，靠層級而不是靠並排來分主次。 */
-const owned = computed(() => prizes.value.filter(p => p.status !== 'recycled'))
-const totalValue = computed(() => owned.value.reduce((s, p) => s + p.card.refPrice, 0))
-const bestCard = computed(() =>
-  owned.value.reduce<UserPrize | null>((b, p) => (!b || p.card.refPrice > b.card.refPrice ? p : b), null))
+   配角則降級成一行小字，靠層級而不是靠並排來分主次。
+
+   這幾個數字講的是**整本卡冊**，所以由後端一次算好（/v1/prizes/summary），
+   不從已載入的那幾張推 —— 那樣算出來的「總值」會隨著捲動一路長大，
+   那不是統計，是進度條。 */
+const summary = ref<PrizeSummary | null>(null)
+async function refreshSummary() {
+  try { summary.value = await api.prizeSummary() } catch { /* 總覽拿不到不該擋住卡片清單 */ }
+}
+
+const total = computed(() => summary.value?.total ?? 0)
+const ownedCount = computed(() => summary.value?.owned ?? 0)
+const totalValue = computed(() => summary.value?.totalValue ?? 0)
+const bestCard = computed(() => summary.value?.best ?? null)
+/* 曲線需要每一張卡的「時間 + 金額」才畫得出來，聚合不掉。
+   後端那支只投影三個純量欄位（不含 card 這個 jsonb），整頁只取一次。 */
+const curvePrizes = computed(() =>
+  (summary.value?.curve ?? []).map(c => ({
+    wonAt: new Date(c.wonAt).toISOString(),
+    card: { refPrice: c.refPrice, name: c.name }
+  })))
 
 /* 賞別分佈。這是既有資料算得出來、又是別處看不到的一項 ——
    狀態的分佈底下的分頁已經標了數字，再放一次只是重複。
@@ -45,10 +73,11 @@ const TIER_ORDER: Tier[] = ['A', 'B', 'C', 'D', 'LAST', 'BUST']
 const TIER_LABEL: Record<Tier, string> = {
   A: 'A 賞', B: 'B 賞', C: 'C 賞', D: 'D 賞', LAST: '最後賞', BUST: '爆賞'
 }
-const tierMix = computed(() =>
-  TIER_ORDER
-    .map(t => ({ tier: t, n: owned.value.filter(p => p.tier === t).length }))
-    .filter(r => r.n > 0))
+const tierMix = computed(() => {
+  const mix = new Map((summary.value?.tierMix ?? []).map(m => [m.tier, m.n]))
+  // 後端不保證回傳順序，展示順序由前端這份 TIER_ORDER 決定
+  return TIER_ORDER.map(t => ({ tier: t, n: mix.get(t) ?? 0 })).filter(r => r.n > 0)
+})
 /* 顏色只是「一眼看比例」的輔助，識別靠的是圖例上的文字。
    賞別色是既有品牌權杖（TierBadge 一路用到底），D 賞刻意是灰的，
    在色覺檢測下 C 賞與 D 賞的分離度偏低 —— 所以每一段都必須有文字圖例，
@@ -68,9 +97,27 @@ const TABS: { k: Tab; label: string }[] = [
   { k: 'shipped', label: '已出貨' },
   { k: 'recycled', label: '已回收' }
 ]
-const countOf = (k: Tab) => k === 'all' ? prizes.value.length : prizes.value.filter(p => p.status === k).length
+/* 張數也來自總覽。從已載入的陣列數的話，「已回收 3」在你捲到第 3 批之前
+   會顯示成 0，而使用者會據此以為自己的卡不見了。 */
+const countOf = (k: Tab) => k === 'all' ? total.value : (summary.value?.counts[k] ?? 0)
 const tabs = computed(() => TABS.filter(t => countOf(t.k) > 0))
-const shown = computed(() => tab.value === 'all' ? prizes.value : prizes.value.filter(p => p.status === tab.value))
+/* 過濾已經在後端做完了（tab 是 API 參數），這裡拿到的就是這個分頁的卡。
+   再濾一次是有害的：剛回收的那張在本地被改成 recycled，如果這裡還濾
+   status === tab，它會在「寄存中」分頁裡當場消失，使用者看不到入帳提示。 */
+const shown = prizes
+
+const listRef = ref<HTMLElement | null>(null)
+/* 換分頁＝換一組查詢：游標歸零、清空既有卡片、重抓第一批。
+   過期回應由 composable 的世代編號擋掉（快速連按不會錯位）。
+   同時把清單頂端捲回視野：內容整批換掉了，停在原本的捲動位置會落在
+   一個比舊清單短得多的新清單的中間，看起來像「載不出來」。 */
+watch(tab, () => {
+  openCard.value = null
+  confirming.value = null
+  list.reset()
+  const top = listRef.value?.getBoundingClientRect().top ?? 0
+  if (top < 0) listRef.value?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+})
 
 /* 卡圖上的膠囊放不下「市場販售中」五個字（兩欄格線下整張卡才 145px 寬），
    而那裡本來就只需要回答「這張現在動不動得了」。
@@ -128,7 +175,17 @@ function flash(msg: string) {
   setTimeout(() => { if (toast.value === msg) toast.value = '' }, 5000)
 }
 
-const stashed = computed(() => prizes.value.filter(p => p.status === 'stashed'))
+/* 出貨面板裡那份「可以一起寄的卡」也是一份會長大的清單，同樣要分批。
+   它跟主清單各有一個 useInfiniteList 實例 —— 共用一個的話，開出貨面板
+   會把卡冊的清單洗掉。
+   注意這裡的哨兵在面板自己的捲動容器裡：IntersectionObserver 的 root 是視窗，
+   哨兵被 .sheet 的 overflow 裁掉時就不算相交，所以判斷仍然正確，
+   只是 400px 的提前量沒有作用（要真的捲到面板底部才觸發）。這份清單短，可以接受。 */
+const shipList = useInfiniteList<UserPrize>((cursor, signal) =>
+  api.myPrizes({ cursor, signal, status: 'stashed' }))
+const shipSentinelRef = shipList.sentinel
+const stashed = shipList.items
+const stashedCount = computed(() => summary.value?.counts.stashed ?? 0)
 
 const addr = ref({ name: '', phone: '', zip: '', city: '', line1: '' })
 const addrReady = computed(() =>
@@ -145,6 +202,8 @@ async function openShip(p: UserPrize) {
   shipErr.value = ''
   shipPick.value = [p.id]
   shipOpen.value = true
+  // 每次打開都重抓：上一次打開之後可能已經送出過幾張，那些不該再出現在清單裡
+  shipList.reset()
   if (MOCK) return
   try {
     const r = await http<{ profile: {
@@ -177,7 +236,8 @@ async function submitShip() {
       city: addr.value.city.trim(), line1: addr.value.line1.trim()
     })
     // 以伺服器為準重讀，不要自己猜狀態 —— 這正是先前那個 bug 的成因
-    prizes.value = await api.myPrizes()
+    list.reset()
+    await refreshSummary()
     flash(`已送出 ${ids.length} 張的出貨申請，平台處理後會通知你。`)
     shipOpen.value = false
     shipPick.value = []
@@ -198,17 +258,48 @@ async function submitShip() {
    實測 393px 上兩欄從各 172px 變成 290px + 62.5px，整個卡冊看起來就壞了。
 
    改成「選取 → 上架頁」：卡片上只負責勾選，定價在自己的頁面做。
-   順便支援多選 —— 一次整理好幾張卡本來就是常見的事。 */
-const sellPick = ref<string[]>([])
+   順便支援多選 —— 一次整理好幾張卡本來就是常見的事。
 
-function toggleSell(p: UserPrize) {
-  const i = sellPick.value.indexOf(p.id)
-  if (i === -1) sellPick.value.push(p.id)
-  else sellPick.value.splice(i, 1)
+   入口原本是單張卡「操作」裡的一顆按鈕，那是放錯層級：賣卡的順序是
+   先決定「我要賣東西」，再挑「賣哪幾張」。從某一張卡的動作進去，等於
+   要求使用者先選中第一張才會發現原來可以多選 —— 多選變成藏起來的功能。
+   現在提到卡冊層級：按一次進入選取模式，整本卡冊的卡片變成可勾選，
+   底下那條列隨時回答「選了幾張」，最後一鍵送進定價頁。 */
+const selecting = ref(false)
+/* 記住整張卡而不是只記 id。清單是分批載入的，換分頁時會被清空 ——
+   只留 id 的話「已選 3 張／市值合計」會在切換之後查不到卡而歸零，
+   但那三張其實還在選取中。 */
+const sellPicked = ref<UserPrize[]>([])
+const sellPick = computed(() => sellPicked.value.map(p => p.id))
+
+/* 只有還在保管庫的卡能上架。定價頁自己也會再濾一次，
+   但擋在選取這一步，才不會讓人挑了半天才發現有幾張不算數。 */
+const canSell = (p: UserPrize) => p.status === 'stashed'
+
+/* 進選取模式時把展開中的卡片與回收確認一起關掉 ——
+   選取模式下整張卡是勾選熱區，底下同時還開著一組動作鈕會有兩套點法在打架。 */
+function startSell() {
+  selecting.value = true
+  sellPicked.value = []
+  openCard.value = null
+  confirming.value = null
+  /* 選取列跟出貨的提示訊息都貼在畫面底部同一個位置。
+     剛送完出貨就進選取模式的話兩則會疊在一起，誰也讀不清楚 */
+  toast.value = ''
 }
 
-const sellPicked = computed(() =>
-  prizes.value.filter(p => sellPick.value.includes(p.id)))
+function endSell() {
+  selecting.value = false
+  sellPicked.value = []
+}
+
+function toggleSell(p: UserPrize) {
+  if (!canSell(p)) return
+  const i = sellPicked.value.findIndex(x => x.id === p.id)
+  if (i === -1) sellPicked.value.push(p)
+  else sellPicked.value.splice(i, 1)
+}
+
 const sellPickValue = computed(() =>
   sellPicked.value.reduce((a, p) => a + (p.card.refPrice || 0), 0))
 
@@ -235,6 +326,10 @@ async function doRecycle(p: UserPrize) {
     confirming.value = null
     justRecycled.value = { id: p.id, points: r.points }
     setTimeout(() => { justRecycled.value = null }, 4000)
+    /* 總覽的張數與總值由後端算，回收之後要重新問一次；卡片清單則不重抓 ——
+       重抓會讓剛回收的那張當場消失，連「已入帳 +N 點」都來不及看到。
+       那一張已經在本地標成 recycled，畫面是對的。 */
+    void refreshSummary()
     track('recycle_success')
   } catch (e) {
     alert(e instanceof Error ? e.message : '回收失敗')
@@ -258,6 +353,12 @@ const askRotate = ref(false)
 let copyTimer: ReturnType<typeof setTimeout> | undefined
 
 const shareLink = computed(() => (shareSlug.value ? shareUrl(shareSlug.value) : ''))
+
+/* 第一批卡片與總覽同時發，兩邊互不等待 —— 總覽慢的話卡片還是先出得來 */
+onMounted(() => {
+  list.reset()
+  void refreshSummary()
+})
 
 onMounted(async () => {
   try {
@@ -321,19 +422,19 @@ async function copyLink() {
 </script>
 
 <template>
-  <div class="container page">
+  <div class="container page" :class="{ picking: selecting }">
     <h1>我的卡冊</h1>
 
     <!-- 收藏總覽：這一頁最想被回答的問題就是「我收了多少、值多少」。
          一個主角（總值）+ 三個配角（張數、賞別分佈、最高價）+ 一張成長曲線 -->
-    <section v-if="owned.length" class="overview card">
+    <section v-if="ownedCount" class="overview card">
       <p class="ovLabel">收藏總值</p>
       <div class="ovHero">
         <!-- 數字與單位鎖在同一個 inline 盒子裡，永遠不會被折成兩行 -->
         <p class="ovVal">
           <strong class="ovNum">{{ totalValue.toLocaleString() }}</strong><span class="ovUnit">點</span>
         </p>
-        <p class="ovHold">持有 <b class="mono">{{ owned.length }}</b> 張</p>
+        <p class="ovHold">持有 <b class="mono">{{ ownedCount }}</b> 張</p>
       </div>
 
       <!-- 賞別分佈。段與段之間留 2px 底色縫，不畫外框 —— 邊框是多餘的墨水。
@@ -354,15 +455,15 @@ async function copyLink() {
       </ul>
 
       <!-- 只有一張卡時「最高價」就是總值本身，再列一次是廢話 -->
-      <p class="ovBest" v-if="bestCard && owned.length > 1">
+      <p class="ovBest" v-if="bestCard && ownedCount > 1">
         <span class="bLabel">最高價</span>
         <span class="kd" :class="`t-${bestCard.tier.toLowerCase()}`" aria-hidden="true"></span>
-        <span class="bName">{{ bestCard.card.name }}</span>
-        <span class="bVal mono">{{ bestCard.card.refPrice.toLocaleString() }}</span>
+        <span class="bName">{{ bestCard.name }}</span>
+        <span class="bVal mono">{{ bestCard.refPrice.toLocaleString() }}</span>
       </p>
 
       <!-- 成長曲線。放在總覽裡而不是另開一張卡：它回答的是同一個問題的時間版本 -->
-      <ValueCurve class="ovCurve" :prizes="owned" />
+      <ValueCurve class="ovCurve" :prizes="curvePrizes" />
     </section>
 
     <!-- 公開卡冊：連結會被貼進群組，收不回來，所以每個動作的後果就寫在按鈕旁邊 -->
@@ -373,7 +474,7 @@ async function copyLink() {
          壓縮的原則是「收起來」不是「刪掉」：隱私警告是誠實揭露，不能拿掉，
          但把細節收進 details，摘要那一行仍然講出最關鍵的一句
          （不必登入、看得到鑑定編號）。開關關著的時候整塊只有兩行。 -->
-    <section v-if="prizes.length" class="share card">
+    <section v-if="total" class="share card">
       <div class="shareTop">
         <div class="shareHead">
           <strong class="shareTitle">公開卡冊</strong>
@@ -439,7 +540,18 @@ async function copyLink() {
 
     <p class="muted note">寄存中的卡可合併出貨（省運費），寄存期限 90 天。</p>
 
-    <div v-if="!prizes.length" class="empty card">
+    <!-- 上架入口放在卡冊層級，不放在單張卡的動作裡 —— 理由見 script 裡的說明。
+         沒有寄存中的卡就整塊不出現：按了也沒有東西可選 -->
+    <div v-if="stashedCount" class="sellBar">
+      <button v-if="!selecting" type="button" class="btn primary sellCta" @click="startSell">
+        上架出售
+      </button>
+      <p v-else class="sellHint">
+        點卡片挑要賣的，可以複選。只有<strong>寄存中</strong>的卡能上架。
+      </p>
+    </div>
+
+    <div v-if="list.ready.value && !total" class="empty card">
       <p>卡冊還是空的。</p>
       <RouterLink :to="{ name: 'home' }" class="btn primary">去抽第一張</RouterLink>
     </div>
@@ -450,12 +562,19 @@ async function copyLink() {
         v-for="t in tabs" :key="t.k"
         type="button" role="tab" :aria-selected="tab === t.k"
         class="tab" :class="{ on: tab === t.k }"
-        @click="tab = t.k; openCard = null"
+        @click="tab = t.k"
       >{{ t.label }}<span class="tabN mono">{{ countOf(t.k) }}</span></button>
     </div>
 
-    <div class="grid">
-      <div v-for="p in shown" :key="p.id" class="item card" :class="{ dim: p.status === 'recycled' }">
+    <div ref="listRef" class="grid">
+      <div
+        v-for="p in shown" :key="p.id" class="item card"
+        :class="{
+          dim: p.status === 'recycled',
+          sel: sellPick.includes(p.id),
+          off: selecting && !canSell(p)
+        }"
+      >
         <!-- 賞別、狀態、卡名、市值全部疊回卡圖上：卡圖本來就佔著這塊面積，
              把字放上去等於不花額外高度。可讀性靠底部的漸層遮罩撐 -->
         <Tilt3D :max="10" radius="12px">
@@ -470,6 +589,21 @@ async function copyLink() {
               <span class="sVal mono">{{ p.card.refPrice.toLocaleString() }}</span>
             </div>
           </div>
+
+          <!-- 選取模式的熱區疊在卡面上。.scrim 是 pointer-events: none，
+               點擊會落到這顆按鈕，所以不必為了「可選取」再複製一份卡面出來。
+               它是 absolute 不是 fixed —— Tilt3D 的 .plane 帶著 transform，
+               裡面任何 fixed 的定位基準都會變成那張卡而不是視窗 -->
+          <button
+            v-if="selecting"
+            type="button" class="hit"
+            :disabled="!canSell(p)"
+            :aria-pressed="sellPick.includes(p.id)"
+            :aria-label="`選取 ${p.card.name}`"
+            @click="toggleSell(p)"
+          >
+            <span v-if="canSell(p)" class="tick" aria-hidden="true"></span>
+          </button>
         </Tilt3D>
 
         <p v-if="justRecycled?.id === p.id" class="got" role="status">
@@ -479,7 +613,7 @@ async function copyLink() {
         <!-- 寄存中才有動作可做，收成一顆按鈕；其餘狀態只留一行取得日期，
              讓每一列的高度不會被「有按鈕的那張」整列撐高 -->
         <button
-          v-if="p.status === 'stashed'"
+          v-if="p.status === 'stashed' && !selecting"
           type="button" class="more" :class="{ on: openCard === p.id }"
           :aria-expanded="openCard === p.id" :aria-label="`${p.card.name} 的操作`"
           @click="toggleCard(p.id)"
@@ -489,16 +623,13 @@ async function copyLink() {
         </button>
         <p v-else class="meta mono">取得 {{ wonDay(p.wonAt) }}</p>
 
-        <div v-if="openCard === p.id && p.status === 'stashed'" class="body">
+        <div v-if="openCard === p.id && p.status === 'stashed' && !selecting" class="body">
           <!-- 鑑定編號與寄存期限：決定要不要出貨／回收時才需要，所以收在這裡 -->
           <CertTag :card="p.card" />
           <span class="mono muted exp">寄存至 {{ p.stashExpiresAt }}</span>
 
           <div class="acts">
             <button class="btn primary sm" @click="openShip(p)">申請出貨</button>
-            <button class="btn sm" :class="{ on: sellPick.includes(p.id) }" @click="toggleSell(p)">
-              {{ sellPick.includes(p.id) ? '已選取' : '上架出售' }}
-            </button>
             <button
               class="btn sm" @click="askRecycle(p)"
               :disabled="!recycleQuote(p.card).eligible"
@@ -531,17 +662,45 @@ async function copyLink() {
       </div>
     </div>
 
-    <!-- 上架選取列。從畫面上方滑出，Teleport 到 body ——
-         換頁轉場會在 .page 上加 transform，fixed 元素會跟著錯位（見出貨面板的說明）。
+    <!-- 這個分頁一張卡也沒有。整本卡冊是空的時候由上面那塊空狀態負責，
+         這裡講的是「這個分頁沒有」，兩句話不一樣 -->
+    <p v-if="list.ready.value && total && !shown.length && !list.error.value" class="empty muted noneTab">
+      這個分頁目前沒有卡片。
+    </p>
+
+    <!-- 哨兵放在格線外面當兄弟節點：塞進 grid 會佔掉一格，而且 grid 子元素
+         預設 min-width: auto，長錯誤訊息會把整欄撐開（手機是兩欄，很敏感） -->
+    <ListSentinel
+      ref="sentinelRef"
+      :loading="list.loading.value"
+      :done="list.done.value"
+      :error="list.error.value"
+      :manual="list.manual.value"
+      :empty="!shown.length"
+      done-text="已經是全部的卡片了"
+      @retry="list.retry()"
+      @more="list.load()"
+    />
+
+    <!-- 上架選取列。貼在底部而不是頂部：它是「選完之後」要按的東西，
+         拇指本來就在那裡，而卡片在上面，兩者不必爭同一塊位置。
+         一進選取模式就在（N=0 時上架鍵是 disabled），所以「還要選幾張才動得了」
+         這件事不必自己猜。
+
+         Teleport 到 body 是必要的，不是整潔問題：換頁轉場會在 .page 上加
+         transform，而祖先只要有 transform，position: fixed 的定位基準就會
+         變成那個祖先而不是視窗（見下面出貨面板的說明）。
          用 @keyframes 不用 transition：class 沒被移除也不會殘留位移。 -->
     <Teleport to="body">
-      <div v-if="sellPick.length" class="pickBar" role="status">
-        <div class="pickInfo">
-          <strong>已選 {{ sellPick.length }} 張</strong>
+      <div v-if="selecting" class="pickBar">
+        <div class="pickInfo" role="status">
+          <strong>已選 <span class="mono">{{ sellPick.length }}</span> 張</strong>
           <span class="mono">市值合計 {{ sellPickValue.toLocaleString() }} 點</span>
         </div>
-        <button type="button" class="btn sm" @click="sellPick = []">取消</button>
-        <button type="button" class="btn primary sm" @click="goSell">上架 {{ sellPick.length }} 張 →</button>
+        <button type="button" class="btn sm" @click="endSell">取消</button>
+        <button type="button" class="btn primary sm" :disabled="!sellPick.length" @click="goSell">
+          一鍵上架
+        </button>
       </div>
     </Teleport>
 
@@ -567,6 +726,16 @@ async function copyLink() {
             </label>
           </li>
         </ul>
+        <ListSentinel
+          ref="shipSentinelRef"
+          :loading="shipList.loading.value"
+          :done="shipList.done.value"
+          :error="shipList.error.value"
+          :manual="shipList.manual.value"
+          :empty="!stashed.length"
+          @retry="shipList.retry()"
+          @more="shipList.load()"
+        />
 
         <div class="fields">
           <label><span>收件人</span><input v-model="addr.name" type="text" placeholder="真實姓名"></label>
@@ -599,26 +768,74 @@ async function copyLink() {
 </template>
 
 <style scoped>
+/* ---- 上架入口 ----
+   卡冊層級的一顆按鈕，選取模式開著時換成一行說明 ——
+   兩者不會同時出現，這一列的高度才不會跳動。 */
+.sellBar { display: flex; align-items: center; gap: 10px; min-width: 0; margin: -8px 0 16px; }
+.sellCta { flex: none; min-height: 44px; padding: 9px 18px; font-size: 13.5px; }
+.sellHint { margin: 0; min-width: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.sellHint strong { color: var(--ink); font-weight: 600; }
+
+/* ---- 選取模式 ----
+   「這張被選了」要在卡片上看得出來，不能只靠底下那條列的數字 ——
+   捲到一半時那條列講的是總數，回答不了眼前這張到底有沒有選中。
+   選取態用 outline 不用 border：outline 不佔版面，
+   兩欄格線下加一圈 2px 的邊會把卡片內容區再縮 4px。 */
+.hit {
+  position: absolute; inset: 0; z-index: 2;
+  padding: 0; border: 0; background: none; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.hit:disabled { cursor: not-allowed; }
+.hit:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 12px; }
+.item.sel { outline: 2px solid var(--accent); }
+/* 不能上架的卡在選取模式下退到背景，但不整個藏起來 ——
+   使用者要知道「它還在，只是這次不能賣」 */
+.item.off { opacity: .38; }
+
+/* 勾記：空心圈 → 實心打勾。勾是兩條 border 轉 45 度畫出來的，
+   不用任何符號字元，換字型或換系統都長一樣。 */
+.tick {
+  position: absolute; top: 7px; right: 7px;
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .9);
+  /* 卡圖底下可能是皮卡丘那種亮黃色，白圈會整個消失 ——
+     所以圈內先鋪一層深色，再加一圈外陰影把它從卡面上撐開 */
+  background: rgba(0, 0, 0, .5);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, .5);
+}
+.item.sel .tick { background: var(--accent); border-color: var(--accent); }
+.item.sel .tick::after {
+  content: ''; position: absolute;
+  left: 5px; top: 3px; width: 5px; height: 9px;
+  border-right: 2px solid #fff; border-bottom: 2px solid #fff;
+  transform: rotate(45deg);
+}
+
 /* ---- 上架選取列 ---- */
 .pickBar {
   position: fixed; z-index: 78;
-  top: calc(8px + var(--safe-t, 0px));
-  left: 10px; right: 10px;
+  /* 貼在底部導覽上緣，並避開手機的安全區 —— 兩者取大值，
+     桌機沒有底部導覽（--nav-total 是 0）時就只剩安全區 */
+  bottom: calc(10px + max(var(--nav-total, 0px), var(--safe-b, 0px)));
+  /* 左右都給值再配 margin: auto，over-constrained 時兩邊的 auto 會平分 ——
+     桌機上不讓兩顆按鈕各自拉到 500px 寬，那不是按鈕該有的樣子 */
+  left: 10px; right: 10px; max-width: 560px; margin: 0 auto;
   /* 資訊自己一行、兩顆按鈕平分下一行。
      原本是三個並排，資訊區靠 flex: 1 撐 —— 那要求按鈕會自己收斂，
      但只要有任何規則把按鈕撐寬（這裡就是 .btn.sm 的 width: 100%），
      資訊區就會被壓到 0。分兩行之後不管按鈕多寬都不會吃到資訊。 */
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
   padding: 10px 12px; border-radius: 14px;
-  background: var(--surface-3); box-shadow: 0 10px 30px rgba(0,0,0,.5);
-  animation: pickDrop .22s cubic-bezier(.2,.8,.3,1);
+  background: var(--surface-3); box-shadow: 0 -8px 30px rgba(0,0,0,.5);
+  animation: pickRise .22s cubic-bezier(.2,.8,.3,1);
 }
-.pickBar .btn { flex: 1 1 0; min-width: 0; white-space: nowrap; }
-@keyframes pickDrop { from { opacity: 0; transform: translateY(-16px) } to { opacity: 1; transform: none } }
+.pickBar .btn { flex: 1 1 0; min-width: 0; white-space: nowrap; min-height: 42px; }
+.pickBar .btn:disabled { opacity: .45; cursor: not-allowed; }
+@keyframes pickRise { from { opacity: 0; transform: translateY(16px) } to { opacity: 1; transform: none } }
 .pickInfo { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .pickInfo strong { font-size: 14px; }
 .pickInfo span { font-size: 11.5px; color: var(--muted); }
-.acts .btn.on { background: var(--accent-wash); border-color: var(--accent); color: var(--accent); }
 
 /* ---- 出貨面板 ----
    貼底而不是置中：手機上置中的對話框，鍵盤一彈出來就會把送出鍵推出畫面 */
@@ -855,9 +1072,16 @@ async function copyLink() {
 }
 
 .page { padding-top: 36px; padding-bottom: 72px; }
+/* 選取列是 fixed，不佔版面 —— 不多留這段，最後一列的卡片會被它蓋住，
+   而那正是使用者最後才捲到、最可能想選的幾張。
+   實測那條列在 393px 上高 109px，加上離底部的 10px 與底部導覽的 40px。 */
+.page.picking { padding-bottom: 140px; }
 h1 { font-size: 22px; margin: 0 0 6px; }
 .note { font-size: 13px; margin: 0 0 22px; }
 .empty { padding: 40px; text-align: center; display: grid; gap: 12px; justify-items: center; }
+/* 「這個分頁沒有卡片」跟整本卡冊是空的不一樣：那是一句提示不是一張卡，
+   所以不套 .card 的外框，留白也小一半 */
+.noneTab { padding: 28px 12px; font-size: 13px; min-width: 0; }
 /* align-items: start —— 沒有這行，整列的高度會被「展開中的那一張」拉高，
    旁邊那些沒展開的卡就跟著長出一大塊空白（改版前每一列都在做這件事） */
 .grid {
@@ -969,6 +1193,11 @@ strong { font-size: 14px; }
 
 @media (max-width: 720px) {
   .page { padding-top: 22px; padding-bottom: 40px; }
+  /* 選取列在 393px 上量到高 109px，離視窗底 10px，底部導覽再 40px ——
+     加起來 159px，這裡取 160px 讓最後一列卡片剛好落在列的上緣之外 */
+  .page.picking { padding-bottom: 160px; }
+  .sellBar { margin: -4px 0 14px; }
+  .sellHint { font-size: 11.5px; }
   h1 { font-size: 19px; }
   .note { font-size: 12px; margin: 0 0 16px; }
   /* minmax(0, 1fr) 不是可有可無：1fr 等同 minmax(auto, 1fr)，

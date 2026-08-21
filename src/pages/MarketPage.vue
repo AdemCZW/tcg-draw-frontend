@@ -9,13 +9,15 @@
  * 成交幣別是點數，且點數永不可提現（見 lib/recycle.ts 的完整理由）。
  * 玩家互相買賣仍在站內閉環，這是整套合規論述的地基。
  */
-import { computed, onMounted, ref } from 'vue'
-import { api } from '@/lib/api'
+import { computed, onMounted, ref, watch } from 'vue'
+import { api, type MarketSort } from '@/lib/api'
 import type { Listing } from '@/types/models'
 import { useWalletStore } from '@/stores/wallet'
 import { useAuthStore } from '@/stores/auth'
 import CardArt from '@/components/CardArt.vue'
 import TradeGuard from '@/components/TradeGuard.vue'
+import ListSentinel from '@/components/ListSentinel.vue'
+import { useInfiniteList } from '@/composables/useInfiniteList'
 import { useOrdersStore } from '@/stores/orders'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { haptic } from '@/lib/haptics'
@@ -25,17 +27,9 @@ const wallet = useWalletStore()
 const auth = useAuthStore()
 const orders = useOrdersStore()
 
-const listings = ref<Listing[]>([])
-const loading = ref(true)
-onMounted(async () => {
-  listings.value = await api.listMarket()
-  loading.value = false
-  track('view_market')
-})
-
 /* 排序而不是篩選：市場的品項還不多，先給「怎麼排」比「濾掉什麼」有用。
    低於市值放第一個 —— 那是使用者真正在找的東西。 */
-type Sort = 'deal' | 'new' | 'cheap' | 'pricey'
+type Sort = MarketSort
 const sort = ref<Sort>('deal')
 const SORTS: { k: Sort; label: string }[] = [
   { k: 'deal', label: '低於市值' },
@@ -43,6 +37,43 @@ const SORTS: { k: Sort; label: string }[] = [
   { k: 'cheap', label: '價格低到高' },
   { k: 'pricey', label: '價格高到低' }
 ]
+
+/* 掛單分批載入，排序在後端。
+   排序不能留在前端：分批之後前端只排得到已載入的那幾筆，捲一頁就整個重排，
+   已經看過的卡片會在眼前跳位。這跟卡冊的狀態分頁是同一個問題。 */
+const list = useInfiniteList<Listing>((cursor, signal) =>
+  api.listMarket({ cursor, signal, sort: sort.value }))
+const sentinelRef = list.sentinel
+const listings = list.items
+const loading = computed(() => list.loading.value && !list.ready.value)
+
+const gridRef = ref<HTMLElement | null>(null)
+/* 換排序＝換一組查詢：游標歸零、清空既有清單，過期的回應由 composable 擋掉。
+   同時把清單頂端捲回視野：整批換掉之後停在原本的捲動位置，會落在一個
+   只剩第一批的短清單底部，哨兵當場又在範圍內 —— 使用者沒有捲動，
+   卻會看到後面幾批被一路抓下來。 */
+watch(sort, () => {
+  list.reset()
+  const top = gridRef.value?.getBoundingClientRect().top ?? 0
+  if (top < 0) gridRef.value?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+})
+
+/* 上方兩條橫向捲軸與總筆數講的是「整個市場」，不是「已經捲出來的那幾筆」——
+   從已載入的清單挑會挑到假的第一名，所以獨立取一次。 */
+const deals = ref<Listing[]>([])
+const graded = ref<Listing[]>([])
+const total = ref(0)
+
+onMounted(async () => {
+  list.reset()
+  track('view_market')
+  try {
+    const h = await api.marketHighlights()
+    deals.value = h.deals
+    graded.value = h.graded
+    total.value = h.total
+  } catch { /* 精選區拿不到不該擋住主清單，那只是兩條輔助捲軸 */ }
+})
 
 /** 掛價相對市值的折數。負數＝比市值便宜 */
 /* 這筆走哪一條通道。
@@ -57,28 +88,12 @@ const diffPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card
 /* ---- 分區 ----
    市場原本跟大廳一樣是單一格線，兩頁看起來幾乎一樣。
    買家來市場只有兩種意圖：「撿便宜」或「找特定的好貨」，
-   所以先用這兩個意圖分區，剩下的才進全部清單。 */
+   所以先用這兩個意圖分區，剩下的才進全部清單。
+   兩區的內容由 /listings/highlights 取（見上面的 onMounted）。 */
 
-/** 撿便宜：低於市值最多的幾張，橫向捲動 */
-const deals = computed(() =>
-  listings.value.filter(l => l.status === 'live' && diffPct(l) <= -8)
-    .sort((a, b) => diffPct(a) - diffPct(b))
-    .slice(0, 6))
-
-/** 鑑定卡：有鑑定編號的，這些是市場上單價最高、也最需要被凸顯的 */
-const graded = computed(() =>
-  listings.value.filter(l => l.status === 'live' && l.card.certNo)
-    .sort((a, b) => b.price - a.price)
-    .slice(0, 4))
-
-const shown = computed(() => {
-  const live = listings.value.filter(l => l.status === 'live')
-  const a = [...live]
-  if (sort.value === 'deal') return a.sort((x, y) => diffPct(x) - diffPct(y))
-  if (sort.value === 'cheap') return a.sort((x, y) => x.price - y.price)
-  if (sort.value === 'pricey') return a.sort((x, y) => y.price - x.price)
-  return a   // 'new'：mock 已依上架時間排好
-})
+/* 已載入的掛單。只濾掉「剛剛在這一頁被買走的」—— 排序已經由後端排好，
+   這裡再排一次會把跨批次的順序打亂。 */
+const shown = computed(() => listings.value.filter(l => l.status === 'live'))
 
 /* 買 —— 不可逆（點數扣掉、卡片入卡冊），所以要一段確認。
    行內展開而不是 window.confirm：要把價格、市值、餘額變化一起講清楚。 */
@@ -214,14 +229,14 @@ function markSold(id: string) {
 
     <header v-if="sort === 'deal' && (deals.length || graded.length)" class="bh allHead">
       <h2><span class="dot all"></span>全部掛單</h2>
-      <span class="muted bhNote">{{ shown.length }} 件</span>
+      <span class="muted bhNote">{{ total }} 件</span>
     </header>
 
     <div v-if="loading" class="grid" aria-hidden="true">
       <div v-for="i in 6" :key="i" class="sk"></div>
     </div>
 
-    <div v-else-if="shown.length" class="grid">
+    <div v-else-if="shown.length" ref="gridRef" class="grid">
       <!-- 卡圖滿版鋪滿整格，資訊直接壓在圖上。
            左到右的漸層遮罩把左半邊壓暗 —— 卡圖的主體（寶可夢）多半偏中上，
            壓左下角最不會蓋到重點，文字也才有足夠對比。 -->
@@ -281,7 +296,21 @@ function markSold(id: string) {
       </article>
     </div>
 
-    <p v-else class="empty muted">目前市場沒有掛單。</p>
+    <p v-else-if="!list.error.value" class="empty muted">目前市場沒有掛單。</p>
+
+    <!-- 哨兵放在格線外面：塞進 grid 會佔掉一格，而且 grid 子元素預設
+         min-width: auto，長錯誤訊息會把整欄撐開（這頁是兩欄，很敏感） -->
+    <ListSentinel
+      ref="sentinelRef"
+      :loading="list.loading.value && list.ready.value"
+      :done="list.done.value"
+      :error="list.error.value"
+      :manual="list.manual.value"
+      :empty="!shown.length"
+      done-text="已經是全部的掛單了"
+      @retry="list.retry()"
+      @more="list.load()"
+    />
 
     <footer class="foot">
       <p class="muted">
@@ -297,7 +326,8 @@ function markSold(id: string) {
 </template>
 
 <style scoped>
-.page { padding-top: 26px; padding-bottom: calc(48px + var(--nav-total)); }
+/* 底部導覽的讓位交給頁尾（見 App.vue），這裡只留自己的排版留白 */
+.page { padding-top: 26px; padding-bottom: 48px; }
 
 .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }

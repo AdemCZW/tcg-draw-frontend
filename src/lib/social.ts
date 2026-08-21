@@ -20,9 +20,17 @@ export interface PublicCard {
   /** 已上架的卡不能私下出價，要走市場 */
   tradable: boolean
 }
-export interface PublicCardbook {
+/**
+ * 公開卡冊的一頁。
+ *
+ * summary 只有第一頁帶 —— 頭部的「收藏 N 張／可談交易 N 張／市值合計」
+ * 講的是整本卡冊，不能拿載進來的那一頁去數，那個數字會隨著捲動一直長大。
+ */
+export interface PublicCardbookPage {
   owner: { name: string; handle: string }
-  prizes: PublicCard[]
+  items: PublicCard[]
+  nextCursor: string | null
+  summary?: { count: number; tradable: number; totalValue: number }
 }
 
 export type OfferStatus = 'pending' | 'accepted' | 'declined' | 'cancelled'
@@ -102,22 +110,53 @@ export const share = {
       method: 'PUT', json: { public: isPublic, rotate }
     })
   },
-  /** 公開卡冊。不需要登入 —— 分享連結要能給沒帳號的人看 */
-  async view(slug: string): Promise<PublicCardbook> {
+  /** 公開卡冊。不需要登入 —— 分享連結要能給沒帳號的人看。一次一批 */
+  async view(slug: string, opts: { cursor?: string | null; limit?: number; signal?: AbortSignal } = {}):
+    Promise<PublicCardbookPage> {
     if (MOCK) {
       await delay()
+      const limit = opts.limit ?? 24
+      const from = opts.cursor ? mockBook.findIndex(p => p.id === opts.cursor) + 1 : 0
+      const items = mockBook.slice(from, from + limit)
+      const end = from + items.length
       return {
         owner: { name: '示範收藏家', handle: 'VD-DEMO' },
-        prizes: [
-          { id: 'pz-1', card: { name: '噴火龍 ex UR', artId: 'SV4a-349', grader: 'PSA', grade: 10, value: 43680 }, tier: 'LAST', tradable: true },
-          { id: 'pz-2', card: { name: '奇樹 SAR', artId: 'SV4a-350', grader: 'PSA', grade: 10, value: 26320 }, tier: 'A', tradable: true },
-          { id: 'pz-3', card: { name: '月亮伊布 ex SAR', artId: 'SV8a-217', grader: 'BGS', grade: 9.5, value: 4200 }, tier: 'C', tradable: false }
-        ]
+        items,
+        nextCursor: end < mockBook.length && items.length ? items[items.length - 1]!.id : null,
+        ...(opts.cursor ? {} : { summary: {
+          count: mockBook.length,
+          tradable: mockBook.filter(p => p.tradable).length,
+          totalValue: mockBook.reduce((a, p) => a + (p.card.value ?? 0), 0)
+        } })
       }
     }
-    return http<PublicCardbook>(`/v1/share/cardbook/${encodeURIComponent(slug)}`)
+    const p = new URLSearchParams()
+    if (opts.cursor) p.set('cursor', opts.cursor)
+    if (opts.limit) p.set('limit', String(opts.limit))
+    const q = p.toString()
+    return http<PublicCardbookPage>(
+      `/v1/share/cardbook/${encodeURIComponent(slug)}${q ? '?' + q : ''}`, { signal: opts.signal })
   }
 }
+
+/* mock 的卡冊刻意多過一頁（預設 24），否則捲動載入這條路在本機開發時永遠走不到 */
+const mockBook: PublicCard[] = [
+  { id: 'pz-1', card: { name: '噴火龍 ex UR', artId: 'SV4a-349', grader: 'PSA', grade: 10, value: 43680 }, tier: 'LAST', tradable: true },
+  { id: 'pz-2', card: { name: '奇樹 SAR', artId: 'SV4a-350', grader: 'PSA', grade: 10, value: 26320 }, tier: 'A', tradable: true },
+  { id: 'pz-3', card: { name: '月亮伊布 ex SAR', artId: 'SV8a-217', grader: 'BGS', grade: 9.5, value: 4200 }, tier: 'C', tradable: false },
+  ...Array.from({ length: 30 }, (_, i) => ({
+    id: `pz-m${i + 4}`,
+    card: {
+      name: `示範收藏卡 ${i + 4}`,
+      artId: `SV4a-3${String((i % 50) + 10).padStart(2, '0')}`,
+      grader: i % 4 === 0 ? 'PSA' : 'RAW',
+      grade: i % 4 === 0 ? 10 : undefined,
+      value: 600 + i * 310
+    },
+    tier: (['B', 'C', 'D'] as const)[i % 3],
+    tradable: i % 5 !== 0
+  }))
+]
 
 /** 分享用的完整網址。BASE_URL 是 GitHub Pages 的 /tcg-draw-frontend/ 前綴，
     少了它貼出去的連結會 404 */

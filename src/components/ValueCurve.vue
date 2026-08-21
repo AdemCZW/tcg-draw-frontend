@@ -22,9 +22,12 @@
  * 取實際寬度當 viewBox 寬度，圖形永遠 1:1，字級與線寬在每個螢幕上都一致。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import type { UserPrize } from '@/types/models'
 
-const props = defineProps<{ prizes: UserPrize[] }>()
+/* 只收畫得出曲線所需的三個欄位，不收整個 UserPrize。
+   卡冊的列表改成分批載入之後，曲線的資料來自後端的總覽端點
+   （那裡只投影 wonAt / name / refPrice，不帶整包 card），
+   而 UserPrize[] 仍然餵得進來 —— 結構上相容。 */
+const props = defineProps<{ prizes: { wonAt: string; card: { refPrice: number; name: string } }[] }>()
 
 /* 座標系。上下留白要含得住端點標籤與 x 軸文字 ——
    容器高度沒把軸帶算進去，是圖表最常見的破法（軸標籤被切掉或長出捲軸）。 */

@@ -8,13 +8,100 @@ import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { credit, walletOf } from '../money.js'
 import { recycleEligible, recyclePoints } from '../shared/recycle.js'
+import { PageQuery, decodeCursor, encodeCursor, isNumeric, slicePage } from '../pagination.js'
 
 export const prizes = new Hono()
 prizes.use('*', requireAuth)
 
+const STATUSES = ['stashed', 'listed', 'ship_requested', 'shipped', 'recycled'] as const
+
+/**
+ * 狀態過濾在這裡做，不在前端做。
+ *
+ * 卡冊上那排「寄存中／已出貨…」的分頁，一旦列表變成分批載入就不能再用前端過濾：
+ * 前端只濾得到「已經載進來的那 24 張」，於是使用者會看到「寄存中 0 張」，
+ * 而真正的寄存中卡片躺在還沒載入的第 3 頁。分頁的數字也是同一個問題，
+ * 所以總數走 /summary 由 SQL 算，不從已載入的陣列數。
+ */
+const PrizeQuery = PageQuery.extend({
+  status: z.enum(STATUSES).optional()
+})
+
 prizes.get('/', async c => {
-  const rows = await sql`select * from prizes where user_id = ${c.get('userId')} order by won_at desc`
-  return c.json({ prizes: rows })
+  const parsed = PrizeQuery.safeParse(c.req.query())
+  if (!parsed.success) {
+    return c.json({ error: 'BAD_REQUEST', message: '分頁參數不合法（limit 介於 1 到 100）' }, 400)
+  }
+  const { limit, cursor, status } = parsed.data
+
+  let after: [string, string] | null = null
+  if (cursor) {
+    const p = decodeCursor(cursor, 2)
+    if (!p || !isNumeric(p[0]!)) return c.json({ error: 'BAD_CURSOR', message: '分頁游標不合法' }, 400)
+    after = [p[0]!, p[1]!]
+  }
+
+  const rows = await sql<{ id: string; won_at: string }[]>`
+    select * from prizes
+    where user_id = ${c.get('userId')}
+      ${status ? sql`and status = ${status}` : sql``}
+      ${after ? sql`and (won_at, id) < (${after[0]}::bigint, ${after[1]}::text)` : sql``}
+    order by won_at desc, id desc
+    limit ${limit + 1}
+  `
+  return c.json(slicePage(rows, limit, r => encodeCursor([String(r.won_at), String(r.id)])))
+})
+
+/**
+ * 卡冊總覽的數字。
+ *
+ * 為什麼要一支獨立端點：總值、最高價、賞別分佈、各狀態張數這幾項講的都是
+ * 「整本卡冊」，而列表已經變成分批載入 —— 用載進來的那幾張算會愈捲愈大，
+ * 那不是統計，是進度條。這幾個聚合在 SQL 一次算完最便宜也最誠實。
+ *
+ * curve 是唯一沒有聚合掉的一段：成長曲線需要每一張卡的「時間 + 金額」才畫得出來。
+ * 但它只投影三個純量欄位（約 40 bytes 一列），不含 card 這個 jsonb（約 600 bytes），
+ * 而且整頁只取一次、不隨捲動重複拿。真正貴的是列表那邊的卡圖與 DOM，
+ * 那一段才是分頁要解決的問題。
+ */
+prizes.get('/summary', async c => {
+  const me = c.get('userId')
+  const [counts, mix, best, curve] = await Promise.all([
+    sql<{ status: string; n: string }[]>`
+      select status, count(*)::text as n from prizes where user_id = ${me} group by status
+    `,
+    // 已回收的卡已經交還平台，不算持有 —— 總值、賞別分佈、最高價都要排除
+    sql<{ tier: string; n: string }[]>`
+      select tier, count(*)::text as n from prizes
+      where user_id = ${me} and status <> 'recycled' group by tier
+    `,
+    sql<{ card: { name?: string; refPrice?: number }; tier: string }[]>`
+      select card, tier from prizes
+      where user_id = ${me} and status <> 'recycled'
+      order by (card->>'refPrice')::numeric desc nulls last limit 1
+    `,
+    sql<{ won_at: string; name: string | null; ref: string | null }[]>`
+      select won_at, card->>'name' as name, card->>'refPrice' as ref
+      from prizes where user_id = ${me} and status <> 'recycled'
+      order by won_at asc, id asc
+    `
+  ])
+
+  const byStatus: Record<string, number> = {}
+  for (const s of STATUSES) byStatus[s] = 0
+  let total = 0
+  for (const r of counts) { byStatus[r.status] = Number(r.n); total += Number(r.n) }
+
+  const owned = total - (byStatus.recycled ?? 0)
+  const totalValue = curve.reduce((a, r) => a + (Number(r.ref) || 0), 0)
+  const b = best[0]
+
+  return c.json({
+    total, counts: byStatus, owned, totalValue,
+    best: b ? { name: b.card?.name ?? '', tier: b.tier, refPrice: Number(b.card?.refPrice) || 0 } : null,
+    tierMix: mix.map(r => ({ tier: r.tier, n: Number(r.n) })),
+    curve: curve.map(r => ({ wonAt: Number(r.won_at), name: r.name ?? '', refPrice: Number(r.ref) || 0 }))
+  })
 })
 
 /**

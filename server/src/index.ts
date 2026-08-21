@@ -46,16 +46,8 @@ if (process.env.DEV_LOGIN === '1') {
   console.warn('[auth] DEV_LOGIN 已開啟：/v1/auth/dev-login 給 handle 就發 token，正式環境不要開')
 }
 
-app.get('/v1/listings', async c => {
-  const rows = await sql`select * from listings where status = 'live' order by listed_at desc limit 100`
-  return c.json({
-    listings: rows.map(r => ({
-      id: r.id, card: r.card, price: Number(r.price),
-      sellerId: r.seller_id, sellerName: r.seller_name,
-      delivery: r.delivery, status: r.status, listedAt: r.listed_at, prizeId: r.prize_id
-    }))
-  })
-})
+/* 市場掛單的讀取端點搬進 routes/public.ts —— 上架、下架都在那裡，
+   而它現在還要處理排序與游標分頁，不該長在入口檔裡。掛載路徑不變。 */
 
 app.route('/v1/orders', orders)
 app.route('/v1/auth', authRoutes)

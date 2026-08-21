@@ -50,6 +50,37 @@ const call = (token: string, path: string, body?: unknown, method?: 'GET' | 'POS
     ...(body === undefined ? {} : { body: JSON.stringify(body) })
   })
 
+/**
+ * 卡冊與掛單都改成游標分頁了，測試要「整本」時必須自己翻完。
+ * 只看第一批會誤判：找不到那張卡不代表它不在，可能只是在第 3 批。
+ */
+async function allPrizes(token: string, status?: string): Promise<Any[]> {
+  const out: Any[] = []
+  let cursor: string | null = null
+  do {
+    const q = new URLSearchParams({ limit: '100' })
+    if (status) q.set('status', status)
+    if (cursor) q.set('cursor', cursor)
+    const r = await json(await call(token, `/v1/prizes?${q}`))
+    out.push(...(r.items ?? []))
+    cursor = r.nextCursor ?? null
+  } while (cursor)
+  return out
+}
+
+async function allListings(sort = 'new'): Promise<Any[]> {
+  const out: Any[] = []
+  let cursor: string | null = null
+  do {
+    const q = new URLSearchParams({ limit: '100', sort })
+    if (cursor) q.set('cursor', cursor)
+    const r = await json(await fetch(`${base}/v1/listings?${q}`))
+    out.push(...(r.items ?? []))
+    cursor = r.nextCursor ?? null
+  } while (cursor)
+  return out
+}
+
 async function run() {
   console.log(`smoke → ${base}\n`)
 
@@ -61,7 +92,7 @@ async function run() {
   const seller = await login('seller', '測試賣家')
   const platform = await login('platform', 'VaultDraw 官方')
 
-  const { listings } = await json(await fetch(`${base}/v1/listings`))
+  const listings = await allListings()
   const ship = listings.find((l: { delivery: string; sellerId: string }) =>
     l.delivery === 'ship' && l.sellerId === 'u-seller')
   const vault = listings.find((l: { delivery: string }) => l.delivery === 'vault')
@@ -185,7 +216,7 @@ async function run() {
      防線是 money.ts 的 lockSpender()：拿 users 那一列當這個人的帳戶閘門。 */
   console.log('\n併發花費：')
   {
-    const all = (await json(await fetch(`${base}/v1/listings`))).listings as Any[]
+    const all = await allListings()
     const two = all.filter(l => l.delivery === 'ship' && l.status === 'live').slice(0, 2)
     if (two.length < 2) {
       check('（跳過併發花費：市場上剩不到兩筆需寄送的掛單）', true)
@@ -254,8 +285,8 @@ async function run() {
     check('失敗的多籤沒有扣任何點', wBefore === wAfter)
 
     // 獎品進了保管庫
-    const mine = await json(await call(buyer, '/v1/prizes'))
-    const got = mine.prizes.find((p: { seat: number }) => Number(p.seat) === seat)
+    const mine = await allPrizes(buyer)
+    const got = mine.find((p: { seat: number }) => Number(p.seat) === seat)
     const owner = d1.ok ? buyer : seller
     if (d1.ok) check('抽到的卡在買家的保管庫', !!got && got.status === 'stashed')
 
@@ -338,8 +369,8 @@ async function run() {
        看起來全綠其實什麼都沒驗到（下架那一段先前就是這樣）。 */
     const ensureStash = async (want: number) => {
       for (let round = 0; round < 4; round++) {
-        const cur = await json(await call(buyer, '/v1/prizes'))
-        const have = (cur.prizes ?? []).filter((p: { status: string }) => p.status === 'stashed')
+        // 狀態過濾走 API 參數，不是撈回來再自己濾 —— 順便把後端的過濾一起驗了
+        const have = await allPrizes(buyer, 'stashed')
         if (have.length >= want) return have
         const snap = await json(await fetch(`${base}/v1/pools/p-seed-1`))
         const taken = new Set<number>(snap.pool?.takenSeats ?? [])
@@ -349,8 +380,7 @@ async function run() {
         await call(buyer, '/v1/pools/p-seed-1/draw',
           { seats, idempotencyKey: 'smoke-ship-' + round + '-' + Date.now() })
       }
-      const last = await json(await call(buyer, '/v1/prizes'))
-      return (last.prizes ?? []).filter((p: { status: string }) => p.status === 'stashed')
+      return allPrizes(buyer, 'stashed')
     }
     const frees = await ensureStash(2)
     const [free, free2] = frees
@@ -388,8 +418,8 @@ async function run() {
       check('單號有記下來', now?.tracking === tn)
       check('寄出後卡片離開保管庫', now?.status === 'shipped')
 
-      const stash2 = await json(await call(buyer, '/v1/prizes'))
-      const moved = (stash2.prizes ?? []).find((p: { id: string }) => p.id === free.id)
+      const stash2 = await allPrizes(buyer)
+      const moved = stash2.find((p: { id: string }) => p.id === free.id)
       check('卡片狀態同步成 shipped', moved?.status === 'shipped', moved?.status)
 
       /* ---- 需寄送的二手轉賣：卡真的要換手 ----
@@ -404,8 +434,8 @@ async function run() {
       check('已寄出的卡可以再上架（需寄送）', listed.ok, await listed.clone().text())
       const listing2 = (await json(listed)).listing
 
-      const stash3 = await json(await call(buyer, '/v1/prizes'))
-      const nowListed = (stash3.prizes ?? []).find((p: { id: string }) => p.id === free.id)
+      const stash3 = await allPrizes(buyer)
+      const nowListed = stash3.find((p: { id: string }) => p.id === free.id)
       check('上架後卡片標成 listed（需寄送也要標，否則擋不住重複上架）',
         nowListed?.status === 'listed', nowListed?.status)
 
@@ -428,13 +458,13 @@ async function run() {
       const done2 = await call(seller, `/v1/orders/${order2.id}/confirm`, {})
       check('新買家確認收貨', done2.ok, await done2.clone().text())
 
-      const sellerCards = await json(await call(seller, '/v1/prizes'))
+      const sellerCards = await allPrizes(seller)
       check('成交後卡片過戶到新買家名下',
-        (sellerCards.prizes ?? []).some((p: { id: string; status: string }) =>
+        sellerCards.some((p: { id: string; status: string }) =>
           p.id === free.id && p.status === 'shipped'))
-      const oldOwner = await json(await call(buyer, '/v1/prizes'))
+      const oldOwner = await allPrizes(buyer)
       check('原持有人的卡冊裡不再有這張卡',
-        !(oldOwner.prizes ?? []).some((p: { id: string }) => p.id === free.id))
+        !oldOwner.some((p: { id: string }) => p.id === free.id))
 
       // 賣掉之後不能再上架一次 —— 卡已經不是他的了
       const resell = await call(buyer, '/v1/listings', { prizeId: free.id, price: relistPrice })
@@ -457,8 +487,8 @@ async function run() {
       const jump = await call(platform, `/v1/admin/shipments/${sid2}/status`,
         { status: 'delivered', note: 'smoke 直接標送達' })
       check('可以從 requested 直接標成 delivered', jump.ok, `${jump.status}`)
-      const after2 = await json(await call(buyer, '/v1/prizes'))
-      const p2 = (after2.prizes ?? []).find((p: { id: string }) => p.id === free2.id)
+      const after2 = await allPrizes(buyer)
+      const p2 = after2.find((p: { id: string }) => p.id === free2.id)
       check('跳過 shipped 的出貨單也要把卡片放出 ship_requested',
         p2?.status === 'shipped', p2?.status)
     }
@@ -507,8 +537,7 @@ async function run() {
     /* 自己抽一張來測，不要靠前面的段落留下庫存 ——
        出貨與交易那兩段會把買家的卡用掉，靠殘留的話這一整段會被靜默跳過，
        看起來是 ok 其實什麼都沒驗到（第一版就是這樣）。 */
-    let mine = await json(await call(buyer, '/v1/prizes'))
-    let free = (mine.prizes ?? []).find((p: { status: string }) => p.status === 'stashed')
+    let free = (await allPrizes(buyer, 'stashed'))[0]
     if (!free) {
       const snap = await json(await fetch(`${base}/v1/pools/p-seed-1`))
       const taken = new Set<number>(snap.pool?.takenSeats ?? [])
@@ -516,8 +545,7 @@ async function run() {
       if (seat) {
         await call(buyer, '/v1/pools/p-seed-1/draw',
           { seats: [seat], idempotencyKey: 'smoke-delist-' + Date.now() })
-        mine = await json(await call(buyer, '/v1/prizes'))
-        free = (mine.prizes ?? []).find((p: { status: string }) => p.status === 'stashed')
+        free = (await allPrizes(buyer, 'stashed'))[0]
       }
     }
     if (!free) {
@@ -527,9 +555,9 @@ async function run() {
       check('上架成功', made.ok, `${made.status}`)
       const { listing } = await json(made)
 
-      const afterList = await json(await call(buyer, '/v1/prizes'))
+      const afterList = await allPrizes(buyer)
       check('上架後卡標成 listed',
-        (afterList.prizes ?? []).find((p: { id: string }) => p.id === free.id)?.status === 'listed')
+        afterList.find((p: { id: string }) => p.id === free.id)?.status === 'listed')
 
       const notMine = await call(seller, `/v1/listings/${listing.id}/delist`, {})
       check('別人不能下架我的掛單', notMine.status === 403, `${notMine.status}`)
@@ -537,9 +565,9 @@ async function run() {
       const off = await call(buyer, `/v1/listings/${listing.id}/delist`, {})
       check('下架成功', off.ok, `${off.status}`)
 
-      const afterOff = await json(await call(buyer, '/v1/prizes'))
+      const afterOff = await allPrizes(buyer)
       check('下架後卡回到保管中',
-        (afterOff.prizes ?? []).find((p: { id: string }) => p.id === free.id)?.status === 'stashed')
+        afterOff.find((p: { id: string }) => p.id === free.id)?.status === 'stashed')
 
       const again = await call(buyer, `/v1/listings/${listing.id}/delist`, {})
       check('已下架的不能再下架', again.status === 409)
@@ -645,7 +673,7 @@ async function run() {
     const anon = await fetch(`${base}/v1/share/cardbook/${on.slug}`)
     check('公開卡冊不用登入就看得到', anon.ok, `${anon.status}`)
     const book = await json(anon)
-    check('公開卡冊帶出持有人與卡片', !!book.owner?.name && Array.isArray(book.prizes))
+    check('公開卡冊帶出持有人與卡片', !!book.owner?.name && Array.isArray(book.items))
     check('公開卡冊不外洩 user_id / email / 電話',
       !JSON.stringify(book).includes('u-buyer') && !JSON.stringify(book).includes('@'))
 
@@ -664,7 +692,7 @@ async function run() {
 
     // 賣家卡冊裡挑一張還在保管庫的卡，讓買家出價
     const ownerBook = await json(await fetch(`${base}/v1/share/cardbook/${rot.slug}`))
-    const target = (ownerBook.prizes ?? []).find((p: { tradable: boolean }) => p.tradable)
+    const target = (ownerBook.items ?? []).find((p: { tradable: boolean }) => p.tradable)
     if (!target) {
       check('（跳過出價流程：卡冊裡沒有可交易的卡）', true)
     } else {
@@ -709,9 +737,9 @@ async function run() {
       const bAfter = (await json(await call(seller, '/v1/wallet'))).wallet.points
       check('出價方被扣了出價的點數', bBefore - bAfter === 500, `${bBefore} → ${bAfter}`)
 
-      const takerBook = await json(await call(seller, '/v1/prizes'))
+      const takerBook = await allPrizes(seller)
       check('卡片過戶到出價方名下',
-        (takerBook.prizes ?? []).some((p: { id: string }) => p.id === target.id))
+        takerBook.some((p: { id: string }) => p.id === target.id))
 
       const again = await call(buyer, `/v1/social/trade-offers/${offerId}/accept`, {})
       check('同一筆出價不能重複接受', again.status === 409)
@@ -725,6 +753,144 @@ async function run() {
       const after = await json(await call(seller, '/v1/social/notifications'))
       check('全部已讀後未讀歸零', after.unread === 0)
     }
+  }
+
+  /* ---- 游標分頁 ----
+     卡冊、公開卡冊、市場都改成分批載入。這一段釘住的是分頁最容易錯的幾件事：
+     換頁會不會漏／重複、最後一頁的 nextCursor 是不是真的 null、
+     limit 超出範圍會不會被默默截斷、以及狀態過濾有沒有真的在 SQL 做。 */
+  console.log('\n游標分頁：')
+  {
+    /* 資料不夠就自己抽幾張。「只有 3 張所以跳過」等於這一段什麼都沒驗到 ——
+       前面的段落會把買家的卡用掉，不能靠殘留狀態。 */
+    for (let round = 0; round < 3; round++) {
+      if ((await allPrizes(buyer)).length >= 6) break
+      const snap = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+      const taken = new Set<number>(snap.pool?.takenSeats ?? [])
+      const seats = Array.from({ length: 100 }, (_, i) => i + 1).filter(n => !taken.has(n)).slice(0, 6)
+      if (!seats.length) break
+      await call(buyer, '/v1/pools/p-seed-1/draw',
+        { seats, idempotencyKey: `smoke-page-${round}-${Date.now()}` })
+    }
+
+    const full = await allPrizes(buyer)
+    check('卡冊有足夠的資料可以測分頁', full.length >= 3, `只有 ${full.length} 張`)
+
+    if (full.length >= 3) {
+      const p1 = await json(await call(buyer, '/v1/prizes?limit=2'))
+      check('第一頁剛好給 limit 筆', p1.items?.length === 2, `${p1.items?.length}`)
+      check('還有下一頁時 nextCursor 不是 null', typeof p1.nextCursor === 'string')
+
+      const p2 = await json(await call(buyer, `/v1/prizes?limit=2&cursor=${encodeURIComponent(p1.nextCursor)}`))
+      const ids1 = new Set(p1.items.map((x: { id: string }) => x.id))
+      check('第二頁跟第一頁沒有重複',
+        p2.items.every((x: { id: string }) => !ids1.has(x.id)))
+      check('第二頁接在第一頁後面（順序沒斷）',
+        p2.items[0]?.id === full[2]?.id, `${p2.items[0]?.id} vs ${full[2]?.id}`)
+
+      /* 資料量剛好整除 limit 的情況：拿 limit = 這個狀態的總筆數。
+         後端必須當場看得出「沒有下一頁」，而不是回一個游標、
+         等前端再打一次拿到空陣列才知道 —— 那一次請求是白打的，
+         而且使用者會在捲到底時看到載入指示閃一下又消失。 */
+      const stashedAll = await allPrizes(buyer, 'stashed')
+      if (stashedAll.length >= 1 && stashedAll.length <= 100) {
+        const exact = await json(await call(buyer, `/v1/prizes?status=stashed&limit=${stashedAll.length}`))
+        check('資料量剛好整除 limit 時 nextCursor 是 null',
+          exact.items.length === stashedAll.length && exact.nextCursor === null,
+          `${exact.items.length}/${stashedAll.length} nextCursor=${exact.nextCursor}`)
+      } else {
+        check('（跳過整除檢查：寄存中的張數超出可測範圍）', false, `${stashedAll.length} 張`)
+      }
+    }
+
+    // limit 超出範圍要回 400，不是默默給 100 筆
+    check('limit 超過上限被拒', (await call(buyer, '/v1/prizes?limit=101')).status === 400)
+    check('limit 0 被拒', (await call(buyer, '/v1/prizes?limit=0')).status === 400)
+    check('limit 不是數字被拒', (await call(buyer, '/v1/prizes?limit=abc')).status === 400)
+    check('亂編的游標被拒', (await call(buyer, '/v1/prizes?cursor=!!!not-base64!!!')).status === 400)
+
+    // 狀態過濾在 SQL 做。翻完所有頁之後的結果必須跟「全部裡挑這個狀態」一致
+    for (const st of ['stashed', 'listed', 'shipped'] as const) {
+      const filtered = await allPrizes(buyer, st)
+      const expected = full.filter((p: { status: string }) => p.status === st)
+      check(`status=${st} 過濾的張數正確`, filtered.length === expected.length,
+        `${filtered.length} vs ${expected.length}`)
+      check(`status=${st} 回傳的每一筆都是這個狀態`,
+        filtered.every((p: { status: string }) => p.status === st))
+    }
+    check('不認得的 status 被拒', (await call(buyer, '/v1/prizes?status=nope')).status === 400)
+
+    // 總覽的數字不能從已載入的那一頁算 —— 它講的是整本卡冊
+    const sum = await json(await call(buyer, '/v1/prizes/summary'))
+    check('總覽的總張數等於整本卡冊', sum.total === full.length, `${sum.total} vs ${full.length}`)
+    check('總覽的各狀態張數對得上',
+      ['stashed', 'listed', 'ship_requested', 'shipped', 'recycled'].every(st =>
+        sum.counts[st] === full.filter((p: { status: string }) => p.status === st).length))
+    check('總覽的總值不含已回收的卡',
+      sum.totalValue === full
+        .filter((p: { status: string }) => p.status !== 'recycled')
+        .reduce((a: number, p: { card: { refPrice?: number } }) => a + Number(p.card?.refPrice ?? 0), 0),
+      `${sum.totalValue}`)
+
+    /* 市場：四種排序各有自己的游標鍵，翻完之後不能漏也不能重複 */
+    for (const sort of ['deal', 'new', 'cheap', 'pricey'] as const) {
+      const one = await allListings(sort)
+      const ids = one.map((l: { id: string }) => l.id)
+      check(`市場 sort=${sort} 翻頁不重複`, new Set(ids).size === ids.length)
+      // 用不同的 limit 翻，翻出來的集合必須一模一樣（差一個就是邊界寫錯了）
+      const small: string[] = []
+      let c: string | null = null
+      do {
+        const q = new URLSearchParams({ limit: '3', sort })
+        if (c) q.set('cursor', c)
+        const r = await json(await fetch(`${base}/v1/listings?${q}`))
+        small.push(...r.items.map((l: { id: string }) => l.id))
+        c = r.nextCursor ?? null
+      } while (c)
+      check(`市場 sort=${sort} 換 limit 翻出同一組結果`,
+        small.length === ids.length && small.every((id, i) => id === ids[i]),
+        `${small.length} vs ${ids.length}`)
+    }
+    check('市場的 limit 超過上限被拒',
+      (await fetch(`${base}/v1/listings?limit=101`)).status === 400)
+    check('市場不認得的排序被拒',
+      (await fetch(`${base}/v1/listings?sort=random`)).status === 400)
+
+    const hl = await json(await fetch(`${base}/v1/listings/highlights`))
+    check('精選區是有界的 top-N', hl.deals.length <= 6 && hl.graded.length <= 4)
+    check('精選區帶出整個市場的總筆數', hl.total === (await allListings()).length)
+
+    /* 公開卡冊：排序是「賞別 → 時間新到舊」，方向是混的，
+       游標用 (賞別序, -won_at, id) 表達。這一條驗的就是那組鍵沒寫歪。 */
+    const st = await json(await call(buyer, '/v1/social/cardbook/settings',
+      { public: true }, 'PUT'))
+    const bookAll: string[] = []
+    let bc: string | null = null
+    do {
+      const q = new URLSearchParams({ limit: '2' })
+      if (bc) q.set('cursor', bc)
+      const r = await json(await fetch(`${base}/v1/share/cardbook/${st.slug}?${q}`))
+      bookAll.push(...r.items.map((x: { id: string }) => x.id))
+      bc = r.nextCursor ?? null
+    } while (bc)
+    const bookOnce = await json(await fetch(`${base}/v1/share/cardbook/${st.slug}?limit=100`))
+    check('公開卡冊翻頁不重複', new Set(bookAll).size === bookAll.length)
+    check('公開卡冊翻完的順序跟一次全撈一致',
+      bookAll.length === bookOnce.items.length &&
+      bookAll.every((id, i) => id === bookOnce.items[i].id),
+      `${bookAll.length} vs ${bookOnce.items.length}`)
+    /* 總覽只有第一頁帶，而且講的是整本卡冊 —— 頭部的「收藏 N 張」不能是
+       「已經捲出來 N 張」，那個數字會隨著捲動一直長大。 */
+    const bookFirst = await json(await fetch(`${base}/v1/share/cardbook/${st.slug}?limit=2`))
+    check('公開卡冊第一頁帶總覽，數字是整本卡冊的',
+      bookFirst.summary?.count === bookAll.length, `${bookFirst.summary?.count} vs ${bookAll.length}`)
+    if (bookFirst.nextCursor) {
+      const bookNext = await json(await fetch(
+        `${base}/v1/share/cardbook/${st.slug}?limit=2&cursor=${encodeURIComponent(bookFirst.nextCursor)}`))
+      check('公開卡冊後續頁不重複帶總覽', bookNext.summary === undefined)
+    }
+    check('公開卡冊的 limit 超過上限被拒',
+      (await fetch(`${base}/v1/share/cardbook/${st.slug}?limit=101`)).status === 400)
   }
 
   console.log(`\n${pass} passed, ${fail} failed`)

@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
+import { PageQuery, decodeCursor, encodeCursor, slicePage } from '../pagination.js'
 
 export const pub = new Hono()
 
@@ -84,6 +85,126 @@ pub.get('/winners', async c => {
       cardName: (r.card as { name?: string }).name ?? '',
       at: new Date(Number(r.won_at)).toISOString().slice(0, 16).replace('T', ' ')
     }))
+  })
+})
+
+/* =====================================================================
+   市場掛單列表
+   ===================================================================== */
+
+/** 掛價相對市值的折數。市值填 0 或沒填時當成「不折不扣」，不要讓它變 NULL 排到天邊 */
+const DEAL_RATIO = sql`coalesce(
+  (price - nullif((card->>'refPrice')::numeric, 0)) / nullif((card->>'refPrice')::numeric, 0), 0)`
+
+/**
+ * 排序搬到後端。
+ *
+ * 跟卡冊的狀態分頁是同一個道理：列表分批載入之後，前端排序只排得到
+ * 「已經載進來的那幾筆」。使用者選「價格低到高」看到的是這一頁裡最便宜的，
+ * 再捲一頁又整個重排 —— 已經看過的卡片會在眼前跳來跳去。
+ *
+ * 每一種排序都要有自己的游標鍵，而且必須跟 order by 逐字對應：
+ * 排序鍵與游標鍵只要有一邊不同，換頁時就會漏筆或重複。
+ */
+const SORTS = ['deal', 'new', 'cheap', 'pricey'] as const
+type Sort = (typeof SORTS)[number]
+
+const ListingQuery = PageQuery.extend({ sort: z.enum(SORTS).default('deal') })
+
+/** 回傳 [order by 片段, 游標比較片段, 從一列取出游標值] 三件一組 */
+function sortSpec(sort: Sort, after: [string, string] | null) {
+  switch (sort) {
+    case 'new':
+      return {
+        order: sql`order by listed_at desc, id desc`,
+        where: after ? sql`and (listed_at, id) < (${after[0]}::timestamptz, ${after[1]}::text)` : sql``,
+        key: (r: Row) => String(r.listed_at_text)
+      }
+    case 'cheap':
+      return {
+        order: sql`order by price asc, id asc`,
+        where: after ? sql`and (price, id) > (${after[0]}::bigint, ${after[1]}::text)` : sql``,
+        key: (r: Row) => String(r.price)
+      }
+    case 'pricey':
+      return {
+        order: sql`order by price desc, id desc`,
+        where: after ? sql`and (price, id) < (${after[0]}::bigint, ${after[1]}::text)` : sql``,
+        key: (r: Row) => String(r.price)
+      }
+    case 'deal':
+      return {
+        order: sql`order by ${DEAL_RATIO} asc, id asc`,
+        where: after ? sql`and (${DEAL_RATIO}, id) > (${after[0]}::numeric, ${after[1]}::text)` : sql``,
+        key: (r: Row) => String(r.deal_ratio)
+      }
+  }
+}
+
+type Row = {
+  id: string; card: unknown; price: string; seller_id: string; seller_name: string
+  delivery: string; status: string; listed_at: Date; prize_id: string | null
+  /* listed_at 是 timestamptz（微秒精度），但 postgres.js 交給 JS 的是 Date，
+     只有毫秒 —— 拿它組游標會把同一微秒內的相鄰列切錯邊，換頁時漏一筆。
+     所以另外撈一份完整精度的字串專門給游標用。 */
+  listed_at_text: string
+  deal_ratio: string
+}
+
+const toListing = (r: Row) => ({
+  id: r.id, card: r.card, price: Number(r.price),
+  sellerId: r.seller_id, sellerName: r.seller_name,
+  delivery: r.delivery, status: r.status, listedAt: r.listed_at, prizeId: r.prize_id
+})
+
+pub.get('/listings', async c => {
+  const parsed = ListingQuery.safeParse(c.req.query())
+  if (!parsed.success) {
+    return c.json({ error: 'BAD_REQUEST', message: '分頁參數不合法（limit 介於 1 到 100）' }, 400)
+  }
+  const { limit, cursor, sort } = parsed.data
+
+  let after: [string, string] | null = null
+  if (cursor) {
+    const p = decodeCursor(cursor, 2)
+    if (!p) return c.json({ error: 'BAD_CURSOR', message: '分頁游標不合法' }, 400)
+    after = [p[0]!, p[1]!]
+  }
+  const spec = sortSpec(sort, after)
+
+  const rows = await sql<Row[]>`
+    select *, listed_at::text as listed_at_text, ${DEAL_RATIO} as deal_ratio
+    from listings where status = 'live' ${spec.where}
+    ${spec.order}
+    limit ${limit + 1}
+  `
+  const page = slicePage(rows, limit, r => encodeCursor([spec.key(r), r.id]))
+  return c.json({ items: page.items.map(toListing), nextCursor: page.nextCursor })
+})
+
+/**
+ * 市場首頁上方那兩條橫向捲軸（今日最殺、已鑑定）與總筆數。
+ *
+ * 它們講的是「整個市場裡最便宜／最貴的那幾張」，不是「這一頁裡的」——
+ * 從已載入的清單挑會挑到假的第一名。取 top-N 是有界的查詢，跟分頁無關，
+ * 所以獨立一支，前端只在第一次進頁時打一次。
+ */
+pub.get('/listings/highlights', async c => {
+  const [deals, graded, total] = await Promise.all([
+    sql<Row[]>`
+      select *, listed_at::text as listed_at_text, ${DEAL_RATIO} as deal_ratio
+      from listings where status = 'live' and ${DEAL_RATIO} <= -0.08
+      order by ${DEAL_RATIO} asc, id asc limit 6
+    `,
+    sql<Row[]>`
+      select *, listed_at::text as listed_at_text, ${DEAL_RATIO} as deal_ratio
+      from listings where status = 'live' and cert_no is not null
+      order by price desc, id desc limit 4
+    `,
+    sql<{ n: string }[]>`select count(*)::text as n from listings where status = 'live'`
+  ])
+  return c.json({
+    deals: deals.map(toListing), graded: graded.map(toListing), total: Number(total[0]?.n ?? 0)
   })
 })
 

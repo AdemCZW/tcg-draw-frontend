@@ -80,6 +80,45 @@ function toLedger(rows: Any[], endBalance: number): LedgerEntry[] {
   })
 }
 
+/* ---------- 分頁 ---------- */
+export interface Page<T> { items: T[]; nextCursor: string | null }
+export interface PageOpts { cursor?: string | null; limit?: number; signal?: AbortSignal }
+export type MarketSort = 'deal' | 'new' | 'cheap' | 'pricey'
+
+export interface PrizeSummary {
+  total: number
+  counts: Record<UserPrize['status'], number>
+  owned: number
+  totalValue: number
+  best: { name: string; tier: Tier; refPrice: number } | null
+  tierMix: { tier: Tier; n: number }[]
+  /** 成長曲線只需要「時間 + 金額」，所以不帶整包 card */
+  curve: { wonAt: number; name: string; refPrice: number }[]
+}
+
+/** 只把有值的參數放進 query string —— 帶 cursor=null 會被後端當成不合法的游標 */
+function qs(o: Record<string, unknown>): string {
+  const p = new URLSearchParams()
+  for (const [k, v] of Object.entries(o)) {
+    if (k === 'signal' || v === undefined || v === null || v === '') continue
+    p.set(k, String(v))
+  }
+  const s = p.toString()
+  return s ? `?${s}` : ''
+}
+
+/**
+ * mock 的游標分頁。游標直接用「上一批最後一筆的 id」，因為 mock 的陣列
+ * 順序就是排序本身；真後端不能這樣做（見 server/src/pagination.ts）。
+ */
+function mockPage<T>(all: T[], idOf: (x: T) => string, opts: PageOpts): Page<T> {
+  const limit = opts.limit ?? 24
+  const from = opts.cursor ? all.findIndex(x => idOf(x) === opts.cursor) + 1 : 0
+  const items = all.slice(from, from + limit)
+  const end = from + items.length
+  return { items, nextCursor: end < all.length && items.length ? idOf(items[items.length - 1]!) : null }
+}
+
 function toListing(l: Any): Listing {
   return {
     id: String(l.id), card: l.card as CardItem, price: Number(l.price),
@@ -181,22 +220,81 @@ export const api = {
     await delay(300); return mock.placeBid(lotId, amount)
   },
 
-  async myPrizes(): Promise<UserPrize[]> {
-    /* 回複本而不是 mock.userPrizes 本身。回同一個陣列參照的話，呼叫端
-       `prizes.value = await api.myPrizes()` 等於把同一個值指回去，ref 不會觸發，
-       依賴它的 computed 就吃快取 —— 症狀是上架之後「市場販售中」那個分頁
-       不會出現（但分頁上的數字會變，因為那是 render 時直接算的）。
-       API 模式每次都 map 出新陣列所以沒這個問題，mock 要跟它一致。 */
-    if (MOCK) { await delay(150); return [...mock.userPrizes] }
-    const r = await http<{ prizes: Any[] }>('/v1/prizes')
-    return r.prizes.map(toPrize)
+  /**
+   * 我的卡冊，一次一批。
+   *
+   * status 由後端過濾，不是撈回來再自己濾 —— 分批載入之後前端只濾得到
+   * 已經載進來的那幾張，「寄存中 0 張」但第 3 頁其實有，是這個改動最容易踩的坑。
+   */
+  async myPrizes(opts: PageOpts & { status?: UserPrize['status'] } = {}): Promise<Page<UserPrize>> {
+    /* mock 也要真的分頁，不能整包回。mock 是本機開發與展示唯一的資料來源，
+       它不分頁的話捲動載入這條路在開發時永遠走不到，等到接上後端才發現壞掉。 */
+    if (MOCK) {
+      await delay(150)
+      const all = opts.status ? mock.userPrizes.filter(p => p.status === opts.status) : mock.userPrizes
+      return mockPage(all, p => p.id, opts)
+    }
+    const r = await http<{ items: Any[]; nextCursor: string | null }>(
+      `/v1/prizes${qs({ ...opts, status: opts.status })}`, { signal: opts.signal })
+    return { items: r.items.map(toPrize), nextCursor: r.nextCursor }
+  },
+
+  /** 卡冊總覽的數字。講的是整本卡冊，所以不能從已載入的那幾張算 */
+  async prizeSummary(): Promise<PrizeSummary> {
+    if (MOCK) {
+      await delay(120)
+      const counts = {} as PrizeSummary['counts']
+      for (const s of ['stashed', 'listed', 'ship_requested', 'shipped', 'recycled'] as const) {
+        counts[s] = mock.userPrizes.filter(p => p.status === s).length
+      }
+      const owned = mock.userPrizes.filter(p => p.status !== 'recycled')
+      const mix = new Map<string, number>()
+      for (const p of owned) mix.set(p.tier, (mix.get(p.tier) ?? 0) + 1)
+      const best = owned.reduce<UserPrize | null>((b, p) => (!b || p.card.refPrice > b.card.refPrice ? p : b), null)
+      return {
+        total: mock.userPrizes.length, counts, owned: owned.length,
+        totalValue: owned.reduce((a, p) => a + p.card.refPrice, 0),
+        best: best ? { name: best.card.name, tier: best.tier, refPrice: best.card.refPrice } : null,
+        tierMix: [...mix].map(([tier, n]) => ({ tier: tier as Tier, n })),
+        curve: owned.map(p => ({ wonAt: Date.parse(p.wonAt) || Date.now(), name: p.card.name, refPrice: p.card.refPrice }))
+      }
+    }
+    return http<PrizeSummary>('/v1/prizes/summary')
   },
 
   // ---- 市場 ----
-  async listMarket(): Promise<Listing[]> {
-    if (MOCK) { await delay(160); return mock.listings }
-    const r = await http<{ listings: Any[] }>('/v1/listings')
-    return r.listings.map(toListing)
+  /** 掛單一次一批。排序也在後端 —— 前端排序只排得到已載入的那幾筆，會愈捲愈亂 */
+  async listMarket(opts: PageOpts & { sort?: MarketSort } = {}): Promise<Page<Listing>> {
+    if (MOCK) {
+      await delay(160)
+      const live = mock.listings.filter(l => l.status === 'live')
+      const d = (l: Listing) => (l.price - l.card.refPrice) / l.card.refPrice
+      const sorted = [...live].sort(
+        opts.sort === 'cheap' ? (a, b) => a.price - b.price
+        : opts.sort === 'pricey' ? (a, b) => b.price - a.price
+        : opts.sort === 'new' ? () => 0            // mock 已依上架時間排好
+        : (a, b) => d(a) - d(b))
+      return mockPage(sorted, l => l.id, opts)
+    }
+    const r = await http<{ items: Any[]; nextCursor: string | null }>(
+      `/v1/listings${qs({ ...opts, sort: opts.sort })}`, { signal: opts.signal })
+    return { items: r.items.map(toListing), nextCursor: r.nextCursor }
+  },
+
+  /** 市場上方那兩條橫向捲軸：講的是「整個市場最便宜／最貴的幾張」，跟分頁無關 */
+  async marketHighlights(): Promise<{ deals: Listing[]; graded: Listing[]; total: number }> {
+    if (MOCK) {
+      await delay(120)
+      const live = mock.listings.filter(l => l.status === 'live')
+      const d = (l: Listing) => (l.price - l.card.refPrice) / l.card.refPrice
+      return {
+        deals: [...live].filter(l => d(l) <= -0.08).sort((a, b) => d(a) - d(b)).slice(0, 6),
+        graded: [...live].filter(l => l.card.certNo).sort((a, b) => b.price - a.price).slice(0, 4),
+        total: live.length
+      }
+    }
+    const r = await http<{ deals: Any[]; graded: Any[]; total: number }>('/v1/listings/highlights')
+    return { deals: r.deals.map(toListing), graded: r.graded.map(toListing), total: r.total }
   },
   async buyListing(id: string): Promise<Listing> {
     if (MOCK) {
@@ -211,8 +309,10 @@ export const api = {
     const r = await http<{ order: Any | null; wallet: { points: number; locked: number } }>(
       '/v1/orders', { method: 'POST', json: { listingId: id, idempotencyKey: idem() } })
     applyWallet(r)
-    const l = (await this.listMarket()).find(x => x.id === id)
-    return l ?? ({ id, status: 'sold' } as Listing)
+    /* 原本這裡會把整個市場再撈一次只為了找回那一筆。掛單改成分頁之後那個做法
+       既錯（要的那筆可能不在第一頁）又浪費，而且呼叫端根本沒用這個回傳值 ——
+       成交與否看的是有沒有丟例外。 */
+    return { id, status: 'sold' } as Listing
   },
   async createListing(input: { prizeId: string; card: CardItem; price: number; sellerName: string }): Promise<Listing> {
     if (MOCK) {

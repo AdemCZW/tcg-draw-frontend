@@ -34,8 +34,19 @@ const cards = computed(() => all.value.filter(p => ids.value.includes(p.id) && p
 /** 每張卡各自的定價。預設帶市值當錨點，但一定讓人改得動 —— 市值只是參考 */
 const price = ref<Record<string, number | null>>({})
 
+/* 卡冊改成分批載入之後不能只抓第一批：使用者是從卡冊裡「選好幾張」進來的，
+   被選中的卡完全可能落在第 3 批。這裡沿著游標一路翻到「要的都找到了」為止，
+   翻完就停 —— 只撈寄存中的，那是唯一能上架的狀態，量比整本卡冊小得多。 */
 onMounted(async () => {
-  all.value = await api.myPrizes()
+  const want = new Set(ids.value)
+  const found: UserPrize[] = []
+  let cursor: string | null = null
+  do {
+    const page = await api.myPrizes({ status: 'stashed', cursor, limit: 100 })
+    for (const p of page.items) if (want.has(p.id)) found.push(p)
+    cursor = page.nextCursor
+  } while (cursor && found.length < want.size)
+  all.value = found
   for (const p of cards.value) price.value[p.id] = p.card.refPrice || null
   loading.value = false
 })
@@ -137,7 +148,10 @@ async function submit() {
 </template>
 
 <style scoped>
-.page { padding-top: 20px; padding-bottom: calc(96px + var(--safe-b, 0px)); max-width: 640px; }
+/* 讓位只留一份：安全區已經由全域頁尾的 --nav-total 算過了（見 App.vue），
+   這裡再加一次會在頁面下緣多出一段捲得到卻空無一物的黑。
+   96px 是留給下面那條 sticky 結帳列的活動空間，跟安全區無關。 */
+.page { padding-top: 20px; padding-bottom: 96px; max-width: 640px; }
 .head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .back { font-size: 13px; color: var(--muted); text-decoration: none; }
 h1 { font-size: 20px; margin: 0; }
@@ -165,7 +179,11 @@ h1 { font-size: 20px; margin: 0; }
 .hint .warn { color: #fcd34d; }
 
 .bar {
-  position: sticky; bottom: calc(12px + var(--safe-b, 0px));
+  /* 手機上底部導覽是在的（這頁沒設 chrome: none），原本只避開安全區
+     會讓這條列的下半截被導覽蓋掉 —— 而它是整個上架流程的送出鍵。
+     取 max：手機的 --nav-total 已含安全區，桌機是 0 才輪到 --safe-b
+     （同 NotifyBell 的寫法）。 */
+  position: sticky; bottom: calc(12px + max(var(--nav-total, 0px), var(--safe-b, 0px)));
   display: flex; align-items: center; gap: 12px;
   padding: 12px 14px; margin-top: 14px;
   background: var(--surface);
