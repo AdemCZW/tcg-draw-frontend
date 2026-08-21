@@ -115,8 +115,11 @@ social.post('/trade-offers', async c => {
       return { error: 'CARDBOOK_PRIVATE', message: '這本卡冊沒有公開，不能提出交易', status: 403 }
     }
 
-    // 出價當下先擋明顯付不出來的。真正的檢查在對方按下接受的那一刻 ——
-    // 中間可能過了三天，那時候的餘額才算數
+    /* 出價會凍結點數（見 money.ts 的 locked 計算），所以這裡的檢查
+       已經把「我其他還在等回應的出價」算進去了 —— 不會出到超過自己付得起的總額。
+       仍然不是最終檢查：對方可能三天後才按接受，那一刻的餘額才算數。
+       這裡也要鎖帳戶，否則同時送出兩筆出價會各自讀到還沒算進對方的餘額。 */
+    await lockSpender(tx, me)
     const w = await walletOf(me, tx)
     if (w.available < points) return { error: 'INSUFFICIENT_POINTS', message: '可動用點數不足', status: 409 }
 
@@ -190,12 +193,19 @@ social.post('/trade-offers/:id/accept', async c => {
        兩邊都會讀到同一個 available 而都判定「夠」—— 對方的餘額就被花了兩次
        （見 money.ts 的 lockSpender）。 */
     await lockSpender(tx, o.from_user as string)
+
+    /* 順序很重要：先把這筆出價移出 pending，再算餘額。
+       待回應的出價會被計入 locked（見 money.ts），所以在改狀態之前，
+       **這筆出價自己**也還在凍結裡 —— 餘額 1000、出價 1000 的人算出來的
+       available 會是 0，每一筆接受都會被自己擋掉。
+       改完狀態它就不在 locked 裡了，這時算出來的才是真正付得起多少。
+       檢查沒過就回錯誤，整筆交易連同這次狀態變更一起回滾。 */
+    await tx`update trade_offers set status = 'accepted', responded_at = ${Date.now()} where id = ${id}`
+
     const w = await walletOf(o.from_user as string, tx)
     if (w.available < price) {
       return { error: 'INSUFFICIENT_POINTS', message: '對方的可動用點數已經不足，無法成交', status: 409 }
     }
-
-    await tx`update trade_offers set status = 'accepted', responded_at = ${Date.now()} where id = ${id}`
     await tx`insert into points_ledger (user_id, delta, reason, ref_id)
              values (${o.from_user}, ${-price}, 'trade-buy', ${id}) on conflict do nothing`
     await tx`insert into points_ledger (user_id, delta, reason, ref_id)

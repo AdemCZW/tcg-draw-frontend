@@ -29,6 +29,15 @@ export async function walletOf(userId: string, db: Db = root): Promise<Wallet> {
       -- 競標中的最高出價也是凍結：被超過就自動解凍（is_top 變 false）
       select b.amount from bids b join auction_lots l on l.id = b.lot_id
        where b.user_id = ${userId} and b.is_top and l.status = 'live'
+      union all
+      /* 待回應的交易邀約也要凍結。
+         沒有這一段的話，餘額 1000 的人可以同時對十張卡各出價 1000 ——
+         lockSpender 保證只有一筆會成功、不會憑空造錢，但另外九個持有人
+         會花時間去看一個根本付不出來的出價，而且以為自己有九個買家。
+         出價是有金錢意義的承諾，錢就該真的在那裡。
+         代價是不能同時廣撒超過餘額的出價 —— 那是刻意的取捨。 */
+      select o.points as amount from trade_offers o
+       where o.from_user = ${userId} and o.status = 'pending'
     ) t
   `
   const points = Number(bal?.sum ?? 0)

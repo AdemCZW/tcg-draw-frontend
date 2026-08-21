@@ -526,6 +526,16 @@ async function run() {
     check('賣家頁仍然公開', (await fetch(`${base}/v1/sellers/u-seller`)).ok)
   }
 
+  /* ---- 出價會凍結點數 ----
+     沒有這條防線，餘額 1000 的人可以同時對十張卡各出價 1000：
+     lockSpender 保證只有一筆成交、不會憑空造錢，但另外九個持有人
+     會花時間去看一個根本付不出來的出價。 */
+  console.log('\n出價凍結：')
+  {
+    const before = (await json(await call(seller, '/v1/wallet'))).wallet
+    check('凍結金額一開始是可讀的數字', typeof before.locked === 'number')
+  }
+
   console.log('\n分享與交易邀約：')
   {
     // 沒公開之前，連結不該有效
@@ -579,6 +589,16 @@ async function run() {
 
       const dup = await call(seller, '/v1/social/trade-offers', { prizeId: target.id, points: 600 })
       check('同一張卡重複出價被擋', dup.status === 409)
+
+      /* 出價之後那筆錢要真的被凍住 —— 這是「未入帳／已承諾的點數不能再花」的防線 */
+      const wAfterOffer = (await json(await call(seller, '/v1/wallet'))).wallet
+      check('待回應的出價計入凍結', wAfterOffer.locked >= 500,
+        `locked=${wAfterOffer.locked}`)
+
+      // 全部身家都出價出去之後，不該還能再開一筆超出可動用額度的
+      const over = await call(seller, '/v1/social/trade-offers',
+        { prizeId: target.id + '-nope', points: 999_999_999 })
+      check('超過可動用點數的出價開不了', !over.ok)
 
       // 對方收到通知了嗎
       const sn = await json(await call(buyer, '/v1/social/notifications'))
