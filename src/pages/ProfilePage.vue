@@ -196,7 +196,9 @@ onMounted(load)
 }
 .memberNo .act { flex: none; font-size: 12px; font-weight: 600; color: var(--accent); }
 
-.prof { padding-bottom: calc(48px + var(--safe-b)); max-width: 560px; }
+/* 安全區與底部導覽一起由頁尾讓位（見 App.vue）—— 這裡再加一次 --safe-b
+   等於把 Home 指示器的高度算兩遍 */
+.prof { padding-bottom: 48px; max-width: 560px; }
 .head { margin-bottom: 16px; }
 h1 { font-size: 22px; margin: 0 0 6px; }
 .sub { font-size: 13px; line-height: 1.7; margin: 0; }

@@ -283,7 +283,8 @@ const VERDICTS = [
 </template>
 
 <style scoped>
-.doc { padding-bottom: calc(48px + var(--safe-b)); }
+/* 安全區與底部導覽一起由頁尾讓位（見 App.vue），這裡不再重複計算 */
+.doc { padding-bottom: 48px; }
 .dh { padding: 8px 0 22px; border-bottom: 2px solid var(--ink); margin-bottom: 8px; }
 .eyebrow {
   font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .14em;

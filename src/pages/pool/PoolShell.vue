@@ -112,7 +112,8 @@ const activeTab = computed(() => String(route.name))
 </template>
 
 <style scoped>
-.shell { padding-top: 26px; padding-bottom: calc(60px + var(--nav-total)); }
+/* 底部導覽的讓位交給頁尾（見 App.vue），這裡只留自己的排版留白 */
+.shell { padding-top: 26px; padding-bottom: 60px; }
 
 .top { margin-bottom: 18px; }
 .titleRow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }

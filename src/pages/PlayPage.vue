@@ -122,18 +122,26 @@ function onChange(i: number) {
 </template>
 
 <style scoped>
-/* 底部導覽是 fixed，不讓位的話頁尾會被壓在它後面。
-   --nav-total 在桌機是 0，不必再包斷點 */
+/* 底部導覽的讓位由頁尾負責（見 App.vue）—— 頁尾就接在這一頁下面，
+   這裡再留一次是留給沒有東西的空白。
+
+   原本還有一條 min-height: calc(100dvh - 56px - --nav-total)：它把這一頁
+   撐滿整個視窗，於是頁尾整段被推到視窗外，下緣就多出「一頁高的黑 + 頁尾」
+   可以捲。撐滿視窗買到的只有環境光鋪得比較開，賠掉的是每次滑到底都要
+   經過一段沒有內容的黑 —— 拿掉之後環境光跟著內容高度走。 */
 .page {
   position: relative; isolation: isolate;
-  padding-top: 26px; padding-bottom: calc(40px + var(--nav-total));
-  min-height: calc(100dvh - 56px - var(--nav-total));
+  padding-top: 26px; padding-bottom: 40px;
 }
 
 /* ---- 環境層 ---- */
 .env {
   position: absolute; inset: 0 0 auto; height: 86%;
   z-index: -1; pointer-events: none;
+  /* 裡面那團光是 90vmax 見方的，頁面短的時候（例如「目前沒有進行中的抽選池」）
+     它會凸出這一層底下 —— 遮罩只管畫不管版面，凸出去的部分照樣算進文件高度，
+     整頁下緣就會多出一段捲得到、卻什麼都沒有的空間。clip 讓它只影響畫面不影響高度。 */
+  overflow: clip;
   -webkit-mask-image: linear-gradient(180deg, transparent, #000 18% 62%, transparent);
   mask-image: linear-gradient(180deg, transparent, #000 18% 62%, transparent);
 }
@@ -233,7 +241,7 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .tail a { color: var(--accent); }
 
 @media (max-width: 720px) {
-  .page { padding-top: 12px; padding-bottom: calc(20px + var(--nav-total)); }
+  .page { padding-top: 12px; padding-bottom: 20px; }
   h1 { font-size: 20px; }
   .sub { font-size: 12.5px; }
   .toggle { font-size: 12.5px; padding: 7px 13px; }

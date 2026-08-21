@@ -123,7 +123,9 @@ const paths: Record<string, string> = {
 </template>
 
 <style scoped>
-.page { padding-top: 28px; padding-bottom: calc(40px + var(--nav-total)); max-width: 640px; }
+/* 下緣不再自己讓開底部導覽：頁尾接在這一頁下面，讓位由它做（見 App.vue）。
+   兩邊都留一次的話，手機上每頁最底下就會多出一整條導覽高度的空白。 */
+.page { padding-top: 28px; padding-bottom: 40px; max-width: 640px; }
 
 .hero {
   display: grid; grid-template-columns: auto 1fr; grid-template-areas: "av who" "bal bal";

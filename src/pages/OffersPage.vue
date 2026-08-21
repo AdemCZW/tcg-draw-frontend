@@ -209,7 +209,8 @@ function switchTab(k: Tab) {
 </template>
 
 <style scoped>
-.page { padding-bottom: calc(48px + var(--nav-total)); }
+/* 底部導覽的讓位交給頁尾（見 App.vue），這裡只留自己的排版留白 */
+.page { padding-bottom: 48px; }
 .head { margin-bottom: 14px; }
 h1 { font-size: 22px; margin: 0 0 4px; }
 .sub { font-size: 13px; line-height: 1.7; margin: 0; }
