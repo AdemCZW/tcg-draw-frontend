@@ -200,7 +200,6 @@ onMounted(() => {
 /* 煙霧演出：整個視窗。按鈕的預設外觀全部拿掉 —— 它只是為了讓鍵盤能跳過。 */
 .emergeWrap {
   position: fixed; inset: 0; z-index: 80;
-  display: grid; place-items: center;
   padding: 0; border: 0; cursor: pointer;
   background: #05040b;
   overflow: hidden;
@@ -211,7 +210,16 @@ onMounted(() => {
    所以不改它的比例，而是整個放大到「蓋滿視窗」再把超出的裁掉 ——
    煙本來就填滿整個畫面，裁邊看不出來。
    max() 挑較大的那一邊：寬螢幕吃 100vw，窄長的手機吃 100dvh × 4/5。 */
+/* 置中方式從 grid 的 place-items 換成絕對定位 + translate。
+   **grid 的置中在子元素比容器大時，配上 overflow: hidden 會裁得不對稱** ——
+   溢出到起始方向的那一半變成不可及，畫面看起來整個偏右、左邊被切掉。
+   393×852 的手機上舞台算出來是 682px 寬，比視窗多 289px，實機就是這樣壞的。
+   translate 置中沒有這個問題：兩側各自溢出一樣多，裁掉的也一樣多。 */
 .emergeWrap :deep(.emerge) {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   width: max(100vw, calc(100dvh * 4 / 5));
   border-radius: 0;
 }
