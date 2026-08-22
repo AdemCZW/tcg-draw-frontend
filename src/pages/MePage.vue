@@ -30,20 +30,26 @@ function logout() {
 }
 
 /* 「我的卡冊」不放這裡 —— 底部選單已經有一顆卡冊，
-   同一個功能出現在兩個地方只會讓人猶豫哪個才對。 */
+   同一個功能出現在兩個地方只會讓人猶豫哪個才對。
+
+   六項排成三欄兩列的格狀選單。副標題全部拿掉：一整行一項時副標題還讀得完，
+   擠進三分之一寬的格子只會變成兩三行灰字，反而看不到真正要點的標題。
+   標題也一併縮短（「賣家專區 · 我要開池」→「我要開池」），
+   窄格子裡塞得下才有得看；語意由圖示與落地頁再補完。
+   排序照使用頻率由高到低，最常回來看的錢包擺在左上第一格。 */
 const rows = [
-  { name: 'profile', t: '會員資料', d: '暱稱、收件人與地址', icon: 'user' },
-  { name: 'wallet', t: '錢包', d: '點數餘額與明細', icon: 'wallet' },
-  { name: 'offers', t: '交易邀約', d: '別人想換你的卡、你出價的紀錄', icon: 'swap' },
-  { name: 'topup', t: '儲值', d: '購買點數', icon: 'plus' },
-  { name: 'seller-new', t: '賣家專區 · 我要開池', d: '上架自己的抽選池', icon: 'box' },
-  { name: 'fairness', t: '公平性驗證', d: '籤序怎麼封存、怎麼自己驗算', icon: 'shield' }
+  { name: 'wallet', t: '錢包', icon: 'wallet' },
+  { name: 'topup', t: '儲值', icon: 'plus' },
+  { name: 'offers', t: '交易邀約', icon: 'swap' },
+  { name: 'profile', t: '會員資料', icon: 'user' },
+  { name: 'seller-new', t: '我要開池', icon: 'box' },
+  { name: 'fairness', t: '公平性驗證', icon: 'shield' }
 ]
 
 /* 後台入口。原本只放在 AppHeader 的導覽列裡，但那一列在 720px 以下是
    display:none（手機改用底部 tab bar），所以手機上根本看不到。
    「我的」是手機上真的找得到後台的地方。 */
-const adminRow = { name: 'admin', t: '平台後台', d: '發點數、審賣家、裁決爭議', icon: 'shield' } as const
+const adminRow = { name: 'admin', t: '平台後台', icon: 'shield' } as const
 
 const paths: Record<string, string> = {
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 20a8 8 0 0 1 16 0',
@@ -72,29 +78,24 @@ const paths: Record<string, string> = {
 
     <ul class="menu">
       <li v-for="r in rows" :key="r.name">
-        <RouterLink :to="{ name: r.name }" class="row">
+        <RouterLink :to="{ name: r.name }" class="cell">
           <span class="ic" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none">
               <path :d="paths[r.icon]" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </span>
-          <span class="txt">
-            <strong>{{ r.t }}</strong>
-            <span class="muted">{{ r.d }}</span>
-          </span>
-          <span class="chev" aria-hidden="true">›</span>
+          <strong>{{ r.t }}</strong>
         </RouterLink>
-        <RouterLink v-if="auth.isAdmin" :to="{ name: adminRow.name }" class="row admin">
+      </li>
+      <!-- 後台自己佔一格，不再跟著 v-for 跑 —— 之前寫在迴圈裡，管理員會看到六顆一樣的後台入口 -->
+      <li v-if="auth.isAdmin">
+        <RouterLink :to="{ name: adminRow.name }" class="cell admin">
           <span class="ic" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none">
               <path :d="paths[adminRow.icon]" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </span>
-          <span class="txt">
-            <strong>{{ adminRow.t }}</strong>
-            <span class="muted">{{ adminRow.d }}</span>
-          </span>
-          <span class="chev" aria-hidden="true">›</span>
+          <strong>{{ adminRow.t }}</strong>
         </RouterLink>
       </li>
     </ul>
@@ -157,18 +158,25 @@ h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
 .balance strong { font-size: 24px; letter-spacing: -.01em; }
 .balance .unit { font-size: 12.5px; margin-left: auto; color: var(--accent); }
 
-.menu { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 8px; }
-.row {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 16px;
+/* minmax(0, 1fr) 而不是 1fr：grid 子元素預設 min-width:auto，
+   標題一長就把欄位撐爆整個視窗，手機上直接橫向捲。 */
+.menu {
+  list-style: none; padding: 0; margin: 16px 0 0;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+}
+.cell {
+  /* 整格可點，所以不再畫箭頭：一格就是一顆按鈕，多一個 › 只是噪音 */
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  min-height: 96px; padding: 14px 8px;
+  text-align: center;
   background: var(--surface);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   transition: background .15s, transform .12s;
 }
-@media (hover: hover) { .row:hover { background: var(--surface-2); } }
-.row:active { transform: scale(.985); }
-.row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) { .cell:hover { background: var(--surface-2); } }
+.cell:active { transform: scale(.985); }
+.cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ic {
   width: 38px; height: 38px; flex: none;
   display: grid; place-items: center;
@@ -176,11 +184,15 @@ h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
   background: var(--accent-wash); color: var(--accent);
 }
 .ic svg { width: 20px; height: 20px; }
-.txt { display: grid; gap: 2px; min-width: 0; }
-.txt strong { font-size: 15px; font-weight: 600; }
-.txt span { font-size: 12.5px; }
-.chev { margin-left: auto; color: var(--faint); font-size: 22px; line-height: 1; }
+.cell strong {
+  font-size: 13.5px; font-weight: 600; line-height: 1.35;
+  /* 窄格子寧可讓標題折行、格子長高，也不要壓字或截斷 */
+  max-width: 100%; overflow-wrap: anywhere;
+}
 
+.pref .txt { display: grid; gap: 2px; min-width: 0; }
+.pref .txt strong { font-size: 15px; font-weight: 600; }
+.pref .txt span { font-size: 12.5px; }
 .pref { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; margin-top: 8px; }
 .switch {
   position: relative; width: 46px; height: 28px; flex: none;
@@ -213,6 +225,6 @@ h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
 }
 
 /* 後台列跟一般功能區隔開：它是平台營運用的，不是使用者功能 */
-.row.admin { box-shadow: inset 3px 0 0 var(--gold); }
-.row.admin strong { color: var(--gold); }
+.cell.admin { box-shadow: inset 0 -3px 0 var(--gold); }
+.cell.admin strong { color: var(--gold); }
 </style>
