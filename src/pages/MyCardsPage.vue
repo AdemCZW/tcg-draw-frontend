@@ -511,31 +511,20 @@ async function copyLink() {
         </button>
       </div>
 
-      <details class="more">
-        <summary>會公開哪些資訊</summary>
-        <p>
-          卡名、賞別、參考價，以及 <strong>PSA / BGS 鑑定編號</strong>。
-          鑑定編號可以在鑑定機構官網反查，等於把這幾張卡的來歷一起公開。
-          你也不會知道誰看過。關掉開關之後，已經分享出去的連結會<strong>立刻失效</strong>。
-        </p>
-      </details>
 
       <div v-if="shareOn && shareLink" class="shareBody">
+        <!-- 網址與它的兩個動作是同一件事，收在同一條裡。
+             網址仍然整條顯示不截斷 —— 使用者要能長按複製，也要看得出連結換過了 -->
         <div class="linkRow">
           <span class="link mono">{{ shareLink }}</span>
-          <button type="button" class="btn sm copyBtn" @click="copyLink">{{ copied ? '已複製' : '複製' }}</button>
-        </div>
-
-        <!-- 次要動作用文字鈕，不佔通欄。它們不是這一塊的主要用途 -->
-        <div class="miniActs">
-          <RouterLink
-            class="mini"
-            :to="{ name: 'public-cardbook', params: { slug: shareSlug } }"
-          >預覽</RouterLink>
-          <button type="button" class="mini" :disabled="shareBusy" @click="askRotate = !askRotate">
-            換新連結
-          </button>
-          <span v-if="copied" class="miniOk" role="status">已複製</span>
+          <div class="linkActs">
+            <button type="button" class="btn sm" @click="copyLink">
+              {{ copied ? '已複製' : '複製' }}
+            </button>
+            <button type="button" class="btn sm ghost" :disabled="shareBusy" @click="askRotate = !askRotate">
+              換新連結
+            </button>
+          </div>
         </div>
 
         <!-- 換連結是不可逆的，跟回收一樣用行內確認：後果要跟按鈕在同一個畫面 -->
@@ -1047,49 +1036,31 @@ async function copyLink() {
 .sw:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--pill); }
 
 .shareBody { display: grid; gap: 10px; }
+/* 網址跟它的兩個動作是同一件事，所以共用一個框：上面一行網址，下面一行按鈕。
+   不把三個並排是因為網址是完整不截斷的長字串，擠在同一行會把按鈕壓到換行 */
 .linkRow {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 8px 8px 14px;
+  display: grid; gap: 10px;
+  padding: 12px 14px;
   background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px;
 }
 /* 網址整條顯示出來（不截斷成 …），使用者才能長按複製，也才看得出連結換過了 */
-.link { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-.linkRow .btn { flex: none; }
+.link { min-width: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+/* 複製撐開、換新連結收成內容寬度：兩顆等寬的話，沒有外框的 ghost
+   會變成一個同樣大的空盒，看起來像那半邊沒東西 */
+.linkActs { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.linkActs .btn { min-width: 0; white-space: nowrap; }
+.linkActs .btn:first-child { flex: 1 1 auto; }
+.linkActs .btn.ghost { flex: none; }
 .shareErr { margin: 0; font-size: 12px; color: var(--danger); }
 .share .confirm { margin-top: 0; }
 
-/* 細節收在 details 裡。隱私揭露不能刪，但也不該讓一個多半是關著的開關
-   在手機上先佔掉五行 */
-.more { margin-top: 8px; }
-.more summary {
-  font-size: 12px; color: var(--muted); cursor: pointer;
-  list-style: none; display: inline-flex; align-items: center; gap: 5px;
-  padding: 4px 0;
-}
-.more summary::-webkit-details-marker { display: none; }
-.more summary::before { content: '＋'; font-size: 11px; }
-.more[open] summary::before { content: '－'; }
-.more p { margin: 6px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
-.more p strong { color: var(--ink); font-weight: 600; }
 
-/* 次要動作用文字鈕：預覽與換連結不是這一塊的主要用途，
-   做成通欄按鈕會讓它們看起來跟「複製連結」一樣重要，也各吃掉一整行 */
-.miniActs { display: flex; align-items: center; gap: 16px; }
-.mini {
-  padding: 0; border: 0; background: none; cursor: pointer;
-  font: inherit; font-size: 12.5px; color: var(--accent); text-decoration: none;
-}
-.mini:disabled { opacity: .5; cursor: not-allowed; }
-.miniOk { margin-left: auto; font-size: 12px; color: var(--ok); }
 
 @media (max-width: 720px) {
   .share { padding: 14px; }
   .shareWhy { font-size: 11.5px; }
-  /* 網址與複製鈕維持並排 —— 複製鈕收成短標籤就塞得下，
-     不必像原本那樣讓按鈕獨佔一行 */
-  .linkRow { padding: 8px 8px 8px 12px; gap: 8px; }
+  .linkRow { padding: 10px 12px; gap: 8px; }
   .link { font-size: 11px; }
-  .copyBtn { padding: 7px 12px; }
 }
 
 .page { padding-top: 36px; padding-bottom: 72px; }
