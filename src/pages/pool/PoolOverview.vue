@@ -73,9 +73,11 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
     <!-- 競標階段：面板只在這一頁掛載，離開就拆（它有兩個 interval） -->
     <AuctionPanel v-if="pool.mode === 'auction' && inAuctionPhase" :pool="pool" class="auction" />
 
-    <!-- 手機主 CTA：桌機的側欄面板在這裡看不到，所以總覽頁自己放一份 -->
+    <!-- 手機主 CTA：桌機的側欄面板在這裡看不到，所以總覽頁自己放一份。
+         這一份走 sheet 版 —— 手機一屏就這麼高，合計與按鈕不該一進頁就先佔掉一塊；
+         選了抽數才從畫面下緣把購買列叫出來（見 DrawPanel 的 variant 說明） -->
     <div class="mobileCta">
-      <DrawPanel v-if="pool.status === 'open' && !inAuctionPhase" :pool="pool" />
+      <DrawPanel v-if="pool.status === 'open' && !inAuctionPhase" :pool="pool" variant="sheet" />
       <div v-else-if="pool.status !== 'open'" class="done card">
         <p>本池已完抽</p>
         <RouterLink :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn">驗證抽選結果</RouterLink>

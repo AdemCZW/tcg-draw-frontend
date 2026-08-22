@@ -21,15 +21,6 @@ declare module 'vue-router' {
     depth?: number
     /** 分頁標題，afterEach 會套上 */
     title?: string
-    /**
-     * 這一頁的右下角要留給自己的操作元件，不要浮動通知鈴。
-     *
-     * 鈴的位置（右下、避開底部導覽）跟「貼在底部導覽上方的送出列」正好重疊，
-     * 在市場卡片頁它會壓住「買下」的右半邊 —— 那是整頁最重要的按鈕。
-     * 用 meta 開關而不是在鈴裡寫死路由名：下一頁有同樣的版型時不用再改元件，
-     * 也不必去動鈴的全域定位（那會影響每一頁）。
-     */
-    hideBell?: boolean
   }
 }
 
@@ -73,7 +64,7 @@ export const router = createRouter({
          擋登入的是頁面裡的購買鍵。 */
       path: '/market/:id', name: 'market-listing',
       component: () => import('@/pages/MarketListingPage.vue'),
-      meta: { depth: 2, title: '市場卡片', hideBell: true }
+      meta: { depth: 2, title: '市場卡片' }
     },
     {
       /* 池：外殼 + 三個 tab 子頁。外殼負責標題列、tab、桌機側欄與「找不到」的 fallback；
