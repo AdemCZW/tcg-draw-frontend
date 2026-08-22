@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import type { Pool } from '@/types/models'
 import { useWalletStore } from '@/stores/wallet'
 import { track } from '@/lib/ga'
+import BottomActionBar from '@/components/BottomActionBar.vue'
 
 /**
  * variant 決定「合計與去選籤鍵放哪裡」：
@@ -16,7 +17,7 @@ import { track } from '@/lib/ga'
  * （PoolShell 的側欄、PoolOverview 的 .mobileCta），誰該長什麼樣在掛的當下
  * 就已經確定，用 JS 量寬度只是把已知的事再猜一次，還會多一組 resize 監聽。
  * 至於 .mobileCta 在桌機是 display:none —— 那擋不住 Teleport 出去的購買列
- * （它已經不在那棵子樹底下了），所以購買列自己也帶一條 min-width 的媒體查詢。
+ * （它已經不在那棵子樹底下了），所以要另外把斷點交給 BottomActionBar。
  */
 const props = withDefaults(defineProps<{ pool: Pool; variant?: 'panel' | 'sheet' }>(), {
   variant: 'panel'
@@ -126,35 +127,27 @@ function goPick() {
     </template>
   </div>
 
-  <!-- 必須 Teleport 到 body：祖先只要有 transform（Tilt3D、任何動畫）就會變成
-       position:fixed 的定位基準，這條列會被釘在卡片上而不是視窗下緣 -->
-  <Teleport to="body">
-    <!-- 讓位要補在整份文件的最後面，不能補在面板裡：捲到底時被列蓋住的是
-         文件的最末端（全域頁尾那排連結），在中間插一段只是把整頁往下推，
-         最末端相對視窗的位置一點都沒變。實測過，補在面板裡完全沒有用。
-         只在列真的浮著時才存在，而且只有這一份 —— 底部導覽的讓位全域頁尾
-         已經算過一次，再加一次會在下緣多出一段捲得到卻空無一物的黑。 -->
-    <div v-if="barUp" class="barSpacer" aria-hidden="true" />
-    <Transition name="bar">
-      <div v-if="barUp" class="buybar" role="region" aria-label="購買">
-        <p v-if="error" class="err" role="alert">{{ error }}</p>
-        <div class="barRow">
-          <span class="barSum">
-            <span class="muted">合計 {{ selected }} 抽</span>
-            <strong class="mono">{{ cost.toLocaleString() }} 點</strong>
-          </span>
-          <button class="btn primary barGo" @click="goPick">去選籤 →</button>
-        </div>
-      </div>
-    </Transition>
-  </Teleport>
+  <!-- 浮出的購買列。Teleport／讓位／進出場動畫都在 BottomActionBar 裡，
+       這裡只給「什麼時候該有列」與列裡放什麼。
+       861 是側欄那份面板出現的斷點：Teleport 出去的節點不受 .mobileCta 的
+       display:none 管，桌機不自己關掉就會在側欄面板旁邊多浮出一條列。 -->
+  <BottomActionBar :open="barUp" label="購買" :desktop-min-width="861">
+    <p v-if="error" class="err barErr" role="alert">{{ error }}</p>
+    <div class="barRow">
+      <span class="barSum">
+        <span class="muted">合計 {{ selected }} 抽</span>
+        <strong class="mono">{{ cost.toLocaleString() }} 點</strong>
+      </span>
+      <button class="btn primary barGo" @click="goPick">去選籤 →</button>
+    </div>
+  </BottomActionBar>
 </template>
 
 <style scoped>
 .panel { padding: 18px; border-radius: var(--radius-lg); }
 .counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 /* 讓 scrollIntoView 知道畫面下緣那塊被浮動的列佔走了，不然它會以為
-   這排已經「看得到」。算式跟 .buybar 的 bottom 同源：10 的下緣間距
+   這排已經「看得到」。算式跟 BottomActionBar 的 bottom 同源：10 的下緣間距
    ＋ 列高約 76 ＋ 8 的呼吸，再加上底部導覽／安全區的讓位 */
 .counts.sheet { scroll-margin-bottom: calc(94px + max(var(--nav-total, 0px), var(--safe-b, 0px))); }
 .count {
@@ -172,53 +165,10 @@ function goPick() {
 .err { color: var(--danger); font-size: 13px; margin: 10px 0 0; font-weight: 600; }
 .note { font-size: 11.5px; margin: 12px 0 0; }
 
-/* 概略等於購買列的高度加上它與畫面下緣的間距。多留一點無妨，
-   少留就會蓋住內容，寧可鬆 */
-.barSpacer { height: 96px; }
-
-/* ---- 貼底購買列 ----
-   bottom 取 max()：手機的 --nav-total 已含安全區，桌機是 0 才輪到 --safe-b
-   自己出面（慣例見 NotifyBell.vue）。只加 --safe-b 會被底部導覽蓋掉。 */
-.buybar {
-  position: fixed; z-index: 65;
-  left: calc(10px + var(--safe-l, 0px));
-  right: calc(10px + var(--safe-r, 0px));
-  bottom: calc(10px + max(var(--nav-total, 0px), var(--safe-b, 0px)));
-  padding: 12px 14px;
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
-  background: var(--surface);
-  box-shadow: var(--shadow-lg);
-}
-/* Teleport 出去的節點不受 .mobileCta 的 display:none 管，桌機要自己關掉，
-   否則側欄那份面板旁邊會多浮出一條列 */
-@media (min-width: 861px) { .buybar, .barSpacer { display: none; } }
-
 .barRow { display: flex; align-items: center; gap: 12px; }
 .barSum { display: grid; gap: 1px; min-width: 0; flex: 1; }
 .barSum .muted { font-size: 11.5px; }
 .barSum strong { font-size: 19px; color: var(--gold-deep); }
 .barGo { flex: none; min-width: 0; padding: 12px 22px; font-size: 15px; }
-.buybar .err { margin: 0 0 8px; }
-
-/* 滑入用 @keyframes 而不是 transition + .bar-enter-from：
-   Vue 是在下一個 rAF 才拿掉 enter-from 這個 class，而 rAF 一被節流
-   （背景分頁、iOS 省電）就永遠停在畫面外 —— 這個 repo 的換頁轉場已經
-   踩過同一個坑（見 App.vue 的說明）。keyframes 從插入那一刻就自己跑，
-   不欠任何一幀。關掉動效的人直接出現，不必等滑入。 */
-@media (prefers-reduced-motion: no-preference) {
-  .bar-enter-active { animation: barUp .24s cubic-bezier(.2, .85, .3, 1); }
-  /* 收回刻意用另一組 keyframes 而不是把 barUp 反著播：animation-name 沒變的話
-     瀏覽器當成同一個動畫、不會重新開始，animationend 就永遠不來，Vue 也就
-     永遠不把這條列從 DOM 拿掉（在 rAF 被節流的分頁實測到過） */
-  .bar-leave-active { animation: barDown .16s ease-in; }
-}
-@keyframes barUp {
-  from { opacity: 0; transform: translateY(calc(100% + 16px)); }
-  to   { opacity: 1; transform: none; }
-}
-@keyframes barDown {
-  from { opacity: 1; transform: none; }
-  to   { opacity: 0; transform: translateY(calc(100% + 16px)); }
-}
+.barErr { margin: 0 0 8px; }
 </style>

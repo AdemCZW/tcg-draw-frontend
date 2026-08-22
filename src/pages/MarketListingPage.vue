@@ -27,6 +27,8 @@ import CardArt from '@/components/CardArt.vue'
 import CertTag from '@/components/CertTag.vue'
 import SellerChip from '@/components/SellerChip.vue'
 import TradeGuard from '@/components/TradeGuard.vue'
+import BottomActionBar from '@/components/BottomActionBar.vue'
+import { useMediaQuery } from '@/composables/useMediaQuery'
 import { haptic } from '@/lib/haptics'
 import { track } from '@/lib/ga'
 
@@ -78,6 +80,11 @@ const price = computed(() => listing.value?.price ?? 0)
 const canAfford = computed(() => wallet.available >= price.value)
 const sold = computed(() => !!listing.value && listing.value.status !== 'live')
 const buyable = computed(() => !!listing.value && !sold.value && auth.isLoggedIn && canAfford.value)
+
+/* 721 是底部導覽消失的斷點（見 tokens.css 的 --nav-total）。
+   窄螢幕的確認列從畫面下緣滑出，寬螢幕就地當 sticky 列 —— 桌機沒有
+   拇指可及的問題，也沒有導覽會蓋住送出鍵，飛進來的列只是噪音。 */
+const wide = useMediaQuery('(min-width: 721px)')
 
 /* 導去卡冊的計時器要收乾淨：使用者可能在這 1.4 秒內自己按了按鈕或返回，
    讓一個已經卸載的頁面再導一次會把他從別的地方拽走。 */
@@ -247,9 +254,16 @@ async function buy() {
 
       <p v-if="error" class="err" role="alert">{{ error }}</p>
 
-      <!-- 購買列。sticky 而不是 fixed：這一頁的祖先有轉場用的 transform，
-           fixed 的定位基準會被它改掉（見專案裡其他頁的同樣處理）。 -->
-      <div v-if="!done" class="bar card">
+      <!-- 結帳列只有一條，兩種狀態：待命（餘額＋買下）與確認（金額＋取消／確定）。
+           確認態改由 BottomActionBar 接手，所以這條在確認時要讓開，不然畫面上
+           會疊出兩條列。窄螢幕用 visibility 藏而不是拿掉：它是 sticky、佔著
+           版面高度，直接移除會讓整頁往上跳一截，而浮出的那條是 fixed 補不回來。
+           寬螢幕相反 —— 確認列就地接在同一個位置，這條要真的讓出流內空間。 -->
+      <div
+        v-if="!done && (!confirming || !wide)"
+        class="bar card" :class="{ ghost: confirming }"
+        :aria-hidden="confirming || undefined"
+      >
         <p v-if="sold" class="soldOut">這張已經被買走了。</p>
 
         <template v-else-if="!auth.isLoggedIn">
@@ -267,7 +281,7 @@ async function buy() {
           <RouterLink :to="{ name: 'topup' }" class="btn primary">去儲值</RouterLink>
         </template>
 
-        <template v-else-if="!confirming">
+        <template v-else>
           <span class="sum">
             餘額 <strong class="mono">{{ wallet.shown.toLocaleString() }}</strong> 點
           </span>
@@ -275,21 +289,31 @@ async function buy() {
             買下 · {{ listing.price.toLocaleString() }} 點
           </button>
         </template>
-
-        <template v-else>
-          <p class="cq">
-            用 <strong class="mono">{{ listing.price.toLocaleString() }}</strong> 點買下？
-            餘額將剩 <span class="mono">{{ (wallet.shown - listing.price).toLocaleString() }}</span> 點。
-            <span class="cqLane">{{ lane === 'vault' ? '成交立刻過戶進卡冊。' : '點數凍結，等收貨才放款。' }}</span>
-          </p>
-          <div class="crow">
-            <button type="button" class="btn" :disabled="busy" @click="confirming = false">取消</button>
-            <button type="button" class="btn primary" :disabled="busy" @click="buy">
-              {{ busy ? '處理中…' : '確定買下' }}
-            </button>
-          </div>
-        </template>
       </div>
+
+      <!-- 確認態。只在真的要確認時才存在，所以已售出、找不到掛單、成交之後
+           都不會浮出一條空列。max-width 跟 .page 同寬，寬螢幕上才不會拉成
+           橫貫整個視窗的一條。 -->
+      <BottomActionBar
+        :open="!done && confirming"
+        label="購買確認"
+        :inline="wide"
+        :max-width="560"
+        :gap="12"
+        :spacer="150"
+      >
+        <p class="cq">
+          用 <strong class="mono">{{ listing.price.toLocaleString() }}</strong> 點買下？
+          餘額將剩 <span class="mono">{{ (wallet.shown - listing.price).toLocaleString() }}</span> 點。
+          <span class="cqLane">{{ lane === 'vault' ? '成交立刻過戶進卡冊。' : '點數凍結，等收貨才放款。' }}</span>
+        </p>
+        <div class="crow">
+          <button type="button" class="btn" :disabled="busy" @click="confirming = false">取消</button>
+          <button type="button" class="btn primary" :disabled="busy" @click="buy">
+            {{ busy ? '處理中…' : '確定買下' }}
+          </button>
+        </div>
+      </BottomActionBar>
     </template>
   </div>
 </template>
@@ -394,7 +418,8 @@ async function buy() {
   /* 手機上底部導覽是在的（這頁沒設 chrome: none），只避開安全區的話
      這條列的下半截會被導覽蓋掉 —— 而它是整個購買流程的送出鍵。
      取 max：手機的 --nav-total 已含安全區，桌機是 0 才輪到 --safe-b
-     （同 NotifyBell 與 SellListingPage 的寫法）。 */
+     （同 NotifyBell 與 SellListingPage 的寫法）。算式跟 BottomActionBar
+     同源，兩種狀態的列才會停在同一個高度。 */
   position: sticky; bottom: calc(12px + max(var(--nav-total, 0px), var(--safe-b, 0px)));
   display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
   padding: 12px 14px; margin-top: 16px;
@@ -407,10 +432,15 @@ async function buy() {
 .bar .btn { flex: none; }
 .soldOut { margin: 0; font-size: 13px; color: var(--muted); }
 
-.cq { flex: 1 1 100%; min-width: 0; margin: 0; font-size: 12.5px; line-height: 1.75; }
+/* 確認態讓待命列讓開時仍佔著版面高度，見 template 的說明 */
+.ghost { visibility: hidden; }
+
+/* 確認列的內容現在住在 BottomActionBar 裡，那是個一般的區塊容器，
+   不再靠外層的 flex-wrap 換行 */
+.cq { min-width: 0; margin: 0 0 10px; font-size: 12.5px; line-height: 1.75; }
 .cq strong { font-size: 15px; }
 .cqLane { display: block; color: var(--muted); }
-.crow { display: flex; flex: 1 1 100%; gap: 8px; }
+.crow { display: flex; gap: 8px; }
 .crow .btn { flex: 1; min-width: 0; }
 
 .gone { text-align: center; padding: 48px 0; display: grid; justify-items: center; gap: 10px; }
