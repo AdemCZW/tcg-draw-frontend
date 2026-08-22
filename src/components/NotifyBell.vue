@@ -15,20 +15,14 @@
  * 手機上用小小的下拉選單是桌機思維，拇指按不準。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { notifications, type Notification, type NotifyKind } from '@/lib/social'
 import { ApiError } from '@/lib/http'
 import { useNotificationStream } from '@/composables/useNotificationStream'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
-const route = useRoute()
 const auth = useAuthStore()
-
-/* 有些頁面的右下角是自己的（例如市場卡片頁貼底的購買列），鈴浮在上面會
-   壓住那一頁最重要的按鈕。由路由的 meta.hideBell 決定，不在這裡寫死路由名，
-   也不去改鈴自己的定位 —— 那條 bottom 是每一頁共用的。 */
-const hidden = computed(() => !!route.meta.hideBell)
 
 const open = ref(false)
 const loading = ref(false)
@@ -204,7 +198,12 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 
 <template>
   <!-- 沒登入不顯示：通知全部是個人的，訪客按下去只會看到空面板 -->
-  <div v-if="auth.isLoggedIn && !hidden" class="bell-root">
+  <div v-if="auth.isLoggedIn" class="bell-root">
+    <!-- 面板與遮罩一定要 Teleport 出去。鈴移進 AppHeader 之後，它的祖先有
+         backdrop-filter —— 那跟 transform 一樣會成為 position: fixed 子孫的
+         定位基準，不搬出去的話面板會貼在頁首那條上而不是視窗上。
+         頁首的 z-index 是 50，面板也會被壓在其他東西下面。 -->
+    <Teleport to="body">
     <!-- 遮罩：手機上壓暗背景（面板是主角），桌機只當「點空白處關閉」的接收面 -->
     <Transition name="veil">
       <div v-if="open" class="veil" @click="open = false" />
@@ -274,6 +273,7 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
         </div>
       </section>
     </Transition>
+    </Teleport>
 
     <button
       type="button" class="bell" :class="{ on: open, hot: unread > 0 }"
@@ -295,17 +295,18 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 <style scoped>
 /* z 層：底部導覽是 60、頁首 sticky 是 50，鈴要在導覽之上；
    開卡結果的沉浸層是 80，但那些頁面 chrome=none，本元件根本不會掛上去 */
-.bell-root { position: relative; z-index: 70; }
+/* 鈴本身跟著頁首排版走，不需要自己的堆疊脈絡。
+   面板與遮罩已經 Teleport 到 body，各自帶自己的 z-index。 */
+.bell-root { display: contents; }
 
-/* ---- 浮動鈴 ----
-   bottom 用 max()：手機的 --nav-total 已經含了 --safe-b（見 tokens.css），
-   桌機的 --nav-total 是 0，這時才輪到 --safe-b 自己出面（iPad 橫放也有底部橫條）。
-   兩者取大的，一式覆蓋兩種情況，不用再多一組斷點。 */
+/* ---- 鈴 ----
+   原本是右下角的浮動鍵，現在是頁首裡的一顆膠囊，跟餘額並排。
+   浮在右下角時它一直在跟各頁貼底的動作列搶位置（市場購買鍵、卡冊選取列、
+   池的購買列都撞過），搬到頁首之後那個衝突整類消失，也不必再有 hideBell 開關。
+   尺寸對齊頁首其他膠囊：桌機 38、手機 32。 */
 .bell {
-  position: fixed;
-  right: calc(14px + var(--safe-r, 0px));
-  bottom: calc(14px + max(var(--nav-total, 0px), var(--safe-b, 0px)));
-  width: 50px; height: 50px;
+  position: relative;
+  width: 38px; height: 38px; flex: none;
   display: grid; place-items: center;
   border-radius: 50%;
   border: 1px solid var(--line);
@@ -313,7 +314,6 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
      深灰疊在深色頁面上等於隱形，使用者兩次回報「看不太到」 */
   background: var(--surface-3);
   color: var(--ink);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .45);
   transition: transform .2s cubic-bezier(.2, .7, .3, 1), background .2s, color .2s, opacity .2s;
 }
 
@@ -365,11 +365,11 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 .badge.wide { letter-spacing: -0.02em; }
 
 /* ---- 遮罩 ---- */
-.veil { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); }
+.veil { position: fixed; inset: 0; z-index: 90; background: rgba(0, 0, 0, .45); }
 
 /* ---- 面板：手機貼底、桌機右下 ---- */
 .panel {
-  position: fixed; left: 0; right: 0; bottom: 0;
+  position: fixed; z-index: 91; left: 0; right: 0; bottom: 0;
   display: flex; flex-direction: column;
   /* dvh 不用 vh：手機 Chrome 的 vh 取的是網址列收起時的高度，面板會比視窗高，
      最後一則被自己的底邊吃掉 */
@@ -536,11 +536,19 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 }
 
 /* ---- 桌機：收成右下角的卡片，不再貼底 ---- */
+@media (max-width: 720px) {
+  /* 對齊頁首在窄螢幕上收小的膠囊高度（見 AppHeader 的 .wallet） */
+  .bell { width: 32px; height: 32px; }
+  .bell svg { width: 19px; height: 19px; }
+}
+
 @media (min-width: 721px) {
+  /* 鈴在頁首，面板就從頁首底下垂下來 —— 從畫面另一端冒出來的面板
+     跟你剛按的那顆鈕對不上，會讓人多花一秒找它從哪來的 */
   .panel {
-    left: auto;
+    left: auto; bottom: auto;
+    top: calc(66px + 8px);
     right: calc(14px + var(--safe-r, 0px));
-    bottom: calc(74px + var(--safe-b, 0px));
     width: 380px;
     max-height: min(68dvh, 560px);
     border: 1px solid var(--line);

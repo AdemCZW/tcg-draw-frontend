@@ -3,7 +3,6 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AppBottomNav from '@/components/AppBottomNav.vue'
-import NotifyBell from '@/components/NotifyBell.vue'
 
 const route = useRoute()
 
@@ -47,7 +46,6 @@ const showChrome = computed(() => chrome.value !== 'none')
   <AppBottomNav v-if="showChrome" />
   <!-- 通知鈴固定在右下角。跟著 showChrome 走：沉浸模式（開卡演出、選籤牆）
        不該有東西浮在畫面上搶注意力 -->
-  <NotifyBell v-if="showChrome" />
   <footer v-if="showChrome && route.name !== 'home'" class="foot">
     <div class="container">
       <span class="mono muted">VaultDraw · 定量池鑑定卡抽選</span>

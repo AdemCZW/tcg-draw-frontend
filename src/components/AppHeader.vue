@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useWalletStore } from '@/stores/wallet'
 import { useAuthStore } from '@/stores/auth'
+import NotifyBell from '@/components/NotifyBell.vue'
 import RollingNumber from '@/components/RollingNumber.vue'
 
 const wallet = useWalletStore()
@@ -77,6 +78,8 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
           <RouterLink :to="{ name: 'topup' }" class="pill wallet mono" aria-label="點數餘額，前往儲值">
             <span class="dot" aria-hidden="true"></span><RollingNumber :value="wallet.shown" /> 點
           </RouterLink>
+          <!-- 通知放在餘額旁邊。原本浮在右下角，一直在跟各頁貼底的動作列搶位置 -->
+          <NotifyBell />
           <RouterLink :to="{ name: 'me' }" class="pill me">
             <span class="avatar" aria-hidden="true">{{ initial }}</span>
             <span class="who">{{ auth.user?.name }}</span>
