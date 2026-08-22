@@ -127,7 +127,13 @@ const liveText = computed(() => {
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
     </button>
 
-    <ul ref="rail" class="rail">
+    <!-- 軌道自己要能被 Tab 聚焦：方向鍵的處理掛在外層，但事件得先有地方發生。
+         桌機沒有手勢，使用者按 Tab 進來的第一站應該就是「可以左右移動的東西」，
+         而不是被迫先聚焦到某一張卡（那會順便把「選了這張」的意思也講出去）。 -->
+    <ul
+      ref="rail" class="rail"
+      tabindex="0" role="group" :aria-label="`${label}：用左右方向鍵切換`"
+    >
       <li
         v-for="(item, i) in items" :key="i"
         :ref="el => setCell(el, i)"
@@ -193,6 +199,8 @@ const liveText = computed(() => {
   padding-block: 4px 2px;
 }
 .rail::-webkit-scrollbar { display: none; }
+/* 內縮 2px：outline 畫在軌道自己的邊界上，offset 為正會被外層裁掉一半 */
+.rail:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
 
 .cell {
   flex: 0 0 var(--card-w);
@@ -205,8 +213,28 @@ const liveText = computed(() => {
 @container (min-width: 480px) {
   .rail { --card-w: min(70cqw, 400px); --gap: 16px; }
 }
-@container (min-width: 860px) {
+/* 門檻從 860 降到 700：選池台在桌機把右半邊讓給資訊面板，1280 下軌道自己
+   只剩 792cqw。用 860 當門檻的話這裡會踩不到，退回 min(70cqw, 400px)——
+   卡片反而比全寬時更大，5:7 換算高度多 42px，整頁要捲的距離跟著變長。 */
+@container (min-width: 700px) {
   .rail { --card-w: 370px; --gap: 20px; }
+}
+/* 軌道自己夠寬時中央卡再放大一階。條件掛在容器而不是視窗：
+   卡片該多大取決於「軌道剩多少」，跟視窗多寬沒有直接關係。 */
+@container (min-width: 900px) {
+  /* 390 是上限不是美感取捨：5:7 換算下這裡每加 10px 寬就多 14px 高，
+     再大一階（410）整頁在 1600x900 下要捲的距離就會比改版前更長。 */
+  .rail { --card-w: 390px; --gap: 24px; }
+}
+
+/* 桌機把軌道兩側淡出。鄰居被欄位邊緣硬切一刀會像是「卡片被面板壓住」，
+   淡出才讀得出「後面還有，可以繼續滑」。遮罩只在夠寬時才上 ——
+   手機的軌道等於整個視窗寬，淡掉兩側會把中央卡的邊角也吃掉。 */
+@container (min-width: 700px) {
+  .rail {
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 9% 91%, transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 9% 91%, transparent);
+  }
 }
 
 /* 鄰居退到後面。用 animation-timeline 讓縮放跟著捲動走，
@@ -254,8 +282,13 @@ const liveText = computed(() => {
    而且不管外層有沒有內距都成立。 */
 .prev { left: 6px; }
 .next { right: 6px; }
-@container (min-width: 860px) {
-  .arrow { display: grid; place-items: center; }
+/* 出現與否看的是「有沒有滑鼠」，不是「螢幕夠不夠寬」。
+   原本用 container 寬度當條件，軌道一旦被面板讓掉一段寬度就整組消失 ——
+   但需不需要箭頭跟寬度無關，跟有沒有手勢有關。 */
+@media (hover: hover) and (pointer: fine) {
+  @container (min-width: 560px) {
+    .arrow { display: grid; place-items: center; }
+  }
 }
 
 /* ---- 指示器 ---- */

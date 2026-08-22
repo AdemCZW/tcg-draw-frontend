@@ -8,15 +8,22 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { usePoolStore } from '@/stores/pools'
+import { useSellerStore } from '@/stores/sellers'
 import type { Pool, Tier } from '@/types/models'
 import PoolCard from '@/components/PoolCard.vue'
 import SnapRail from '@/components/SnapRail.vue'
 import ShaderSky from '@/components/ShaderSky.vue'
+import SellerChip from '@/components/SellerChip.vue'
+import PoolModeBadge from '@/components/PoolModeBadge.vue'
+import PoolOriginBadge from '@/components/PoolOriginBadge.vue'
 import { track } from '@/lib/ga'
 
 const pools = usePoolStore()
+const sellers = useSellerStore()
 onMounted(() => {
   pools.ensureLoaded()
+  // 桌機的資訊面板要秀賣家；手機沒有面板，但這支是快取過的，重複呼叫不花錢
+  sellers.ensureLoaded()
   track('view_play')
 })
 
@@ -59,6 +66,47 @@ function onChange(i: number) {
   activeIndex.value = i
   switchKey.value++
 }
+
+/* ---- 桌機資訊面板 ----
+   寬螢幕上中央那張卡只吃掉一半的寬度，剩下的以前是空的。卡片下緣塞得下的
+   只有標題、單價、剩幾抽 —— 「這一池到底放了什麼」得點進去才知道。
+   面板把那些攤開來講：賞別分佈、最高賞還在不在、賣家是誰、還元率。
+   挑池的判斷本來就需要這些，把它們搬到選池台等於少一次來回。 */
+const activeSeller = computed(() =>
+  activePool.value ? sellers.byId(activePool.value.sellerId) : undefined)
+
+/** 還沒出的最高賞。這是挑池時最先被問的一件事 */
+const topLive = computed(() => {
+  const p = activePool.value
+  if (!p) return undefined
+  return p.prizes.filter(x => x.remaining > 0)
+    .reduce<Pool['prizes'][number] | undefined>(
+      (best, x) => (!best || RANK[x.tier] > RANK[best.tier] ? x : best), undefined)
+})
+
+/* 賞別分佈：同一個賞別可能有好幾筆獎品，先加總再排序。
+   由高到低排 —— 使用者掃這一欄是在找「大獎還剩幾隻」，不是在讀清單。 */
+const TIER_ORDER: Tier[] = ['LAST', 'A', 'B', 'C', 'D', 'BUST']
+const TIER_LABEL: Record<Tier, string> = {
+  LAST: '最後賞', A: 'A 賞', B: 'B 賞', C: 'C 賞', D: 'D 賞', BUST: '爆賞'
+}
+const tierRows = computed(() => {
+  const p = activePool.value
+  if (!p) return []
+  const sum = new Map<Tier, { total: number; remaining: number }>()
+  for (const x of p.prizes) {
+    const cur = sum.get(x.tier) ?? { total: 0, remaining: 0 }
+    cur.total += x.total
+    cur.remaining += x.remaining
+    sum.set(x.tier, cur)
+  }
+  return TIER_ORDER.filter(t => sum.has(t)).map(t => ({ tier: t, ...sum.get(t)! }))
+})
+
+const pct = computed(() => {
+  const p = activePool.value
+  return p ? Math.round((p.remainingTickets / p.totalTickets) * 100) : 0
+})
 </script>
 
 <template>
@@ -80,7 +128,12 @@ function onChange(i: number) {
     <header class="head container">
       <div>
         <h1>挑一池來開</h1>
-        <p class="muted sub">左右滑動選擇</p>
+        <!-- 兩句提示用 CSS 切換而不是 matchMedia：這是純樣式的差異，
+             拿 JS 判斷會在 SSR／初次繪製時先閃錯的那一句 -->
+        <p class="muted sub">
+          <span class="onTouch">左右滑動選擇</span>
+          <span class="onMouse">方向鍵或兩側箭頭切換</span>
+        </p>
       </div>
       <RouterLink :to="{ name: 'home' }" class="toggle">
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -96,28 +149,86 @@ function onChange(i: number) {
       <div v-for="i in 3" :key="i" class="sk"></div>
     </div>
 
-    <SnapRail
-      v-else-if="list.length"
-      :items="list"
-      label="抽選池"
-      :describe="describe"
-      @change="onChange"
-      v-slot="{ item, active }"
-    >
-      <!-- 置中那一張加一圈跟球階同色的光暈：讓「現在選的是這張」有實體感 -->
-      <div class="slot" :class="{ on: active }">
-        <PoolCard :pool="item" variant="stage" />
-        <!-- 切換脈衝：只掛在置中那張，key 變動才會重播 -->
-        <span v-if="active" :key="switchKey" class="pulse" aria-hidden="true"></span>
-      </div>
-    </SnapRail>
+    <!-- 桌機是「軌道 + 資訊面板」兩欄。面板的顯示與否交給 CSS 斷點而不是
+         JS：這是純樣式的分歧，用 matchMedia 判斷會在視窗跨過斷點時多一次
+         掛載／卸載，中央卡的捲動位置也跟著被重算。 -->
+    <div v-else-if="list.length" class="stage">
+      <SnapRail
+        :items="list"
+        label="抽選池"
+        :describe="describe"
+        @change="onChange"
+        v-slot="{ item, active }"
+      >
+        <!-- 置中那一張加一圈跟球階同色的光暈：讓「現在選的是這張」有實體感 -->
+        <div class="slot" :class="{ on: active }">
+          <PoolCard :pool="item" variant="stage" />
+          <!-- 切換脈衝：只掛在置中那張，key 變動才會重播 -->
+          <span v-if="active" :key="switchKey" class="pulse" aria-hidden="true"></span>
+        </div>
+      </SnapRail>
+
+      <!-- key 綁 switchKey 讓面板整塊重掛載：換池時內容全變，用 transition
+           一項一項補間會看到數字亂跳，整塊淡入反而乾淨。
+           面板是卡片的展開說明，讀屏已經有軌道那份 live region，這裡不再播報。 -->
+      <aside v-if="activePool" :key="switchKey" class="panel">
+        <div class="tags">
+          <PoolModeBadge :mode="activePool.mode" />
+          <PoolOriginBadge :origin="activePool.origin" />
+        </div>
+
+        <h2>{{ activePool.title }}</h2>
+        <SellerChip v-if="activeSeller" :seller="activeSeller" />
+
+        <p v-if="topLive" class="topLive">
+          <span class="lbl mono">最高賞未出</span>
+          <strong>{{ topLive.tier === 'LAST' ? '最後賞' : topLive.tier + ' 賞' }} · {{ topLive.card.name }}</strong>
+        </p>
+        <p v-else class="topLive gone">
+          <span class="lbl mono">高賞已出完</span>
+        </p>
+
+        <!-- 賞別分佈。條的長度是「還剩多少比例」，不是絕對數量 ——
+             各賞別的總數差一個數量級，照絕對值畫的話 D 賞會把其他全部壓扁。 -->
+        <ul class="tiers">
+          <li v-for="row in tierRows" :key="row.tier" :class="`t-${row.tier.toLowerCase()}`">
+            <span class="tname">{{ TIER_LABEL[row.tier] }}</span>
+            <span class="tbar"><i :style="{ width: (row.remaining / row.total * 100) + '%' }"></i></span>
+            <span class="tnum mono">{{ row.remaining }}<span class="of">/{{ row.total }}</span></span>
+          </li>
+        </ul>
+
+        <div class="progress">
+          <div class="meter" role="progressbar" :aria-valuenow="pct" aria-valuemin="0" aria-valuemax="100" :aria-label="`剩餘 ${pct}%`">
+            <div class="fill" :style="{ width: pct + '%' }"></div>
+          </div>
+          <p class="pline">
+            <span class="mono">剩 {{ activePool.remainingTickets }} / {{ activePool.totalTickets }} 抽</span>
+            <span v-if="activePool.returnRatio" class="muted">還元率 {{ activePool.returnRatio }}%</span>
+          </p>
+        </div>
+
+        <!-- 選池台以前沒有任何行動點，唯一的出口是「點卡片」——
+             那是可以點的，但畫面上看不出來。把單價跟入口併成一顆按鈕講明白。
+             完抽的池不掛強調色：那顆橘鈕的意思是「可以買」，
+             對著一池 0 抽還喊價等於騙人進去撞牆。 -->
+        <RouterLink
+          :to="{ name: 'pool', params: { id: activePool.id } }"
+          class="cta" :class="{ done: activePool.status !== 'open' }"
+        >
+          <template v-if="activePool.status === 'open'">
+            <span class="ctaPrice">{{ activePool.ticketPrice.toLocaleString() }} 點<span class="per"> / 抽</span></span>
+            <span class="ctaGo">進入這一池</span>
+          </template>
+          <template v-else>
+            <span class="ctaPrice">已完抽</span>
+            <span class="ctaGo">看抽選結果</span>
+          </template>
+        </RouterLink>
+      </aside>
+    </div>
 
     <p v-else class="container empty muted">目前沒有進行中的抽選池。</p>
-
-    <p v-if="list.length" class="container tail muted">
-      共 {{ list.length }} 池 ·
-      <RouterLink :to="{ name: 'home' }">回大廳看全部</RouterLink>
-    </p>
   </div>
 </template>
 
@@ -237,8 +348,129 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 }
 
 .empty { padding: 60px 0; text-align: center; }
-.tail { margin-top: 18px; text-align: center; font-size: 13px; }
-.tail a { color: var(--accent); }
+
+/* 提示句預設是觸控版；有滑鼠才換成鍵盤／箭頭那句 */
+.onMouse { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .onTouch { display: none; }
+  .onMouse { display: inline; }
+}
+
+/* ---- 桌機兩欄舞台 ----
+   原本整條軌道獨佔全寬，1280 以上會排到三張半卡片：多出來的兩張是同一個
+   元件的暗掉複本，佔了空間卻沒有新資訊。改成軌道只留「中央卡 + 兩側各露一半」，
+   省下來的寬度交給面板 —— 同樣的像素，從「重複的縮圖」換成「這一池的細節」。
+
+   斷點壓在 1120：再窄一點的話兩欄各自都不夠寬（軌道 <700 會退回較大的卡寬，
+   面板也塞不下賞別分佈），不如維持單欄。 */
+.stage { min-width: 0; }
+@media (min-width: 1120px) {
+  .stage {
+    max-width: var(--maxw); margin-inline: auto; padding-inline: var(--pad);
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
+    gap: 28px; align-items: center;
+  }
+}
+
+/* 超寬螢幕再放寬一階。站上其他頁面都停在 --maxw(1180)，但那是「一欄一欄
+   讀下去」的頁；選池台是舞台，1600 上照 1180 收邊會在左右各留 210px 的黑，
+   而那正是這次要處理的問題。放寬之後軌道拿到多的寬度，兩側鄰居露得更完整。 */
+@media (min-width: 1440px) {
+  .stage {
+    max-width: 1400px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 360px);
+    gap: 32px;
+  }
+}
+
+/* ---- 資訊面板 ---- */
+.panel { display: none; }
+@media (min-width: 1120px) {
+  .panel {
+    display: grid; align-content: start; gap: 13px;
+    min-width: 0;
+    padding: 20px;
+    border-radius: var(--radius);
+    border: 1px solid var(--line);
+    /* 半透明底而不是實色：面板浮在會換色的環境光上面，實色會像貼了一塊補丁 */
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+    backdrop-filter: blur(14px);
+    /* 上緣一道跟當前球階同色的光，把面板跟中央卡綁成同一組 */
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--hue) 45%, transparent),
+      var(--shadow);
+  }
+}
+@media (min-width: 1120px) and (prefers-reduced-motion: no-preference) {
+  /* 換池時整塊淡入。位移只有 6px —— 面板不是主角，動作太大會搶走中央卡的注意力 */
+  .panel { animation: panelIn .26s cubic-bezier(.2, .8, .3, 1) both; }
+}
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.tags { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.panel h2 {
+  margin: 0; font-size: 19px; line-height: 1.25; letter-spacing: -.02em;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+.topLive { margin: 0; display: grid; gap: 3px; min-width: 0; }
+.topLive .lbl { font-size: 10.5px; letter-spacing: .14em; color: var(--ok); }
+.topLive.gone .lbl { color: var(--faint); }
+.topLive strong {
+  font-size: 14px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.tiers {
+  list-style: none; margin: 0; padding: 11px 0 0;
+  border-top: 1px solid var(--line-soft);
+  display: grid; gap: 7px;
+}
+.tiers li {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center; gap: 9px;
+  font-size: 12px;
+}
+/* 賞別色只宣告一次，名稱吃它當文字色、長條吃它當底色。
+   直接針對每個賞別各寫兩條規則的話，色票分散在八個地方，改一個賞別的顏色
+   就要記得兩處一起改。
+   預設值放在 .tiers 而不是 .tiers li：後者特異度 (0,1,1) 會贏過 li 自己的
+   .t-last (0,1,0)，每一列都會退回 D 賞的灰；靠繼承下來的值才蓋得掉。 */
+.tiers { --tc: var(--tier-d); }
+.t-last { --tc: var(--tier-last); }
+.t-a { --tc: var(--tier-a); }
+.t-b { --tc: var(--tier-b); }
+.t-c { --tc: var(--tier-c); }
+.tname { color: var(--tc); white-space: nowrap; }
+.tbar { height: 4px; border-radius: var(--pill); background: var(--surface-3); overflow: hidden; }
+.tbar i { display: block; height: 100%; border-radius: var(--pill); background: var(--tc); }
+.tnum { font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.tnum .of { color: var(--faint); }
+
+.progress { display: grid; gap: 6px; padding-top: 11px; border-top: 1px solid var(--line-soft); }
+.meter { height: 5px; border-radius: var(--pill); background: var(--surface-3); overflow: hidden; }
+.fill { height: 100%; border-radius: var(--pill); background: linear-gradient(90deg, var(--accent), var(--accent-soft)); }
+.pline { margin: 0; display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; }
+
+.cta {
+  margin-top: 2px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 11px 16px;
+  border-radius: var(--pill);
+  background: var(--accent); color: var(--on-accent);
+  transition: background .15s;
+}
+.ctaPrice { font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+.ctaPrice .per { font-size: 11.5px; font-weight: 400; opacity: .8; }
+.ctaGo { font-size: 13px; font-weight: 600; white-space: nowrap; }
+@media (hover: hover) { .cta:hover { background: var(--accent-soft); } }
+.cta:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.cta.done { background: var(--surface-3); color: var(--muted); }
+.cta.done .ctaPrice { font-size: 15px; font-weight: 700; }
+@media (hover: hover) { .cta.done:hover { background: var(--line); } }
 
 @media (max-width: 720px) {
   .page { padding-top: 12px; padding-bottom: 20px; }
@@ -248,6 +480,5 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   .sk { height: 360px; }
   .head { margin-bottom: 10px; }
   .sub { margin-top: 3px; }
-  .tail { margin-top: 12px; }
 }
 </style>
