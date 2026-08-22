@@ -11,6 +11,7 @@
  */
 import type { Db } from './db.js'
 import { sql as root } from './db.js'
+import { publishNotify } from './notify-stream.js'
 
 export type NotifyKind =
   | 'draw' | 'trade-offer' | 'trade-result' | 'listing-sold'
@@ -29,11 +30,18 @@ export interface NotifyInput {
 
 export async function notify(input: NotifyInput, db: Db = root) {
   const { userId, kind, title, link, body = '', refId } = input
-  await db`
+  const ins = await db`
     insert into notifications (user_id, kind, title, body, link, ref_id)
     values (${userId}, ${kind}, ${title}, ${body}, ${link}, ${refId ?? null})
     on conflict do nothing
+    returning id
   `
+  /* 只有真的寫進去才推播。
+     上面那條唯一索引擋掉的是「同一件事重試第二次」—— 那次沒有新東西，
+     推出去只會讓每個開著的分頁白跑一趟 GET /notifications。
+     推播也吃同一個 db：包在交易裡的話 NOTIFY 會跟著 commit 才送出，
+     前端收到訊號時那一列一定已經看得到。 */
+  if (ins.length) await publishNotify(userId, db)
 }
 
 /** 一次通知多個人（例如一筆交易的買賣雙方）。失敗不該擋住主流程，所以不拋。 */

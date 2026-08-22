@@ -71,7 +71,9 @@ export interface Notification {
 const now = Date.now()
 const mockNotifications: Notification[] = [
   { id: 5, kind: 'trade-offer', title: '有人想要你的卡', body: '小明 出 12,000 點想換「噴火龍 ex UR」', link: '/me/offers', ref_id: 'to-1', read_at: null, created_at: now - 4 * 60_000 },
+  { id: 7, kind: 'order', title: '實體出貨訂單已成立', body: '訂單 #A2481 共 3 張卡，運費 60 點已扣款。', link: '/me/orders', ref_id: 'o-1', read_at: null, created_at: now - 22 * 60_000 },
   { id: 4, kind: 'draw', title: '抽到最後賞', body: '噴火龍 ex UR 已經進到你的卡冊。', link: '/me/cards', ref_id: 'd-1', read_at: null, created_at: now - 40 * 60_000 },
+  { id: 6, kind: 'trade-result', title: '你的出價被接受了', body: '「謎擬Ｑ SAR」以 26,000 點成交，卡片已入卡冊。', link: '/me/offers', ref_id: 'to-5', read_at: null, created_at: now - 95 * 60_000 },
   { id: 3, kind: 'listing-sold', title: '你的卡賣出了', body: '「月亮伊布 ex SAR」以 4,200 點成交，點數已入帳。', link: '/me/wallet', ref_id: 'l-1', read_at: null, created_at: now - 5 * 3600_000 },
   { id: 2, kind: 'shipment', title: '你的卡已經寄出', body: '物流單號 SMOKE12345678', link: '/me/cards', ref_id: 'sh-1', read_at: new Date(now - 26 * 3600_000).toISOString(), created_at: now - 28 * 3600_000 },
   { id: 1, kind: 'system', title: '測試點數已入帳', body: 'LINE 登入送 1,000,000 點，可以直接開始抽卡。', link: '/me/wallet', ref_id: 'u-1', read_at: new Date(now - 70 * 3600_000).toISOString(), created_at: now - 72 * 3600_000 }

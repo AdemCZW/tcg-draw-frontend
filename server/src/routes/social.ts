@@ -14,6 +14,7 @@ import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { lockSpender, walletOf } from '../money.js'
 import { notify } from '../notify.js'
+import { subscribe } from '../notify-stream.js'
 import { PageQuery, decodeCursor, encodeCursor, isNumeric, slicePage } from '../pagination.js'
 
 /* =====================================================================
@@ -333,6 +334,80 @@ social.get('/notifications', async c => {
     select count(*)::text as count from notifications where user_id = ${me} and read_at is null
   `
   return c.json({ notifications: rows, unread: Number(n?.count ?? 0) })
+})
+
+/**
+ * 通知的即時串流（SSE）。
+ *
+ * 只送「你有新東西」這一個訊號，不送內容 —— 前端收到就回頭打
+ * GET /v1/social/notifications。通知的資料形狀因此只有一個來源，
+ * 不會變成串流一套、列表一套，改欄位時漏改其中一邊。
+ *
+ * 認證走一般的 Authorization header（這支在 social 的 requireAuth 底下）。
+ * 前端因此不能用瀏覽器原生的 EventSource —— 它不能帶 header，
+ * 唯一的辦法是把 token 塞進 query string，而那會讓 JWT 進到伺服器存取日誌、
+ * 瀏覽器歷史與 Referer。前端改用 fetch + ReadableStream 讀這個回應。
+ */
+const HEARTBEAT_MS = 25_000
+
+social.get('/notifications/stream', c => {
+  const me = c.get('userId')
+  const enc = new TextEncoder()
+
+  const body = new ReadableStream<Uint8Array>({
+    async start(ctrl) {
+      let closed = false
+      let hb: ReturnType<typeof setInterval> | undefined
+      let off: (() => void) | undefined
+
+      const send = (s: string) => {
+        if (closed) return
+        // 對方可能在這一瞬間剛斷線，enqueue 會拋。這不是錯誤，直接收攤
+        try { ctrl.enqueue(enc.encode(s)) } catch { close() }
+      }
+      function close() {
+        if (closed) return
+        closed = true
+        clearInterval(hb)
+        // 一定要退訂：不退的話每一次斷線都在行程裡留一個永遠不會被清掉的 closure
+        off?.()
+        try { ctrl.close() } catch { /* 已經關了 */ }
+      }
+
+      c.req.raw.signal.addEventListener('abort', close)
+      // 已經斷掉才輪到我們執行的情況（例如使用者馬上切走）
+      if (c.req.raw.signal.aborted) { close(); return }
+
+      try {
+        off = await subscribe(me, () => send('event: notify\ndata: 1\n\n'))
+      } catch (e) {
+        console.error('[stream] 訂閱失敗:', (e as Error).message)
+        close()
+        return
+      }
+
+      /* 先送一個 comment frame 把回應的 header 與第一個位元組推出去。
+         不送的話中間的代理會一直等 body，前端也就一直不知道自己連上了沒有 ——
+         「連上」的判定要有實際到達的位元組，不能只靠 fetch 的 promise resolve。 */
+      send(': connected\n\n')
+
+      /* 心跳。閒置的連線在 Railway 與各家代理眼裡跟死掉沒兩樣，
+         沒有東西流動就會被切掉，而且是靜靜地切 —— 前端只會看到串流「不再送東西」。
+         25 秒比常見的 30～60 秒閒置逾時短，留了一次的餘裕。
+         用 comment frame 而不是自訂 event：這樣前端完全不用處理它。 */
+      hb = setInterval(() => send(': hb\n\n'), HEARTBEAT_MS)
+    }
+  })
+
+  return new Response(body, {
+    headers: {
+      'content-type': 'text/event-stream; charset=utf-8',
+      // no-transform 是給會壓縮／緩衝回應的代理看的：被緩衝的 SSE 等於沒有即時性
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no'
+    }
+  })
 })
 
 const ReadBody = z.object({

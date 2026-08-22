@@ -18,6 +18,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { notifications, type Notification, type NotifyKind } from '@/lib/social'
 import { ApiError } from '@/lib/http'
+import { useNotificationStream } from '@/composables/useNotificationStream'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -44,25 +45,47 @@ const unread = ref(0)
  */
 const wasUnread = ref<Set<number>>(new Set())
 
-/* 圖示一律 inline SVG：emoji 在 Android / iOS / 各家輸入法字面差很多，
+/**
+ * 串流是否連上。連上時標籤顯示「即時」，退回輪詢時顯示「定時更新」——
+ * 使用者要能知道自己看到的是即時的還是可能慢一拍的。
+ */
+const streamConnected = ref(false)
+
+/* ---- 通知分類 ----
+   舊版每一則都是同一顆驚嘆號，賣出跟系統公告長得一模一樣，掃過去分不出
+   哪則跟錢有關、哪則要你回話。這裡把 kind 拆成兩層：
+
+   tone 決定「這件事對我是什麼性質」，只有三種，因為使用者真正要分的就三種 ——
+     money 跟錢有關（進帳、成交、訂單）
+     act   別人對你採取行動、球在你這邊（要回應）
+     info  純告知，看過就好
+   label 是兩個字的中文標籤，d 是每個 kind 各自的圖形。
+
+   顏色不能是唯一的區分：色弱與強光下的手機螢幕都會讓色相失效，所以同一件事
+   同時用「形狀（圖示）＋文字（標籤）＋顏色（tone）」講三次。act 另外用實心色塊，
+   money 與 info 是淡底 —— 填色與否連黑白截圖都分得出來。
+
+   圖示一律 inline SVG：emoji 在 Android / iOS / 各家輸入法字面差很多，
    而且偏卡通，跟這套暗色高級感的視覺對不上。 */
-const ICONS: Record<NotifyKind, string> = {
+type Tone = 'money' | 'act' | 'info'
+const KINDS: Record<NotifyKind, { tone: Tone; label: string; d: string }> = {
   // 四角星芒：抽到卡
-  draw: 'M12 3.6l1.9 5.3 5.3 1.9-5.3 1.9-1.9 5.3-1.9-5.3-5.3-1.9 5.3-1.9z',
-  // 一來一往兩支箭：有人出價
-  'trade-offer': 'M4 8.5h13m-3.2-3.2L17 8.5l-3.2 3.2M20 15.5H7m3.2-3.2L7 15.5l3.2 3.2',
-  // 圈內打勾：出價有結果了
-  'trade-result': 'M21 12a9 9 0 1 1-4.4-7.7M8.6 12.1l2.7 2.7L20.4 5.7',
-  // 價牌：卡賣出
-  'listing-sold': 'M3 12.5V5a2 2 0 0 1 2-2h7.5a2 2 0 0 1 1.4.6l6.5 6.5a2 2 0 0 1 0 2.8l-7.5 7.5a2 2 0 0 1-2.8 0L3.6 13.9a2 2 0 0 1-.6-1.4zM7.5 7.5h.01',
+  draw: { tone: 'info', label: '抽卡', d: 'M12 3.6l1.9 5.3 5.3 1.9-5.3 1.9-1.9 5.3-1.9-5.3-5.3-1.9 5.3-1.9z' },
+  // 一來一往兩支箭：有人出價，等你回應
+  'trade-offer': { tone: 'act', label: '出價', d: 'M4 8.5h13m-3.2-3.2L17 8.5l-3.2 3.2M20 15.5H7m3.2-3.2L7 15.5l3.2 3.2' },
+  // 圈內打勾：你出的價有結果了
+  'trade-result': { tone: 'info', label: '回覆', d: 'M21 12a9 9 0 1 1-4.4-7.7M8.6 12.1l2.7 2.7L20.4 5.7' },
+  // 價牌：卡賣出，錢進來了
+  'listing-sold': { tone: 'money', label: '成交', d: 'M3 12.5V5a2 2 0 0 1 2-2h7.5a2 2 0 0 1 1.4.6l6.5 6.5a2 2 0 0 1 0 2.8l-7.5 7.5a2 2 0 0 1-2.8 0L3.6 13.9a2 2 0 0 1-.6-1.4zM7.5 7.5h.01' },
   // 收據：訂單
-  order: 'M5 3.5h14v17l-2.6-1.5-2.7 1.5-2.7-1.5-2.7 1.5L5 20.5zM9 8.5h6M9 12.5h4',
+  order: { tone: 'money', label: '訂單', d: 'M5 3.5h14v17l-2.6-1.5-2.7 1.5-2.7-1.5-2.7 1.5L5 20.5zM9 8.5h6M9 12.5h4' },
   // 貨車：出貨
-  shipment: 'M3 6.5h10v9H3zM13 10h3.6l3 3v2.5H13zM7 18.6a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8zM17.4 18.6a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8z',
+  shipment: { tone: 'info', label: '出貨', d: 'M3 6.5h10v9H3zM13 10h3.6l3 3v2.5H13zM7 18.6a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8zM17.4 18.6a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8z' },
   // 驚嘆圈：系統
-  system: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.6v5.2M12 16.3h.01'
+  system: { tone: 'info', label: '系統', d: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.6v5.2M12 16.3h.01' }
 }
-const ICON_FALLBACK = ICONS.system
+/* 後端之後多加一種 kind 時，前端不該整排空白：認不得就當系統通知 */
+const meta = (k: NotifyKind) => KINDS[k] ?? KINDS.system
 
 /** 相對時間。整點以上就不再報分鐘 —— 通知看的是「新不新」，不是精確秒數 */
 const DAY_MS = 86_400_000
@@ -72,7 +95,7 @@ function relTime(v: string | number): string {
   if (!Number.isFinite(t)) return ''
   const diff = Date.now() - t
   if (diff < 60_000) return '剛剛'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分鐘前`
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分前`
   // 「昨天」要用日曆日算，不是「24 小時前」：早上 9 點看昨晚 11 點的通知，
   // 差 10 小時，講「10 小時前」沒錯但講「昨天」才是人腦裡的答案
   const days = Math.round((startOfDay(Date.now()) - startOfDay(t)) / DAY_MS)
@@ -83,7 +106,14 @@ function relTime(v: string | number): string {
   return `${d.getMonth() + 1}/${d.getDate()}`
 }
 
-async function load() {
+/**
+ * 重抓清單。
+ *
+ * 對外就這一支：輪詢、切回前景、登入、開面板都走它，之後即時推播的
+ * useNotificationStream({ onPush }) 也把 onPush 接到這裡 —— 推播只負責說
+ * 「你有新東西」，要抓什麼、怎麼併，還是由這裡一家決定，兩邊才不會各抓一次。
+ */
+async function refresh() {
   if (!auth.isLoggedIn || loading.value) return
   loading.value = true
   err.value = ''
@@ -102,8 +132,8 @@ async function toggle() {
   if (open.value) { open.value = false; return }
   wasUnread.value = new Set(rows.value.filter(n => !n.read_at).map(n => n.id))
   open.value = true
-  await load()
-  // load() 之後才有完整清單，把這批也算進快照（第一次開啟時 rows 還是空的）
+  await refresh()
+  // refresh() 之後才有完整清單，把這批也算進快照（第一次開啟時 rows 還是空的）
   for (const n of rows.value) if (!n.read_at) wasUnread.value.add(n.id)
   if (!unread.value) return
   // 紅點先清：標已讀失敗也不該讓使用者一直看到紅點，下次 list 會以伺服器為準
@@ -113,6 +143,14 @@ async function toggle() {
 
 function go(n: Notification) {
   if (!n.link) return
+  /* 點進去代表真的看過了：把這一則單獨標掉，未讀樣式當場消失。
+     打開面板時已經整批標過一次，這裡是補上那次失敗的情況 ——
+     回上一頁時看到自己剛點過的還亮著「新」，會以為根本沒點到。 */
+  wasUnread.value.delete(n.id)
+  if (!n.read_at) {
+    n.read_at = new Date().toISOString()
+    notifications.markRead([n.id]).catch(() => { /* 靜默：導頁才是使用者要的 */ })
+  }
   open.value = false
   router.push(n.link)
 }
@@ -120,33 +158,38 @@ function go(n: Notification) {
 /* Esc 關閉：桌機上面板是浮層，沒有 Esc 就只能靠滑鼠點空白處 */
 function onKey(e: KeyboardEvent) { if (e.key === 'Escape') open.value = false }
 
-/* 通知的價值在於「新」，開著分頁不動也該長出東西來。
-   分頁不可見時跳過 —— 背景分頁的輪詢只會白花流量，而且回到前景時
-   visibilitychange 會補一次。面板開著時也跳過，免得清單在手指底下重排。 */
-let timer: number | undefined
-const POLL_MS = 90_000
-function tick() {
-  if (document.visibilityState !== 'visible' || open.value) return
-  load()
-}
-function onVisible() { if (document.visibilityState === 'visible') load() }
+/* 「什麼時候該重抓」整包交給 useNotificationStream：伺服器推、斷線退避重連、
+   背景分頁不連線、以及串流不可用時的輪詢退路，都在它裡面。
+   這裡原本自己有一份 90 秒輪詢與 visibilitychange —— 留著會變成兩邊各打一次。 */
+const stream = useNotificationStream({
+  onPush: () => {
+    /* 面板開著時不當場重抓：清單在手指底下重排，使用者會點到不是他要點的那則。
+       但事件不能丟，記下來等面板關掉再補。 */
+    if (open.value) { pendingRefresh = true; return }
+    refresh()
+  },
+  enabled: () => auth.isLoggedIn
+})
+watch(stream.connected, v => { streamConnected.value = v }, { immediate: true })
+
+let pendingRefresh = false
+watch(open, v => {
+  if (!v && pendingRefresh) { pendingRefresh = false; refresh() }
+})
 
 onMounted(() => {
-  if (auth.isLoggedIn) load()
-  timer = window.setInterval(tick, POLL_MS)
+  if (auth.isLoggedIn) refresh()
   window.addEventListener('keydown', onKey)
-  document.addEventListener('visibilitychange', onVisible)
 })
 onBeforeUnmount(() => {
-  clearInterval(timer)
+  stream.stop()
   window.removeEventListener('keydown', onKey)
-  document.removeEventListener('visibilitychange', onVisible)
 })
 
 /* 登出要把資料清乾淨：留著上一個人的通知在記憶體裡，
    換人登入的瞬間會閃出別人的內容 */
 watch(() => auth.isLoggedIn, v => {
-  if (v) { load(); return }
+  if (v) { refresh(); return }
   open.value = false
   rows.value = []
   unread.value = 0
@@ -155,6 +198,8 @@ watch(() => auth.isLoggedIn, v => {
 /** 徽章最多顯示 99+，三位數以上會把圓點撐成長條 */
 const badge = computed(() => (unread.value > 99 ? '99+' : String(unread.value)))
 const hasRows = computed(() => rows.value.length > 0)
+/** 標題列的「N 則新」用快照算：紅點已經歸零了，但這次打開看到的新東西還在 */
+const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.value.has(n.id) ? 1 : 0), 0))
 </script>
 
 <template>
@@ -167,8 +212,14 @@ const hasRows = computed(() => rows.value.length > 0)
 
     <Transition name="sheet">
       <section v-if="open" class="panel" role="dialog" aria-label="通知">
+        <!-- 手機貼底面板的抓握條：告訴拇指這塊是可以往下收的 -->
+        <span class="grab" aria-hidden="true" />
         <header class="phead">
           <h2>通知</h2>
+          <span v-if="freshCount" class="newchip">{{ freshCount }} 則新</span>
+          <span class="live" :class="{ on: streamConnected }">
+            <span class="lamp" aria-hidden="true" />{{ streamConnected ? '即時' : '定時更新' }}
+          </span>
           <button type="button" class="close" aria-label="關閉" @click="open = false">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
@@ -176,34 +227,49 @@ const hasRows = computed(() => rows.value.length > 0)
           </button>
         </header>
 
-        <p v-if="err" class="msg err">{{ err }} <button type="button" class="retry" @click="load">重試</button></p>
+        <p v-if="err" class="msg err">{{ err }} <button type="button" class="retry" @click="refresh">重試</button></p>
         <p v-else-if="loading && !hasRows" class="msg">載入中…</p>
-        <p v-else-if="!hasRows" class="msg empty">
-          還沒有任何通知。<br>
-          抽到卡、有人對你的卡出價、卡片賣出或訂單有進度時，都會出現在這裡。
-        </p>
+
+        <!-- 空狀態：一片空白會讓人以為壞了，畫一顆鈴＋講清楚什麼事會出現在這 -->
+        <div v-else-if="!hasRows" class="blank">
+          <span class="blank-ic" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path
+                d="M6.2 9.4a5.8 5.8 0 0 1 11.6 0c0 3.7 1.4 5.3 1.4 5.3H4.8s1.4-1.6 1.4-5.3zM9.9 18.2a2.1 2.1 0 0 0 4.2 0"
+                stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+              />
+            </svg>
+          </span>
+          <p class="blank-t">目前沒有新消息</p>
+          <p class="blank-b">抽到卡、有人對你的卡出價、卡片賣出或訂單有進度時，都會出現在這裡。</p>
+        </div>
 
         <div v-else class="list">
           <component
             :is="n.link ? 'button' : 'div'"
             v-for="n in rows" :key="n.id"
             class="item"
-            :class="{ fresh: wasUnread.has(n.id), tap: !!n.link }"
+            :class="[`tone-${meta(n.kind).tone}`, { fresh: wasUnread.has(n.id), tap: !!n.link }]"
             :type="n.link ? 'button' : undefined"
             @click="go(n)"
           >
-            <span class="ic" :class="n.kind">
+            <span class="ic">
               <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path :d="ICONS[n.kind] || ICON_FALLBACK" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                <path :d="meta(n.kind).d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </span>
             <span class="body">
-              <span class="t">{{ n.title }}</span>
-              <span class="b">{{ n.body }}</span>
-              <span class="when">{{ relTime(n.created_at) }}</span>
+              <!-- 時間跟標題同一行靠右：自己佔一行只是把每則撐高，掃視時也離標題太遠 -->
+              <span class="top">
+                <span class="t">{{ n.title }}</span>
+                <span class="when">{{ relTime(n.created_at) }}</span>
+              </span>
+              <span class="sub">
+                <span class="tag">{{ meta(n.kind).label }}</span>
+                <span class="b">{{ n.body }}</span>
+              </span>
             </span>
-            <!-- 未讀點放在右上：整列都是文字，只有這一點是圓的，掃視時抓得住 -->
-            <span v-if="wasUnread.has(n.id)" class="dot" aria-label="未讀" />
+            <span v-if="wasUnread.has(n.id)" class="sr">未讀</span>
           </component>
         </div>
       </section>
@@ -305,7 +371,9 @@ const hasRows = computed(() => rows.value.length > 0)
 .panel {
   position: fixed; left: 0; right: 0; bottom: 0;
   display: flex; flex-direction: column;
-  max-height: min(76vh, 560px);
+  /* dvh 不用 vh：手機 Chrome 的 vh 取的是網址列收起時的高度，面板會比視窗高，
+     最後一則被自己的底邊吃掉 */
+  max-height: min(72dvh, 560px);
   background: var(--surface);
   border-top: 1px solid var(--line);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
@@ -315,37 +383,82 @@ const hasRows = computed(() => rows.value.length > 0)
   padding-bottom: var(--safe-b, 0px);
   overflow: hidden;
 }
-.phead {
-  display: flex; align-items: center; gap: 10px;
-  padding: 14px 16px 10px;
-  border-bottom: 1px solid var(--line-soft);
+.grab {
+  width: 36px; height: 4px; margin: 8px auto 0;
+  border-radius: var(--pill);
+  background: var(--line);
 }
-.phead h2 { font-size: 15px; margin: 0; flex: 1; }
-.close {
-  width: 32px; height: 32px; display: grid; place-items: center;
-  border-radius: 50%; background: var(--surface-2); color: var(--muted);
-}
-.close svg { width: 16px; height: 16px; }
-.close:active { transform: scale(.92); }
 
-.msg { margin: 0; padding: 26px 18px 30px; font-size: 13.5px; line-height: 1.8; color: var(--muted); }
-.msg.empty { text-align: center; }
+/* 標題列刻意輕：它只是告訴你「這裡是通知」，
+   真正要被看見的是下面那些列，沒有分隔線也不會混在一起 */
+.phead {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 8px 8px 18px;
+}
+.phead h2 { font-size: 15px; font-weight: 700; margin: 0; flex: none; }
+/* 「N 則新」：紅點消失後仍要有東西回答「我剛剛漏了幾則」 */
+.newchip {
+  flex: none; min-width: 0;
+  padding: 2px 8px;
+  border-radius: var(--pill);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent-soft);
+  font-size: 11px; font-weight: 700; line-height: 1.6;
+}
+/* 即時推播接上之前先佔位。字很小、顏色很淡：這是狀態不是內容 */
+.live {
+  margin-left: auto; flex: none; min-width: 0;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px; color: var(--faint);
+}
+.live .lamp { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+.live.on { color: var(--ok-ink); }
+.live.on .lamp { background: var(--ok); }
+/* 44×44 是拇指要的尺寸，但視覺重量不必跟著大：拿掉底色，只留一個灰叉 */
+.close {
+  flex: none;
+  width: 44px; height: 44px; display: grid; place-items: center;
+  /* border 要自己歸零：這顆沒有底色，瀏覽器預設的 button 外框會整圈跑出來 */
+  border: 0; border-radius: 50%; background: transparent; color: var(--faint);
+}
+.close svg { width: 17px; height: 17px; }
+.close:active { transform: scale(.9); background: var(--surface-2); }
+@media (hover: hover) { .close:hover { color: var(--ink); background: var(--surface-2); } }
+.close:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.msg { margin: 0; padding: 22px 18px 28px; font-size: 13.5px; line-height: 1.8; color: var(--muted); }
 .msg.err { color: var(--danger); }
 .retry { color: var(--accent); font-weight: 600; text-decoration: underline; }
 
+/* ---- 空狀態 ---- */
+.blank { padding: 26px 30px 38px; text-align: center; }
+.blank-ic {
+  width: 54px; height: 54px; margin: 0 auto 12px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--faint);
+}
+.blank-ic svg { width: 26px; height: 26px; }
+.blank-t { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--ink); }
+.blank-b { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--muted); }
+
+/* ---- 清單 ---- */
 .list {
   overflow-y: auto;
   /* 面板滑到底不要把整頁一起帶動 */
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
+/* 兩行一則：標題與時間同一行、分類標籤與內文同一行。
+   舊版三行加上鬆的行高，一則要吃掉快 90px，一個畫面只看得到四則 */
 .item {
   position: relative;
   width: 100%;
-  display: grid; grid-template-columns: 34px 1fr; gap: 11px;
+  display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px;
   align-items: start;
   text-align: left;
-  padding: 12px 16px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--line-soft);
   color: var(--ink);
   background: transparent;
@@ -356,40 +469,70 @@ const hasRows = computed(() => rows.value.length > 0)
 .item.tap:active { background: var(--surface-2); }
 @media (hover: hover) { .item.tap:hover { background: var(--surface-2); } }
 .item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* 未讀底色極淡：整排都亮起來就等於沒有重點 */
-.item.fresh { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 
+/* 未讀同時給三個訊號：左緣色條（形狀）、極淡底色、標題加粗。
+   只靠底色的話，深色模式下那點色差在陽光下的手機上等於沒有 */
+.item.fresh { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.item.fresh::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--accent);
+}
+.item.fresh .t { font-weight: 700; color: var(--ink); }
+
+/* tone 決定顏色，圖形與標籤各自另外講一次，色弱也分得出來 */
 .ic {
-  width: 34px; height: 34px;
+  width: 32px; height: 32px;
   display: grid; place-items: center;
-  border-radius: 11px;
-  /* 底色從 currentColor 混：每個 kind 只要換 color 一個值 */
-  background: color-mix(in srgb, currentColor 16%, transparent);
+  border-radius: 10px;
+  /* 底色從 currentColor 混：每個 tone 只要換 color 一個值 */
+  background: color-mix(in srgb, currentColor 15%, transparent);
   color: var(--muted);
 }
-.ic svg { width: 18px; height: 18px; }
-.ic.draw { color: var(--gold); }
-.ic.trade-offer { color: var(--accent); }
-.ic.trade-result { color: var(--tier-b); }
-.ic.listing-sold { color: var(--ok); }
-.ic.order { color: var(--tier-c); }
-.ic.shipment { color: var(--tier-c); }
-.ic.system { color: var(--muted); }
-
-.body { display: grid; gap: 3px; min-width: 0; }
-.t { font-size: 13.5px; font-weight: 600; line-height: 1.45; }
-.item.fresh .t { font-weight: 700; }
-.b {
-  font-size: 12.5px; line-height: 1.6; color: var(--muted);
-  /* 兩行截斷：通知是索引不是內文，太長反而讓人一則都不想看 */
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-  overflow: hidden;
-}
-.when { font-size: 11px; color: var(--faint); }
-.dot {
-  position: absolute; top: 15px; right: 14px;
-  width: 8px; height: 8px; border-radius: 50%;
+.ic svg { width: 17px; height: 17px; }
+.tone-info .ic { color: var(--tier-c); }
+.tone-money .ic { color: var(--gold); }
+/* 要你回應的那類用實心色塊 —— 填色與否是連黑白截圖都成立的差異 */
+.tone-act .ic {
   background: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.body { display: grid; gap: 2px; min-width: 0; }
+.top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.t {
+  flex: 1; min-width: 0;
+  font-size: 13.5px; font-weight: 600; line-height: 1.5;
+  /* 標題一行就好：兩行標題會把時間擠到奇怪的位置，而且通知標題本來就該短 */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.when { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+.sub { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* 兩個字的分類標籤。有它才能在不看顏色的情況下知道這是「成交」還是「出貨」 */
+.tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 10.5px; font-weight: 700; line-height: 1.6;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: var(--muted);
+}
+.tone-info .tag { color: var(--tier-c); }
+.tone-money .tag { color: var(--gold); }
+.tone-act .tag { color: var(--accent-soft); }
+.b {
+  flex: 1; min-width: 0;
+  font-size: 12.5px; line-height: 1.6; color: var(--muted);
+  /* 一行截斷：通知是索引不是內文，真正的內容在點進去的那一頁 */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 未讀狀態不再另外畫一顆點：左緣色條已經講過了，
+   但讀螢幕的人看不到色條，用隱藏文字補 */
+.sr {
+  position: absolute; width: 1px; height: 1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
 
 /* ---- 桌機：收成右下角的卡片，不再貼底 ---- */
@@ -399,10 +542,14 @@ const hasRows = computed(() => rows.value.length > 0)
     right: calc(14px + var(--safe-r, 0px));
     bottom: calc(74px + var(--safe-b, 0px));
     width: 380px;
+    max-height: min(68dvh, 560px);
     border: 1px solid var(--line);
     border-radius: var(--radius-lg);
-    padding-bottom: 0;
+    padding-bottom: 6px;
   }
+  /* 抓握條是給拇指往下拉的暗示，桌機沒有這個手勢 */
+  .grab { display: none; }
+  .phead { padding-top: 10px; }
   /* 桌機不壓暗背景：面板只佔角落一小塊，壓暗整頁的份量不對，
      這裡只留它「點空白處關閉」的功能 */
   .veil { background: transparent; }
