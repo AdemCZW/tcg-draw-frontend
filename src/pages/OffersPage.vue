@@ -119,32 +119,37 @@ function switchTab(k: Tab) {
 }
 </script>
 
+
 <template>
   <div class="container page">
     <header class="head">
-      <h1>交易邀約</h1>
+      <div class="hrow">
+        <h1>交易邀約</h1>
+        <!-- 重新整理是動作不是視角，放回標題列才不會被當成第三個分頁 -->
+        <button type="button" class="rf" :disabled="loading" @click="load">
+          {{ loading ? '更新中…' : '重新整理' }}
+        </button>
+      </div>
       <p class="muted sub">私下換卡的出價都在這裡。接受之後點數與卡片會立刻移轉，不可還原。</p>
     </header>
 
-    <div class="tabs" role="tablist">
+    <!-- 兩個分頁做成一條軌道上的雙格：只有「二選一」才長這樣，不會再多出一格 -->
+    <div class="seg" role="tablist">
       <button
         v-for="t in TABS" :key="t.k"
         type="button" role="tab" :aria-selected="tab === t.k"
-        class="chip" :class="{ on: tab === t.k }"
+        class="sg" :class="{ on: tab === t.k }"
         @click="switchTab(t.k)"
       >
         {{ t.label }}<span v-if="t.k === 'incoming' && pendingIn" class="n">{{ pendingIn }}</span>
-      </button>
-      <button type="button" class="chip refresh" :disabled="loading" @click="load">
-        {{ loading ? '更新中…' : '重新整理' }}
       </button>
     </div>
 
     <p v-if="okMsg" class="ok" role="status">{{ okMsg }}</p>
     <p v-if="err" class="err" role="alert">{{ err }}</p>
 
-    <p v-if="loading && !list.length" class="empty muted">載入中…</p>
-    <p v-else-if="!list.length" class="empty muted">
+    <p v-if="loading && !list.length" class="blank muted">載入中…</p>
+    <p v-else-if="!list.length" class="blank muted">
       <template v-if="tab === 'incoming'">
         還沒有人對你的卡出價。把卡冊設成公開分享出去，別人才找得到你的卡。
       </template>
@@ -153,56 +158,55 @@ function switchTab(k: Tab) {
       </template>
     </p>
 
-    <article v-for="o in list" :key="o.id" class="ofr">
-      <div class="top">
-        <div class="meta">
-          <strong class="nm">{{ o.card?.name || o.prize_id }}</strong>
-          <p class="who">
-            <span class="role">{{ tab === 'incoming' ? '出價者' : '持卡人' }}</span>
-            {{ counterpart(o) }}
-          </p>
-        </div>
+    <article
+      v-for="o in list" :key="o.id"
+      class="ofr" :class="{ armed: confirming === o.id }"
+    >
+      <div class="r1">
+        <strong class="nm">{{ o.card?.name || o.prize_id }}</strong>
         <span class="st" :class="o.status">{{ STATUS_TEXT[o.status] }}</span>
       </div>
 
-      <p class="amt mono">{{ fmtPts(o.points) }} 點</p>
+      <!-- 「多少錢／誰出的」擠同一行：這兩件事要一起讀才有意義，拆兩行反而要對照 -->
+      <p class="r2">
+        <span class="amt mono">{{ fmtPts(o.points) }}</span><span class="unit">點</span>
+        <span class="who">{{ tab === 'incoming' ? '出價者' : '持卡人' }} {{ counterpart(o) }}</span>
+      </p>
+
       <p v-if="o.message" class="msg">「{{ o.message }}」</p>
       <p class="when">
         {{ fmtWhen(o.created_at) }} 送出<span v-if="o.responded_at"> · {{ fmtWhen(o.responded_at) }} 回覆</span>
       </p>
 
-      <!-- 收到的、還在等回覆：可以接受或婉拒 -->
-      <div v-if="tab === 'incoming' && o.status === 'pending'" class="acts">
-        <button
-          type="button" class="btn sm" :disabled="busy === o.id"
-          @click="decline(o, false)"
-        >婉拒</button>
-        <button
-          type="button" class="btn sm" :class="{ armed: confirming === o.id }" :disabled="busy === o.id"
-          @click="confirming = confirming === o.id ? null : o.id"
-        >接受</button>
-      </div>
-
-      <!-- 第二段：點了「接受」才出現。這裡才是真的會動錢的那一顆 -->
-      <div v-if="confirming === o.id" class="confirm">
-        <p>
-          接受後 <strong class="mono">{{ fmtPts(o.points) }}</strong> 點會入帳，
-          「{{ o.card?.name || o.prize_id }}」會過戶給 {{ counterpart(o) }}。這個動作沒有還原鍵。
-        </p>
-        <div class="crow">
-          <button type="button" class="btn sm" :disabled="busy === o.id" @click="confirming = null">取消</button>
-          <button type="button" class="btn primary sm" :disabled="busy === o.id" @click="accept(o)">
-            {{ busy === o.id ? '處理中…' : '確認接受' }}
-          </button>
+      <!-- 收到的、還在等回覆：動作列與確認列共用同一個位置。
+           確認不另開一塊巢狀卡片 —— 那會讓一筆邀約看起來像兩筆，也把下一筆推很遠。
+           改成就地換掉這一列，並讓整張卡描一圈紅來表示「這張正在待確認」。 -->
+      <div v-if="tab === 'incoming' && o.status === 'pending'" class="foot">
+        <template v-if="confirming === o.id">
+          <p class="cfm">
+            接受後 <strong class="mono">{{ fmtPts(o.points) }}</strong> 點會入帳，
+            「{{ o.card?.name || o.prize_id }}」會過戶給 {{ counterpart(o) }}。這個動作沒有還原鍵。
+          </p>
+          <div class="acts">
+            <button type="button" class="btn sm" :disabled="busy === o.id" @click="confirming = null">取消</button>
+            <button type="button" class="btn primary sm" :disabled="busy === o.id" @click="accept(o)">
+              {{ busy === o.id ? '處理中…' : '確認接受' }}
+            </button>
+          </div>
+        </template>
+        <div v-else class="acts">
+          <button type="button" class="btn sm" :disabled="busy === o.id" @click="decline(o, false)">婉拒</button>
+          <button type="button" class="btn sm" :disabled="busy === o.id" @click="confirming = o.id">接受</button>
         </div>
       </div>
 
       <!-- 送出的、還在等回覆：可以收回。走的是同一支 decline -->
-      <div v-if="tab === 'outgoing' && o.status === 'pending'" class="acts">
-        <button
-          type="button" class="btn sm" :disabled="busy === o.id"
-          @click="decline(o, true)"
-        >{{ busy === o.id ? '處理中…' : '收回邀約' }}</button>
+      <div v-if="tab === 'outgoing' && o.status === 'pending'" class="foot">
+        <div class="acts one">
+          <button type="button" class="btn sm" :disabled="busy === o.id" @click="decline(o, true)">
+            {{ busy === o.id ? '處理中…' : '收回邀約' }}
+          </button>
+        </div>
       </div>
     </article>
   </div>
@@ -210,63 +214,100 @@ function switchTab(k: Tab) {
 
 <style scoped>
 /* 底部導覽的讓位交給頁尾（見 App.vue），這裡只留自己的排版留白 */
-.page { padding-bottom: 48px; }
-.head { margin-bottom: 14px; }
-h1 { font-size: 22px; margin: 0 0 4px; }
-.sub { font-size: 13px; line-height: 1.7; margin: 0; }
+.page { padding-bottom: 32px; }
 
-.tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
-.chip { min-height: 36px; }
-.chip.on { background: var(--accent); color: #fff; font-weight: 600; }
-.chip.refresh { margin-left: auto; color: var(--muted); }
-.chip:disabled { opacity: .5; }
+.head { margin-bottom: 12px; }
+.hrow { display: flex; align-items: baseline; gap: 12px; }
+h1 { font-size: 22px; margin: 0; flex: 1; min-width: 0; }
+/* 純文字鍵：它不該有跟分頁一樣的膠囊外框，不然又變成一個可切換的東西 */
+.rf {
+  flex: none; padding: 4px 0;
+  font-size: 12.5px; color: var(--muted);
+  background: none; border: 0;
+  text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: var(--line);
+}
+.rf:disabled { opacity: .5; }
+.sub { font-size: 12.5px; line-height: 1.6; margin: 4px 0 0; }
+
+/* 分頁：一條軌道切兩格。滑塊靠 .on 的實色底表現，不另外做動畫層 */
+.seg {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px; padding: 4px; margin-bottom: 12px;
+  background: var(--surface-2); border-radius: var(--pill);
+}
+.sg {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-width: 0; min-height: 34px; padding: 0 10px;
+  border: 0; border-radius: var(--pill);
+  background: transparent; color: var(--muted);
+  font-size: 13.5px; font-weight: 600;
+}
+.sg.on { background: var(--accent); color: var(--on-accent); }
 /* 待回覆數：只有收件匣有，因為只有那邊是「等你動作」 */
 .n {
-  min-width: 18px; padding: 0 5px; border-radius: var(--pill);
-  background: var(--accent); color: #fff;
-  font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+  min-width: 17px; padding: 0 5px; border-radius: var(--pill);
+  background: var(--surface-3); color: var(--ink);
+  font-size: 11px; font-weight: 700; line-height: 17px; text-align: center;
 }
-.chip.on .n { background: rgba(255, 255, 255, .28); }
+.sg.on .n { background: rgba(255, 255, 255, .28); color: var(--on-accent); }
 
-.empty { padding: 30px 4px; font-size: 14px; line-height: 1.9; }
-.ok { color: var(--ok); font-size: 13.5px; line-height: 1.7; margin: 0 0 12px; }
-.err { color: var(--danger); font-size: 13.5px; line-height: 1.7; margin: 0 0 12px; }
-
-.ofr { background: var(--surface); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 12px; }
-.top { display: flex; align-items: flex-start; gap: 10px; }
-.meta { flex: 1; min-width: 0; }
-.nm { display: block; font-size: 15px; line-height: 1.4; margin-bottom: 4px; }
-.who { font-size: 12px; color: var(--muted); margin: 0; }
-.role {
-  display: inline-block; font-size: 10px; font-weight: 700;
-  padding: 1px 6px; border-radius: var(--pill); margin-right: 5px;
-  background: var(--surface-3); color: var(--muted);
+.blank {
+  margin: 0; padding: 22px 18px;
+  background: var(--surface); border-radius: var(--radius);
+  font-size: 13px; line-height: 1.8; text-align: center;
 }
+.ok { color: var(--ok); font-size: 13px; line-height: 1.6; margin: 0 0 10px; }
+.err { color: var(--danger); font-size: 13px; line-height: 1.6; margin: 0 0 10px; }
+
+.ofr {
+  background: var(--surface); border-radius: var(--radius);
+  padding: 12px 14px; margin-bottom: 8px;
+  /* 描邊常駐但透明：待確認時只換顏色，卡片不會因為多出一圈邊而抖動 */
+  border: 1px solid transparent;
+}
+.ofr.armed { border-color: var(--danger); background: var(--danger-wash); }
+
+.r1 { display: flex; align-items: center; gap: 8px; }
+.nm { flex: 1; min-width: 0; font-size: 14.5px; line-height: 1.35; }
 .st {
-  font-size: 11px; font-weight: 700; white-space: nowrap;
-  padding: 4px 9px; border-radius: var(--pill);
+  flex: none; font-size: 10.5px; font-weight: 700; white-space: nowrap;
+  padding: 3px 8px; border-radius: var(--pill);
   background: var(--surface-3); color: var(--muted);
 }
-.st.pending { background: var(--warn-wash); color: var(--warn); }
-.st.accepted { background: var(--ok-wash); color: var(--ok); }
+.st.pending { background: var(--warn-wash); color: var(--warn-ink); }
+.st.accepted { background: var(--ok-wash); color: var(--ok-ink); }
 
-/* 金額是這張卡最重要的一行，字級拉開才不用讀完全部才知道對方出多少 */
-.amt { font-size: 19px; font-weight: 600; margin: 10px 0 0; color: var(--gold); }
-.msg { font-size: 13px; line-height: 1.7; color: var(--ink); margin: 8px 0 0; }
-.when { font-size: 11.5px; color: var(--faint); margin: 6px 0 0; }
-
-.acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
-.acts .btn.sm, .crow .btn.sm { padding: 9px 18px; font-size: 13.5px; }
-/* 已展開確認條時，第一顆維持「按下去了」的樣子，不然看不出來下面那塊是它開的 */
-.btn.armed { border-color: var(--accent); color: var(--accent); }
-
-.confirm {
-  margin-top: 10px; padding: 12px;
-  border-radius: var(--radius);
-  background: var(--danger-wash);
-  /* 側邊一道紅：這一區跟上面的資訊不同性質，是「你正要做一件不可逆的事」 */
-  box-shadow: inset 2px 0 0 var(--danger);
+/* 金額與出價者同一行、共用基線：金額是主詞，人名退成註腳 */
+.r2 { display: flex; align-items: baseline; gap: 4px; margin: 3px 0 0; }
+.amt { flex: none; font-size: 20px; font-weight: 600; color: var(--gold); letter-spacing: -.01em; }
+.unit { flex: none; font-size: 12px; color: var(--gold-deep); }
+.who {
+  flex: 1; min-width: 0; margin-left: 4px;
+  font-size: 12px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.confirm p { font-size: 12.5px; line-height: 1.75; color: var(--ink); margin: 0 0 10px; }
-.crow { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* 留言可能很長，但它不是決策依據 —— 收成兩行，要看全文再點進對話 */
+.msg {
+  margin: 5px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+.when { font-size: 11px; color: var(--faint); margin: 3px 0 0; }
+
+/* 動作列與資訊之間一道細線：靠分隔而不是靠空白，省下的是每一筆的高度 */
+.foot { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
+.cfm { font-size: 12px; line-height: 1.6; color: var(--ink); margin: 0 0 8px; }
+/* 兩顆各佔一半、切齊卡片內容的左右邊 —— 靠右浮著會讓視線橫跨整張卡 */
+.acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+/* 只有一顆時不撐滿：收回是低頻動作，不該長得跟主要動作一樣大 */
+.acts.one { grid-template-columns: minmax(0, auto); justify-content: start; }
+.acts .btn { min-width: 0; padding: 7px 14px; font-size: 13px; min-height: 38px; }
+
+/* 桌機：邀約是清單資料，拉滿 1180px 會變成一排超寬空盒 */
+@media (min-width: 721px) {
+  .page { max-width: 720px; }
+  /* 桌機不需要撐滿的按鈕：手機的滿版是為了拇指，滑鼠不吃這一套 */
+  .acts { grid-template-columns: repeat(2, minmax(0, 150px)); justify-content: start; }
+}
 </style>
