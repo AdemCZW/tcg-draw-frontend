@@ -1,0 +1,281 @@
+# VaultDraw 交接文件
+
+寫給下一個接手這個專案的 AI。這份文件不重複程式碼與 git log 講得清楚的事，
+只寫**從程式碼看不出來的判斷、踩過的坑、以及還沒補完的洞**。
+
+最後更新：2026-08-22
+
+---
+
+## 1. 這是什麼
+
+VaultDraw — 台灣市場的鑑定寶可夢卡「線上抽選」（オリパ）平台。
+
+- 前端：Vue 3.5 `<script setup>` + Pinia + Vue Router 4 + Vite 5 + TypeScript 5.6，手寫 CSS（變數在 `src/styles/tokens.css`）。部署在 **GitHub Pages**。
+- 後端：Hono + postgres.js + zod，原生 SQL 搭配明確交易與 `SELECT ... FOR UPDATE`。部署在 **Railway**。
+- `src/shared/` 是前後端共用的邏輯，用 `server/scripts/sync-shared.mjs` 複製一份到 `server/src/shared/`。**改了來源要跑 `cd server && npm run sync-shared`**，`npm run check` 會驗證兩邊一致。
+
+### 不可違反的約束（使用者反覆強調過）
+
+| 約束 | 原因 |
+|---|---|
+| 只部署到使用者的私人 GitHub 帳號 `ademczw` / `AdemCZW` | 使用者指定 |
+| 用 GitHub Pages，不要改用 Cloudflare | 使用者指定 |
+| **點數永遠不可以換回現金** | 法律問題：刑法 266 條的「對價關係」。這不是產品選擇，是紅線 |
+| **平台不可以買回自己送出的獎品** | 電子遊戲場業管理條例第 14 條第 2 項第 2 款明文禁止「買回提供給客人之獎品」。我曾經建議過 70% 回購當行銷賣點，查證後發現違法並收回 |
+| 手機版 UI **不可以有 emoji** | 使用者指定。圖示一律用 inline SVG 或 CSS 畫 |
+| **Secret Access Key / ADMIN_PASSWORD / LINE_CHANNEL_SECRET 不可以貼進對話** | 使用者原話：「這組密碼不要貼給我」。只能寫進 Railway 環境變數 |
+
+---
+
+## 2. 這個 repo 的三大陷阱
+
+這三件事造成的 bug 佔了整個專案除錯時間的一半以上。**動版面之前先讀完這一節。**
+
+### 2.1 `min-width: auto`
+
+grid / flex 的子元素預設 `min-width: auto`，不會縮到比內容小。長字串、卡圖、
+`<summary>`、按鈕都會把容器撐爆或反過來被擠成一個字寬。
+
+**規則**：grid / flex 的子元素一律補 `min-width: 0`，欄位定義用 `minmax(0, 1fr)` 不要用 `1fr`。
+
+### 2.2 `transform` 會變成 `position: fixed` 的定位基準
+
+祖先只要有 `transform`（Tilt3D、換頁轉場、任何動畫），底下 `position: fixed`
+的元素就不再相對視窗定位。底部固定列、對話框都中過。
+
+**規則**：會被轉場包住的固定元素用 `<Teleport to="body">`。`z-index` 也要給值 —— 有 transform 的元素自成堆疊脈絡，不給值會被蓋住。
+
+### 2.3 底部導覽的讓位只能有一個來源
+
+`--nav-total` 在手機上是 `--nav-h + --safe-b`，桌機是 0。全域頁尾（`App.vue` 的 `.foot`）
+已經留了一份。**頁面根容器不要再加一次**，否則每頁下緣會多出一段捲得到卻空無一物的黑。
+
+底部固定元素要避開導覽時用：
+```css
+bottom: calc(X + max(var(--nav-total, 0px), var(--safe-b, 0px)));
+```
+取 `max` 的理由：手機的 `--nav-total` 已含安全區，桌機是 0 時才輪到 `--safe-b`。
+慣例寫在 `src/components/NotifyBell.vue` 的註解裡。
+
+### 2.4 額外：量測跑版的正確方法
+
+**只檢查 `document.scrollWidth > innerWidth` 是不夠的** —— 這個 repo 的跑版
+多半不會觸發那一項（被 `overflow: hidden` 裁掉、或只是內部擠壓）。
+
+正確做法是逐元素：
+```js
+[...document.querySelectorAll('sel *')].filter(e => {
+  const r = e.getBoundingClientRect()
+  return r.right > innerWidth + 0.5 || r.left < -0.5 || e.scrollWidth > e.clientWidth + 1
+})
+```
+已知會命中但屬正常的：`.sr-only`（1px 裁切盒）、橫向捲軸（`.tabs`/`.sorts`）的子元素、
+`CardArt` 內部被 `overflow: hidden` 裁住的 `.art` / `.sheen`。
+
+### 2.5 其他踩過的坑
+
+- **Postgres：一個語句失敗會讓整個交易作廢**。在交易裡 `try/catch` 再 `return` 沒有用，`COMMIT` 還是會失敗。要用 `ON CONFLICT DO NOTHING ... RETURNING`。
+- **grid 的 `place-items: center` 碰上比容器大的子元素 + `overflow: hidden` 會裁得不對稱**，看起來像整個偏右。要置中就用絕對定位 + `translate(-50%, -50%)`。
+- **手機視窗高度一律用 `dvh`，不要用 `vh`**。`vh` 取的是網址列收起時的高度。
+- **同一個 scoped stylesheet 裡不要有兩個同名 class**。曾經有兩個 `.more`（`<details>` 與卡片展開鈕），同權重、後者勝，把 `<summary>` 擠成一字一行。
+- **Vue `Transition` 用 `requestAnimationFrame` 換 class，`:duration` 保護不到**。整頁換頁轉場已經移除（原因寫在 `App.vue` 的註解裡），不要加回來。
+- **Claude 的 Browser pane 會讓 `document.hidden === true`**，IntersectionObserver 的回呼不會送達，測不了無限捲動。要測捲動請改用 Playwright。
+
+---
+
+## 3. 幾個要理解的機制
+
+### 3.1 公平性：commit-reveal
+
+- v1：`commit = SHA256(server_seed_bytes)`
+- **v2（現行）**：`commit = SHA256(server_seed_bytes ‖ manifest_hash_bytes)`
+
+manifest 是整池獎品的規格化字串（`src/shared/fairness.ts` 的 `manifestString`）。
+**刻意不用 `JSON.stringify`** —— 鍵的順序與跳脫規則是實作決定的，不能拿來當雜湊輸入。
+
+把獎品內容綁進 commit 之後，「開池前偷換卡」會被驗算抓到。已實測：直接
+`UPDATE pool_prizes SET card = jsonb_set(...)` 把最後一個獎換成便宜卡（不動座位順序），
+驗證從 `{"ok":true,"version":2}` 變成 `{"ok":false,"reason":"commit 對不上"}`。
+
+客戶端種子用 **drand（League of Entropy）**，開池時先預約一個未來的輪次，
+賣家沒辦法反覆重算來挑對自己有利的種子。洗牌是 Fisher-Yates 配 `HMAC-SHA256`
+串流，用**拒絕取樣**不是取餘數（取餘數會有偏差）。
+
+> ⚠️ **正式環境現存的池仍然是 commit v1、`return_ratio` 是 null** —— 種子只建新池，不回頭改舊的。
+
+### 3.2 錢
+
+餘額是**帳本推導**的（`SUM(points_ledger.delta)`），不是一個可以直接改的欄位。
+`locked`（凍結）由未結束的訂單、出價、以及 **pending 的交易報價**推導。
+
+- `money.ts` 的 `lockSpender()` 一定要在算餘額前呼叫。少了它，同一個人同時買兩張卡會鎖到兩列不同的 `listings`、互不阻擋，兩邊都判定「錢夠」，於是花掉兩份同一筆錢。
+- 接受出價時要**先把該筆 offer 的狀態改掉再算餘額**，否則那筆 offer 自己會把自己凍住。
+
+### 3.3 `won_at` vs `acquired_at`（migration 014）
+
+- `won_at` = 這張卡**被抽出來**的時刻。公開的「最近開出」動態照它排。
+- `acquired_at` = 這張卡**進到這個人卡冊**的時刻。卡冊照它排。
+
+過戶（市場買卡、接受出價）只更新 `acquired_at`。**不要為了讓卡排到最前面而去改 `won_at`**
+—— 那會讓一張買來的舊卡出現在「剛剛有人抽到」裡面，那是假的。
+
+### 3.4 兩條交付通道
+
+| `delivery` | 行為 |
+|---|---|
+| `vault`（庫內轉移） | 原子交換：點數直接扣、`prizes` 改 owner。成交即完成，卡立刻進卡冊 |
+| `ship`（需寄送） | 建立託管訂單。點數只是**凍結不是扣款**，等確認收貨或驗收期滿才放款給賣家。**卡不會進卡冊** |
+
+介面上這個差別必須在**按下購買之前**講清楚。
+
+`vault` 掛單如果沒有對應的 `prize_id`，交易會被整筆擋掉（`LISTING_BROKEN`）。
+這不是防禦性程式碼，是真的發生過：種子只寫 `listings` 不寫 `prizes`，
+買家付了錢、賣家入了帳、卡片不存在。
+
+### 3.5 分頁
+
+所有會無限成長的列表都用**游標分頁不用 offset**（offset 在會插入資料的列表上
+會漏資料也會重複資料）。`nextCursor` 為 `null` 是唯一的結束訊號，
+**不要用「回傳數量少於一批」推斷** —— 剛好整除時會多打一次空請求。
+
+游標是 opaque 的 base64，比較用 row-value（`(a, b) < (?, ?)`）不要展開成 OR
+（用不到索引，邊界也容易寫錯）。索引的欄位順序與方向必須跟 `order by` 逐字對應。
+
+公開卡冊的排序是**混合方向**（賞別升冪、時間降冪），row-value 表達不了，
+所以把 `won_at` 取負讓三個鍵同向。
+
+### 3.6 即時通知
+
+`notify()` 寫入通知的同時發一則 `pg_notify`（channel `vd_notify`，payload 只有 userId）。
+SSE 端點 `GET /v1/social/notifications/stream` 把訊號推給該使用者的連線。
+
+**串流只送「你有新東西」，不送內容** —— 通知的資料形狀只留 `GET /v1/social/notifications`
+一個來源，不會兩邊各自定義而走鐘。
+
+- **不要用瀏覽器原生的 `EventSource`**：它不能帶 header，唯一的變通是把 JWT 放進網址，那會讓憑證進到伺服器日誌、瀏覽器歷史與 Referer。現在用 `fetch` + `ReadableStream`。
+- **整個行程共用一條 `LISTEN` 連線**，不要每個 SSE 連線各開一條（會耗光連線池）。
+- 25 秒心跳，否則中間的代理會切掉閒置連線。
+- 輪詢保留當退路但**只在串流沒連上時跑**，而且整包在 `useNotificationStream` 裡 —— 鈴鐺元件不要自己再開一份。
+
+---
+
+## 4. 還沒補完的洞
+
+依嚴重度排序。**這些是已知的、使用者也知情的，不是漏看。**
+
+### 4.1 `refPrice` 沒有外部錨點 ⚠️ 最重要
+
+`refPrice`（參考市值）目前是**賣家自己填的**，沒有任何外部依據。
+而它是整個系統的地基：回收價、期望回報率、經濟護欄、「今日最殺」的折扣幅度，
+全部從它算出來。賣家把 `refPrice` 填高，所有數字就一起說謊。
+
+使用者的態度是「可以先試試，畢竟要過才知道會不會回本」。**這是目前最大的結構性風險。**
+
+> 註：使用者曾指出我拿平台間的回收率（70% vs 90–100%）做比較是無效的 ——
+> 開 90–100% 的平台把基準價開得比市場低。他是對的，那個比較不成立。
+> 真正的變數是 `refPrice` 這個沒有錨的基準，不是回收率的數字。
+
+### 4.2 沒有實體入庫流程
+
+`prizes.status = 'stashed'` 是被**宣告**的，從來沒有被驗證過。
+平台手上實際有沒有那張卡，系統不知道。使用者的決定是
+「現況我還是希望從賣家自己直接轉交給買家」——**平台不代管實體卡**，
+所以不要再提代管方案，那已經被否決過。
+
+延伸問題：使用者問過「萬一上傳的卡片是沒有經過檢驗的卡片，我該怎麼知道他是否真的持有這張」。這個問題還沒有答案。
+
+### 4.3 池的結算不存在
+
+`draw()` 從來不會把錢**貸記給賣家**。玩家抽卡的點數進了系統，但沒有任何流程
+把它結算給開池的人。第三方賣家目前實際上收不到錢。
+
+我曾提過的順序（使用者還沒選）：
+1. 抽卡結算（帶保留額）
+2. 賣家出貨佇列
+3. 開池保證金
+4. `refPrice` 錨定
+
+### 4.4 出貨佇列只通往後台
+
+出貨請求只送到管理後台，不會送給賣家。第三方賣家的出貨流程是斷的。
+
+### 4.5 其他
+
+- 市場交易手續費目前是 **0**。
+- 過戶時**沒有**重設 `stash_expires_at`，買家繼承賣家剩下的寄存天數。這是政策決定不是 bug，使用者還沒表態。
+- 保底 / 天井（第 ⑤ 項）我建議不做，使用者還沒確認。
+- `/u/:slug` 在 GitHub Pages 上對爬蟲回 404（沒有 SPA rewrite），所以 LINE 分享沒有預覽卡。要修需要換一個支援 SPA rewrite 的主機。
+- `public/og.png`（1200×630）還沒放。
+
+---
+
+## 5. 上線前一定要拆掉的東西
+
+**這三件忘記做會出事：**
+
+1. **LINE 登入送 1,000,000 點** —— 測試用的，上線前務必移除。
+2. **Railway 啟動指令裡的 `npm run seed`** —— 每次部署都會重塞一批假掛單與假池。
+3. `DEV_LOGIN` 確認在正式環境是關的。
+
+（Railway 的啟動指令**有**跑 `npm run migrate`，日誌裡看得到「migrations done」之後才 listening。所以新增 migration 只要推上去就會套用。）
+
+---
+
+## 6. 開發與驗證慣例
+
+使用者對「說做好了但其實沒驗」非常敏感。**先有證據再下結論。**
+
+### 建置
+
+```bash
+npm run build                    # 前端。不要接 pipe，要讀 exit code
+cd server && npm run check       # sync-shared --check + tsc --noEmit
+cd server && npm run build
+```
+
+**不要用 `tsc --noEmit` 代替 `npm run build`**，而且**不要接 pipe** —— 接了 pipe 讀到的是 pipe 的 exit code。
+
+### 煙霧測試（目前 175 項）
+
+需要本機 PostgreSQL 與一個跑著的 server：
+
+```bash
+export DATABASE_URL="postgres://$(whoami)@localhost:5432/vaultdraw_test"
+export JWT_SECRET="local-test-only-not-a-real-secret-000000000000"
+export DEV_LOGIN=1 PORT=8080
+cd server && npm run migrate && npm run seed
+npm run dev &        # 另一個終端
+npm run smoke
+```
+
+`dev-login` 要同時給 `handle` 與 `name`。`GET /v1/auth/me` 回的是 `{ user: {...} }` 不是裸物件。
+
+煙霧測試會消耗種子掛單，所以**每次跑之前要重建資料庫**。跑完請把測試庫還原成乾淨的 migrate + seed。
+
+### 瀏覽器驗證
+
+`.claude/launch.json` 裡有 `tcg-draw-mock`（port 5175，mock 模式，不需要後端）。
+一律在 **393×852** 驗證手機版。
+
+### 正式環境
+
+```
+API: https://web-production-154871.up.railway.app
+Railway: -p 3ef179b4-ad8b-4bb3-a43b-ea6adfbb90da -e production -s web
+```
+
+- **Railway CLI 一定要從 repo 根目錄執行**，不是從 `server/`。
+- CLI 版本太舊（5.20）會讓 `service source connect` 假報 Unauthorized。`brew upgrade railway` 解決。
+- **不要跑 `railway config apply`** —— 它會刪掉環境變數。要改先用 `plan` 看。
+- 推上去約 25 秒後自動部署。
+
+---
+
+## 7. 跟使用者合作的方式
+
+- 使用者用**繁體中文**溝通，回覆也用繁體中文。程式碼註解一樣。
+- 註解要解釋**為什麼**，不是做了什麼。這個 repo 現有的註解都是這個風格，跟著寫。
+- 使用者常說「可以多開幾個 agent」。他確實希望平行處理。但**交辦時要明確劃分檔案範圍**，否則兩支 agent 會改到同一個檔案互相蓋掉（發生過好幾次，靠事後逐檔比對才發現沒被蓋掉）。
+- 使用者會直接貼截圖回報跑版。他對手機版版面很敏感，而我在這件事上錯過很多次 —— **不要靠讀 CSS 推論說「應該沒問題」，實際量。**
+- 我講錯過幾次並當場更正過：出貨追蹤號的風險（其實 `applyDeadlines` 有處理）、`/pools/:id/open` 缺少驗證（其實是刻意的）、底部黑色空白的成因（不是 `100vh`）、以及 migration 不會自動跑（其實會）。**遇到「我記得是這樣」的時候去查，不要憑印象斷言。**
