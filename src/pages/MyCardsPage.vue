@@ -445,7 +445,8 @@ async function copyLink() {
 
     <!-- 收藏總覽：這一頁最想被回答的問題就是「我收了多少、值多少」。
          一個主角（總值）+ 三個配角（張數、賞別分佈、最高價）+ 一張成長曲線 -->
-    <section v-if="ownedCount" class="overview card">
+    <section v-if="ownedCount || total" class="overview card">
+      <template v-if="ownedCount">
       <p class="ovLabel">收藏總值</p>
       <div class="ovHero">
         <!-- 數字與單位鎖在同一個 inline 盒子裡，永遠不會被折成兩行 -->
@@ -482,24 +483,23 @@ async function copyLink() {
 
       <!-- 成長曲線。放在總覽裡而不是另開一張卡：它回答的是同一個問題的時間版本 -->
       <ValueCurve class="ovCurve" :prizes="curvePrizes" />
-    </section>
+      </template>
 
-    <!-- 公開卡冊：連結會被貼進群組，收不回來，所以每個動作的後果就寫在按鈕旁邊 -->
-    <!-- 公開卡冊。
-         原本這一塊在手機上高約 800px：五行的隱私警告、兩行網址、
-         三顆通欄按鈕、再兩行說明 —— 一個「多數時候是關著」的開關佔掉一整屏。
+      <!-- 公開卡冊併進總覽：分享出去的就是這一區講的東西（總值、張數、賞別分佈），
+           兩者是同一件事的兩面，各佔一張卡會讓人以為是兩個不相干的功能。
+           網址不顯示了 —— 一長串亂碼佔兩行卻沒人會去讀它，要用的時候按複製就好。
+           換新連結是不可逆的，所以確認仍然留在這裡，不收進按鈕的 tooltip。 -->
+      <div v-if="total" class="shareRow">
+        <template v-if="shareOn && shareLink">
+          <button type="button" class="btn sm" @click="copyLink">
+            {{ copied ? '已複製' : '複製卡冊連結' }}
+          </button>
+          <button type="button" class="btn sm ghost" :disabled="shareBusy" @click="askRotate = !askRotate">
+            換新連結
+          </button>
+        </template>
+        <span v-else class="shareOffLabel">公開卡冊</span>
 
-         壓縮的原則是「收起來」不是「刪掉」：隱私警告是誠實揭露，不能拿掉，
-         但把細節收進 details，摘要那一行仍然講出最關鍵的一句
-         （不必登入、看得到鑑定編號）。開關關著的時候整塊只有兩行。 -->
-    <section v-if="total" class="share card">
-      <div class="shareTop">
-        <div class="shareHead">
-          <strong class="shareTitle">公開卡冊</strong>
-          <p class="shareWhy">
-            任何拿到連結的人<strong>不必登入</strong>就能看到你所有卡片與鑑定編號。
-          </p>
-        </div>
         <button
           type="button" role="switch" :aria-checked="shareOn"
           class="sw" :class="{ on: shareOn }"
@@ -511,34 +511,17 @@ async function copyLink() {
         </button>
       </div>
 
-
-      <div v-if="shareOn && shareLink" class="shareBody">
-        <!-- 網址與它的兩個動作是同一件事，收在同一條裡。
-             網址仍然整條顯示不截斷 —— 使用者要能長按複製，也要看得出連結換過了 -->
-        <div class="linkRow">
-          <span class="link mono">{{ shareLink }}</span>
-          <div class="linkActs">
-            <button type="button" class="btn sm" @click="copyLink">
-              {{ copied ? '已複製' : '複製' }}
-            </button>
-            <button type="button" class="btn sm ghost" :disabled="shareBusy" @click="askRotate = !askRotate">
-              換新連結
-            </button>
-          </div>
-        </div>
-
-        <!-- 換連結是不可逆的，跟回收一樣用行內確認：後果要跟按鈕在同一個畫面 -->
-        <div v-if="askRotate" class="confirm">
-          <p class="warn">
-            換新之後<strong>舊連結立刻失效</strong> —— 已經貼在群組、私訊裡的網址
-            任何人再點都只會看到「找不到卡冊」。分享錯對象時這是唯一的補救。
-          </p>
-          <div class="acts">
-            <button type="button" class="btn primary sm" :disabled="shareBusy" @click="rotateLink">
-              確認換新
-            </button>
-            <button type="button" class="btn sm" :disabled="shareBusy" @click="askRotate = false">取消</button>
-          </div>
+      <!-- 換連結是不可逆的，跟回收一樣用行內確認：後果要跟按鈕在同一個畫面 -->
+      <div v-if="askRotate && shareOn" class="confirm">
+        <p class="warn">
+          換新之後<strong>舊連結立刻失效</strong> —— 已經貼在群組、私訊裡的網址
+          任何人再點都只會看到「找不到卡冊」。分享錯對象時這是唯一的補救。
+        </p>
+        <div class="acts">
+          <button type="button" class="btn primary sm" :disabled="shareBusy" @click="rotateLink">
+            確認換新
+          </button>
+          <button type="button" class="btn sm" :disabled="shareBusy" @click="askRotate = false">取消</button>
         </div>
       </div>
 
@@ -1014,14 +997,8 @@ async function copyLink() {
 
 
 /* ---- 公開卡冊 ---- */
-.share { padding: 16px 18px; margin: 0 0 14px; display: grid; gap: 12px; }
-.shareTop { display: flex; align-items: flex-start; gap: 12px; }
-.shareHead { display: grid; gap: 5px; min-width: 0; }
-.shareTitle { font-size: 14px; }
 /* 這段警語不縮成灰字小號 —— 它是使用者決定要不要按開關的依據，
    跟標題一樣要讀得下去 */
-.shareWhy { margin: 0; font-size: 12px; line-height: 1.65; color: var(--muted); }
-.shareWhy strong { color: var(--ink); font-weight: 600; }
 
 /* 開關本體 30px 高，但按鈕撐到 44px 觸控高度（touch.css 的門檻） */
 .sw {
@@ -1043,32 +1020,22 @@ async function copyLink() {
 .sw.on .knob { transform: translateX(22px); background: #fff; }
 .sw:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--pill); }
 
-.shareBody { display: grid; gap: 10px; }
-/* 網址跟它的兩個動作是同一件事，所以共用一個框：上面一行網址，下面一行按鈕。
-   不把三個並排是因為網址是完整不截斷的長字串，擠在同一行會把按鈕壓到換行 */
-.linkRow {
-  display: grid; gap: 10px;
-  padding: 12px 14px;
-  background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px;
+/* 分享列併進總覽卡的最後一段，用一條細線跟上面的數字分開 ——
+   它是同一張卡裡的另一件事，不是另一張卡 */
+.shareRow {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line-soft);
 }
-/* 網址整條顯示出來（不截斷成 …），使用者才能長按複製，也才看得出連結換過了 */
-.link { min-width: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-/* 複製撐開、換新連結收成內容寬度：兩顆等寬的話，沒有外框的 ghost
-   會變成一個同樣大的空盒，看起來像那半邊沒東西 */
-.linkActs { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.linkActs .btn { min-width: 0; white-space: nowrap; }
-.linkActs .btn:first-child { flex: 1 1 auto; }
-.linkActs .btn.ghost { flex: none; }
-.shareErr { margin: 0; font-size: 12px; color: var(--danger); }
-.share .confirm { margin-top: 0; }
+.shareRow .btn { min-width: 0; white-space: nowrap; }
+.shareOffLabel { min-width: 0; font-size: 13px; font-weight: 600; }
+/* 開關永遠靠右：不管左邊是標籤還是兩顆按鈕，它的位置都不該跳動 */
+.shareRow .sw { margin-left: auto; flex: none; }
+.shareErr { margin: 10px 0 0; font-size: 12px; color: var(--danger); }
+.overview .confirm { margin-top: 12px; }
 
 
 
 @media (max-width: 720px) {
-  .share { padding: 14px; }
-  .shareWhy { font-size: 11.5px; }
-  .linkRow { padding: 10px 12px; gap: 8px; }
-  .link { font-size: 11px; }
 }
 
 .page { padding-top: 36px; padding-bottom: 72px; }

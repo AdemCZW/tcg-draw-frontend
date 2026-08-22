@@ -63,16 +63,21 @@ const paths: Record<string, string> = {
 
 <template>
   <div class="container page">
+    <!-- 一列講完：誰、有多少點、去哪儲值。
+         原本餘額自己包一個有底色的盒子另起一行，那個盒子沒有承載任何額外資訊，
+         只是把頁首撐高一倍 —— 「點數餘額」四個字也是，數字後面跟著「點」跟儲值箭頭
+         已經說明它是什麼了。 -->
     <header class="hero card">
       <div class="avatar" aria-hidden="true">{{ (auth.user?.name ?? 'VD').slice(0, 2) }}</div>
       <div class="who">
-        <p class="eyebrow">會員</p>
         <h1 class="mono">{{ auth.user?.name ?? '尚未登入' }}</h1>
+        <p class="eyebrow">會員</p>
       </div>
       <RouterLink :to="{ name: 'topup' }" class="balance">
-        <span class="muted lbl">點數餘額</span>
-        <strong class="mono"><RollingNumber :value="wallet.shown" /></strong>
-        <span class="muted unit">點 · 儲值 →</span>
+        <span class="amt">
+          <strong class="mono"><RollingNumber :value="wallet.shown" /></strong><span class="unit">點</span>
+        </span>
+        <span class="go">儲值 →</span>
       </RouterLink>
     </header>
 
@@ -129,34 +134,35 @@ const paths: Record<string, string> = {
 .page { padding-top: 28px; padding-bottom: 40px; max-width: 640px; }
 
 .hero {
-  display: grid; grid-template-columns: auto 1fr; grid-template-areas: "av who" "bal bal";
-  gap: 14px 16px; align-items: center;
-  padding: 18px 20px;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px; align-items: center;
+  padding: 14px 16px;
 }
 .avatar {
-  grid-area: av;
-  width: 52px; height: 52px; border-radius: 50%;
+  width: 44px; height: 44px; border-radius: 50%;
   display: grid; place-items: center;
   font-family: var(--font-mono); font-size: 15px; font-weight: 600; letter-spacing: .04em;
   background: linear-gradient(135deg, var(--accent), var(--accent-soft));
   color: #fff;
 }
-.who { grid-area: who; min-width: 0; }
-.who .eyebrow { margin: 0 0 2px; }
-h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
-.balance {
-  grid-area: bal;
-  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  padding: 12px 14px;
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  transition: background .15s;
+.who { min-width: 0; }
+/* 名字可能很長，撞到餘額之前先截斷 —— 餘額是右邊那欄，不該被推出去 */
+h1 {
+  margin: 0; font-size: 17px; letter-spacing: .02em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-@media (hover: hover) { .balance:hover { background: var(--surface-3); } }
+.who .eyebrow { margin: 1px 0 0; }
+/* 整塊是連往儲值的連結，觸控區靠 min-height 撐足，不另外畫背景 */
+.balance {
+  display: grid; justify-items: end; gap: 1px;
+  min-height: 44px; align-content: center;
+  padding: 0 2px; border-radius: var(--radius);
+}
 .balance:active { transform: scale(.99); }
-.balance .lbl { font-size: 12.5px; }
-.balance strong { font-size: 24px; letter-spacing: -.01em; }
-.balance .unit { font-size: 12.5px; margin-left: auto; color: var(--accent); }
+.amt { display: inline-flex; align-items: baseline; gap: 3px; }
+.balance strong { font-size: 20px; letter-spacing: -.01em; }
+.balance .unit { font-size: 12px; color: var(--muted); }
+.balance .go { font-size: 12px; color: var(--accent); }
 
 /* minmax(0, 1fr) 而不是 1fr：grid 子元素預設 min-width:auto，
    標題一長就把欄位撐爆整個視窗，手機上直接橫向捲。 */
