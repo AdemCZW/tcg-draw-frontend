@@ -47,17 +47,27 @@ const heroItem = computed(() =>
     ? result.items.reduce((best, it) => TIER_RANK[it.tier] > TIER_RANK[best.tier] ? it : best, result.items[0]!)
     : null)
 
-/* 演出速度依賞別調。最高賞看完整段，低賞加速 ——
-   每抽一張 D 賞都播滿八秒只會讓人想關掉。
+/* 演出速度依賞別調。最高賞看完整段（十秒），低賞加速 ——
+   每抽一張 D 賞都播滿十秒只會讓人想關掉。
    這跟 RevealBuildup 的分級是同一個原則：演出對應真的開出來的東西。 */
 const emergePace = computed(() => {
   const r = TIER_RANK[bestTier.value]
   return r >= 4 ? 1 : r === 3 ? 1.4 : 1.9
 })
+/* 強度跟速度分開。只調速度的話，低賞別看到的是同一場大爆炸的快轉版，
+   「衝擊」就變成常態；常態化的衝擊等於沒有衝擊。
+   要讓最高賞那一下打得出來，低賞別就必須真的小聲。 */
+const emergeIntensity = computed(() => {
+  const r = TIER_RANK[bestTier.value]
+  return r >= 5 ? 1 : r === 4 ? 0.92 : r === 3 ? 0.6 : 0.32
+})
 
-/* 原本煙霧前面還有一段光球蓄勢演出（RevealBuildup），已移除 ——
-   兩段動畫接連播要十秒以上，而且光球那段講的事情煙霧也在講。
-   現在開卡結果一進來就直接進煙霧。
+/* 原本煙霧前面還有一段光球蓄勢演出（RevealBuildup），已移除，
+   而且在這次「加長、加衝擊」的改版裡重新評估過，結論仍然是不啟用：
+   它是另一支獨立的全螢幕演出，播完畫面重來一次才輪到煙霧，兩段之間沒有交接。
+   把它接回來只是把演出變長，不會變得更有份量。
+   真正需要的蓄力已經做進煙霧演出內部（CardEmerge 的 charge 那一拍），
+   共用同一個核心光、同一團煙，爆完的殘料直接變成卡片的材料。
 
    動態偏好關動效的人直接看結果，不必先等一支動畫。 */
 const reduceMotion = typeof matchMedia !== 'undefined'
@@ -100,8 +110,8 @@ onMounted(() => {
      使用者就再也看不到自己抽到什麼。時間到就強制顯示。 */
   /* 保險絲：WebGL 中途失敗、或分頁在背景導致動畫暫停時，
      CardEmerge 的 done 事件永遠不會來，使用者就再也看不到自己抽到什麼。
-     煙霧最長八秒，這裡給到十二秒。 */
-  setTimeout(() => { revealed.value = true }, 12000)
+     演出最長十秒（七拍，含蓄力與爆發），這裡給到十五秒。 */
+  setTimeout(() => { revealed.value = true }, 15000)
 })
 </script>
 
@@ -126,6 +136,7 @@ onMounted(() => {
         :name="heroItem.card.name"
         :tier="heroItem.tier"
         :pace="emergePace"
+        :intensity="emergeIntensity"
         auto
         @done="revealed = true"
       />
@@ -243,6 +254,11 @@ onMounted(() => {
 }
 .emergeWrap .skipHint {
   position: absolute; left: 0; right: 0;
+  /* 下面那條給蓄勢演出用的 .skipHint 還帶著 translateX(-50%)，
+     而這裡改用 left:0/right:0 置中，兩條疊起來會把整行字往左推半個螢幕寬 ——
+     實測 left = -196.5px，字只剩最右邊幾個像素露在畫面上。
+     transform 沒有被 left/right 覆蓋掉，得自己歸零。 */
+  transform: none;
   bottom: calc(22px + var(--safe-b, 0px));
   font-size: 12px; color: rgba(255, 255, 255, .6); text-align: center;
   text-shadow: 0 1px 6px #000;

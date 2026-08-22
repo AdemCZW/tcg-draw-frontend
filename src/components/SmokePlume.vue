@@ -18,6 +18,20 @@
  *
  * 效能沿用 ShaderSky 那三件事：降解析度算、分頁看不見就停、
  * 開頭量一次幀率太慢就降 octave。煙是低頻訊號，降解析度幾乎看不出來。
+ *
+ * ---- uProg 與外層相位的對照表 ----
+ * duration 收到的是「到 form 結束為止」的長度（CardEmerge 的 SMOKE_MS = 8400ms），
+ * 不是整段演出 —— settle 是 DOM 那張卡接手之後的餘韻，煙那時已經沒事做。
+ * 下面每一個 smoothstep 的常數都是對著這張表算的，**改 SCRIPT 就要回來改這裡**：
+ *
+ *   uProg   相位            這裡在做什麼
+ *   .000    still 起
+ *   .083    gather 起       煙從四邊往內長
+ *   .274    swell 起        合攏、懸置（卡片輪廓閃一次預告）
+ *   .405    charge 起       煙被吸向核心、壓實、變厚
+ *   .583    burst 起        炸開：往外掀 + 開始消散
+ *   .690    form 起         殘料在卡框堆積 → 圖案顯影
+ *  1.000    form 結束       圖案完成，等 DOM 接手
  */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
@@ -118,14 +132,20 @@ void main() {
      這支 shader 一個畫素要算十次 fbm，octave 加一層等於多四十次噪聲取樣。 */
   int oct = uQuality > 0.5 ? 4 : 2;
 
-  /* 兩條互相獨立的時間曲線。
-     gather 聚集：煙從四個邊往內長，慢慢圍成一片
-     clear  消散：中心先破開，再整體變薄
+  /* 四條互相獨立的時間曲線。
+     gather  聚集：煙從四個邊往內長，慢慢圍成一片
+     squeeze 壓實：蓄力段被核心吸過去，體積變小密度變高
+     blast   掀開：爆發那一瞬間往外推的一下（短命）
+     clear   消散：整體變薄
 
      分開才控制得住 —— 用同一條曲線的話，煙會沿原路退回四個邊，
      看起來像倒放。煙聚攏之後是在原地散掉的，不是縮回去。 */
-  float gather = smoothstep(0.07, 0.31, uProg);   // gather 這一拍結束時煙剛好合攏
-  float clear  = smoothstep(0.50, 0.98, uProg);   // 周圍的煙往中間收，收完就散
+  float gather  = smoothstep(0.06, 0.27, uProg);  // gather 這一拍結束時煙剛好合攏
+  float squeeze = smoothstep(0.41, 0.58, uProg);  // charge 這一拍：往核心收
+  /* 掀開只活 0.10 個 uProg（滿速下約 0.9 秒）。
+     它必須短 —— 爆震是一下，拖長就變成「煙在放大」。 */
+  float blast   = smoothstep(0.583, 0.615, uProg) * (1.0 - smoothstep(0.615, 0.72, uProg));
+  float clear   = smoothstep(0.585, 0.96, uProg); // 炸完就開始薄下去
 
   /* 很慢的鏡頭漂移。只作用在煙的取樣座標，不能動到 p ——
      p 還要拿來定位卡片，一起轉的話卡片會跟著歪。
@@ -135,7 +155,12 @@ void main() {
           * (1.0 - 0.045 * sin(uTime * 0.10));
 
   float zoom = mix(2.60, 1.30, smoothstep(0.0, 0.80, uProg));
-  float d = smokeField(sp * zoom, uTime, 0.45, gather * 0.5, oct);
+  /* 取樣座標放大 = 畫面上的煙變小 = 整團往中心縮；縮小則相反。
+     蓄力時往內收、爆發那一下往外掀。
+     這比改遮罩自然得多：紋理本身跟著一起被壓縮／撐開，
+     只動遮罩的話煙的細節站在原地不動，讀起來像一塊布被拉。 */
+  zoom *= 1.0 + squeeze * 0.55 - blast * 0.42;
+  float d = smokeField(sp * zoom, uTime, 0.45, gather * 0.5 + squeeze * 0.45, oct);
 
   /* 細絲層：更高頻、跑更快的一層疊上去。
      主場的 fbm 給的是大團的形狀，煙真正「活」的感覺來自邊緣那些細絲 ——
@@ -179,7 +204,7 @@ void main() {
 
      它加在門檻之前，所以這塊煙跟畫面上其它煙走同一套門檻、打光、自我陰影。
      這是它讀起來是煙而不是一個貼上去的矩形的原因。 */
-  float acc = uHasCard > 0.5 ? smoothstep(0.44, 0.72, uProg) : 0.0;
+  float acc = uHasCard > 0.5 ? smoothstep(0.62, 0.84, uProg) : 0.0;
   vec2 relA = p / (uCardHalf * mix(0.74, 1.0, acc));
   float sdA = max(abs(relA.x), abs(relA.y));
   // 邊界一開始很糊很不規則，隨堆積收緊成卡框。用已經算過的細絲層當亂數，不多花成本
@@ -197,7 +222,9 @@ void main() {
 
      消散的門檻走平方曲線。線性的話門檻一開始就抬得很快，
      周圍的煙在還沒堆到卡上之前就掉光了。 */
-  float thr = mix(0.12, 0.82, clear * clear);
+  /* 蓄力時門檻壓低一點 = 同一片噪聲有更多畫素算得上是煙 = 煙看起來更濃。
+     配合上面的向心收縮，讀起來就是「同樣多的煙被塞進更小的地方」。 */
+  float thr = mix(0.12, 0.82, clear * clear) - squeeze * 0.045;
   float alpha = smoothstep(thr, thr + 0.30, d);
   alpha *= (1.0 - clear * clear * 0.55) * uDensity;
 
@@ -226,7 +253,7 @@ void main() {
      結果看到的是一張大卡在縮小 —— 不是煙聚成卡。
      先有形（上面的 slab），後有圖（這裡）。 */
   if (uHasCard > 0.5) {
-    float img = smoothstep(0.63, 0.835, uProg);
+    float img = smoothstep(0.79, 0.965, uProg);
 
     /* 這一段的擾動很小：料已經堆在該在的位置了，這裡只負責讓圖案浮出來。
        之前那個 2.9 倍的攤開量是「聚集」階段的工作，已經移到 slab 去做。 */
@@ -258,8 +285,9 @@ void main() {
 
     /* swell 那一拍（煙合攏、還沒開始堆）先閃一次卡片輪廓。
        那一拍本來是刻意的空白，但完全沒東西看會變成單純的等待 ——
-       給一個「有東西要來了」的預告，懸置才成立。 */
-    float ghost = smoothstep(0.33, 0.41, uProg) * (1.0 - smoothstep(0.43, 0.52, uProg));
+       給一個「有東西要來了」的預告，懸置才成立。
+       閃完馬上接 charge，預告跟蓄力連在一起才是一句完整的話。 */
+    float ghost = smoothstep(0.30, 0.37, uProg) * (1.0 - smoothstep(0.39, 0.47, uProg));
     if (ghost > 0.002) {
       vec2 gq = relA * 1.05 + (vec2(fbm(relA * 2.1 + uTime * 0.30, 2),
                                     fbm(relA * 2.1 + 9.1 - uTime * 0.24, 2)) - 0.5) * 0.55;
@@ -289,7 +317,7 @@ void main() {
   // 衰減指數決定顆粒大小。太小會變方塊、太大就成了鏡頭光斑，
   // 這個值對應到畫面上大約六到八個畫素
   float mote = step(0.90, hash(gi)) * exp(-dot(gf, gf) * 95.0);
-  float emberLife = smoothstep(0.28, 0.48, uProg) * (1.0 - smoothstep(0.82, 1.0, uProg));
+  float emberLife = smoothstep(0.25, 0.42, uProg) * (1.0 - smoothstep(0.86, 1.0, uProg));
   col += mix(uTint, vec3(1.0), 0.55) * mote * emberLife * 0.45;
   alpha = max(alpha, mote * emberLife * 0.5);
 
