@@ -49,8 +49,12 @@ const activeTab = computed(() => String(route.name))
     <header class="top">
       <div class="titleRow">
         <h1>{{ pool.title }}</h1>
-        <PoolModeBadge :mode="pool.mode" />
-        <PoolOriginBadge :origin="pool.origin" />
+        <!-- 總覽那頁的封面卡上緣已經有這兩顆，同一畫面重複兩次只是雜訊。
+             獎項與驗證沒有那張卡，仍然要在這裡講「這是什麼池」。 -->
+        <template v-if="route.name !== 'pool-overview'">
+          <PoolModeBadge :mode="pool.mode" />
+          <PoolOriginBadge :origin="pool.origin" />
+        </template>
       </div>
       <p class="meta mono muted">
         <span>{{ pool.ticketPrice.toLocaleString() }} 點 / 抽</span>

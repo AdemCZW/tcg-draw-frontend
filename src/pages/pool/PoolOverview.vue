@@ -42,14 +42,20 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
            讀不出那是一顆球；而它要傳達的等級，下面已經用文字講了三次
            （玩法徽章 / 最高賞未出 / 最後賞 · 卡名）。讀不懂的裝飾就只是雜訊。 -->
       <div class="art">
+        <!-- 玩法與來源標在卡片上緣：這兩件事講的是「這一池是什麼」，
+             跟卡片是同一個對象，分開放會讓人要在兩處之間來回對照。
+             原本用 detailed 模式在下面各展開一段規則說明，兩段字把卡片擠小了 —— 
+             卡是這一頁的主角，規則細節在賣家頁與交易保護頁都查得到。 -->
+        <div class="artTags">
+          <PoolModeBadge :mode="pool.mode" />
+          <PoolOriginBadge :origin="pool.origin" />
+        </div>
         <Tilt3D :max="16" class="cover" :style="{ viewTransitionName: `pool-cover-${pool.id}` }">
           <CardArt :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo" :art-id="topPrize?.card.artId" />
         </Tilt3D>
       </div>
 
       <div class="facts">
-        <PoolModeBadge :mode="pool.mode" detailed />
-        <PoolOriginBadge :origin="pool.origin" detailed class="originBlock" />
         <p v-if="topLive" class="top">
           <span class="lbl mono">最高賞未出</span>
           <strong>{{ topLive.tier === 'LAST' ? '最後賞' : topLive.tier + ' 賞' }} · {{ topLive.card.name }}</strong>
@@ -86,10 +92,16 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
 <style scoped>
 .ov { display: grid; gap: 16px; }
 .hero { padding: 18px; display: grid; grid-template-columns: auto 1fr; gap: 20px; align-items: center; }
-.art { position: relative; width: 150px; flex: none; }
+.art { position: relative; width: 190px; flex: none; }
 .cover { width: 100%; }
+/* 疊在卡片上緣，左右各一。z-index 要壓過 Tilt3D —— 它有 transform，
+   會自成一個堆疊脈絡，不給值的話標籤會被卡面蓋住 */
+.artTags {
+  position: absolute; z-index: 3; top: -11px; left: 6px; right: 6px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  pointer-events: none;
+}
 .facts { display: grid; gap: 12px; justify-items: start; min-width: 0; }
-.originBlock { padding-top: 10px; border-top: 1px dashed var(--line-soft); width: 100%; }
 .top { margin: 0; display: grid; gap: 4px; }
 .top .lbl { font-size: 11px; letter-spacing: .14em; color: var(--ok); }
 .top strong { font-size: 16px; }
@@ -109,7 +121,8 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
 }
 @media (max-width: 720px) {
   .hero { grid-template-columns: 1fr; gap: 16px; padding: 16px; justify-items: center; text-align: center; }
-  .art { width: 132px; }
+  /* 手機上卡片是唯一的主角，佔滿可用寬度。上限擋住平板寬度下的過度放大 */
+  .art { width: min(100%, 260px); }
   .facts { justify-items: center; }
   .top { text-align: center; }
   .sellerRow { justify-content: center; }
