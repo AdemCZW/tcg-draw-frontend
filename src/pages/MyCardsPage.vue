@@ -547,31 +547,37 @@ async function copyLink() {
 
     <p class="muted note">寄存中的卡可合併出貨（省運費），寄存期限 90 天。</p>
 
-    <!-- 上架入口放在卡冊層級，不放在單張卡的動作裡 —— 理由見 script 裡的說明。
-         沒有寄存中的卡就整塊不出現：按了也沒有東西可選 -->
-    <div v-if="stashedCount" class="sellBar">
-      <button v-if="!selecting" type="button" class="btn primary sellCta" @click="startSell">
-        上架出售
-      </button>
-      <p v-else class="sellHint">
-        點卡片挑要賣的，可以複選。只有<strong>寄存中</strong>的卡能上架。
-      </p>
-    </div>
-
     <div v-if="list.ready.value && !total" class="empty card">
       <p>卡冊還是空的。</p>
       <RouterLink :to="{ name: 'home' }" class="btn primary">去抽第一張</RouterLink>
     </div>
 
-    <!-- 狀態分頁：三種狀態的下一步動作完全不同，分開才不用每張卡重新判斷 -->
-    <div v-if="tabs.length > 1" class="tabs" role="tablist">
+    <!-- 上架入口與狀態分頁同一列：兩者都是「要看／要動哪一批卡」的控制項，
+         各佔一行會在手機上先吃掉兩列才看得到第一張卡。
+         上架在前、分頁在後 —— 分頁那條的右緣有漸隱遮罩表示還能往右捲，
+         按鈕擺在它後面會看起來像按鈕自己在淡出。
+         沒有寄存中的卡就不出現上架鍵：按了也沒有東西可選。 -->
+    <div v-if="stashedCount || tabs.length > 1" class="listHead">
       <button
-        v-for="t in tabs" :key="t.k"
-        type="button" role="tab" :aria-selected="tab === t.k"
-        class="tab" :class="{ on: tab === t.k }"
-        @click="tab = t.k"
-      >{{ t.label }}<span class="tabN mono">{{ countOf(t.k) }}</span></button>
+        v-if="stashedCount && !selecting"
+        type="button" class="btn primary sellCta" @click="startSell"
+      >上架出售</button>
+
+      <!-- 狀態分頁：三種狀態的下一步動作完全不同，分開才不用每張卡重新判斷 -->
+      <div v-if="tabs.length > 1" class="tabs" role="tablist">
+        <button
+          v-for="t in tabs" :key="t.k"
+          type="button" role="tab" :aria-selected="tab === t.k"
+          class="tab" :class="{ on: tab === t.k }"
+          @click="tab = t.k"
+        >{{ t.label }}<span class="tabN mono">{{ countOf(t.k) }}</span></button>
+      </div>
     </div>
+
+    <!-- 選取模式的說明另起一行：塞進上面那列會把分頁擠到看不見 -->
+    <p v-if="selecting" class="sellHint">
+      點卡片挑要賣的，可以複選。只有<strong>寄存中</strong>的卡能上架。
+    </p>
 
     <div ref="listRef" class="grid">
       <div
@@ -781,9 +787,11 @@ async function copyLink() {
 /* ---- 上架入口 ----
    卡冊層級的一顆按鈕，選取模式開著時換成一行說明 ——
    兩者不會同時出現，這一列的高度才不會跳動。 */
-.sellBar { display: flex; align-items: center; gap: 10px; min-width: 0; margin: -8px 0 16px; }
+.listHead { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 4px 0 16px; }
 .sellCta { flex: none; min-height: 44px; padding: 9px 18px; font-size: 13.5px; }
-.sellHint { margin: 0; min-width: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+/* 這一列的寬度由分頁那條讓出來：它自己會橫向捲，按鈕不該被壓縮 */
+.listHead .tabs { flex: 1 1 auto; min-width: 0; margin: 0; }
+.sellHint { margin: -8px 0 16px; min-width: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
 .sellHint strong { color: var(--ink); font-weight: 600; }
 
 /* ---- 選取模式 ----
