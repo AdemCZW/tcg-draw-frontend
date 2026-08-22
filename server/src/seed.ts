@@ -4,6 +4,7 @@
  * 部署完的資料庫是空的，沒有掛單就沒東西可買、也沒東西可測。
  * 這支可以重複執行 —— 全部用 on conflict do nothing，不會重複塞。
  */
+import { randomBytes } from 'node:crypto'
 import { sql } from './db.js'
 import { PLATFORM_ID } from './orders-service.js'
 import { commitV2, manifestHashOf, seatSequence } from './shared/fairness.js'
@@ -92,8 +93,6 @@ interface PoolDef {
   ticketPrice: number
   /** 只用 002_core.sql 允許的值：draft / committed / open / sold_out / revealed */
   status: 'open' | 'sold_out' | 'revealed'
-  /** 每個池都要不同 —— 同一組 seed 會洗出同一個籤序，共用就等於沒洗 */
-  serverSeed: string
   /** 已售出的籤數。沒有人抽過的池看起來像壞掉，所以先預填一部分 */
   sold: number
   /** 籤位排列：預設散落（像真的有人挑籤），競標池要留最後幾支所以從頭填 */
@@ -116,7 +115,7 @@ const poolDefs: PoolDef[] = [
        官方池的角色是基準線 —— 讓買家知道這個站的池應該長什麼樣。 */
     id: 'p-official-1', sellerId: 'u-official', mode: 'classic',
     title: '官方旗艦場 #59 · 閃色寶藏 精選',
-    ticketPrice: 1280, status: 'open', serverSeed: 'a1'.repeat(32), sold: 42, openedDaysAgo: 4,
+    ticketPrice: 1280, status: 'open', sold: 42, openedDaysAgo: 4,
     prizes: [ // 100 籤，還元 86.3%
       { tier: 'LAST', card: C.charizardUR, total: 1 },
       { tier: 'A', card: C.gardevoirUR, total: 1 },
@@ -131,7 +130,7 @@ const poolDefs: PoolDef[] = [
        票價壓不到 100 是因為最低價的普卡就要 120 —— 再低就變成每抽必賺。 */
     id: 'p-official-2', sellerId: 'u-official', mode: 'classic',
     title: '官方入門場 · 兩百點開一張',
-    ticketPrice: 200, status: 'open', serverSeed: 'a2'.repeat(32), sold: 61, openedDaysAgo: 3,
+    ticketPrice: 200, status: 'open', sold: 61, openedDaysAgo: 3,
     prizes: [ // 200 籤，還元 87.8%
       { tier: 'A', card: C.espeonSAR, total: 1 },
       { tier: 'B', card: C.hasselSAR, total: 3 },
@@ -145,7 +144,7 @@ const poolDefs: PoolDef[] = [
        公平性頁面 —— server_seed 只有在 revealed 之後才會出現在回應裡。 */
     id: 'p-official-3', sellerId: 'u-official', mode: 'classic',
     title: '官方旗艦場 #58 · 已開獎',
-    ticketPrice: 800, status: 'revealed', serverSeed: 'a3'.repeat(32), sold: 60, openedDaysAgo: 26,
+    ticketPrice: 800, status: 'revealed', sold: 60, openedDaysAgo: 26,
     prizes: [ // 60 籤，還元 84.2%
       { tier: 'LAST', card: C.gardevoirUR, total: 1 },
       { tier: 'A', card: C.dragapultSAR, total: 1 },
@@ -158,7 +157,7 @@ const poolDefs: PoolDef[] = [
     // 商家的量產大池：籤多、單價中等，用來壓測籤牆一次畫 250 格的效能
     id: 'p-shop-1', sellerId: 'u-shop', mode: 'classic',
     title: '關都精選 · 伊布家族 250 抽',
-    ticketPrice: 350, status: 'open', serverSeed: 'b1'.repeat(32), sold: 118, openedDaysAgo: 6,
+    ticketPrice: 350, status: 'open', sold: 118, openedDaysAgo: 6,
     prizes: [ // 250 籤，還元 85.7%
       { tier: 'LAST', card: C.pikachuSAR, total: 1 },
       { tier: 'A', card: C.umbreonSAR, total: 1 },
@@ -179,7 +178,7 @@ const poolDefs: PoolDef[] = [
        等後端補上模式邏輯再把 mode 改回來即可，獎項結構不用動。 */
     id: 'p-shop-2', sellerId: 'u-shop', mode: 'classic',
     title: '多龍巴魯托 精選 50 抽',
-    ticketPrice: 350, status: 'open', serverSeed: 'b2'.repeat(32), sold: 9, openedDaysAgo: 5,
+    ticketPrice: 350, status: 'open', sold: 9, openedDaysAgo: 5,
     prizes: [ // 50 籤
       { tier: 'A', card: C.dragapultSAR, total: 1 },
       { tier: 'C', card: C.morpeko, total: 20 },
@@ -196,7 +195,7 @@ const poolDefs: PoolDef[] = [
     title: '夢幻 精選 66 抽',
     /* 票價 500 → 640。原本是連莊爆賞，抽到 BUST 的人暫持獎品會被沒收，
        那部分不用發出去。改成 classic 之後每一格都要真的發，還元率變成 108%。 */
-    ticketPrice: 640, status: 'open', serverSeed: 'b3'.repeat(32), sold: 14, openedDaysAgo: 2,
+    ticketPrice: 640, status: 'open', sold: 14, openedDaysAgo: 2,
     prizes: [ // 66 籤
       { tier: 'A', card: C.dragapultSAR, total: 1 },
       { tier: 'B', card: C.pidgeotSAR, total: 3 },
@@ -209,7 +208,7 @@ const poolDefs: PoolDef[] = [
     // 原本是無敵賞（muteki）。同樣因為後端不讀 mode 而改回 classic，見 p-shop-2 的說明
     id: 'p-shop-4', sellerId: 'u-shop', mode: 'classic',
     title: '謎擬Ｑ 60 抽',
-    ticketPrice: 700, status: 'open', serverSeed: 'b4'.repeat(32), sold: 33, openedDaysAgo: 8,
+    ticketPrice: 700, status: 'open', sold: 33, openedDaysAgo: 8,
     prizes: [ // 60 籤，還元 83.6%
       { tier: 'LAST', card: C.charizardSAR, total: 1 },
       { tier: 'B', card: C.dragapultSAR, total: 2 },
@@ -221,7 +220,7 @@ const poolDefs: PoolDef[] = [
     // 個人賣家的小池：40 籤，抽起來很快就完抽
     id: 'p-seller-1', sellerId: 'u-seller', mode: 'classic',
     title: '個人開池 · 伊布小場 40 抽',
-    ticketPrice: 800, status: 'open', serverSeed: 'c1'.repeat(32), sold: 12, openedDaysAgo: 1,
+    ticketPrice: 800, status: 'open', sold: 12, openedDaysAgo: 1,
     prizes: [ // 40 籤，還元 86.6%
       { tier: 'A', card: C.umbreonSAR, total: 1 },
       { tier: 'B', card: C.eeveeSAR, total: 1 },
@@ -234,7 +233,7 @@ const poolDefs: PoolDef[] = [
        中間隔著賣家按下開獎 —— 前端要分得出來，所以兩種都要有池。 */
     id: 'p-seller-2', sellerId: 'u-seller', mode: 'classic',
     title: '個人開池 · 伊布家族全餐（已售完）',
-    ticketPrice: 400, status: 'sold_out', serverSeed: 'c2'.repeat(32), sold: 66, openedDaysAgo: 12,
+    ticketPrice: 400, status: 'sold_out', sold: 66, openedDaysAgo: 12,
     prizes: [ // 66 籤，還元 81.4%
       { tier: 'A', card: C.umbreonSAR, total: 1 },
       { tier: 'B', card: C.espeonSAR, total: 1 },
@@ -247,7 +246,7 @@ const poolDefs: PoolDef[] = [
     // 高單價、低籤數。頂獎佔票收的比例高，抽起來的感覺跟銅板池完全不同
     id: 'p-vault-1', sellerId: 'u-vaultkeeper', mode: 'classic',
     title: '保庫堂 · 高額場 30 抽',
-    ticketPrice: 2500, status: 'open', serverSeed: 'd1'.repeat(32), sold: 7, openedDaysAgo: 3,
+    ticketPrice: 2500, status: 'open', sold: 7, openedDaysAgo: 3,
     prizes: [ // 30 籤，還元 84.9%
       { tier: 'LAST', card: C.kieran, total: 1 },
       { tier: 'A', card: C.terapagosUR, total: 1 },
@@ -266,7 +265,7 @@ const poolDefs: PoolDef[] = [
     title: '保庫堂 · 噴火龍 80 抽',
     /* 票價 300 → 580。這個池原本是尾籤競標，收入有一部分來自喊標；
        改成 classic 之後只剩固定票價，還元率變成 164%。調價回到 ~85%。 */
-    ticketPrice: 580, status: 'open', serverSeed: 'd2'.repeat(32), sold: 77, soldLayout: 'head',
+    ticketPrice: 580, status: 'open', sold: 77, soldLayout: 'head',
     openedDaysAgo: 9,
     prizes: [ // 80 籤
       { tier: 'A', card: C.charizardSAR, total: 1 },
@@ -282,7 +281,7 @@ const poolDefs: PoolDef[] = [
     // 全部附鑑定編號的精品池：這種池的賣點是「可查證」，買家能拿 certNo 自己去對
     id: 'p-grade10-1', sellerId: 'u-grade10', mode: 'classic',
     title: '滿分場 #30 · 全 PSA 10',
-    ticketPrice: 3200, status: 'open', serverSeed: 'e1'.repeat(32), sold: 9, openedDaysAgo: 5,
+    ticketPrice: 3200, status: 'open', sold: 9, openedDaysAgo: 5,
     prizes: [ // 20 籤，還元 89.2%
       { tier: 'LAST', card: C.terapagosPSA, total: 1 },
       { tier: 'A', card: C.pikachuPSA, total: 1 },
@@ -302,7 +301,7 @@ const poolDefs: PoolDef[] = [
     // 個人賣家的小池，開得快、賣得也快：接近完抽的池在列表上要看得到
     id: 'p-promo-1', sellerId: 'u-promolab', mode: 'classic',
     title: '促販卡 大亂鬥 第 7 回',
-    ticketPrice: 250, status: 'open', serverSeed: 'e2'.repeat(32), sold: 25, openedDaysAgo: 1,
+    ticketPrice: 250, status: 'open', sold: 25, openedDaysAgo: 1,
     prizes: [ // 36 籤，還元 88.7%
       { tier: 'A', card: C.pepperSAR, total: 1 },
       { tier: 'B', card: C.hasselSAR, total: 1 },
@@ -318,7 +317,7 @@ const poolDefs: PoolDef[] = [
     /* 票價從 300 調到 3250。原本的獎品總值是 276,120，用 300 × 100 籤賣
        等於還元率 920% —— 賣一池賠九池，而且過不了平台自己的護欄。
        獎品組成不動（那是這個池的賣點），調票價讓它落在 85% 左右。 */
-    ticketPrice: 3250, status: 'open', serverSeed: '11'.repeat(32), clientSeed: 'fixture:seed-1',
+    ticketPrice: 3250, status: 'open', clientSeed: 'fixture:seed-1',
     sold: 0, openedDaysAgo: 0,
     prizes: [
       { tier: 'LAST', card: pcard('噴火龍 ex UR', 'SV4a-349', 43680), total: 1 },
@@ -359,6 +358,13 @@ async function seedPool(d: PoolDef) {
   const [exists] = await sql`select 1 from pools where id = ${d.id}`
   if (exists) return
   const clientSeed = d.clientSeed ?? `fixture:${d.id}`
+  /* server_seed 一定要是密碼學隨機，不能寫死。
+     commitHash、clientSeed、整份獎品清單都由 GET /v1/pools/:id 公開，
+     只要 server_seed 可預測（例如寫死成 'a1' 重複 32 次，全空間才 256 種），
+     任何人都能離線暴力比對 commit、還原出「哪個籤位是好卡」——
+     開獎前的盲盒就被看穿了。改用 32 bytes 隨機值，這條路整個封死。
+     （安全稽核 C-1：docs/security-audit.md） */
+  const serverSeed = randomBytes(32).toString('hex')
   const prizeDefs = d.prizes.map((p, i) => ({ ...p, id: `${d.id}-pr${i}` }))
   const total = prizeDefs.reduce((a, p) => a + p.total, 0)
   const openedAt = new Date(Date.now() - d.openedDaysAgo * 86_400_000)
@@ -392,14 +398,14 @@ async function seedPool(d: PoolDef) {
                        server_seed, commit_hash, manifest_hash, client_seed_source, client_seed,
                        shitei_tier, auction_seats, opened_at, revealed_at, return_ratio)
     values (${d.id}, ${d.sellerId}, ${d.mode}, ${d.title}, ${d.ticketPrice}, ${total}, ${d.status},
-            ${d.serverSeed}, ${await commitV2(d.serverSeed, manifestHash)}, ${manifestHash},
+            ${serverSeed}, ${await commitV2(serverSeed, manifestHash)}, ${manifestHash},
             ${clientSeed}, ${clientSeed},
             ${d.shiteiTier ?? null}, ${d.auctionSeats ?? null}, ${openedAt},
             ${d.status === 'revealed' ? new Date() : null}, ${ratio.toFixed(2)})
   `
   await sql`insert into pool_prizes ${sql(prizeDefs.map(p => ({ id: p.id, pool_id: d.id, tier: p.tier, card: p.card, total: p.total })) as never)}`
 
-  const seq = await seatSequence(d.serverSeed, clientSeed, prizeDefs.map(p => ({ prizeId: p.id, total: p.total })))
+  const seq = await seatSequence(serverSeed, clientSeed, prizeDefs.map(p => ({ prizeId: p.id, total: p.total })))
   /* 已售出的籤直接標在 pool_seats 上，不補 draws / prizes ——
      這裡要的只是「這個池賣了多少」的畫面，補了反而會讓測試帳號的保管庫多出憑空的卡。 */
   const taken = pickSeats(total, d.sold, d.soldLayout ?? 'scatter')
