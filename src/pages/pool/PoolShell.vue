@@ -14,7 +14,7 @@
  * 池詳情就在跑。現在只在「總覽」tab 且進入競標階段時掛載，離開就拆。
  */
 import { computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { usePoolStore } from '@/stores/pools'
 import { useSellerStore } from '@/stores/sellers'
 import DrawPanel from '@/components/DrawPanel.vue'
@@ -23,6 +23,17 @@ import PoolOriginBadge from '@/components/PoolOriginBadge.vue'
 import { track } from '@/lib/ga'
 
 const route = useRoute()
+const router = useRouter()
+
+/* 退去哪不能寫死：池可能從大廳或挑池頁進來。
+   判斷「有沒有站內的上一頁」不能用 window.history.length —— 新分頁直接貼網址
+   進來時，那張空白起始頁也算一筆，length 是 2，back() 會把人丟回空白頁。
+   改看 Vue Router 自己記的 state.back：它只在「上一筆是這個 app 的路由」時才有值。 */
+function leave() {
+  const prev = (router.options.history.state as { back?: string | null } | undefined)?.back
+  if (typeof prev === 'string') router.back()
+  else router.replace({ name: 'home' })
+}
 const pools = usePoolStore()
 const sellers = useSellerStore()
 
@@ -47,6 +58,11 @@ const activeTab = computed(() => String(route.name))
   <div v-if="pool" class="shell container">
     <!-- 標題列：貼在 header 下面，切 tab 不動 -->
     <header class="top">
+      <!-- 這一頁先前唯一的出口是瀏覽器的上一頁。池可能從大廳或挑池頁進來，
+           所以退去哪不能寫死 —— 有歷史就 back，直接貼網址進來的退到大廳。
+           樣式沿用市場卡片頁與上架頁那條「← 名稱」，不另外發明一種返回。 -->
+      <button type="button" class="back" @click="leave">← 返回</button>
+
       <div class="titleRow">
         <h1>{{ pool.title }}</h1>
         <!-- 總覽那頁的封面卡上緣已經有這兩顆，同一畫面重複兩次只是雜訊。
@@ -118,6 +134,14 @@ const activeTab = computed(() => String(route.name))
 <style scoped>
 /* 底部導覽的讓位交給頁尾（見 App.vue），這裡只留自己的排版留白 */
 .shell { padding-top: 26px; padding-bottom: 60px; }
+/* 觸控高度給滿 44，但視覺上是一行小字 —— 返回不該跟這一頁的主要動作搶注意力 */
+.back {
+  padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 13px; color: var(--muted);
+  min-height: 44px; display: inline-flex; align-items: center;
+}
+@media (hover: hover) { .back:hover { color: var(--ink); } }
+.back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 
 .top { margin-bottom: 18px; }
 .titleRow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }

@@ -18,8 +18,13 @@ const props = withDefaults(defineProps<{
 }>(), { fallback: undefined })
 
 const router = useRouter()
+/* 不能用 window.history.length 判斷有沒有上一頁：新分頁直接貼網址進來時，
+   那張空白起始頁也算一筆，length 是 2，back() 會把人丟回空白頁 —— 而這一條
+   是 chrome:'none' 頁面唯一的出口，丟出去就真的困住了。
+   Vue Router 的 state.back 只在「上一筆是這個 app 的路由」時才有值。 */
 function back() {
-  if (window.history.length > 1) router.back()
+  const prev = (router.options.history.state as { back?: string | null } | undefined)?.back
+  if (typeof prev === 'string') router.back()
   else if (props.fallback) router.replace(props.fallback)
   else router.replace({ name: 'home' })
 }
