@@ -10,8 +10,8 @@
  * 不推 history —— 返回鍵應該直接跳出池，不該在 tab 之間來回彈。
  * 桌機保留側欄的購買面板：同一屏邊看獎項邊決定抽數，這是桌機該有的效率。
  *
- * 尾籤競標面板有 500ms ticker 與 11s 模擬對手兩個 interval，原本只要打開
- * 池詳情就在跑。現在只在「總覽」tab 且進入競標階段時掛載，離開就拆。
+ * 尾籤競標面板有一個 500ms 的倒數 ticker，原本只要打開池詳情就在跑。
+ * 現在只在「總覽」tab 且進入競標階段時掛載，離開就拆。
  */
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'

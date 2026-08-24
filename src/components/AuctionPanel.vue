@@ -5,7 +5,6 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { AuctionLot, Pool } from '@/types/models'
 import { api } from '@/lib/api'
 import { useWalletStore } from '@/stores/wallet'
-import * as mock from '@/mocks/data'
 
 const props = defineProps<{ pool: Pool }>()
 const wallet = useWalletStore()
@@ -19,12 +18,19 @@ const busy = ref<string | null>(null)
 const notice = ref('')
 const error = ref('')
 let ticker: ReturnType<typeof setInterval> | undefined
-let rival: ReturnType<typeof setInterval> | undefined
 
 const MIN_INCREMENT = 50
 
 onMounted(async () => {
-  lots.value = await api.listLots(props.pool.id)
+  /* 正式模式下 api.listLots 會直接丟「尾籤競標尚未上線」。要接住它 ——
+     不接的話是 onMounted 裡的 unhandled rejection，畫面只會是一塊空白面板，
+     使用者看到的是「壞掉」而不是「還沒開」。 */
+  try {
+    lots.value = await api.listLots(props.pool.id)
+  } catch (e) {
+    error.value = e instanceof Error && e.message ? e.message : '無法載入競標資訊'
+    return
+  }
   for (const l of lots.value) bidInput.value[l.id] = l.currentBid + MIN_INCREMENT
 
   ticker = setInterval(() => {
@@ -40,26 +46,14 @@ onMounted(async () => {
     }
   }, 500)
 
-  // mock 對手加價；正式版改為 SSE / WebSocket 推播
-  rival = setInterval(() => {
-    const live = lots.value.filter(l => l.status === 'live')
-    if (!live.length) return
-    const target = live[Math.floor(Math.random() * live.length)]
-    const wasTop = target.youAreTop
-    const updated = mock.rivalBid(target.id)
-    if (!updated) return
-    Object.assign(target, updated)
-    bidInput.value[target.id] = updated.currentBid + MIN_INCREMENT
-    if (wasTop) {
-      const refund = myLocked.value[target.id] ?? 0
-      delete myLocked.value[target.id]
-      if (refund) wallet.topup(refund)
-      notice.value = `第 ${target.seat} 籤已被 ${updated.topBidder} 超越，你的 ${refund.toLocaleString()} 點已全額退還`
-    }
-  }, 11_000)
+  /* 這裡原本還有第二個定時器：每 11 秒呼叫一次 mock.rivalBid()，把「對手加價」
+     演出來。它沒有被 MOCK 旗標擋住，所以那是平台無條件內建的自動抬價機器人 ——
+     對真人顯示「有人出價超過你」，而根本沒有那個人。競標系統最不能有的就是這個，
+     所以直接刪掉，不是關掉。真實的對手出價要靠後端推播（SSE / WebSocket），
+     等競標真的有後端時再接。 */
 })
 
-onUnmounted(() => { clearInterval(ticker); clearInterval(rival) })
+onUnmounted(() => { clearInterval(ticker) })
 
 function remain(lot: AuctionLot) {
   const ms = Math.max(0, lot.endsAt - now.value)

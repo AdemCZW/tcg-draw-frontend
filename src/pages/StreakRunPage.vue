@@ -50,7 +50,17 @@ function onBallOpened() {
 const busy = ref(false)
 const error = ref('')
 
-onMounted(() => pools.ensureLoaded())
+onMounted(async () => {
+  await pools.ensureLoaded()
+  /* 這一頁只屬於連莊池。網址是猜得到的（/pools/<任何 id>/streak），
+     而路由沒有任何條件，所以在此之前把一個無敵賞的池的 id 貼進去，
+     整頁連莊介面就照樣長出來 —— 標題寫「連莊爆賞」、寫「入場 350 點，
+     之後每一抽都免費」，而那個池根本沒有這回事。那是殘留的假入口，
+     不是壞掉的功能：它長得完全正常，只有按下去才會失敗。
+     玩法對不上就退回池頁，讓入口只有一個來源（DrawPanel 看 mode 決定去哪）。 */
+  const p = pool.value
+  if (p && p.mode !== 'streak') router.replace({ name: 'pool', params: { id: p.id } })
+})
 
 const taken = computed(() => new Set(pool.value?.takenSeats ?? []))
 const held = computed(() => run.value?.items ?? [])
@@ -75,8 +85,11 @@ async function start() {
     run.value = await pools.startStreak(pool.value.id)
     phase.value = 'picking'
     track('click_draw_1')
-  } catch {
-    error.value = '無法開始，點數已退回'
+  } catch (e) {
+    /* 把真正的原因講出來，不要一律「無法開始」。API 模式下 api.startStreak
+       會丟「連莊爆賞尚未上線」—— 那句話是給人看的，吞掉它就等於把
+       「這個玩法根本沒有後端」變回一個看不出來的失敗。 */
+    error.value = e instanceof Error && e.message ? e.message : '無法開始，點數已退回'
     wallet.topup(entry.value)
   } finally { busy.value = false }
 }

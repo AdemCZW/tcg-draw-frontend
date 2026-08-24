@@ -137,8 +137,11 @@ const MATCH: Record<Cat, (p: Pool) => boolean> = {
      永遠篩不掉東西的分類等於沒有分類，只是多一個要掃過的按鈕。
      改看金額才真的有選擇性，也才是玩家實際在找的訊號。 */
   big: p => p.status === 'open' && topLiveValue(p) >= 5000,
-  // 特殊玩法：連莊、競標、二選一這些不是一般抽
-  special: p => p.status === 'open' && ['streak', 'auction', 'muteki'].includes(p.mode),
+  /* 特殊玩法：連莊、競標、指定賞這些不是一般抽。
+     muteki 從這裡拿掉了 —— 它現在是全站唯一開得出來的玩法（見 migration 016），
+     每個池都符合的話這一格會列出全部，跟「全部」那一格一模一樣。
+     永遠篩不掉東西的分類等於沒有分類，理由跟上面 big 那格的註解相同。 */
+  special: p => p.status === 'open' && ['streak', 'auction', 'shitei'].includes(p.mode),
   done: p => p.status !== 'open'
 }
 const CATS: { k: Cat; label: string }[] = [

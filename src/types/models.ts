@@ -15,6 +15,12 @@ export type Tier = 'A' | 'B' | 'C' | 'D' | 'LAST' | 'BUST'
 
 /**
  * 玩法模式（源自市場調查：金證N/oneone 四玩法 + DOPA ニブイチ）
+ *
+ * 五種只有 muteki 是後端真的實作了的 —— pools-service.ts 的 draw() 從來沒讀過
+ * pools.mode，它做的事就是無敵賞。所以建池 API 只收 muteki，資料庫的 check
+ * 也只允許 muteki（migration 016）。另外四種在 API 模式下開不出池，
+ * 型別留著是因為 mock（demo 模式）還在示範它們，而且將來要實作。
+ *
  * - classic  經典賞：最後賞送給抽走最後一籤的人（LAST 不佔籤位）
  * - shitei   指定賞：抽中指定賞 → 加送最後賞，整池立刻結束
  * - muteki   無敵賞：最後賞作為一般大獎放在籤池內，無額外贈獎

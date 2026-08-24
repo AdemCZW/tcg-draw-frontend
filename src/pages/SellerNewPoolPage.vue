@@ -62,17 +62,20 @@ async function submitApply() {
   }
 }
 
-/* 玩法。目前只有 classic 是真的能用的：pools-service.ts 完全沒有讀 pools.mode，
-   抽卡一律照籤位發獎。所以
-     - shitei / muteki 開得出來，但抽起來是一般池，畫面上的期望值會跟實際不符
+/* 玩法。目前只有 muteki（無敵賞）是真的能用的：pools-service.ts 完全沒有讀
+   pools.mode，抽卡一律照籤位發獎 —— 那就是無敵賞的規則。所以
+     - classic / shitei 開得出來的話，賣的是後端不存在的規則（經典賞宣傳的
+       「抽走最後一籤額外得最後賞」一行都沒有），那是對買家的不實陳述
      - streak / auction 更糟：前端會把人導去連莊／競標流程，而那兩個在 API 模式下
        沒有後端，是死路
    讓賣家選得到等於讓他開一個對玩家壞掉的池，所以先鎖住，但仍然列出來 ——
-   藏起來的話賣家不會知道之後會有這些玩法。後端補上模式邏輯後把 enabled 打開即可。 */
+   藏起來的話賣家不會知道之後會有這些玩法。後端補上模式邏輯後把 enabled 打開即可
+   （同時要放寬建池 API 的 enum 與資料庫的 check，見 migration 016）。
+   muteki 排在第一個：它是現在唯一開得出來的，預設選項不該還要往下找。 */
 const MODES: { m: PoolMode; enabled: boolean }[] = [
-  { m: 'classic', enabled: true },
+  { m: 'muteki', enabled: true },
+  { m: 'classic', enabled: false },
   { m: 'shitei', enabled: false },
-  { m: 'muteki', enabled: false },
   { m: 'streak', enabled: false },
   { m: 'auction', enabled: false }
 ]
@@ -80,7 +83,7 @@ const TIERS: Tier[] = ['A', 'B', 'C', 'D', 'LAST', 'BUST']
 
 const form = reactive({
   title: '',
-  mode: 'classic' as PoolMode,
+  mode: 'muteki' as PoolMode,
   ticketPrice: 300,
   shiteiTier: 'A' as Tier,
   auctionSeats: 3,
@@ -223,7 +226,7 @@ async function submit() {
           </label>
 
           <span class="field-label">玩法</span>
-          <p class="modeNote">目前開放一般池。指定賞、無敵賞、連莊、競標還在做，開放後會在這裡解鎖。</p>
+          <p class="modeNote">目前開放無敵賞。經典賞、指定賞、連莊、競標還在做，開放後會在這裡解鎖。</p>
           <div class="modes">
             <button
               v-for="o in MODES" :key="o.m" type="button"
@@ -285,6 +288,10 @@ async function submit() {
           <p v-if="form.mode === 'streak'" class="hint muted">
             連莊爆賞必須放「爆賞」籤，玩家抽到就該輪歸零。爆賞越少玩家越容易連莊，
             但你的還元率會飆高——右側會即時算給你看。
+          </p>
+          <p v-else-if="form.mode === 'muteki'" class="hint muted">
+            無敵賞的「最後賞」就是籤池裡的一張獎品，它跟其他賞別一樣佔一個籤位，
+            所有賞別的數量加總必須剛好等於總籤數。抽走最後一籤沒有額外贈獎。
           </p>
           <p v-else-if="form.mode === 'classic' || form.mode === 'shitei'" class="hint muted">
             「最後賞」是額外贈獎，不佔籤位；其餘賞別的數量加總就是總籤數。

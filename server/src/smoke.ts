@@ -623,7 +623,7 @@ async function run() {
   console.log('\n經濟護欄：')
   {
     const mint = await call(seller, '/v1/pools', {
-      mode: 'classic', title: 'smoke-mint', ticketPrice: 100, totalTickets: 10,
+      mode: 'muteki', title: 'smoke-mint', ticketPrice: 100, totalTickets: 10,
       prizes: [
         { tier: 'A', card: { id: 'c-a', name: '誘餌 A 賞', refPrice: 700 }, total: 1 },
         { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 1_000_000 }, total: 9 }
@@ -635,7 +635,7 @@ async function run() {
 
     // 單張 refPrice 的絕對上限：多打幾個零不該進得了資料庫
     const huge = await call(seller, '/v1/pools', {
-      mode: 'classic', title: 'smoke-huge-ref', ticketPrice: 100_000_000, totalTickets: 1,
+      mode: 'muteki', title: 'smoke-huge-ref', ticketPrice: 100_000_000, totalTickets: 1,
       prizes: [{ tier: 'A', card: { id: 'c-h', name: '天價卡', refPrice: 99_999_999 }, total: 1 }]
     })
     check('單張 refPrice 超過上限被擋', huge.status === 400, String(huge.status))
@@ -643,7 +643,7 @@ async function run() {
     /* 反面：正常的池還是開得出來。少了這一條，把護欄寫成「一律拒絕」也會全綠。
        還元率 70%（不算爆賞），兌現率 97%（爆賞也算），兩道閘都應該放行。 */
     const okPool = await call(seller, '/v1/pools', {
-      mode: 'classic', title: 'smoke-ok-pool', ticketPrice: 100, totalTickets: 10,
+      mode: 'muteki', title: 'smoke-ok-pool', ticketPrice: 100, totalTickets: 10,
       prizes: [
         { tier: 'A', card: { id: 'c-a', name: 'A 賞', refPrice: 700 }, total: 1 },
         { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 30 }, total: 9 }
@@ -736,7 +736,7 @@ async function run() {
 
       // pending 不能開池 —— 門檻在這裡，不在申請
       const pool = await call(buyer, '/v1/pools', {
-        title: '不該開得成的池', mode: 'classic', ticketPrice: 100, totalTickets: 2,
+        title: '不該開得成的池', mode: 'muteki', ticketPrice: 100, totalTickets: 2,
         prizes: [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 2 }]
       })
       check('待審核的賣家開不了池', pool.status === 403, `${pool.status}`)
@@ -752,7 +752,7 @@ async function run() {
        直接打 API 就能繞過。 */
     const cheapCard = { id: 'c-econ', name: '測試卡', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }
     const mkPool = (title: string, price: number, tickets: number) => call(seller, '/v1/pools', {
-      title, mode: 'classic', ticketPrice: price, totalTickets: tickets,
+      title, mode: 'muteki', ticketPrice: price, totalTickets: tickets,
       prizes: [{ tier: 'D', card: cheapCard, total: tickets }]
     })
 
@@ -764,13 +764,19 @@ async function run() {
     check('還元率超過 100% 的池也開不了', lossy.status === 400)
     check('賠本的訊息提示可能是參考價填錯', (await lossy.clone().text()).includes('參考價'))
 
-    /* 後端只收 classic：抽卡邏輯不讀 mode，收下其他模式等於讓賣家開出
-       標示著某種玩法、實際卻不是那樣運作的池 */
+    /* 後端只收 muteki：抽卡邏輯不讀 mode，收下其他模式等於讓賣家開出
+       標示著某種玩法、實際卻不是那樣運作的池。
+       classic 也在擋掉的名單裡 —— 它宣傳的「抽走最後一籤額外得最後賞」
+       後端一行都沒有，開得出來就等於繼續掛著不存在的規則收錢（見 migration 016） */
+    const onePrize = [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 1 }]
     const badMode = await call(seller, '/v1/pools', {
-      title: '連莊池', mode: 'streak', ticketPrice: 100, totalTickets: 1,
-      prizes: [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 1 }]
+      title: '連莊池', mode: 'streak', ticketPrice: 100, totalTickets: 1, prizes: onePrize
     })
-    check('後端不收 classic 以外的玩法', badMode.status === 400, `${badMode.status}`)
+    check('後端不收 muteki 以外的玩法', badMode.status === 400, `${badMode.status}`)
+    const oldMode = await call(seller, '/v1/pools', {
+      title: '經典賞池', mode: 'classic', ticketPrice: 100, totalTickets: 1, prizes: onePrize
+    })
+    check('後端也不收 classic（最後賞規則沒實作）', oldMode.status === 400, `${oldMode.status}`)
 
     // 公開的賣家端點不能被 /v1/seller 的 requireAuth 波及
     check('賣家列表仍然公開', (await fetch(`${base}/v1/sellers`)).ok)

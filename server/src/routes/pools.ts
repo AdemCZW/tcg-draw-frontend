@@ -155,12 +155,15 @@ const PrizeIn = z.object({
   message: '有鑑定編號的卡只能開 1 籤 —— 一個編號對應一張實體卡'
 })
 const CreatePool = z.object({
-  /* 只收 classic。這個檔案的抽卡邏輯（pools-service.ts）完全沒有讀 pools.mode ——
-     收下其他模式等於讓賣家開一個標示著某種玩法、實際卻按一般池發獎的池，
-     streak / auction 甚至會讓前端把玩家導去沒有後端的流程。
-     前端也鎖了，但那只是不讓人誤按；直接打 API 的要在這裡擋。
-     補上模式邏輯時把 enum 加回來。 */
-  mode: z.enum(['classic']),
+  /* 只收 muteki（無敵賞）。這是唯一「標示等於實際」的玩法：pools-service.ts 的
+     draw() 沒有讀過 pools.mode，它的行為就是「最後賞是籤池裡的一張普通獎品，
+     抽走最後一籤不加送」—— 那正是無敵賞的定義。原本這裡收的是 classic，
+     但 classic 的賣點（抽走最後一籤額外得最後賞）後端一行都沒有（見 migration 016）。
+     其餘三種收下來只會開出標示著某種玩法、實際照無敵賞發獎的池，
+     streak / auction 更會讓前端把玩家導去沒有後端的流程。
+     前端也鎖了，但那只是不讓人誤按；直接打 API 的要在這裡擋，
+     資料庫的 check 是最後一道（016）。補上模式邏輯時再把該玩法加回三個地方。 */
+  mode: z.enum(['muteki']),
   title: z.string().min(1).max(60),
   ticketPrice: z.number().int().positive(),
   totalTickets: z.number().int().positive().max(5000),

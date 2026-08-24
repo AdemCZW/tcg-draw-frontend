@@ -88,7 +88,7 @@ type Tier = 'A' | 'B' | 'C' | 'D' | 'LAST' | 'BUST'
 interface PoolDef {
   id: string
   sellerId: string
-  mode: 'classic' | 'shitei' | 'muteki' | 'streak' | 'auction'
+  mode: 'muteki' | 'shitei' | 'muteki' | 'streak' | 'auction'
   title: string
   ticketPrice: number
   /** 只用 002_core.sql 允許的值：draft / committed / open / sold_out / revealed */
@@ -113,7 +113,7 @@ const poolDefs: PoolDef[] = [
   {
     /* 官方旗艦池：平台自營，規格刻意做得比商家池好一階。
        官方池的角色是基準線 —— 讓買家知道這個站的池應該長什麼樣。 */
-    id: 'p-official-1', sellerId: 'u-official', mode: 'classic',
+    id: 'p-official-1', sellerId: 'u-official', mode: 'muteki',
     title: '官方旗艦場 #59 · 閃色寶藏 精選',
     ticketPrice: 1280, status: 'open', sold: 42, openedDaysAgo: 4,
     prizes: [ // 100 籤，還元 86.3%
@@ -128,7 +128,7 @@ const poolDefs: PoolDef[] = [
   {
     /* 官方入門池：漏斗上緣，給第一次抽的人一個便宜又安全的地方。
        票價壓不到 100 是因為最低價的普卡就要 120 —— 再低就變成每抽必賺。 */
-    id: 'p-official-2', sellerId: 'u-official', mode: 'classic',
+    id: 'p-official-2', sellerId: 'u-official', mode: 'muteki',
     title: '官方入門場 · 兩百點開一張',
     ticketPrice: 200, status: 'open', sold: 61, openedDaysAgo: 3,
     prizes: [ // 200 籤，還元 87.8%
@@ -142,7 +142,7 @@ const poolDefs: PoolDef[] = [
   {
     /* 已完抽並公布 seed 的池。沒有這種池就驗不到 /pools/:id/reveal 與前端的
        公平性頁面 —— server_seed 只有在 revealed 之後才會出現在回應裡。 */
-    id: 'p-official-3', sellerId: 'u-official', mode: 'classic',
+    id: 'p-official-3', sellerId: 'u-official', mode: 'muteki',
     title: '官方旗艦場 #58 · 已開獎',
     ticketPrice: 800, status: 'revealed', sold: 60, openedDaysAgo: 26,
     prizes: [ // 60 籤，還元 84.2%
@@ -155,7 +155,7 @@ const poolDefs: PoolDef[] = [
   },
   {
     // 商家的量產大池：籤多、單價中等，用來壓測籤牆一次畫 250 格的效能
-    id: 'p-shop-1', sellerId: 'u-shop', mode: 'classic',
+    id: 'p-shop-1', sellerId: 'u-shop', mode: 'muteki',
     title: '關都精選 · 伊布家族 250 抽',
     ticketPrice: 350, status: 'open', sold: 118, openedDaysAgo: 6,
     prizes: [ // 250 籤，還元 85.7%
@@ -172,11 +172,11 @@ const poolDefs: PoolDef[] = [
        A 賞平均落在第 25.5 支，期望只賣得掉一半的籤。
        期望票收 25.5 × 350 = 8,925，期望發出 4,200 + 24.5 × 144.5 ≈ 7,740，
        還元約 87%。用整池票收去算會誤判成 63%，那個數字沒有意義。 */
-    /* 原本設計成指定賞（shitei）。改回 classic 是因為 pools-service.ts 完全沒有讀
-       pools.mode —— 抽卡一律照籤位發獎。掛著 shitei 的話前端會顯示指定賞的徽章
-       與期望值，實際抽起來卻是一般池，那比沒有這個模式更糟。
+    /* 原本設計成指定賞（shitei）。改回 muteki（無敵賞）是因為 pools-service.ts 完全沒有
+       讀 pools.mode —— 抽卡一律照籤位發獎，那正是無敵賞的規則。掛著 shitei 的話
+       前端會顯示指定賞的徽章與期望值，實際抽起來卻是無敵賞，那比沒有這個模式更糟。
        等後端補上模式邏輯再把 mode 改回來即可，獎項結構不用動。 */
-    id: 'p-shop-2', sellerId: 'u-shop', mode: 'classic',
+    id: 'p-shop-2', sellerId: 'u-shop', mode: 'muteki',
     title: '多龍巴魯托 精選 50 抽',
     ticketPrice: 350, status: 'open', sold: 9, openedDaysAgo: 5,
     prizes: [ // 50 籤
@@ -186,15 +186,15 @@ const poolDefs: PoolDef[] = [
     ]
   },
   {
-    /* 原本設計成連莊爆賞（streak）。改回 classic 的原因比 shitei 更硬：
+    /* 原本設計成連莊爆賞（streak）。改回 muteki 的原因比 shitei 更硬：
        前端的 DrawPanel 看到 mode === 'streak' 會把人導去 StreakRunPage，
        而連莊在 API 模式下沒有後端（只有 mock 有），點下去就是死路。
        BUST 賞也一併拿掉 —— 爆賞只有在「抽到就收手」的規則下才有意義，
-       在一般池裡它會變成一張可以被正常抽走的廢卡。那 20 席併進 D 賞。 */
-    id: 'p-shop-3', sellerId: 'u-shop', mode: 'classic',
+       在無敵賞裡它會變成一張可以被正常抽走的廢卡。那 20 席併進 D 賞。 */
+    id: 'p-shop-3', sellerId: 'u-shop', mode: 'muteki',
     title: '夢幻 精選 66 抽',
     /* 票價 500 → 640。原本是連莊爆賞，抽到 BUST 的人暫持獎品會被沒收，
-       那部分不用發出去。改成 classic 之後每一格都要真的發，還元率變成 108%。 */
+       那部分不用發出去。改成無敵賞之後每一格都要真的發，還元率變成 108%。 */
     ticketPrice: 640, status: 'open', sold: 14, openedDaysAgo: 2,
     prizes: [ // 66 籤
       { tier: 'A', card: C.dragapultSAR, total: 1 },
@@ -205,8 +205,8 @@ const poolDefs: PoolDef[] = [
     ]
   },
   {
-    // 原本是無敵賞（muteki）。同樣因為後端不讀 mode 而改回 classic，見 p-shop-2 的說明
-    id: 'p-shop-4', sellerId: 'u-shop', mode: 'classic',
+    // 這個池本來就是無敵賞，是唯一不用改規則的示範池 —— 後端跑的就是它
+    id: 'p-shop-4', sellerId: 'u-shop', mode: 'muteki',
     title: '謎擬Ｑ 60 抽',
     ticketPrice: 700, status: 'open', sold: 33, openedDaysAgo: 8,
     prizes: [ // 60 籤，還元 83.6%
@@ -218,7 +218,7 @@ const poolDefs: PoolDef[] = [
   },
   {
     // 個人賣家的小池：40 籤，抽起來很快就完抽
-    id: 'p-seller-1', sellerId: 'u-seller', mode: 'classic',
+    id: 'p-seller-1', sellerId: 'u-seller', mode: 'muteki',
     title: '個人開池 · 伊布小場 40 抽',
     ticketPrice: 800, status: 'open', sold: 12, openedDaysAgo: 1,
     prizes: [ // 40 籤，還元 86.6%
@@ -231,7 +231,7 @@ const poolDefs: PoolDef[] = [
   {
     /* 已售完但還沒公布 seed。sold_out 與 revealed 是兩個狀態，
        中間隔著賣家按下開獎 —— 前端要分得出來，所以兩種都要有池。 */
-    id: 'p-seller-2', sellerId: 'u-seller', mode: 'classic',
+    id: 'p-seller-2', sellerId: 'u-seller', mode: 'muteki',
     title: '個人開池 · 伊布家族全餐（已售完）',
     ticketPrice: 400, status: 'sold_out', sold: 66, openedDaysAgo: 12,
     prizes: [ // 66 籤，還元 81.4%
@@ -244,7 +244,7 @@ const poolDefs: PoolDef[] = [
   },
   {
     // 高單價、低籤數。頂獎佔票收的比例高，抽起來的感覺跟銅板池完全不同
-    id: 'p-vault-1', sellerId: 'u-vaultkeeper', mode: 'classic',
+    id: 'p-vault-1', sellerId: 'u-vaultkeeper', mode: 'muteki',
     title: '保庫堂 · 高額場 30 抽',
     ticketPrice: 2500, status: 'open', sold: 7, openedDaysAgo: 3,
     prizes: [ // 30 籤，還元 84.9%
@@ -260,11 +260,11 @@ const poolDefs: PoolDef[] = [
        固定席的還元 86.1%（19,880 ÷ 23,100），競標席不含在內 ——
        成交價由市場決定，事前算不出來。 */
     /* 原本是尾籤競標（auction）。競標同樣只有 mock 有實作，API 模式下
-       沒有出價端點，開出來只會是一個按了沒反應的池。改回 classic。 */
-    id: 'p-vault-2', sellerId: 'u-vaultkeeper', mode: 'classic',
+       沒有出價端點，開出來只會是一個按了沒反應的池。改回 muteki。 */
+    id: 'p-vault-2', sellerId: 'u-vaultkeeper', mode: 'muteki',
     title: '保庫堂 · 噴火龍 80 抽',
     /* 票價 300 → 580。這個池原本是尾籤競標，收入有一部分來自喊標；
-       改成 classic 之後只剩固定票價，還元率變成 164%。調價回到 ~85%。 */
+       改成無敵賞之後只剩固定票價，還元率變成 164%。調價回到 ~85%。 */
     ticketPrice: 580, status: 'open', sold: 77, soldLayout: 'head',
     openedDaysAgo: 9,
     prizes: [ // 80 籤
@@ -279,7 +279,7 @@ const poolDefs: PoolDef[] = [
   },
   {
     // 全部附鑑定編號的精品池：這種池的賣點是「可查證」，買家能拿 certNo 自己去對
-    id: 'p-grade10-1', sellerId: 'u-grade10', mode: 'classic',
+    id: 'p-grade10-1', sellerId: 'u-grade10', mode: 'muteki',
     title: '滿分場 #30 · 全 PSA 10',
     ticketPrice: 3200, status: 'open', sold: 9, openedDaysAgo: 5,
     prizes: [ // 20 籤，還元 89.2%
@@ -299,7 +299,7 @@ const poolDefs: PoolDef[] = [
   },
   {
     // 個人賣家的小池，開得快、賣得也快：接近完抽的池在列表上要看得到
-    id: 'p-promo-1', sellerId: 'u-promolab', mode: 'classic',
+    id: 'p-promo-1', sellerId: 'u-promolab', mode: 'muteki',
     title: '促販卡 大亂鬥 第 7 回',
     ticketPrice: 250, status: 'open', sold: 25, openedDaysAgo: 1,
     prizes: [ // 36 籤，還元 88.7%
@@ -312,7 +312,7 @@ const poolDefs: PoolDef[] = [
   {
     /* 最早的測試池。籤序已經在正式資料庫裡，client_seed 與 server_seed
        都必須維持原值 —— 換掉就等於偷改了已公布的籤序。 */
-    id: 'p-seed-1', sellerId: 'u-seller', mode: 'classic',
+    id: 'p-seed-1', sellerId: 'u-seller', mode: 'muteki',
     title: '測試池：閃色寶藏 100 抽',
     /* 票價從 300 調到 3250。原本的獎品總值是 276,120，用 300 × 100 籤賣
        等於還元率 920% —— 賣一池賠九池，而且過不了平台自己的護欄。
