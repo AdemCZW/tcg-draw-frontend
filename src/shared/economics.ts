@@ -38,6 +38,39 @@ export function returnRatio(prizes: PrizeValue[], seats: number, price: number) 
   return { prizeValue, revenue, ratio: revenue ? (prizeValue / revenue) * 100 : 0 }
 }
 
+/**
+ * 兌現率 = 全部獎品的參考價總值 ÷ 票收 × 100。跟 returnRatio 只差一件事：
+ * **每一種賞別都算，BUST 也算。**
+ *
+ * 為什麼要有第二個比率：returnRatio 刻意把 BUST 當成 0（理由見上），
+ * 但回收（shared/recycle.ts）不看賞別 —— 任何一張卡都照自己的 refPrice
+ * 折成點數。於是「公開的還元率」跟「平台真的要兌現多少點」用了兩套規則，
+ * 而 refPrice 是賣家自己填的。賣家只要用一張便宜的 A 賞把還元率做到 70%，
+ * 再把爆賞的 refPrice 填成天文數字，自己抽光整池、全部回收，就能憑空印點數
+ * （本機實測：花 1,000 點換到 6,300,000 點）。
+ *
+ * 公開展示的數字可以不算爆賞，但「平台要付出去多少」一張都不能漏。
+ */
+export function redeemRatio(prizes: PrizeValue[], seats: number, price: number) {
+  const redeemable = prizes.reduce((s, p) => s + p.qty * p.unitValue, 0)
+  const revenue = seats * price
+  return { redeemable, revenue, ratio: revenue ? (redeemable / revenue) * 100 : 0 }
+}
+
+/**
+ * 兌現率能不能過。門檻用跟 returnRatio 同一條 RETURN_LOSS ——
+ * 「獎品總值超過票收」不管算不算爆賞都是同一件壞事，只是這一條堵的是
+ * 「用爆賞把總值藏起來」。回收只付 70%，所以卡在 100% 之下即可保證
+ * 抽光整池再全部回收永遠拿不回票錢，印點數這條路在算術上不成立。
+ */
+export function redeemAllowed(ratio: number): { allowed: boolean; message: string } {
+  return {
+    allowed: ratio < RETURN_LOSS,
+    message: `含爆賞在內，獎品參考價的總值是票收的 ${ratio.toFixed(1)}%，超過 100%。` +
+      `每一張卡都能照參考價回收成點數，這個池會憑空生出點數。`
+  }
+}
+
 export function verdictOf(ratio: number): { verdict: ReturnVerdict; message: string } {
   if (ratio >= RETURN_LOSS) {
     return { verdict: 'loss', message: `還元率 ${ratio.toFixed(1)}% 超過 100%，開一池賠一池。` }

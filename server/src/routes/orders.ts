@@ -56,8 +56,13 @@ orders.post('/', async c => {
   const { listingId, idempotencyKey } = parsed.data
 
   const result = await sql.begin(async tx => {
-    // 重複送出：同一把 key 只會成立一次
-    const [dup] = await tx`select order_id from idempotency where key = ${idempotencyKey}`
+    /* 重複送出：同一個人的同一把 key 只會成立一次。
+       user_id 一定要一起比 —— 鍵是呼叫端自己產生的字串，只比 key 的話
+       拿到別人的鍵重放一次就會讀到別人整張訂單（卡片鑑定編號、成交價、買賣雙方）。
+       別人的鍵對你等於沒用過，會照常走下去，掛單早被買走時擋在 LISTING_TAKEN。 */
+    const [dup] = await tx`
+      select order_id from idempotency where key = ${idempotencyKey} and user_id = ${me}
+    `
     if (dup) {
       const [row] = await tx`select * from orders where id = ${dup.order_id}`
       return { order: row ? toOrder(row as Record<string, unknown>) : null }

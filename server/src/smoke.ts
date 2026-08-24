@@ -106,9 +106,11 @@ async function run() {
      這是整支測試最重要的一條 —— 驗的是 SELECT ... FOR UPDATE 有沒有真的鎖住。
      沒有鎖的話兩邊都會通過「掛單還是 live」的檢查，兩張訂單都成立，
      一張卡賣給兩個人。 */
+  const keyA = 'smoke-' + Date.now() + '-a'
+  const keyB = 'smoke-' + Date.now() + '-b'
   const [a, b] = await Promise.all([
-    call(buyer, '/v1/orders', { listingId: ship.id, idempotencyKey: 'smoke-' + Date.now() + '-a' }),
-    call(buyer, '/v1/orders', { listingId: ship.id, idempotencyKey: 'smoke-' + Date.now() + '-b' })
+    call(buyer, '/v1/orders', { listingId: ship.id, idempotencyKey: keyA }),
+    call(buyer, '/v1/orders', { listingId: ship.id, idempotencyKey: keyB })
   ])
   const oks = [a, b].filter(r => r.ok).length
   check('同時買同一張卡，只有一筆成立', oks === 1, `實際 ${oks} 筆成功`)
@@ -132,7 +134,29 @@ async function run() {
   check('掛單賣掉後不能再買', !d1.ok && (await json(d1)).error === 'LISTING_TAKEN')
   check('重複的 idempotencyKey 不會爆炸', d2.status === d1.status)
 
-  const photo = ['https://example.com/a.jpg']
+  /* ---- 冪等鍵綁使用者（H-1 迴歸，訂單側） ----
+     冪等鍵是呼叫端自己產生的字串。查重複時只比 key 不比人的話，
+     拿到別人的鍵重放一次，回來的是別人整張訂單：卡片鑑定編號、成交價、
+     買賣雙方的 id 與姓名。這是授權缺失，不是「字串猜不到就沒事」。 */
+  {
+    const winnerKey = a.ok ? keyA : keyB
+    const stranger = await login('idem-stranger', '路人甲')
+    const stolen = await json(await call(stranger, '/v1/orders',
+      { listingId: ship.id, idempotencyKey: winnerKey }))
+    check('別人的冪等鍵重放拿不到那張訂單', stolen.order?.id !== order.id,
+      JSON.stringify(stolen).slice(0, 200))
+    check('別人的冪等鍵重放什麼訂單內容都不給', !stolen.order,
+      JSON.stringify(stolen).slice(0, 200))
+
+    /* 反面：本人重放同一把鍵還是要拿回自己原本那筆。
+       那是冪等的正常用途，修掉越權不能把它一起修掉。 */
+    const replay = await json(await call(buyer, '/v1/orders',
+      { listingId: ship.id, idempotencyKey: winnerKey }))
+    check('本人重放同一把鍵仍然拿回原本那張訂單', replay.order?.id === order.id,
+      JSON.stringify(replay).slice(0, 200))
+  }
+
+  const photo =['https://example.com/a.jpg']
 
   // 買家不能替賣家出貨
   const wrongRole = await call(buyer, `/v1/orders/${order.id}/ship`,
@@ -315,6 +339,43 @@ async function run() {
     const rv = await fetch(`${base}/v1/pools/${pool.id}/reveal`)
     check('未 revealed 的池不給 reveal 資料', rv.status === 409)
     void owner
+
+    /* ---- 冪等鍵綁使用者（H-1 迴歸，抽選側） ----
+       只比 key 不比人的話，重放別人的鍵會直接回 { replay: true, draw: {...} }，
+       裡面是那個人的 draw 那一列（user_id、籤位、花了多少點）。 */
+    {
+      const drawKey = 'smoke-idem-draw-' + Date.now()
+      const free = [90, 91, 92, 93, 94].find(s => !pool.takenSeats.includes(s))!
+      const own = await json(await call(buyer, `/v1/pools/${pool.id}/draw`,
+        { seats: [free], idempotencyKey: drawKey }))
+      check('抽選建立了一筆可供重放的紀錄', own.ok === true, JSON.stringify(own).slice(0, 160))
+
+      const stranger = await login('idem-stranger', '路人甲')
+      const stolen = await json(await call(stranger, `/v1/pools/${pool.id}/draw`,
+        { seats: [free], idempotencyKey: drawKey }))
+      check('別人的冪等鍵重放不會回別人的抽卡紀錄',
+        stolen.replay !== true && stolen.draw === undefined, JSON.stringify(stolen).slice(0, 200))
+      /* 鍵對他等於沒用過，於是走正常流程，然後撞在已經被抽走的籤位上 ——
+         這正是我們要的：越權讀取變回一次普通的、會被既有鎖擋住的請求。 */
+      check('別人的鍵只是走正常流程，被籤位衝突擋下',
+        stolen.error === 'SEATS_TAKEN' || stolen.error === 'INSUFFICIENT_POINTS',
+        JSON.stringify(stolen).slice(0, 200))
+
+      /* 兩個人剛好撞到同一把鍵不該互相擋到。這一條守的是 015 的複合主鍵：
+         查詢補了 user_id 但主鍵還是 key 單獨一欄的話，這裡會撞主鍵直接 500。 */
+      const other = [90, 91, 92, 93, 94, 95].find(s => s !== free && !pool.takenSeats.includes(s))!
+      const sameKeyOther = await json(await call(seller, `/v1/pools/${pool.id}/draw`,
+        { seats: [other], idempotencyKey: drawKey }))
+      check('兩個人用同一把鍵各自抽各自的，互不影響',
+        sameKeyOther.ok === true && sameKeyOther.items?.[0]?.seat === other,
+        JSON.stringify(sameKeyOther).slice(0, 200))
+
+      // 反面：本人重放自己的鍵，冪等照舊
+      const mine = await json(await call(buyer, `/v1/pools/${pool.id}/draw`,
+        { seats: [free], idempotencyKey: drawKey }))
+      check('本人重放自己的鍵仍然回原本那一抽',
+        mine.replay === true && mine.draw?.id === own.drawId, JSON.stringify(mine).slice(0, 200))
+    }
   }
 
   /* ---- 檔案上傳 ---- */
@@ -551,6 +612,52 @@ async function run() {
       `returnRatio=${snap.pool?.returnRatio}`)
     check('種子池的還元率落在護欄之內',
       snap.pool.returnRatio >= 55 && snap.pool.returnRatio < 100, `${snap.pool?.returnRatio}`)
+  }
+
+  /* ---- 印點數（C-2 迴歸） ----
+     還元率刻意不算 BUST，但回收對每一種賞別都照 refPrice 付 70% 點數。
+     少了兌現率那道閘，賣家用一張便宜的 A 賞把還元率做到 70%、爆賞的 refPrice
+     填天文數字，自己抽光整池再全部回收，就能憑空印點數（實測 1,000 → 6,300,000）。
+     這裡驗的是「開池那一刻就開不成」——
+     池開不出來，後面抽光跟回收的那一整條路自然不存在。 */
+  console.log('\n經濟護欄：')
+  {
+    const mint = await call(seller, '/v1/pools', {
+      mode: 'classic', title: 'smoke-mint', ticketPrice: 100, totalTickets: 10,
+      prizes: [
+        { tier: 'A', card: { id: 'c-a', name: '誘餌 A 賞', refPrice: 700 }, total: 1 },
+        { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 1_000_000 }, total: 9 }
+      ]
+    })
+    const mj = await json(mint)
+    check('爆賞灌 refPrice 的印點數池開不出來',
+      mint.status === 400 && mj.error === 'BAD_ECONOMICS', `${mint.status} ${JSON.stringify(mj)}`)
+
+    // 單張 refPrice 的絕對上限：多打幾個零不該進得了資料庫
+    const huge = await call(seller, '/v1/pools', {
+      mode: 'classic', title: 'smoke-huge-ref', ticketPrice: 100_000_000, totalTickets: 1,
+      prizes: [{ tier: 'A', card: { id: 'c-h', name: '天價卡', refPrice: 99_999_999 }, total: 1 }]
+    })
+    check('單張 refPrice 超過上限被擋', huge.status === 400, String(huge.status))
+
+    /* 反面：正常的池還是開得出來。少了這一條，把護欄寫成「一律拒絕」也會全綠。
+       還元率 70%（不算爆賞），兌現率 97%（爆賞也算），兩道閘都應該放行。 */
+    const okPool = await call(seller, '/v1/pools', {
+      mode: 'classic', title: 'smoke-ok-pool', ticketPrice: 100, totalTickets: 10,
+      prizes: [
+        { tier: 'A', card: { id: 'c-a', name: 'A 賞', refPrice: 700 }, total: 1 },
+        { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 30 }, total: 9 }
+      ]
+    })
+    check('含爆賞但總值合理的池照常開得出來', okPool.ok, `${okPool.status} ${await okPool.clone().text()}`)
+    const okj = await json(okPool)
+    if (okj.poolId) {
+      /* 護欄現在有兩個數字，公開的那個仍然是不算爆賞的還元率 —— 兌現率是內部閘門，
+         不該把展示用的數字換掉，換掉的話買家看到的還元率會突然多算爆賞。 */
+      const s2 = await json(await fetch(`${base}/v1/pools/${okj.poolId}`))
+      check('公開的還元率仍然是不算爆賞的那個', s2.pool?.returnRatio === 70,
+        `returnRatio=${s2.pool?.returnRatio}`)
+    }
   }
 
   console.log('\n下架：')

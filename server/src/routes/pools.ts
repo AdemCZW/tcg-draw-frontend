@@ -6,7 +6,7 @@
  */
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { returnRatio, poolAllowed } from '../shared/economics.js'
+import { returnRatio, poolAllowed, redeemRatio, redeemAllowed } from '../shared/economics.js'
 import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
@@ -131,10 +131,18 @@ pools.get('/:id/reveal', async c => {
 
 /* ---- 以下需要登入 ---- */
 
+/* refPrice 的絕對上限。這個欄位是賣家自己填的，而它同時是護欄的分母
+   與回收付點的分子 —— 沒有上界時一個手滑多打幾個零就是一張「市值一億」的卡。
+   兌現率護欄已經擋住整池的總量，這裡擋的是單張的荒謬值：它進得了 JSON、
+   會出現在卡冊總值與排行榜上，也讓 numeric 運算有機會溢位成 500。
+   一千萬台幣一張的卡不存在於這個平台的商品範圍，超過就是填錯。 */
+const REF_PRICE_MAX = 10_000_000
+
 const PrizeIn = z.object({
   tier: z.enum(['A', 'B', 'C', 'D', 'LAST', 'BUST']),
   card: z.object({
-    id: z.string(), name: z.string(), refPrice: z.number().int().nonnegative(),
+    id: z.string(), name: z.string(),
+    refPrice: z.number().int().nonnegative().max(REF_PRICE_MAX, `參考價不能超過 ${REF_PRICE_MAX.toLocaleString('zh-TW')}`),
     certNo: z.string().nullable().optional()
   }).passthrough(),
   total: z.number().int().nonnegative()
@@ -196,6 +204,19 @@ pools.post('/', requireAuth, async c => {
     }, 400)
   }
 
+  /* 第二道閘：兌現率。上面那道刻意不算 BUST，但回收對每一種賞別都照 refPrice
+     付點數 —— 少了這一段，賣家可以用一張便宜的 A 賞把還元率做到 70%，
+     再把爆賞的 refPrice 填成天文數字，自己抽光、全部回收，憑空印出點數。
+     兩道閘一起，公開的還元率跟平台實際要兌現的點數才終於受同一條線約束。 */
+  const redeem = redeemRatio(
+    b.prizes.map(p => ({ tier: p.tier, qty: p.total, unitValue: p.card.refPrice })),
+    b.totalTickets, b.ticketPrice
+  )
+  const redeemGate = redeemAllowed(redeem.ratio)
+  if (!redeemGate.allowed) {
+    return c.json({ error: 'BAD_ECONOMICS', message: redeemGate.message }, 400)
+  }
+
   const id = 'p-' + randomBytes(5).toString('hex')
   try {
     const result = await sql.begin(async tx => {
@@ -246,7 +267,13 @@ pools.post('/:id/draw', requireAuth, async c => {
   const { seats, idempotencyKey } = parsed.data
   const poolId = pid(c)
 
-  const [dup] = await sql`select order_id as draw_id from idempotency where key = ${idempotencyKey}`
+  /* 一定要連 user_id 一起比。只比 key 的話，鍵是呼叫端自己產生的字串，
+     拿到別人的鍵重放一次就會拿到別人那一抽的內容 —— 冪等是「同一個人的同一個請求
+     只做一次」，不是「這把字串全站只做一次」。別人的鍵對你等於沒用過，
+     照常建立；真的撞到同一個籤位會被既有的 FOR UPDATE 與唯一索引擋下。 */
+  const [dup] = await sql`
+    select order_id as draw_id from idempotency where key = ${idempotencyKey} and user_id = ${me}
+  `
   if (dup) {
     const [d] = await sql`select * from draws where id = ${dup.draw_id}`
     return c.json({ replay: true, draw: d ?? null })

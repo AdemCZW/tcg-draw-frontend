@@ -5,10 +5,12 @@
 本機驗證環境：PostgreSQL `vaultdraw_test`、`localhost:8080`、`DEV_LOGIN=1`
 正式環境：`https://web-production-154871.up.railway.app`（**只做唯讀探測，沒有任何寫入或壓測**）
 
-> **本次沒有修改任何程式碼。** 稽核進行到後半段時工具權限被安全分類器擋住，
-> 原本規劃要動手修的兩處（下面標 `[建議直接修]`）沒有修成。
-> 另外：本機還有一個跑著的 server 行程與一個被測試污染的 `vaultdraw_test`，
-> 請依最後一節「收尾待辦」處理。
+> **稽核當下（2026-08-22）沒有修改任何程式碼**，工具權限被安全分類器擋住，
+> 原本規劃要動手修的兩處沒有修成。
+>
+> **2026-08-24 補記：C-2 與 H-1 已修。** 兩條都先在本機重現確認屬實才動手，
+> 修法與當初的建議有出入，各自寫在那一節的「實際修法」裡（包含前後對照的實際輸出）。
+> C-1 與其餘各條**仍未處理**。
 
 ---
 
@@ -17,8 +19,8 @@
 | 嚴重度 | 項目 |
 |---|---|
 | **Critical** | C-1 正式環境所有進行中的池，籤位→獎品可以離線算出來（種子是固定樣式，256 次猜測） |
-| **Critical** | C-2 爆賞（BUST）不計入還元率護欄，但回收照付 —— 已核可的賣家可以無限印點數 |
-| High | H-1 冪等鍵沒有綁使用者，重放別人的鍵可以讀到別人的抽卡／訂單 |
+| ~~**Critical**~~ | ~~C-2 爆賞（BUST）不計入還元率護欄，但回收照付 —— 已核可的賣家可以無限印點數~~ **已修（2026-08-24）** |
+| ~~High~~ | ~~H-1 冪等鍵沒有綁使用者，重放別人的鍵可以讀到別人的抽卡／訂單~~ **已修（2026-08-24）** |
 | Medium | M-1 註冊端點實際上沒有速率限制 |
 | Medium | M-2 前端沒有任何 CSP／安全標頭，JWT 放在 localStorage |
 | Medium | M-3 `refPrice` 同時是護欄的分母與回收的分子（結構性，與 C-2 同源） |
@@ -132,7 +134,7 @@ $ npx tsx scratchpad/predict.mjs
 
 ---
 
-### C-2 爆賞不計入還元率護欄，但回收照付 —— 可無限印點數 `[建議直接修]`
+### C-2 爆賞不計入還元率護欄，但回收照付 —— 可無限印點數 `[已修 2026-08-24]`
 
 **問題**
 
@@ -239,11 +241,75 @@ if (redeemRatio >= RETURN_LOSS) {
 4. 考慮禁止賣家抽自己開的池（目前完全沒有限制）。這不能單獨解決問題
    （可以用第二個帳號），但會讓自動化的印點更麻煩。
 
+**實際修法（2026-08-24，與上面的建議有出入）**
+
+漏洞先在本機重現確認屬實（見下方前後對照），再動手。採用的是
+**建池時的第二道閘 —— 兌現率**，但實作位置與建議不同：
+
+- 建議說「因為 `src/shared/economics.ts` 是共用檔，所以最小的後端側修法是把
+  算式寫在 `routes/pools.ts` 裡」。實際做法相反：新的
+  `redeemRatio()` / `redeemAllowed()` **加在 `src/shared/economics.ts`**，
+  跑 `npm run sync-shared` 同步進 `server/`。理由是那個檔案自己的開頭就寫著
+  「門檻只能有一份，前後端共用同一個檔案才不會分岔」——
+  把第二條門檻藏在路由裡，正好是它當初要避免的那件事。
+  這不動到任何前端程式碼（前端沒有呼叫新函式，行為不變）。
+- 門檻沿用 `RETURN_LOSS`（100%）而不是另外訂一個數字：「獎品總值超過票收」
+  不管算不算爆賞都是同一件壞事。回收只付 70%，卡在 100% 之下就足以保證
+  「抽光整池再全部回收」在算術上永遠拿不回票錢，印點數這條路直接不成立。
+- 配套 1（`refPrice` 絕對上限）採用了，`REF_PRICE_MAX = 10_000_000`。
+- 配套 2（回收不吃 `refPrice`）沒做：那需要平台自己的估價欄位，是產品決策不是修補，
+  留在 M-3。
+- 配套 3（帳本層回收額度上限）沒做：兌現率閘已經在來源端保證每個池的
+  可回收總值不超過票收，再加一層跨池的總量上限會誤傷正常玩家
+  （買一堆別人的卡再回收是合法行為），代價大於收益。
+- 配套 4（禁止賣家抽自己的池）**刻意沒做**：修完之後自抽自池是穩賠的
+  （付 100% 票錢、最多換回 70%），已經沒有經濟誘因；而賣家開賣前抽兩格
+  自己驗一下是正當用途，擋掉是拿真實的功能損失換一個已經失效的攻擊面。
+
+**沒有改「爆賞不能回收」**：爆賞給玩家的是真實的保底卡，禁止回收是把成本
+轉嫁給老實玩家。正確的做法是讓護欄看見它，不是讓玩家換不到。
+
+**前後對照**（本機 `vaultdraw_test`，`u-seller`，同一支腳本）
+
+修之前：
+
+```
+--- wallet before: {'points': 99000, 'locked': 0, 'available': 99000}
+--- create pool (A refPrice 700 x1, BUST refPrice 1000000 x9, 10 tickets @100):
+{"poolId":"p-58c139e949","commit":"682db704...","source":"drand:6404233"}
+--- public snapshot: status committed returnRatio 70
+--- draw all 10 seats: cost 1000 wallet {'points': 98000, ...}
+--- recycle every BUST card:
+recycled 700000  wallet {'points': 798000, ...}
+... （共 9 張）...
+recycled 700000  wallet {'points': 6398000, ...}
+--- wallet after: {'points': 6398000, 'locked': 0, 'available': 6398000}
+```
+
+**花 1,000 點 → 99,000 變成 6,398,000 點**（比報告初稿的 2,899,000 更高，
+因為這次把 9 張爆賞全部回收）。
+
+修之後（同一支腳本，第一步就斷）：
+
+```
+--- wallet before: {'points': 100000, 'locked': 0, 'available': 100000}
+--- create pool (A refPrice 700 x1, BUST refPrice 1000000 x9, 10 tickets @100):
+{"error":"BAD_ECONOMICS","message":"含爆賞在內，獎品參考價的總值是票收的 900070.0%，
+超過 100%。每一張卡都能照參考價回收成點數，這個池會憑空生出點數。"}
+```
+
+池開不出來，後面抽光與回收那一整條路不存在。
+
+**迴歸測試**（`server/src/smoke.ts`，「經濟護欄」段）：印點數池被擋、單張
+`refPrice` 超過上限被擋，另加兩條反面 —— 含爆賞但總值合理的池照常開得出來、
+公開展示的還元率仍然是不算爆賞的那個（避免把護欄寫成「一律拒絕」也全綠，
+以及避免內部閘門把買家看到的數字換掉）。
+
 ---
 
 ## High
 
-### H-1 冪等鍵沒有綁使用者，重放別人的鍵可以讀到別人的資料 `[建議直接修]`
+### H-1 冪等鍵沒有綁使用者，重放別人的鍵可以讀到別人的資料 `[已修 2026-08-24]`
 
 **問題**
 
@@ -292,6 +358,59 @@ $ curl -s -X POST localhost:8080/v1/pools/p-seed-1/draw -H "authorization: Beare
 （`return { order: null, stashId }` 在 insert 之前就 return 了），
 所以庫內轉移的購買其實不是冪等的。實務上不會重複扣款
 （`listings.status` 已經變成 `sold`），但重送會拿到 `LISTING_TAKEN` 而不是原本的結果。
+
+**實際修法（2026-08-24）**
+
+建議的方向是對的（兩處補 `and user_id`），但**只補查詢不夠** ——
+`key` 還是主鍵的話，別人的鍵對你「等於沒用過」之後要寫入自己那一列時
+會撞主鍵，整筆請求 500。所以一起做了 schema 的部分：
+
+- `server/migrations/015_idempotency_user.sql`：主鍵從 `(key)` 改成 `(user_id, key)`。
+  不需要回填 —— `user_id` 從 001 起就是 `not null`，而 `key` 原本全表唯一，
+  所以 `(user_id, key)` 保證沒有重複，直接換主鍵即可。
+- `routes/pools.ts` 與 `routes/orders.ts` 的查重複都補上 `and user_id = ${me}`。
+
+語意上分成兩件事，兩件都有迴歸測試守著：
+**同一個人重放同一把鍵**照舊回原本那筆（冪等的正常用途，不能被一起修掉）；
+**別人的鍵**對你等於沒用過，走正常建立流程，然後被既有的
+`SELECT ... FOR UPDATE`／唯一索引／餘額檢查擋下，一個位元組的內容都不外流。
+
+上面提到的 `vault` 分支不寫 `idempotency` 這件事**沒有一起改** ——
+那是冪等性的缺口不是越權，混在這次修裡會讓改動變大而且難以驗證。
+
+**前後對照**（本機，`buyer` 先用一把鍵，攻擊者用不同帳號重放同一把鍵）
+
+修之前：
+
+```
+--- [draw] ATTACKER replays the same key:
+{"replay":true,"draw":{"id":"d-mt6xwa9t-84778b","pool_id":"p-seed-1","user_id":"u-buyer",
+ "seats":[1],"cost":"3250","source":"draw","created_at":"1787558028546"}}
+
+--- [order] ATTACKER replays the same key:
+{"order":{"id":"o-mt6xwabc-9st4nf","listingId":"l-seed-1","card":{...,"certNo":"82345671",
+ "refPrice":9800},"price":8620,"deposit":862,"buyerId":"u-buyer","buyerName":"測試買家",
+ "sellerId":"u-seller","sellerName":"測試賣家","status":"escrowed",...}}
+```
+
+修之後（同一支腳本）：
+
+```
+--- [draw] ATTACKER replays the same key:
+{"error":"INSUFFICIENT_POINTS","message":"可動用點數不足"}
+
+--- [order] ATTACKER replays the same key:
+{"error":"LISTING_NOT_FOUND","message":"這筆掛單不存在","status":409}
+```
+
+兩邊都變成「這是你自己的新請求」，回的是攻擊者自己那筆請求的失敗原因，
+沒有任何屬於別人的欄位。
+
+**迴歸測試**（`server/src/smoke.ts`）：抽選側與訂單側各兩條越權檢查
+（拿不到別人那筆、不洩漏任何內容），再各一條反面檢查
+（本人重放自己的鍵仍然回原本那一抽／那張訂單），
+外加一條「兩個人用同一把鍵各自抽各自的」—— 那條守的是 015 的複合主鍵，
+只補查詢不換主鍵的話它會撞主鍵 500。
 
 ---
 
@@ -623,15 +742,14 @@ $ curl -s -X POST /v1/pools/p-.../open -H "authorization: Bearer $S"
 
 ## 收尾待辦（本次沒能做完的事）
 
-1. **本機還有一個 server 行程跑在 :8080**，是用
-   `npx tsx src/index.ts` 在背景啟動的（log 在 `/tmp/vd-server.log`）。請 kill 掉：
-   `pkill -f "tsx src/index.ts"`。
-2. **`vaultdraw_test` 已被測試污染**（多了 attacker / racer / rl* 帳號、
-   一個 `mint-test` 池、被改過價格的 seed 掛單、被回收的卡）。請重建：
-   `dropdb vaultdraw_test && createdb vaultdraw_test && npm run migrate && npm run seed`。
-3. **C-2 與 H-1 的修改沒有套用。** 兩處的具體改法寫在上面。
-   套用後請跑 `cd server && npm run check`、`npm run build`、`npm run smoke`
-   （不要接 pipe，讀 exit code；基準 175 項）。
+1. ~~本機還有一個 server 行程跑在 :8080~~ 已 kill（2026-08-24）。
+2. ~~`vaultdraw_test` 已被測試污染~~ 已重建成乾淨的 migrate + seed（2026-08-24）。
+3. ~~**C-2 與 H-1 的修改沒有套用。**~~ 已於 2026-08-24 修完並驗證：
+   `npm run check`、`npm run build`、`npm run smoke` 三支都是 exit 0，
+   smoke 從 167 項增加到 **179 項**全綠（新增 12 條迴歸檢查）。
+   注意 smoke 有一條檢查（「抽到的卡在買家的保管庫」）掛在一個併發搶位的
+   競態結果下，抽選的贏家是賣家那一輪就不會執行 —— 所以總項數會在
+   178／179 之間跳，這是既有行為，不是這次改壞的。
 4. **C-1 的 ground truth 對照沒跑完**：請在自己的終端執行
    ```sql
    select ps.pool_id, ps.seat, pp.tier, pp.card->>'name'
