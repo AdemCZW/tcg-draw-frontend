@@ -1,18 +1,16 @@
 <script setup lang="ts">
 /**
- * 右下角通知鈴。
+ * 頁首右上角的通知鈴，與從右緣滑出的通知抽屜。
  *
- * 為什麼是浮動鈴而不是塞進 AppHeader：手機上的重要動作都在畫面下緣（底部導覽、
- * 選籤結算列），把通知放頂端等於要使用者換一次手。而底部導覽的五格已經滿了，
- * 再擠一格會讓「抽選」中央鍵失去重心 —— 所以獨立成一顆浮動鍵。
+ * 為什麼是右側抽屜而不是貼底面板：鈴已經搬進 AppHeader 的右上角，貼底面板等於
+ * 「按右上、東西從左下冒出來」，使用者要多花一秒把兩件事連起來。從鈴的同一側
+ * 滑出，動作的起點與終點才對得上。
  *
- * 位置要同時避開兩件事：底部導覽（手機才有，高度是 --nav-total，本身已含安全區）
- * 與 iPhone 的底部安全區（桌機寬度下 --nav-total 是 0，這時才需要自己補 --safe-b）。
- * 用 max() 一式吃掉兩種情況，不用再寫一組斷點 —— 斷點寫多了，改 --nav-h 就會漏改。
+ * 順便換來的好處是高度：貼底面板為了不蓋住整頁只能給 72dvh，扣掉標題列真正
+ * 能放清單的不到六成畫面；抽屜是整條可用高度，同樣的內容不必再壓成兩行截斷。
  *
- * 面板在手機是貼底的 bottom sheet（幾乎全寬、大目標好按，蓋掉底部導覽是刻意的：
- * 展開時使用者的注意力就在通知上），桌機才收成右下角的卡片。
- * 手機上用小小的下拉選單是桌機思維，拇指按不準。
+ * 手機刻意在左邊留一條背景不蓋：那條縫是在說「你還在剛才那一頁上，這只是疊上來的」，
+ * 全螢幕蓋掉會被誤讀成換頁，使用者就會去找返回鍵而不是關閉鍵。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -209,10 +207,8 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
       <div v-if="open" class="veil" @click="open = false" />
     </Transition>
 
-    <Transition name="sheet">
+    <Transition name="drawer">
       <section v-if="open" class="panel" role="dialog" aria-label="通知">
-        <!-- 手機貼底面板的抓握條：告訴拇指這塊是可以往下收的 -->
-        <span class="grab" aria-hidden="true" />
         <header class="phead">
           <h2>通知</h2>
           <span v-if="freshCount" class="newchip">{{ freshCount }} 則新</span>
@@ -258,16 +254,20 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
               </svg>
             </span>
             <span class="body">
-              <!-- 時間跟標題同一行靠右：自己佔一行只是把每則撐高，掃視時也離標題太遠 -->
-              <span class="top">
-                <span class="t">{{ n.title }}</span>
+              <!-- 眉標行：分類與時間都是「這則的座標」，不是內容，先一起講完再讓
+                   標題獨佔一行。舊版把分類塞在內文前面、時間塞在標題後面，兩個
+                   最不重要的東西各自去切一段最重要的東西 -->
+              <span class="kicker">
+                <span class="tag">{{ meta(n.kind).label }}</span>
                 <span class="when">{{ relTime(n.created_at) }}</span>
               </span>
-              <span class="sub">
-                <span class="tag">{{ meta(n.kind).label }}</span>
-                <span class="b">{{ n.body }}</span>
-              </span>
+              <span class="t">{{ n.title }}</span>
+              <span v-if="n.body" class="b">{{ n.body }}</span>
             </span>
+            <!-- 有 link 才有箭頭：能不能點進去要在按下去之前就看得出來 -->
+            <svg v-if="n.link" class="chev" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M9.5 5.5l6.5 6.5-6.5 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
             <span v-if="wasUnread.has(n.id)" class="sr">未讀</span>
           </component>
         </div>
@@ -341,12 +341,10 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 
 .bell svg { width: 23px; height: 23px; }
 .bell:active { transform: scale(.92); transition-duration: 60ms; }
+/* 開著時整顆變主色。抽屜從頁首底下起算，這顆不會被蓋住，所以留著 ——
+   它同時是「東西從這裡出來的」的錨點，也是再按一次就收回去的開關
+   （貼底面板時代手機上會把它藏掉，是因為那時面板正好壓在鈴上） */
 .bell.on { background: var(--accent); border-color: transparent; color: #fff; }
-/* 手機上面板貼底，鈴會浮在清單上面擋住其中一則 —— 展開時直接讓它退場，
-   關閉有面板自己的 × 與遮罩，不缺這顆。桌機面板在鈴的上方，不會擋到，維持顯示 */
-@media (max-width: 720px) {
-  .bell.on { opacity: 0; transform: scale(.8); pointer-events: none; }
-}
 .bell:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 /* 徽章：有數字就顯示數字，一位數維持正圓 */
@@ -367,33 +365,35 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 /* ---- 遮罩 ---- */
 .veil { position: fixed; inset: 0; z-index: 90; background: rgba(0, 0, 0, .45); }
 
-/* ---- 面板：手機貼底、桌機右下 ---- */
+/* ---- 面板：從右緣滑出的抽屜 ---- */
 .panel {
-  position: fixed; z-index: 91; left: 0; right: 0; bottom: 0;
+  position: fixed; z-index: 91;
+  /* 從頁首底下起算，不蓋住它：頁首上還有餘額與返回，關掉通知之前那些仍該可讀。
+     手機頁首是 56、桌機 66（見 AppHeader 的 .row），兩者都要再加瀏海的 --safe-t */
+  top: calc(56px + var(--safe-t, 0px));
+  right: 0; bottom: 0;
+  /* 左邊留一條背景。用 max() 是為了橫置時左側瀏海也吃得掉 */
+  left: max(46px, var(--safe-l, 0px));
   display: flex; flex-direction: column;
-  /* dvh 不用 vh：手機 Chrome 的 vh 取的是網址列收起時的高度，面板會比視窗高，
-     最後一則被自己的底邊吃掉 */
-  max-height: min(72dvh, 560px);
-  background: var(--surface);
-  border-top: 1px solid var(--line);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  box-shadow: var(--shadow-lg);
-  /* 面板蓋掉底部導覽是刻意的：展開時注意力就該全在通知上。
-     但仍要讓開安全區，否則最後一則會被 Home 橫條壓住 */
+  /* 抽屜貼著右緣與下緣，兩邊的安全區都要自己讓：底色仍鋪滿到螢幕邊
+     （中斷的底色比壓到內容更難看），只把內容推進來 */
+  padding-right: var(--safe-r, 0px);
   padding-bottom: var(--safe-b, 0px);
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  /* 只圓左上角：右側與下緣都貼齊螢幕，那裡的圓角只會露出一小塊底色 */
+  border-radius: var(--radius-lg) 0 0 0;
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
-.grab {
-  width: 36px; height: 4px; margin: 8px auto 0;
-  border-radius: var(--pill);
-  background: var(--line);
-}
 
-/* 標題列刻意輕：它只是告訴你「這裡是通知」，
-   真正要被看見的是下面那些列，沒有分隔線也不會混在一起 */
+/* 標題列在抽屜裡要比在貼底面板時重一點：清單長，捲到一半時這條是唯一還留在
+   畫面上的「我在哪」，底下補一條線讓捲動的內容不會直接貼上標題 */
 .phead {
+  flex: none;
   display: flex; align-items: center; gap: 8px;
   padding: 8px 8px 8px 18px;
+  border-bottom: 1px solid var(--line-soft);
 }
 .phead h2 { font-size: 15px; font-weight: 700; margin: 0; flex: none; }
 /* 「N 則新」：紅點消失後仍要有東西回答「我剛剛漏了幾則」 */
@@ -430,8 +430,10 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 .msg.err { color: var(--danger); }
 .retry { color: var(--accent); font-weight: 600; text-decoration: underline; }
 
-/* ---- 空狀態 ---- */
-.blank { padding: 26px 30px 38px; text-align: center; }
+/* ---- 空狀態 ----
+   margin auto 讓它在抽屜的空高度裡置中。貼底面板時內容一定塞滿，抽屜卻可能
+   只有一句話配一整條畫面，靠在最上面會像是還沒載完 */
+.blank { margin: auto 0; padding: 26px 30px 38px; text-align: center; }
 .blank-ic {
   width: 54px; height: 54px; margin: 0 auto 12px;
   display: grid; place-items: center;
@@ -445,27 +447,40 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 
 /* ---- 清單 ---- */
 .list {
+  /* flex: 1 才會把抽屜剩下的高度吃完 —— 沒有它，清單只有內容高，
+     捲動會落到整頁上，抽屜自己反而不動 */
+  flex: 1; min-height: 0;
   overflow-y: auto;
-  /* 面板滑到底不要把整頁一起帶動 */
+  /* 抽屜滑到底不要把整頁一起帶動 */
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
-/* 兩行一則：標題與時間同一行、分類標籤與內文同一行。
-   舊版三行加上鬆的行高，一則要吃掉快 90px，一個畫面只看得到四則 */
+/* 一則三行：眉標（分類＋時間）、標題、內文。
+   抽屜的高度是貼底面板的兩倍有餘，省下來的那一行不必再拿去換截斷 —— 舊版
+   把分類跟內文擠在同一行，內文常常只剩「訂單 #A2481 共 3 張…」看不出結果 */
 .item {
   position: relative;
   width: 100%;
-  display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px;
+  display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px;
   align-items: start;
   text-align: left;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line-soft);
+  padding: 13px 16px 14px;
+  /* 每則有 link 時是 <button>，border 一定要自己歸零 —— 這個專案沒有全域的
+     button reset（見上面 .close 的同一個坑）。舊版只覆蓋了 border-bottom，
+     另外三邊的瀏覽器預設外框就整圈留著，一排下來像一疊盒子 */
+  border: 0;
   color: var(--ink);
   background: transparent;
   transition: background .15s;
 }
-.item:last-child { border-bottom: 0; }
-.item.tap { cursor: pointer; }
+/* 分隔線縮排到文字欄起點，而且是每則之間才有（不是每則自己一條下邊框）。
+   齊頭的滿版線會把每一則框成一格一格，縮排之後圖示那欄是連續的留白，
+   一整排看起來是一份清單而不是一疊卡片 */
+.item + .item::before {
+  content: ''; position: absolute; left: 62px; right: 16px; top: 0;
+  height: 1px; background: var(--line-soft);
+}
+.item.tap { cursor: pointer; padding-right: 34px; }
 .item.tap:active { background: var(--surface-2); }
 @media (hover: hover) { .item.tap:hover { background: var(--surface-2); } }
 .item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -473,7 +488,8 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 /* 未讀同時給三個訊號：左緣色條（形狀）、極淡底色、標題加粗。
    只靠底色的話，深色模式下那點色差在陽光下的手機上等於沒有 */
 .item.fresh { background: color-mix(in srgb, var(--accent) 6%, transparent); }
-.item.fresh::before {
+/* 用 ::after 不用 ::before：::before 已經是那條縮排分隔線了 */
+.item.fresh::after {
   content: ''; position: absolute; left: 0; top: 0; bottom: 0;
   width: 3px;
   background: var(--accent);
@@ -482,14 +498,14 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 
 /* tone 決定顏色，圖形與標籤各自另外講一次，色弱也分得出來 */
 .ic {
-  width: 32px; height: 32px;
+  width: 34px; height: 34px;
   display: grid; place-items: center;
-  border-radius: 10px;
+  border-radius: 11px;
   /* 底色從 currentColor 混：每個 tone 只要換 color 一個值 */
   background: color-mix(in srgb, currentColor 15%, transparent);
   color: var(--muted);
 }
-.ic svg { width: 17px; height: 17px; }
+.ic svg { width: 18px; height: 18px; }
 .tone-info .ic { color: var(--tier-c); }
 .tone-money .ic { color: var(--gold); }
 /* 要你回應的那類用實心色塊 —— 填色與否是連黑白截圖都成立的差異 */
@@ -499,17 +515,11 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
   box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
-.body { display: grid; gap: 2px; min-width: 0; }
-.top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.t {
-  flex: 1; min-width: 0;
-  font-size: 13.5px; font-weight: 600; line-height: 1.5;
-  /* 標題一行就好：兩行標題會把時間擠到奇怪的位置，而且通知標題本來就該短 */
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.when { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.body { display: grid; gap: 3px; min-width: 0; }
 
-.sub { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* 眉標行：整行都是小字淡色，刻意讓它比標題輕兩級。
+   它要能被找到（想知道多久以前的時候），但不該在掃視時被讀到 */
+.kicker { display: flex; align-items: center; gap: 7px; min-width: 0; }
 /* 兩個字的分類標籤。有它才能在不看顏色的情況下知道這是「成交」還是「出貨」 */
 .tag {
   flex: none;
@@ -522,11 +532,36 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 .tone-info .tag { color: var(--tier-c); }
 .tone-money .tag { color: var(--gold); }
 .tone-act .tag { color: var(--accent-soft); }
-.b {
+/* 時間跟在標籤後面，不再靠右對齊：靠右時它會跟標題搶同一條視線，
+   而且每則的長度不一，右緣參差反而更吵 */
+.when {
   flex: 1; min-width: 0;
-  font-size: 12.5px; line-height: 1.6; color: var(--muted);
-  /* 一行截斷：通知是索引不是內文，真正的內容在點進去的那一頁 */
+  font-size: 11px; color: var(--faint);
+  font-variant-numeric: tabular-nums;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 標題自己一行，是這一則裡最重的東西 —— 「發生了什麼事」就寫在這。
+   兩行才截斷：一行截斷會把「你的出價被接受了」砍成看不懂的半句 */
+.t {
+  min-width: 0;
+  font-size: 14px; font-weight: 600; line-height: 1.45;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+/* 內文給兩行：通知是索引不是內文，但一行連「以 4,200 點成交」都放不下的索引
+   等於沒有內容，還要逼使用者點進去才知道要不要在意 */
+.b {
+  min-width: 0;
+  font-size: 12.5px; line-height: 1.65; color: var(--muted);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* 箭頭很淡：它只回答「這則點得進去嗎」，不是要人去按它 */
+.chev {
+  position: absolute; right: 12px; top: 16px;
+  width: 14px; height: 14px; color: var(--faint);
 }
 /* 未讀狀態不再另外畫一顆點：左緣色條已經講過了，
    但讀螢幕的人看不到色條，用隱藏文字補 */
@@ -535,7 +570,6 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
   overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
 
-/* ---- 桌機：收成右下角的卡片，不再貼底 ---- */
 @media (max-width: 720px) {
   /* 對齊頁首在窄螢幕上收小的膠囊高度（見 AppHeader 的 .wallet） */
   .bell { width: 32px; height: 32px; }
@@ -543,35 +577,47 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 }
 
 @media (min-width: 721px) {
-  /* 鈴在頁首，面板就從頁首底下垂下來 —— 從畫面另一端冒出來的面板
-     跟你剛按的那顆鈕對不上，會讓人多花一秒找它從哪來的 */
+  /* 桌機一樣從右邊來，只是浮成一張離邊的卡片：滿版貼邊的抽屜在 1280 寬的畫面上
+     會像是網站的第二欄，而不是一層可以關掉的東西。
+     高度用 max-height 不是 bottom：只有兩則通知時撐一條到底的空白很怪，
+     但真的有二十則時它會一路長到畫面底 —— 這就是「佔滿可用高度」要的行為 */
   .panel {
     left: auto; bottom: auto;
-    top: calc(66px + 8px);
+    top: calc(66px + var(--safe-t, 0px) + 8px);
     right: calc(14px + var(--safe-r, 0px));
     width: 380px;
-    max-height: min(68dvh, 560px);
+    max-height: calc(100dvh - 66px - var(--safe-t, 0px) - var(--safe-b, 0px) - 22px);
+    padding-right: 0; padding-bottom: 6px;
     border: 1px solid var(--line);
     border-radius: var(--radius-lg);
-    padding-bottom: 6px;
   }
-  /* 抓握條是給拇指往下拉的暗示，桌機沒有這個手勢 */
-  .grab { display: none; }
   .phead { padding-top: 10px; }
-  /* 桌機不壓暗背景：面板只佔角落一小塊，壓暗整頁的份量不對，
+  /* 桌機不壓暗背景：面板只佔角落一塊，壓暗整頁的份量不對，
      這裡只留它「點空白處關閉」的功能 */
   .veil { background: transparent; }
 }
 
-/* ---- 轉場 ---- */
+/* ---- 轉場 ----
+   用 @keyframes 而不是 transition，而且進出場是兩組各自具名的動畫。
+   兩個坑都在這一段裡：
+   1. 收回不能把進場的那組反著播 —— animation-name 沒變時瀏覽器當成同一個動畫
+      不會重啟，animationend 不來，Vue 就永遠不移除節點（這支檔案實測撞過）。
+   2. 之所以不用 transition：Vue 要等下一個 rAF 才拿掉 -enter-from，而分頁不在
+      前景（或被瀏覽器節流）時 rAF 可能遲遲不來，抽屜會停在畫面外不進來。
+      keyframes 從掛上去的那一刻就自己跑完，不欠任何一幀。
+   也因此這裡刻意不寫 -enter-from / -leave-to：起訖狀態全由 keyframes 說了算，
+   多寫一份殘留的 transform 反而會在動畫結束後把抽屜彈回畫面外。 */
 @media (prefers-reduced-motion: no-preference) {
-  .veil-enter-active, .veil-leave-active { transition: opacity .18s ease; }
-  .veil-enter-from, .veil-leave-to { opacity: 0; }
-  .sheet-enter-active { transition: transform .26s cubic-bezier(.2, .85, .3, 1), opacity .2s ease; }
-  .sheet-leave-active { transition: transform .18s ease-in, opacity .18s ease-in; }
-  .sheet-enter-from, .sheet-leave-to { opacity: 0; transform: translateY(100%); }
-  @media (min-width: 721px) {
-    .sheet-enter-from, .sheet-leave-to { transform: translateY(10px) scale(.98); }
-  }
+  .veil-enter-active { animation: veilIn .18s ease both; }
+  .veil-leave-active { animation: veilOut .16s ease both; }
+  @keyframes veilIn { from { opacity: 0; } }
+  @keyframes veilOut { to { opacity: 0; } }
+
+  /* 進場帶一點減速曲線（像被推進來停住），收回是直的加速（被抽走），
+     兩邊時間也不對稱：關閉是使用者已經決定好的事，不必陪它慢慢演 */
+  .drawer-enter-active { animation: drawerIn .28s cubic-bezier(.2, .85, .3, 1) both; }
+  .drawer-leave-active { animation: drawerOut .18s cubic-bezier(.4, 0, 1, 1) both; }
+  @keyframes drawerIn { from { transform: translateX(100%); opacity: .5; } }
+  @keyframes drawerOut { to { transform: translateX(100%); opacity: .5; } }
 }
 </style>
