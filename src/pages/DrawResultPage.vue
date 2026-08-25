@@ -74,13 +74,9 @@ const reduceMotion = typeof matchMedia !== 'undefined'
   && matchMedia('(prefers-reduced-motion: reduce)').matches
 if (reduceMotion || !result) revealed.value = true
 
-/* 開獎當下是使用者最會懷疑「這是不是喬過的」的時刻，
-   驗算入口放在這裡比藏在說明頁有意義得多。 */
+/* 開獎當下是使用者最會懷疑「這是不是喬過的」的時刻，驗算入口留在這一頁 ——
+   但收成按鈕下方的一行連結，不再把整套材料攤在結果上面擋住卡片。 */
 const pool = computed(() => (result ? pools.byId(result.poolId) : undefined))
-const shortHash = computed(() => {
-  const h = pool.value?.commitHash
-  return h ? `${h.slice(0, 12)}…${h.slice(-8)}` : ''
-})
 /* 種子池用 fixture:<池id> 當來源（seed 不能等 drand 兩分鐘）。
    那些池的結果不具備對外驗證的意義，畫面要講實話。 */
 const isFixture = computed(() => (pool.value?.clientSeedSource ?? '').startsWith('fixture:'))
@@ -91,17 +87,6 @@ const cardbookLink = computed(() => {
   const ids = (result?.items ?? []).map(i => i.stashId).filter(Boolean)
   return ids.length ? `/me/cards?new=${ids.join(',')}` : '/me/cards'
 })
-
-const copied = ref(false)
-async function copyHash() {
-  const h = pool.value?.commitHash
-  if (!h) return
-  try {
-    await navigator.clipboard.writeText(h)
-    copied.value = true
-    setTimeout(() => { copied.value = false }, 1800)
-  } catch { /* 剪貼簿被拒也不影響驗算，使用者仍可從驗算頁複製 */ }
-}
 
 onMounted(() => {
   track('view_prize_result')
@@ -164,43 +149,6 @@ onMounted(() => {
       </li>
     </ul>
 
-    <!-- 公平性：不要求信任，直接給驗算材料 -->
-    <section v-if="pool" class="verify">
-      <p class="claim">這個結果<strong>不需要你信任我們</strong></p>
-      <!-- 這段原本寫「籤序在開賣前就已洗好封存，當時公布的承諾雜湊如下」，
-           意思是承諾涵蓋的是籤序 —— 但 commitOf() 雜湊的是 server seed。
-           講錯自己的機制比不講更傷：懂的人一驗就發現對不上。 -->
-      <p class="how">
-        開賣前我們就公布了種子的雜湊，但不公布種子本身。籤序由那組種子決定，
-        所以雜湊一旦公布，我們就改不動籤序而不被發現。完抽後種子會公開，
-        你可以在自己的瀏覽器重算一次。
-      </p>
-      <dl class="facts">
-        <div>
-          <dt>承諾雜湊 SHA-256</dt>
-          <dd>
-            <button type="button" class="hash mono" @click="copyHash" :aria-label="copied ? '已複製' : '複製完整雜湊'">
-              {{ shortHash }}<span class="copy">{{ copied ? '已複製' : '複製' }}</span>
-            </button>
-          </dd>
-        </div>
-        <div>
-          <dt>隨機來源</dt>
-          <!-- 示範資料的來源字串是 fixture:<池id>，那不是真的第三方隨機。
-               直接把它原樣印出來，會在「不需要你信任我們」正下方
-               擺一個字面寫著 fixture 的值 —— 那是自相矛盾。
-               老實標示它是示範池，比假裝它可驗證好。 -->
-          <dd v-if="isFixture" class="mono src warn">示範池 · 非正式隨機來源</dd>
-          <dd v-else class="mono src">{{ pool.clientSeedSource }}</dd>
-        </div>
-      </dl>
-      <RouterLink v-if="!isFixture" :to="`/fairness/${result.poolId}`" class="btn verify-btn">自己驗算這一池 →</RouterLink>
-      <p v-else class="fixnote">
-        這是示範池，種子與籤序是固定的測試值，驗算頁對它沒有意義。
-        正式開的池會鎖定 drand 的未來輪次，那時這裡會是可驗證的。
-      </p>
-    </section>
-
     <!-- 這一行是重點：卡在抽完的當下就已經寫進卡冊了（後端在同一個交易裡），
          底下那顆按鈕只是帶你過去看。原本的文案是「收進卡冊」，
          讀起來像「要按了才會進去」—— 沒按的人就以為自己抽到的卡不見了。 -->
@@ -211,6 +159,19 @@ onMounted(() => {
       <RouterLink :to="cardbookLink" class="btn primary">去卡冊看這{{ result.items.length > 1 ? '幾' : '' }}張</RouterLink>
       <RouterLink :to="`/pools/${result.poolId}`" class="btn">再抽一次</RouterLink>
     </div>
+
+    <!-- 公平性收成一行連結。原本整段（主張、原理、承諾雜湊、隨機來源）攤在
+         結果上方，剛抽完的人要的是看卡，那一大塊把卡推下去而且多半被略過。
+         材料一個都沒少，只是搬到驗算頁 —— 想查的人一定會點進去看，
+         不想查的人本來就不會讀。
+         示範池仍然要當場說清楚不可驗證：把「不需要你信任我們」收起來、
+         卻讓人以為這一池可驗證，比原本那一大塊更糟。 -->
+    <p v-if="pool" class="proof">
+      <RouterLink v-if="!isFixture" :to="`/fairness/${result.poolId}`">
+        這一池怎麼證明沒有作弊 →
+      </RouterLink>
+      <span v-else class="warn">這是示範池，籤序是固定的測試值，無法驗算。</span>
+    </p>
   </div>
   <div v-else class="container page">
     <p class="muted">沒有可顯示的抽選結果。<RouterLink to="/pools">去抽選</RouterLink></p>
@@ -218,13 +179,16 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 公平性收成按鈕下方的一行小字，不跟主要動作搶份量 */
+.proof { margin: 14px 0 0; font-size: 12.5px; line-height: 1.7; text-align: center; }
+.proof a { color: var(--accent); }
+.proof .warn { color: #fcd34d; }
+
 /* 「已經在卡冊裡」的說明。按鈕上方，比按鈕先讀到 */
 .stashed {
   margin: 18px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted);
 }
 
-.src.warn { color: #fcd34d; }
-.fixnote { font-size: 12px; line-height: 1.7; color: var(--muted); margin: 10px 0 0; }
 
 /* 煙霧演出：整個視窗。按鈕的預設外觀全部拿掉 —— 它只是為了讓鍵盤能跳過。 */
 .emergeWrap {
@@ -328,49 +292,6 @@ h1 { font-size: 26px; margin: 0; }
   padding: 2px 10px; border-radius: var(--pill);
   background: var(--accent-wash); color: var(--accent);
 }
-/* 公平性區塊 —— 刻意不做淡入、不依賴 3D 演出完成。
-   信任訊息如果會因為動畫沒跑完就消失，那它就不是可信的。 */
-.verify {
-  max-width: 620px; margin: 26px auto 0;
-  padding: 20px;
-  background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  text-align: left;
-}
-.claim { margin: 0; font-size: 15.5px; }
-.claim strong { color: var(--accent); }
-.how { margin: 7px 0 0; font-size: 13.5px; color: var(--muted); line-height: 1.62; }
-.facts {
-  display: grid; gap: 10px;
-  margin: 15px 0 0; padding-top: 14px;
-  border-top: 1px dashed var(--line);
-}
-.facts div { display: grid; gap: 3px; }
-.facts dt { font-size: 11.5px; color: var(--faint); font-weight: 600; }
-.facts dd { margin: 0; min-width: 0; }
-.hash {
-  display: inline-flex; align-items: center; gap: 9px;
-  max-width: 100%;
-  padding: 5px 10px 5px 12px;
-  background: var(--field);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--ink);
-  font-size: 12.5px;
-  overflow: hidden;
-}
-.hash .copy {
-  flex: none;
-  font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
-  color: var(--accent);
-  padding-left: 9px;
-  border-left: 1px solid var(--line);
-}
-.hash:hover { border-color: var(--accent); }
-.hash:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.src { font-size: 12.5px; color: var(--muted); }
-.verify-btn { margin-top: 15px; width: 100%; }
 
 .actions { display: flex; gap: 12px; justify-content: center; margin-top: 30px; }
 
