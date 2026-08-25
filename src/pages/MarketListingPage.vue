@@ -31,6 +31,7 @@ import BottomActionBar from '@/components/BottomActionBar.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
 import { haptic } from '@/lib/haptics'
 import { track } from '@/lib/ga'
+import { refPriceText } from '@/lib/refprice'
 
 const route = useRoute()
 const router = useRouter()
@@ -187,7 +188,7 @@ async function buy() {
               {{ diffPct <= 0 ? '' : '+' }}{{ diffPct }}%
             </span>
           </div>
-          <p class="ref mono">市值 {{ listing.card.refPrice.toLocaleString() }} 點 · 上架於 {{ listing.listedAt }}</p>
+          <p class="ref mono">賣家標示參考價 {{ refPriceText(listing.card.refPrice) }} · 上架於 {{ listing.listedAt }}</p>
         </div>
 
         <!-- 通道說明緊貼價格：它講的是「這筆交易的性質」，跟價格是同一組資訊。
@@ -218,7 +219,7 @@ async function buy() {
           </div>
           <div class="fact">
             <dt>參考市值</dt>
-            <dd class="mono">{{ listing.card.refPrice.toLocaleString() }} 點</dd>
+            <dd class="mono">{{ refPriceText(listing.card.refPrice) }}</dd>
           </div>
           <div class="fact">
             <dt>賣家</dt>

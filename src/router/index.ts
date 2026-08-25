@@ -119,6 +119,13 @@ export const router = createRouter({
       meta: { depth: 1, title: '開卡演出試看' }
     },
     {
+      /* 卡片挑選器的試跑頁。跟 /fx 同一個性質：開發與驗收用，不掛進導覽。
+         挑選器要接進開池表單之前，先在這裡單獨驗它帶回的卡片身分對不對。 */
+      path: '/dev/card-picker', name: 'dev-card-picker',
+      component: () => import('@/pages/DevCardPickerPage.vue'),
+      meta: { depth: 1, title: '卡片挑選器試跑' }
+    },
+    {
       path: '/fairness', name: 'fairness',
       component: () => import('@/pages/FairnessPage.vue'),
       meta: { depth: 1, title: '公平性驗證' }

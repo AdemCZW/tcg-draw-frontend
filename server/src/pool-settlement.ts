@@ -189,7 +189,11 @@ export async function refund(tx: Tx, s: SettlementRow, now: number) {
 }
 
 /**
- * 買家接受賣家的回收報價。
+ * 買家接受賣家宣告的買回價。
+ *
+ * points 由呼叫端從 pool_prizes.buyback 直接讀出來 —— 那是賣家在建池時
+ * 宣告、寫進 commit 鎖死的金額，**不是任何比率乘 refPrice 的結果**。
+ * 這一層不知道也不需要知道那個數字怎麼來的，它只負責移動點數。
  *
  * 「這筆交易取消一半」：卡本來就還在賣家手上（從沒出貨），買家把卡還回去、
  * 拿回部分點數。**錢從這個池的保留額出，沒有任何新點數被創造。**
@@ -210,10 +214,10 @@ export async function acceptRecycle(
 
   await lockSpender(tx, s.sellerId)
   const w = await walletOf(s.sellerId, tx)
-  /* 報價通常低於票價，這筆保留額剛剛才被解開，所以「原路退」自然付得出來。
-     但賣家可以把回收率設到市場價的 7 成，而市場價可能遠高於單張票價 ——
-     那時候差額要從賣家自己的可動用出。付不出來就不能成交，而且要照實說：
-     假裝成交會讓買家的卡消失卻沒拿到點數。 */
+  /* 買回價通常低於票價，這筆保留額剛剛才被解開，所以「原路退」自然付得出來。
+     但單張大獎的買回價可以遠高於一張票的價格（護欄管的是整池的總和，
+     不是單張）—— 那時候差額要從賣家自己的可動用出。付不出來就不能成交，
+     而且要照實說：假裝成交會讓買家的卡消失卻沒拿到點數。 */
   if (w.available < points) return { ok: false, error: 'SELLER_UNFUNDED' }
 
   await credit(tx, s.sellerId, -points, 'pool-recycle-out', s.id)

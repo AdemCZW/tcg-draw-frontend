@@ -38,7 +38,7 @@ interface SeatRow { seat: number; prizeId: string; takenAt: number | null }
 const reveal = ref<Reveal & {
   clientSeedSource?: string; manifestHash?: string | null; seats?: SeatRow[]
 } | null>(null)
-const result = ref<{ ok: boolean; reason?: string; version: 1 | 2 } | null>(null)
+const result = ref<{ ok: boolean; reason?: string; version: 1 | 2 | 3 } | null>(null)
 /** 自己重算出來的 commit，跟開賣前公布的並排給使用者看 */
 const recomputed = ref('')
 
@@ -67,7 +67,7 @@ async function run() {
     /* 重算 commit 的方式要跟這個池的版本一致，否則會在畫面上並排兩個
        必然不一樣的雜湊，看起來像出事了 */
     recomputed.value = r.manifest
-      ? await commitV2(r.serverSeed, await manifestHashOf(r.manifest))
+      ? await commitV2(r.serverSeed, await manifestHashOf(r.manifest, r.manifestVersion ?? 2))
       : await commitOf(r.serverSeed)
     result.value = await verifyReveal(r)
   } catch {
@@ -133,7 +133,7 @@ onMounted(async () => {
 
         <template v-if="result">
           <p v-if="result.ok" class="ok" role="status">
-            通過。<template v-if="result.version === 2">籤序<strong>與獎品內容</strong>都跟開賣前的承諾一致</template><template v-else>籤序與開賣前的承諾一致</template>，沒有被更動過。
+            通過。<template v-if="result.version === 3">籤序、<strong>獎品內容</strong>與<strong>宣告的買回價</strong>都跟開賣前的承諾一致</template><template v-else-if="result.version === 2">籤序<strong>與獎品內容</strong>都跟開賣前的承諾一致</template><template v-else>籤序與開賣前的承諾一致</template>，沒有被更動過。
           </p>
           <p v-else class="bad" role="alert">
             不一致：{{ result.reason }}。請保留這個畫面並聯繫客服。
@@ -148,7 +148,8 @@ onMounted(async () => {
         </p>
 
         <!-- 承諾涵蓋的獎品清單。這是 v2 真正多出來的東西：
-             它就是開賣前宣告的內容，被改過就驗不過 -->
+             它就是開賣前宣告的內容，被改過就驗不過。
+             v3 再多綁一個買回價 —— 賣家有義務履行的金額也鎖在承諾裡。 -->
         <details v-if="reveal?.manifest?.length" class="man">
           <summary>承諾涵蓋的獎品清單（{{ reveal.manifest.length }} 項）</summary>
           <ul>
@@ -157,7 +158,10 @@ onMounted(async () => {
               <span class="c-name">{{ m.name }}</span>
               <span class="mono muted">×{{ m.total }}</span>
               <span v-if="m.certNo" class="mono muted">#{{ m.certNo }}</span>
-              <span v-if="m.refPrice" class="mono muted">{{ m.refPrice.toLocaleString() }}</span>
+              <span v-if="m.refPrice" class="mono muted">參考 {{ m.refPrice.toLocaleString() }}</span>
+              <!-- 買回價是這份清單裡唯一一個「賣家有義務履行」的金額。
+                   v3 的池才有，而它進了雜湊 —— 開賣後偷改會被上面的驗算抓到。 -->
+              <span v-if="m.buyback != null" class="mono buyb">買回 {{ m.buyback.toLocaleString() }}</span>
             </li>
           </ul>
         </details>
@@ -246,7 +250,8 @@ onMounted(async () => {
   flex: none; padding: 1px 7px; border-radius: 999px;
   background: var(--surface-3); color: var(--muted); font-size: 11px;
 }
-.man .c-name { flex: 1; min-width: 0; }
+.man .buyb { color: var(--accent); }
+.c-name { flex: 1; min-width: 0; }
 
 .page { padding-top: 40px; padding-bottom: 72px; max-width: 680px; }
 h1 { font-size: 20px; margin: 0 0 18px; }

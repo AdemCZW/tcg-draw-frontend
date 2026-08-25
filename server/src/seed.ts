@@ -7,8 +7,9 @@
 import { randomBytes } from 'node:crypto'
 import { sql } from './db.js'
 import { PLATFORM_ID } from './orders-service.js'
-import { commitV2, manifestHashOf, seatSequence } from './shared/fairness.js'
-import { poolAllowed, redeemAllowed, redeemRatio, returnRatio } from './shared/economics.js'
+import { BUYBACK_MIN } from './shared/pool-settlement.js'
+import { commitV2, manifestHashOf, seatSequence, type ManifestVersion } from './shared/fairness.js'
+import { floorAllowed, floorRatio } from './shared/economics.js'
 
 const users: [string, string, string][] = [
   [PLATFORM_ID, 'platform', 'VaultDraw 官方'],
@@ -120,6 +121,14 @@ interface PoolDef {
   shiteiTier?: 'A' | 'B' | 'C' | 'D'
   /** 只有既有的 p-seed-1 需要 —— 它的籤序已經在正式資料庫裡，不能因為改規則就變 */
   clientSeed?: string
+  /**
+   * 刻意停在舊制（commit v2、沒有宣告買回價）的池。
+   *
+   * 種子裡一定要留至少一個，否則「舊池的驗算仍然過得了」這條迴歸
+   * 在本機永遠碰不到 —— 而那正是 manifest 版本化最容易做壞的地方。
+   * 這種池的卡不能回收，跟正式環境現有的池行為一致。
+   */
+  legacyV2?: boolean
   prizes: { tier: Tier; card: ReturnType<typeof pcard>; total: number }[]
 }
 
@@ -183,6 +192,11 @@ const poolDefs: PoolDef[] = [
        公平性頁面 —— server_seed 只有在 revealed 之後才會出現在回應裡。 */
     id: 'p-official-3', sellerId: 'u-official', mode: 'muteki',
     title: '官方旗艦場 #58 · 已開獎',
+    /* **刻意停在舊制**（commit v2、沒有宣告買回價）。
+       這是「manifest 版本化之後舊池仍然驗得過」那條迴歸的固定樣本 ——
+       種子裡全部改成 v3 的話，那個洞在本機就永遠碰不到，
+       而它是這次改動最容易做壞的一件事。 */
+    legacyV2: true,
     ticketPrice: 800, status: 'revealed', sold: 60, openedDaysAgo: 26,
     prizes: [ // 60 籤，還元 84.2%
       { tier: 'LAST', card: C.gardevoirUR, total: 1 },
@@ -190,6 +204,23 @@ const poolDefs: PoolDef[] = [
       { tier: 'B', card: C.pidgeotSAR, total: 2 },
       { tier: 'C', card: C.hasselSAR, total: 6 },
       { tier: 'D', card: C.glaceon, total: 50 }
+    ]
+  },
+  {
+    /* 已完抽並公布 seed 的 **v3** 池（有宣告買回價）。
+       p-official-3 是 v2 的樣本，這一池是 v3 的 —— 兩個都 revealed，
+       所以 /pools/:id/reveal 的驗算在新舊兩套規則下都有東西可測。
+       少了這一池，「新池驗得過」只能靠現場建一個池再等 drand 開賣完抽，
+       那在測試裡跑不動。 */
+    id: 'p-official-4', sellerId: 'u-official', mode: 'muteki',
+    title: '官方旗艦場 #59 · 已開獎',
+    ticketPrice: 900, status: 'revealed', sold: 40, openedDaysAgo: 20,
+    prizes: [ // 40 籤，票收 36,000
+      { tier: 'LAST', card: C.terapagosUR, total: 1 },
+      { tier: 'A', card: C.gardevoirUR, total: 1 },
+      { tier: 'B', card: C.pidgeotSAR, total: 2 },
+      { tier: 'C', card: C.hasselSAR, total: 6 },
+      { tier: 'D', card: C.glaceon, total: 30 }
     ]
   },
   {
@@ -306,6 +337,10 @@ const poolDefs: PoolDef[] = [
     // 個人賣家的小池，開得快、賣得也快：接近完抽的池在列表上要看得到
     id: 'p-promo-1', sellerId: 'u-promolab', mode: 'muteki',
     title: '促販卡 大亂鬥 第 7 回',
+    /* **刻意停在舊制**（沒有宣告買回價），而且是 open 的 ——
+       p-official-3 已經 revealed，抽不了，所以「舊池抽到的卡回收不了」
+       這條迴歸需要一個還在賣的舊池。正式環境現有的池全部長這樣。 */
+    legacyV2: true,
     ticketPrice: 250, status: 'open', sold: 25, openedDaysAgo: 1,
     prizes: [ // 36 籤，還元 88.7%
       { tier: 'A', card: C.pepperSAR, total: 1 },
@@ -374,10 +409,24 @@ async function seedPool(d: PoolDef) {
   const total = prizeDefs.reduce((a, p) => a + p.total, 0)
   const openedAt = new Date(Date.now() - d.openedDaysAgo * 86_400_000)
 
-  /* 種子池也走 v2 的承諾（把獎品清單綁進 commit）——
+  /* 示範賣家「宣告」的買回價：取標示市值的六成。
+     這是**建構種子資料**時挑的一個合理示範值，不是執行期的算式 ——
+     線上的買回價由賣家在建池表單上一格一格填，系統從來不從 refPrice 推導。
+     六成是舊制回收區間（5–7 成）的中間值，讓示範資料的數字看起來跟以前一樣，
+     這樣改動前後的畫面可以直接對照。 */
+  const declaredBuyback = (refPrice: number) => Math.max(BUYBACK_MIN, Math.floor(refPrice * 0.6))
+
+  const version: ManifestVersion = d.legacyV2 ? 2 : 3
+  const withBuyback = prizeDefs.map(p => ({
+    ...p,
+    buyback: d.legacyV2 ? null : declaredBuyback((p.card as { refPrice?: number }).refPrice ?? 0)
+  }))
+
+  /* 種子池也走含獎品清單的承諾 ——
      示範資料如果停在 v1，那「開賣後換卡抓不到」的洞在展示與測試裡就永遠碰不到，
-     而那正是最需要被測到的一條。 */
-  const manifest = prizeDefs.map(p => {
+     而那正是最需要被測到的一條。版本照 d.legacyV2 決定：留一個 v2 的池，
+     「舊池仍然驗得過」這條迴歸才有東西可驗。 */
+  const manifest = withBuyback.map(p => {
     const c = p.card as {
       name?: string; setCode?: string | null; cardNo?: string | null
       grader?: string | null; grade?: number | null; certNo?: string | null; refPrice?: number | null
@@ -386,50 +435,60 @@ async function seedPool(d: PoolDef) {
       prizeId: p.id, tier: p.tier, total: p.total,
       name: c.name ?? '', setCode: c.setCode ?? null, cardNo: c.cardNo ?? null,
       grader: c.grader ?? null, grade: c.grade ?? null,
-      certNo: c.certNo ?? null, refPrice: c.refPrice ?? null
+      certNo: c.certNo ?? null, refPrice: c.refPrice ?? null,
+      buyback: p.buyback
     }
   })
-  const manifestHash = await manifestHashOf(manifest)
+  const manifestHash = await manifestHashOf(manifest, version)
 
-  /* 種子池也要有還元率，否則示範資料上看不到這個數字，
-     而它正是買家判斷值不值得抽最直接的依據。 */
-  const values = prizeDefs.map(p => ({
-    tier: p.tier, qty: p.total, unitValue: (p.card as { refPrice?: number }).refPrice ?? 0
-  }))
-  const { ratio } = returnRatio(values, total, d.ticketPrice)
+  /* 保底回饋率。v2 的池沒有宣告買回價，所以算不出來 —— 它存的是舊制的
+     還元率（return_ratio），那個數字留在資料庫裡不動。 */
+  const ratio = d.legacyV2
+    ? null
+    : floorRatio(withBuyback.map(p => ({ tier: p.tier, qty: p.total, buyback: p.buyback ?? 0 })),
+                 total, d.ticketPrice).ratio
 
-  /* 種子走的是 insert，繞過了 POST /v1/pools 上的兩道經濟護欄。
+  /* 種子走的是 insert，繞過了 POST /v1/pools 上的經濟護欄。
      繞過去的後果不是「示範資料醜一點」：示範池是所有人第一眼看到的東西，
-     一個還元率 160% 的池會被當成平台的正常水準，而且回收（recycle）照 refPrice
-     付點數，那種池自己就是一台印鈔機（安全稽核 C-2）。
-     所以這裡自己補上同樣的兩道閘，而且是 throw 不是 warn ——
+     一個 Σ(買回價) 超過票收的池自己就是一台印鈔機。
+     所以這裡自己補上同一道閘，而且是 throw 不是 warn ——
      算錯的池應該在 seed 就停下來，不是安靜地進資料庫。 */
-  const gate = poolAllowed(ratio)
-  if (!gate.allowed) throw new Error(`種子池 ${d.id} 過不了還元率護欄：${gate.message}`)
-  const redeem = redeemAllowed(redeemRatio(values, total, d.ticketPrice).ratio)
-  if (!redeem.allowed) throw new Error(`種子池 ${d.id} 過不了兌現率護欄：${redeem.message}`)
+  if (ratio !== null) {
+    const gate = floorAllowed(ratio)
+    if (!gate.allowed) throw new Error(`種子池 ${d.id} 過不了保底回饋率護欄：${gate.message}`)
+  }
+
+  /* v2 的舊池存的是舊制還元率（Σ 賣家標示市值 ÷ 票收），v3 存的是保底回饋率。
+     兩個數字分開存在兩個欄位，不共用一欄 —— 意義不同，混在一起沒有辦法
+     事後分辨哪一列是哪一種（見 migration 018）。 */
+  const legacyReturn = d.legacyV2
+    ? prizeDefs.filter(p => p.tier !== 'BUST')
+        .reduce((a, p) => a + p.total * ((p.card as { refPrice?: number }).refPrice ?? 0), 0)
+      / (total * d.ticketPrice) * 100
+    : null
 
   await sql`
     insert into pools (id, seller_id, mode, title, ticket_price, total_tickets, status,
-                       server_seed, commit_hash, manifest_hash, client_seed_source, client_seed,
-                       shitei_tier, opened_at, revealed_at, return_ratio,
-                       expires_at, recycle_rate, platform_fee_rate)
+                       server_seed, commit_hash, manifest_hash, commit_version,
+                       client_seed_source, client_seed,
+                       shitei_tier, opened_at, revealed_at, return_ratio, floor_ratio,
+                       expires_at, platform_fee_rate)
     values (${d.id}, ${d.sellerId}, ${d.mode}, ${d.title}, ${d.ticketPrice}, ${total}, ${d.status},
-            ${serverSeed}, ${await commitV2(serverSeed, manifestHash)}, ${manifestHash},
+            ${serverSeed}, ${await commitV2(serverSeed, manifestHash)}, ${manifestHash}, ${version},
             ${clientSeed}, ${clientSeed},
             ${d.shiteiTier ?? null}, ${openedAt},
-            ${d.status === 'revealed' ? new Date() : null}, ${ratio.toFixed(2)},
+            ${d.status === 'revealed' ? new Date() : null},
+            ${legacyReturn === null ? null : legacyReturn.toFixed(2)},
+            ${ratio === null ? null : ratio.toFixed(2)},
             /* 池一定要有到期日。種子給 30 天，剛好長到示範資料不會在開發途中
                自己關掉，又短到「到期會關」這件事在種子裡也是真的。 */
             ${Date.now() + 30 * 86_400_000},
-            /* 賣家的回收報價。種子一律給 6 成（區間 5–7 成的中間值），
-               這樣示範資料上的回收流程是走得通的 —— 但它是**賣家出的價**，
-               錢從這個池的保留額出，不是平台收購。 */
-            ${0.6},
             /* 平台抽成先填 0。做成參數是為了改的時候只改一個地方 */
             ${0})
   `
-  await sql`insert into pool_prizes ${sql(prizeDefs.map(p => ({ id: p.id, pool_id: d.id, tier: p.tier, card: p.card, total: p.total })) as never)}`
+  await sql`insert into pool_prizes ${sql(withBuyback.map(p => ({
+    id: p.id, pool_id: d.id, tier: p.tier, card: p.card, total: p.total, buyback: p.buyback
+  })) as never)}`
 
   const seq = await seatSequence(serverSeed, clientSeed, prizeDefs.map(p => ({ prizeId: p.id, total: p.total })))
   /* 已售出的籤直接標在 pool_seats 上，不補 draws / prizes ——
@@ -441,7 +500,9 @@ async function seedPool(d: PoolDef) {
     taken_by: taken.has(i + 1) ? 'u-buyer' : null,
     taken_at: taken.has(i + 1) ? takenAt : null
   })) as never)}`
-  console.log(`seed pool ${d.id}: 票價 ${d.ticketPrice} × ${total} 籤，還元 ${ratio.toFixed(1)}%，已售 ${taken.size}，${d.status}`)
+  console.log(`seed pool ${d.id}: 票價 ${d.ticketPrice} × ${total} 籤，` +
+    (ratio === null ? `舊制 v2（無買回價）` : `保底回饋 ${ratio.toFixed(1)}%`) +
+    `，已售 ${taken.size}，${d.status}`)
 }
 
 async function run() {

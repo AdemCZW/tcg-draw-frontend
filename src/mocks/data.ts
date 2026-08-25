@@ -78,7 +78,8 @@ const mk = (
   sellerId: string, sellerName: string, listedAt: string,
   delivery?: 'vault' | 'ship'
 ): Listing => ({
-  id, card: c, price: Math.round((c.refPrice * ratio) / 10) * 10,
+  // mock 的掛單價從參考價推 —— 這是造假資料，不是執行期的算式
+  id, card: c, price: Math.round(((c.refPrice ?? 0) * ratio) / 10) * 10,
   sellerId, sellerName, listedAt, status: 'live',
   delivery: delivery ?? (sellerId.startsWith('u-') ? 'vault' : 'ship')
 })
@@ -580,13 +581,64 @@ export const pools: Pool[] = [
   }
 ]
 
+/* ---- mock 的宣告買回價 ----
+ *
+ * 真實資料裡 buyback 是賣家在建池表單上**一格一格填**的，系統從來不從
+ * refPrice 推導。mock 沒有賣家可以填，所以在這裡一次補上一組示範值：
+ * 取標示市值的六成（舊制回收區間 5–7 成的中間值），讓 mock 的畫面跟
+ * 接上後端之後看起來一致。**這是產生假資料，不是執行期的算式。**
+ *
+ * 最後一個池刻意留成舊制（buyback 全部 null、只有 returnRatio）——
+ * 「這個池沒有宣告買回價」那條分支在 mock 模式下也要走得到，
+ * 否則本機開發永遠看不到它長什麼樣。
+ */
+/* 示範用的保底水位：讓每個 mock 池的保底回饋率大約落在這裡。
+   真實資料裡賣家是**直接填絕對金額**的，這個比率只存在於「造假資料」這一步 ——
+   要一組看起來合理的示範數字，總得有個目標水位。 */
+const MOCK_FLOOR_TARGET = 0.6
+pools.forEach((pool, idx) => {
+  const legacy = idx === pools.length - 1
+  if (legacy) {
+    // 舊池：沒有買回價，只有當初宣告過的舊制還元率（不算爆賞）
+    const value = pool.prizes
+      .filter(p => p.tier !== 'BUST')
+      .reduce((a, p) => a + p.total * (p.card.refPrice ?? 0), 0)
+    pool.returnRatio = Math.round((value / (pool.totalTickets * pool.ticketPrice)) * 1000) / 10
+    pool.floorRatio = null
+    pool.commitVersion = 2
+    for (const p of pool.prizes) p.buyback = null
+    return
+  }
+  /* **一個賞別一個金額**，跟建池表單的填法一致 —— 同一個賞別裡的卡
+     共用同一個買回價。代表值取該賞別最高的參考價，再整池等比縮到目標水位、
+     湊成整十的數字（賣家實際會填的就是這種數字，不是 4,573 這種）。 */
+  const rep = new Map<string, number>()
+  for (const p of pool.prizes) {
+    rep.set(p.tier, Math.max(rep.get(p.tier) ?? 0, p.card.refPrice ?? 0))
+  }
+  const raw = pool.prizes.reduce((a, p) => a + p.total * (rep.get(p.tier) ?? 0), 0)
+  const revenue = pool.totalTickets * pool.ticketPrice
+  const scale = raw ? (MOCK_FLOOR_TARGET * revenue) / raw : 0
+  const tierBuyback = new Map(
+    [...rep].map(([t, v]) => [t, Math.max(10, Math.round((v * scale) / 10) * 10)]))
+  let floor = 0
+  for (const p of pool.prizes) {
+    p.buyback = tierBuyback.get(p.tier)!
+    floor += p.total * p.buyback
+  }
+  pool.floorRatio = Math.round((floor / revenue) * 1000) / 10
+  pool.returnRatio = null
+  pool.commitVersion = 3
+})
+
 export interface NewPoolInput {
   sellerId: string
   title: string
   mode: Pool['mode']
   ticketPrice: number
   shiteiTier?: Tier
-  prizes: { tier: Tier; name: string; qty: number; unitValue: number }[]
+  /** unitValue 是賣家標示的參考價（**選填**、只顯示）；buyback 是他宣告的買回價（要履行的絕對金額） */
+  prizes: { tier: Tier; name: string; qty: number; unitValue: number | null; buyback: number }[]
 }
 
 /** 賣家開池。籤序在此刻預洗並產生 commit hash（mock 以假雜湊代替） */
@@ -600,6 +652,8 @@ export function createPool(input: NewPoolInput): Pool {
     tier: p.tier,
     total: p.qty,
     remaining: p.qty,
+    // 賣家宣告的買回價。原樣存下來，不做任何換算
+    buyback: p.buyback,
     card: {
       id: `nc${seq}-${i}`,
       name: p.name,
@@ -694,16 +748,18 @@ export function mockDraw(poolId: string, seats: number[]): DrawResult {
   return { drawId: `d-${Date.now()}`, poolId, items, cost: seats.length * pool.ticketPrice }
 }
 
-/* recycleRate 是那個池的賣家設定的回收報價比率（市場價的 5–7 成）。
-   mock 一律給 0.6，跟種子資料一致 —— 沒有這個值的話卡冊會顯示
-   「這個池的賣家沒有提供回收」，而 mock 模式就看不到回收這條動線了。 */
+/* buyback 是那個池的賣家在開賣前宣告的買回價（點）。
+   mock 取市值六成當示範值，跟上面的 mock 池一致 —— 沒有這個值的話卡冊會顯示
+   「這個池沒有宣告買回價」，而 mock 模式就看不到回收這條動線了。
+   up6 刻意留成 null：那條分支在 mock 裡也要看得到。 */
 export const userPrizes: UserPrize[] = [
-  { id: 'up1', card: cards[1], tier: 'B', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03', recycleRate: 0.6 },
-  { id: 'up2', card: cards[4], tier: 'D', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03', recycleRate: 0.6 },
-  { id: 'up3', card: cards[5], tier: 'C', status: 'shipped', wonAt: '2026-07-20T14:02:00+08:00', acquiredAt: '2026-07-20T14:02:00+08:00', stashExpiresAt: '—', recycleRate: 0.6 },
-  { id: 'up4', card: cards[16], tier: 'A', status: 'stashed', wonAt: '2026-08-09T18:40:00+08:00', acquiredAt: '2026-08-09T18:40:00+08:00', stashExpiresAt: '2026-11-07', recycleRate: 0.6 },
-  { id: 'up5', card: cards[19], tier: 'D', status: 'ship_requested', wonAt: '2026-08-10T11:05:00+08:00', acquiredAt: '2026-08-10T11:05:00+08:00', stashExpiresAt: '2026-11-08', recycleRate: 0.6 },
-  { id: 'up6', card: cards[21], tier: 'C', status: 'stashed', wonAt: '2026-08-11T09:30:00+08:00', acquiredAt: '2026-08-11T09:30:00+08:00', stashExpiresAt: '2026-11-09', recycleRate: 0.6 }
+  { id: 'up1', card: cards[1], tier: 'B', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03', buyback: 16800 },
+  { id: 'up2', card: cards[4], tier: 'D', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03', buyback: 7680 },
+  { id: 'up3', card: cards[5], tier: 'C', status: 'shipped', wonAt: '2026-07-20T14:02:00+08:00', acquiredAt: '2026-07-20T14:02:00+08:00', stashExpiresAt: '—', buyback: 5880 },
+  { id: 'up4', card: cards[16], tier: 'A', status: 'stashed', wonAt: '2026-08-09T18:40:00+08:00', acquiredAt: '2026-08-09T18:40:00+08:00', stashExpiresAt: '2026-11-07', buyback: 900 },
+  { id: 'up5', card: cards[19], tier: 'D', status: 'ship_requested', wonAt: '2026-08-10T11:05:00+08:00', acquiredAt: '2026-08-10T11:05:00+08:00', stashExpiresAt: '2026-11-08', buyback: 456 },
+  // 舊制的池抽到的卡：沒有宣告過買回價，所以回收不了。這條分支要看得到
+  { id: 'up6', card: cards[21], tier: 'C', status: 'stashed', wonAt: '2026-08-11T09:30:00+08:00', acquiredAt: '2026-08-11T09:30:00+08:00', stashExpiresAt: '2026-11-09', buyback: null }
 ]
 
 export const ledger: LedgerEntry[] = [

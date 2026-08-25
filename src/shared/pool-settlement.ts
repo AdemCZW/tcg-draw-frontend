@@ -54,15 +54,32 @@ export const POOL_DEFAULT_DAYS = 14
 export const POOL_MAX_DAYS = 90
 
 /**
- * 賣家回收報價的上下限。使用者講的是市場價的 5–7 成。
+ * 賣家宣告的買回價上下限。**每個獎品一個金額，不是整池一個比率。**
  *
- * 為什麼有下限：低於 5 成的報價實質上是「不提供回收」卻掛著回收的招牌。
- * 為什麼有上限：高於 7 成時，賣家把 refPrice 填高再自抽自回收，
- * 就變成把票金原路搬回自己口袋還多賺 —— 雖然這個模型下沒有新點數被創造，
- * 但會把公開的「回收率」洗成一個誘導性的數字。
+ * 舊制是「賣家自填的 refPrice × 5–7 成」。那個算式的地基是 refPrice，
+ * 而 refPrice 沒有任何外部依據（docs/HANDOFF.md 4.1）—— 賣家填高，
+ * 回收價、還元率、市場折扣就一起說謊。
+ *
+ * 改成直接宣告買回金額之後，這個數字是**他有義務履行的**：玩家一按接受，
+ * 錢就從他自己那個池的保留額出去。設太高自己賠、設太低沒人抽，
+ * 不需要任何外部價格資料就會自我修正。
+ *
+ * 下限 10 點：低於這個數字，走一次回收流程的成本比卡本身高，
+ * 而且「買回價 0」實質上是掛著買回的招牌卻什麼都不買 —— 不提供買回的池
+ * 應該是不存在的池，不是買回價 0 的池。
+ *
+ * 上限一千萬點：這是一個**荒謬值防線**，不是經濟門檻。真正的經濟門檻是
+ * 整池的 Σ(買回價) 必須低於票收（見 shared/economics.ts 的 floorAllowed）——
+ * 單張大獎的買回價本來就可以遠高於單張票價，所以單張不該有相對上限。
+ * 這裡擋的是手滑多打幾個零：那種值進得了 JSON、會出現在卡冊總值與排行榜上，
+ * 也讓 numeric 運算有機會溢位成 500。
  */
-export const RECYCLE_RATE_MIN = 0.5
-export const RECYCLE_RATE_MAX = 0.7
+export const BUYBACK_MIN = 10
+export const BUYBACK_MAX = 10_000_000
+
+export function buybackValid(v: number): boolean {
+  return Number.isInteger(v) && v >= BUYBACK_MIN && v <= BUYBACK_MAX
+}
 
 /**
  * 賣家違約（逾期未出貨）幾次之後不能再開池。
@@ -95,17 +112,6 @@ export function splitTicket(ticketPrice: number, feeRate: number) {
   return { fee, sellerAmount: ticketPrice - fee }
 }
 
-/** 賣家的回收報價。無條件捨去，理由同上：寧可低於折算，不要多付零頭 */
-export function recycleOfferPoints(refPrice: number, rate: number): number {
-  return Math.floor(refPrice * rate)
-}
-
-/** 回收報價的下限。低於這個點數不值得走一次流程（手續成本比卡本身高） */
-export const RECYCLE_MIN_VALUE = 10
-
-export function recycleRateValid(rate: number): boolean {
-  return rate >= RECYCLE_RATE_MIN && rate <= RECYCLE_RATE_MAX
-}
 
 /* ---------------- 狀態機 ---------------- */
 

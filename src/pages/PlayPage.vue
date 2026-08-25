@@ -204,7 +204,10 @@ const pct = computed(() => {
           </div>
           <p class="pline">
             <span class="mono">剩 {{ activePool.remainingTickets }} / {{ activePool.totalTickets }} 抽</span>
-            <span v-if="activePool.returnRatio" class="muted">還元率 {{ activePool.returnRatio }}%</span>
+            <!-- 保底回饋率＝Σ(賣家宣告的買回價) ÷ 票收，也就是「你最少拿得回多少」。
+                 舊池沒有這個數字（賣家沒有宣告過買回價），那就什麼都不顯示 ——
+                 拿舊制的還元率頂替會讓兩個意義不同的數字看起來是同一個。 -->
+            <span v-if="activePool.floorRatio != null" class="muted">保底回饋 {{ activePool.floorRatio }}%</span>
           </p>
         </div>
 

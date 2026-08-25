@@ -20,8 +20,15 @@ export interface CardItem {
   /** 鑑定編號。整套爭議判定能成立的關鍵 —— 每個殼唯一，可對外查證 */
   certNo: string | null
   image: string
-  /** 市場參考價（顯示用） */
-  refPrice: number
+  /**
+   * 賣家標示的參考價（**純顯示**）。
+   *
+   * null = 賣家沒有標示。**不要退回成 0** —— 0 在畫面上讀起來是
+   * 「這張卡不值錢」，跟「沒有標示」是兩件完全不同的事。
+   * 這個欄位不參與任何金額計算：回收看的是賣家宣告的買回價
+   * （見 docs/HANDOFF.md 4.1 與 src/lib/recycle.ts）。
+   */
+  refPrice: number | null
   /** TCGdex 卡片編號，例如 'SV4a-349' */
   artId?: string
 }

@@ -10,6 +10,8 @@
  *
  * 會改資料，不要對正式環境跑。
  */
+import { verifyReveal, manifestHashOf, commitV2, type Reveal } from './shared/fairness.js'
+
 const base = (process.argv[2] ?? 'http://localhost:8080').replace(/\/$/, '')
 
 // 測試腳本裡對回應形狀的假設是刻意寬鬆的：這裡驗的是行為，不是型別
@@ -605,58 +607,196 @@ async function run() {
      但平台上沒有任何地方可以申請。 */
   /* ---- 下架 ----
      這條路原本不存在，上架之後只能等人買，卡也跟著卡在 listed。 */
-  /* 還元率要能被買家看到 —— 那是判斷一個池值不值得抽最直接的依據 */
+  /* 保底回饋率與每一項的買回價，都要在**抽卡之前**看得到 ——
+     那是判斷一個池值不值得抽最直接的依據，而且抽完才知道能買回多少就是釣魚。 */
   {
     const snap = await json(await fetch(`${base}/v1/pools/p-seed-1`))
-    check('池快照帶出還元率', typeof snap.pool?.returnRatio === 'number',
-      `returnRatio=${snap.pool?.returnRatio}`)
-    check('種子池的還元率落在護欄之內',
-      snap.pool.returnRatio >= 55 && snap.pool.returnRatio < 100, `${snap.pool?.returnRatio}`)
+    check('池快照帶出保底回饋率', typeof snap.pool?.floorRatio === 'number',
+      `floorRatio=${snap.pool?.floorRatio}`)
+    check('種子池的保底回饋率落在護欄之內',
+      snap.pool.floorRatio >= 25 && snap.pool.floorRatio < 100, `${snap.pool?.floorRatio}`)
+    check('公開的獎項清單每一項都帶宣告買回價（抽卡前就看得到）',
+      (snap.pool?.prizes ?? []).length > 0 &&
+      snap.pool.prizes.every((x: Any) => typeof x.buyback === 'number' && x.buyback >= 10),
+      JSON.stringify((snap.pool?.prizes ?? []).map((x: Any) => x.buyback)))
+    /* 保底回饋率必須真的等於 Σ(買回價 × 數量) ÷ 票收。
+       少了這一條，存一個好看的常數進 floor_ratio 也會全綠。 */
+    const sum = snap.pool.prizes.reduce((a: number, x: Any) => a + x.total * x.buyback, 0)
+    const expect = (sum / (snap.pool.totalTickets * snap.pool.ticketPrice)) * 100
+    check('保底回饋率就是 Σ(買回價 × 數量) ÷ 票收',
+      Math.abs(snap.pool.floorRatio - expect) < 0.02, `${snap.pool.floorRatio} vs ${expect.toFixed(2)}`)
+
+    /* 舊池照實顯示「沒有宣告買回價」，不拿參考價湊一個數字出來 */
+    const old = await json(await fetch(`${base}/v1/pools/p-official-3`))
+    check('舊池的保底回饋率是 null（它從來沒有宣告過買回價）',
+      old.pool?.floorRatio === null, `floorRatio=${old.pool?.floorRatio}`)
+    check('舊池的獎項買回價也是 null，不是 0',
+      (old.pool?.prizes ?? []).every((x: Any) => x.buyback === null),
+      JSON.stringify((old.pool?.prizes ?? []).map((x: Any) => x.buyback)))
+    check('舊池仍然留著它當初宣告過的舊制還元率',
+      typeof old.pool?.returnRatio === 'number', `returnRatio=${old.pool?.returnRatio}`)
+  }
+
+  /* ---- 公平性驗算：新舊兩套 manifest 規則都要驗得過 ----
+
+     manifestString 用 `|` join，尾端加一個 buyback 欄位會讓**每一行**都變 ——
+     既有的池用新程式重算出來的 manifest 會對不上它們存著的 commit。
+     所以序列化版本化了（v2 / v3），而版本存在池上、由伺服器宣告。
+
+     這一段就是釘住「加了欄位之後舊池沒有集體變成被竄改」。
+     p-official-3 是刻意留在 v2 的種子池，p-official-4 是 v3 的。 */
+  console.log('\n公平性驗算（v2 / v3）：')
+  for (const [poolId, want] of [['p-official-3', 2], ['p-official-4', 3]] as const) {
+    const r = await fetch(`${base}/v1/pools/${poolId}/reveal`)
+    if (!r.ok) { check(`${poolId} 取得 reveal`, false, String(r.status)); continue }
+    const rv = await json(r) as Reveal & { manifestVersion?: number }
+    check(`${poolId} 宣告的 manifest 版本是 v${want}`, rv.manifestVersion === want,
+      `manifestVersion=${rv.manifestVersion}`)
+    const out = await verifyReveal(rv)
+    check(`${poolId}（v${want}）的驗算通過`, out.ok, out.reason ?? '')
+    check(`${poolId} 回報的版本是 ${want}`, out.version === want, String(out.version))
+
+    /* 版本必須是池宣告的，不能「哪個版本算得過就算哪個」——
+       依序嘗試等於讓一個作弊的伺服器挑對自己有利的那一版送出。 */
+    const wrong = await verifyReveal({ ...rv, manifestVersion: (want === 2 ? 3 : 2) as 2 | 3 })
+    check(`${poolId} 用錯的版本重算就驗不過`, !wrong.ok, wrong.reason ?? '（竟然通過了）')
+
+    if (want === 3) {
+      check('v3 的清單每一項都帶宣告買回價',
+        (rv.manifest ?? []).every(m => typeof m.buyback === 'number'),
+        JSON.stringify((rv.manifest ?? []).map(m => m.buyback)))
+      /* 偷改買回價 —— 籤序一個字都沒動、卡也沒換，只把承諾的金額調低。
+         這裡是拿伺服器吐出來的真實資料改一個欄位再重算，
+         等同於「有人在資料庫裡動了 pool_prizes.buyback」之後驗算端會看到的東西。 */
+      const tampered = (rv.manifest ?? []).map((m, i) => i === 0 ? { ...m, buyback: 10 } : m)
+      const bad = await verifyReveal({ ...rv, manifest: tampered })
+      check('開賣後偷改買回價會被驗算抓到（跟偷換卡一樣）', !bad.ok, bad.reason ?? '（竟然通過了）')
+      const reHash = await commitV2(rv.serverSeed, await manifestHashOf(tampered, 3))
+      check('而且重算出來的 commit 真的不一樣', reHash !== rv.commitHash.toLowerCase())
+    }
   }
 
   /* ---- 印點數（C-2 迴歸） ----
-     還元率刻意不算 BUST，但回收對每一種賞別都照 refPrice 付 70% 點數。
-     少了兌現率那道閘，賣家用一張便宜的 A 賞把還元率做到 70%、爆賞的 refPrice
-     填天文數字，自己抽光整池再全部回收，就能憑空印點數（實測 1,000 → 6,300,000）。
+     舊制的印鈔機是「還元率不算 BUST，但回收對每一種賞別都照 refPrice 付 70%」
+     —— 兩套規則的縫隙。現在只有一個數字：Σ(宣告買回價) ÷ 票收，每一種賞別都算。
+     Σ(買回價) ≥ 票收 的池等於「抽光整池再全部買回還有得賺」，
      這裡驗的是「開池那一刻就開不成」——
      池開不出來，後面抽光跟回收的那一整條路自然不存在。 */
   console.log('\n經濟護欄：')
   {
+    /* 買回價總和 = 9,000 + 700 = 9,700，票收 1,000 —— 970% */
     const mint = await call(seller, '/v1/pools', {
       mode: 'muteki', title: 'smoke-mint', ticketPrice: 100, totalTickets: 10,
       prizes: [
-        { tier: 'A', card: { id: 'c-a', name: '誘餌 A 賞', refPrice: 700 }, total: 1 },
-        { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 1_000_000 }, total: 9 }
+        { tier: 'A', card: { id: 'c-a', name: '誘餌 A 賞', refPrice: 700 }, buyback: 700, total: 1 },
+        { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 1_000_000 }, buyback: 1_000, total: 9 }
       ]
     })
     const mj = await json(mint)
-    check('爆賞灌 refPrice 的印點數池開不出來',
+    check('Σ(買回價) 超過票收的印點數池開不出來',
       mint.status === 400 && mj.error === 'BAD_ECONOMICS', `${mint.status} ${JSON.stringify(mj)}`)
+
+    /* 爆賞灌 refPrice 現在**不該**再影響任何金額 —— refPrice 已經降級成純顯示。
+       同一組獎品，只把買回價壓回合理值，池就開得出來。
+       這一條是「refPrice 真的退出金額計算」最直接的證明。 */
+    const bustRef = await call(seller, '/v1/pools', {
+      mode: 'muteki', title: 'smoke-bust-ref', ticketPrice: 100, totalTickets: 10,
+      prizes: [
+        { tier: 'A', card: { id: 'c-a', name: 'A 賞', refPrice: 700 }, buyback: 500, total: 1 },
+        { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 1_000_000 }, buyback: 30, total: 9 }
+      ]
+    })
+    check('爆賞的 refPrice 灌到一百萬也不影響護欄（refPrice 不再參與金額計算）',
+      bustRef.ok, `${bustRef.status} ${await bustRef.clone().text()}`)
+    const brj = await json(bustRef)
+    if (brj.poolId) {
+      const s3 = await json(await fetch(`${base}/v1/pools/${brj.poolId}`))
+      // (500 + 30×9) / 1000 = 77%
+      check('保底回饋率只看買回價，不看 refPrice', s3.pool?.floorRatio === 77,
+        `floorRatio=${s3.pool?.floorRatio}`)
+    }
 
     // 單張 refPrice 的絕對上限：多打幾個零不該進得了資料庫
     const huge = await call(seller, '/v1/pools', {
       mode: 'muteki', title: 'smoke-huge-ref', ticketPrice: 100_000_000, totalTickets: 1,
-      prizes: [{ tier: 'A', card: { id: 'c-h', name: '天價卡', refPrice: 99_999_999 }, total: 1 }]
+      prizes: [{ tier: 'A', card: { id: 'c-h', name: '天價卡', refPrice: 99_999_999 }, buyback: 50_000_000, total: 1 }]
     })
     check('單張 refPrice 超過上限被擋', huge.status === 400, String(huge.status))
 
+    /* ---- 買回價的上下限 ---- */
+    const mkBuyback = (title: string, buyback: unknown) => call(seller, '/v1/pools', {
+      mode: 'muteki', title, ticketPrice: 100, totalTickets: 10,
+      prizes: [{ tier: 'D', card: { id: 'c-b', name: '測試卡', refPrice: 100 }, buyback, total: 10 }]
+    })
+    const zero = await mkBuyback('smoke-buyback-0', 0)
+    check('買回價填 0 被拒（掛著買回的招牌卻什麼都不買）', zero.status === 400, String(zero.status))
+    check('而且講得出下限是多少', (await zero.clone().text()).includes('10'))
+
+    const astro = await mkBuyback('smoke-buyback-astro', 99_999_999)
+    check('買回價填天文數字被拒', astro.status === 400, String(astro.status))
+
+    const missing = await call(seller, '/v1/pools', {
+      mode: 'muteki', title: 'smoke-buyback-missing', ticketPrice: 100, totalTickets: 10,
+      prizes: [{ tier: 'D', card: { id: 'c-b', name: '測試卡', refPrice: 100 }, total: 10 }]
+    })
+    check('沒有任何買回價來源的池開不出來（不能有「抽到才發現沒得買回」的獎項）',
+      missing.status === 400, String(missing.status))
+    check('而且講得出是哪一個賞別缺', (await missing.clone().text()).includes('D 賞'))
+
+    /* ---- 賞別預設 + 個別覆寫 ----
+       買回價按賞別給一個絕對金額（不需要任何基準），某一項特別貴時單獨覆寫。
+       **存進資料庫與 manifest 的仍然是每個獎品的絕對金額** —— 下面就是驗這件事：
+       解析完之後 A 賞那一項拿到的是覆寫值，D 賞拿到的是賞別預設。 */
+    const tiered = await call(seller, '/v1/pools', {
+      mode: 'muteki', title: 'smoke-tier-buyback', ticketPrice: 100, totalTickets: 10,
+      tierBuyback: { A: 400, D: 40 },
+      prizes: [
+        { tier: 'A', card: { id: 'c-ta', name: '同賞別裡特別貴的那張' }, buyback: 300, total: 1 },
+        { tier: 'D', card: { id: 'c-td', name: '一般 D 賞' }, total: 9 }
+      ]
+    })
+    check('賞別預設 + 個別覆寫開得出池', tiered.ok, `${tiered.status} ${await tiered.clone().text()}`)
+    const tj = await json(tiered)
+    if (tj.poolId) {
+      const snap = await json(await fetch(`${base}/v1/pools/${tj.poolId}`))
+      const byTier = Object.fromEntries(
+        (snap.pool?.prizes ?? []).map((x: Any) => [x.tier, x.buyback]))
+      check('個別覆寫蓋過賞別預設', byTier.A === 300, `A=${byTier.A}`)
+      check('沒有覆寫的吃賞別預設', byTier.D === 40, `D=${byTier.D}`)
+      // (300 + 40×9) / 1000 = 66%
+      check('保底回饋率用的是解析後的絕對金額', snap.pool?.floorRatio === 66,
+        `floorRatio=${snap.pool?.floorRatio}`)
+      /* refPrice 完全沒填也要開得出來、也要照實回 null。
+         退回成 0 的話買家看到的是「這張卡不值 0 元」，那跟「沒有標示」是兩件事。 */
+      check('參考價完全不填也開得出池，而且照實回 null（不是 0）',
+        (snap.pool?.prizes ?? []).every((x: Any) => x.card?.refPrice === null),
+        JSON.stringify((snap.pool?.prizes ?? []).map((x: Any) => x.card?.refPrice)))
+    }
+
+    const tierBad = await call(seller, '/v1/pools', {
+      mode: 'muteki', title: 'smoke-tier-bad', ticketPrice: 100, totalTickets: 10,
+      tierBuyback: { D: 0 },
+      prizes: [{ tier: 'D', card: { id: 'c-tb', name: '測試卡' }, total: 10 }]
+    })
+    check('賞別預設填 0 一樣被上下限擋下', tierBad.status === 400, String(tierBad.status))
+
     /* 反面：正常的池還是開得出來。少了這一條，把護欄寫成「一律拒絕」也會全綠。
-       還元率 70%（不算爆賞），兌現率 97%（爆賞也算），兩道閘都應該放行。 */
+       買回價總和 500 + 30×9 = 770，票收 1,000 → 77%，落在 25–100 之間。 */
     const okPool = await call(seller, '/v1/pools', {
       mode: 'muteki', title: 'smoke-ok-pool', ticketPrice: 100, totalTickets: 10,
       prizes: [
-        { tier: 'A', card: { id: 'c-a', name: 'A 賞', refPrice: 700 }, total: 1 },
-        { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 30 }, total: 9 }
+        { tier: 'A', card: { id: 'c-a', name: 'A 賞', refPrice: 700 }, buyback: 500, total: 1 },
+        { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 30 }, buyback: 30, total: 9 }
       ]
     })
-    check('含爆賞但總值合理的池照常開得出來', okPool.ok, `${okPool.status} ${await okPool.clone().text()}`)
+    check('含爆賞但買回價總和合理的池照常開得出來', okPool.ok, `${okPool.status} ${await okPool.clone().text()}`)
     const okj = await json(okPool)
     if (okj.poolId) {
-      /* 護欄現在有兩個數字，公開的那個仍然是不算爆賞的還元率 —— 兌現率是內部閘門，
-         不該把展示用的數字換掉，換掉的話買家看到的還元率會突然多算爆賞。 */
       const s2 = await json(await fetch(`${base}/v1/pools/${okj.poolId}`))
-      check('公開的還元率仍然是不算爆賞的那個', s2.pool?.returnRatio === 70,
-        `returnRatio=${s2.pool?.returnRatio}`)
+      check('新池的保底回饋率算得對', s2.pool?.floorRatio === 77, `floorRatio=${s2.pool?.floorRatio}`)
+      check('新池不再寫舊制的還元率（兩個數字意義不同，不共用一欄）',
+        s2.pool?.returnRatio === null, `returnRatio=${s2.pool?.returnRatio}`)
+      check('新池宣告的 commit 版本是 3', s2.pool?.commitVersion === 3, `${s2.pool?.commitVersion}`)
     }
   }
 
@@ -737,7 +877,7 @@ async function run() {
       // pending 不能開池 —— 門檻在這裡，不在申請
       const pool = await call(buyer, '/v1/pools', {
         title: '不該開得成的池', mode: 'muteki', ticketPrice: 100, totalTickets: 2,
-        prizes: [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 2 }]
+        prizes: [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, buyback: 60, total: 2 }]
       })
       check('待審核的賣家開不了池', pool.status === 403, `${pool.status}`)
 
@@ -751,24 +891,31 @@ async function run() {
        這套判斷原本只存在於前端，也就是說「不合理就不給開」只在瀏覽器裡，
        直接打 API 就能繞過。 */
     const cheapCard = { id: 'c-econ', name: '測試卡', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }
+    /* 買回價固定 10 點（下限），只調票價就能掃過整個保底回饋率區間 ——
+       這樣測到的是護欄的門檻，不是某一組數字剛好。 */
     const mkPool = (title: string, price: number, tickets: number) => call(seller, '/v1/pools', {
       title, mode: 'muteki', ticketPrice: price, totalTickets: tickets,
-      prizes: [{ tier: 'D', card: cheapCard, total: tickets }]
+      prizes: [{ tier: 'D', card: cheapCard, buyback: 10, total: tickets }]
     })
 
-    const harsh = await mkPool('苛刻池', 100, 10)          // 還元 10%
-    check('還元率過低的池開不了', harsh.status === 400, `${harsh.status}`)
+    const harsh = await mkPool('苛刻池', 100, 10)          // 保底 10%
+    check('保底回饋率過低的池開不了', harsh.status === 400, `${harsh.status}`)
     check('而且講得出原因', (await harsh.clone().text()).includes('過於不利'))
 
-    const lossy = await mkPool('賠本池', 2, 10)            // 還元 500%
-    check('還元率超過 100% 的池也開不了', lossy.status === 400)
-    check('賠本的訊息提示可能是參考價填錯', (await lossy.clone().text()).includes('參考價'))
+    const mint2 = await mkPool('印鈔池', 2, 10)            // 保底 500%
+    check('Σ(買回價) 超過票收的池也開不了', mint2.status === 400)
+    check('印鈔機的訊息把兩個數字並排講清楚',
+      (await mint2.clone().text()).includes('票收'))
+
+    // 反面：保底 50%（買回價 10、票價 20）應該過得了
+    const fine = await mkPool('正常池', 20, 10)
+    check('保底回饋率落在區間內的池開得出來', fine.ok, `${fine.status}`)
 
     /* 後端只收 muteki：抽卡邏輯不讀 mode，收下其他模式等於讓賣家開出
        標示著某種玩法、實際卻不是那樣運作的池。
        classic 也在擋掉的名單裡 —— 它宣傳的「抽走最後一籤額外得最後賞」
        後端一行都沒有，開得出來就等於繼續掛著不存在的規則收錢（見 migration 016） */
-    const onePrize = [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 1 }]
+    const onePrize = [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, buyback: 60, total: 1 }]
     const badMode = await call(seller, '/v1/pools', {
       title: '指定賞池', mode: 'shitei', ticketPrice: 100, totalTickets: 1, prizes: onePrize
     })
@@ -1173,7 +1320,7 @@ async function run() {
     /* 規則 3 的後果：超過門檻不能再開池 */
     const blocked = await call(shop, '/v1/pools', {
       mode: 'muteki', title: 'smoke-blocked', ticketPrice: 100, totalTickets: 10,
-      prizes: [{ tier: 'D', card: { id: 'c-x', name: '測試卡', refPrice: 85 }, total: 10 }]
+      prizes: [{ tier: 'D', card: { id: 'c-x', name: '測試卡', refPrice: 85 }, buyback: 60, total: 10 }]
     })
     const bj = await json(blocked)
     check('違約次數達門檻的賣家開不了新池',
@@ -1207,27 +1354,36 @@ async function run() {
       } else check('（跳過到期池的已售出流程：抽不到卡）', false)
     }
 
-    /* 規則 5：回收改成賣家出價、玩家接受，而且錢從那個池自己的保留額出。
-       關鍵是**沒有任何新點數被創造** —— 舊制是平台照 refPrice 付 70%，
-       那是安全稽核 C-2 的印鈔機。 */
+    /* 規則 5：回收照**賣家宣告的買回價**成交，錢從那個池自己的保留額出。
+       關鍵有兩件：
+         a) 沒有任何新點數被創造（舊制是平台照 refPrice 付 70%，C-2 的印鈔機）
+         b) 金額**完全不看 refPrice** —— 下一段會把 refPrice 改掉再驗一次 */
     {
       const total0 = (await json(await call(platform, '/v1/admin/reconcile'))).total
       const sBefore = await walletOf(seller)
       const bBefore = await walletOf(buyer)
       const g = await drawOne(buyer, 'p-seed-1')
       if (g) {
+        /* 期望值從卡冊那一列帶出來的 buyback 拿 —— 那是伺服器告訴使用者
+           「你按下去會拿到多少」的同一個數字。用 refPrice 反推的話，
+           這條測試自己就把 refPrice 又綁回金額計算裡了。 */
+        const mine = await allPrizes(buyer, 'stashed')
+        const row = mine.find((x: Any) => x.id === g.stashId)
+        const expect = Number(row?.buyback ?? -1)
+        check('卡冊那一列帶出宣告買回價', expect >= 10, `buyback=${row?.buyback}`)
         const refPrice = Number((g.card as Any)?.refPrice ?? 0)
-        const expect = Math.floor(refPrice * 0.6)   // 種子池的回收率是 6 成
+        check('買回價跟賣家標示的參考價是兩個獨立的數字', expect !== refPrice,
+          `buyback=${expect} refPrice=${refPrice}`)
         const r = await call(buyer, `/v1/prizes/${g.stashId}/recycle`, {})
         const rj = await json(r)
-        check('回收照賣家設定的報價成交', r.ok && rj.points === expect,
+        check('回收照賣家宣告的買回價成交', r.ok && rj.points === expect,
           `${r.status} ${JSON.stringify(rj)} 期望 ${expect}`)
         const sAfter = await walletOf(seller)
         const bAfter = await walletOf(buyer)
         check('回收的錢是賣家付的（不是平台憑空給的）',
           sAfter.points === sBefore.points + 3250 - expect,
           `${sBefore.points} → ${sAfter.points}`)
-        check('買家拿回報價的點數（其餘留給賣家＝這筆交易取消一半）',
+        check('買家拿回宣告的點數（其餘留給賣家＝這筆交易取消一半）',
           bAfter.points === bBefore.points - 3250 + expect,
           `${bBefore.points} → ${bAfter.points}`)
         check('回收之後那一筆不再是保留額', sAfter.reserved === sBefore.reserved,
@@ -1235,6 +1391,50 @@ async function run() {
         const total1 = (await json(await call(platform, '/v1/admin/reconcile'))).total
         check('整輪回收沒有創造任何新點數', total1 === total0, `${total0} → ${total1}`)
       } else check('（跳過回收：抽不到卡）', false)
+    }
+
+    /* 規則 5b：**回收金額完全不受 refPrice 影響。**
+       這是這次改動的核心命題，所以要正面驗一次：把那張卡的 refPrice 改成
+       一個荒謬的數字，再回收一次，拿到的點數必須一模一樣。
+       refPrice 從 /v1/dev/set-ref-price 改（只有 DEV_LOGIN=1 才開）——
+       改的是 prizes.card 那份快照，不動 pool_prizes，所以公平性承諾不受影響。 */
+    {
+      const g = await drawOne(buyer, 'p-seed-1')
+      if (g) {
+        const mine = await allPrizes(buyer, 'stashed')
+        const row = mine.find((x: Any) => x.id === g.stashId)
+        const expect = Number(row?.buyback ?? -1)
+        const bumped = await fetch(`${base}/v1/dev/set-ref-price`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ prizeId: g.stashId, refPrice: 9_000_000 })
+        })
+        check('把 refPrice 改成天價（測試用端點）', bumped.ok, String(bumped.status))
+        const after = (await allPrizes(buyer, 'stashed')).find((x: Any) => x.id === g.stashId)
+        check('refPrice 真的被改掉了', Number(after?.card?.refPrice) === 9_000_000,
+          `refPrice=${after?.card?.refPrice}`)
+        check('買回價不受 refPrice 影響', Number(after?.buyback) === expect,
+          `${expect} → ${after?.buyback}`)
+        const r = await call(buyer, `/v1/prizes/${g.stashId}/recycle`, {})
+        const rj = await json(r)
+        check('refPrice 改成天價之後，回收拿到的點數一模一樣',
+          r.ok && rj.points === expect, `${r.status} ${JSON.stringify(rj)} 期望 ${expect}`)
+      } else check('（跳過 refPrice 無關性：抽不到卡）', false)
+    }
+
+    /* 規則 5c：舊制的池（沒有宣告過買回價）不能回收。
+       系統不能替賣家簽一個他從來沒同意過的約 —— 見 migration 018。 */
+    {
+      const g = await drawOne(buyer, 'p-promo-1')
+      if (g) {
+        const mine = await allPrizes(buyer, 'stashed')
+        const row = mine.find((x: Any) => x.id === g.stashId)
+        check('舊池抽到的卡，買回價是 null 不是 0', row?.buyback === null, `buyback=${row?.buyback}`)
+        const r = await call(buyer, `/v1/prizes/${g.stashId}/recycle`, {})
+        const rj = await json(r)
+        check('舊池抽到的卡回收不了，而且講得出原因',
+          r.status === 409 && rj.error === 'NO_OFFER' && String(rj.message).includes('沒有宣告買回價'),
+          `${r.status} ${JSON.stringify(rj)}`)
+      } else check('（跳過舊池回收：抽不到卡）', false)
     }
 
     /* 規則 8：賣家自抽自池不禁止（錢從自己流到自己），但不計入公開的進度顯示 */

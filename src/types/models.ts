@@ -61,6 +61,13 @@ export interface PoolPrize {
   card: CardItem
   total: number
   remaining: number
+  /**
+   * 賣家宣告的買回價（單張，點）。開賣前鎖死、寫進 commit，抽完也改不了。
+   *
+   * **一定要在抽卡前就顯示出來** —— 抽完才知道能買回多少就是釣魚。
+   * null = 這個池是買回制上線之前開的，從來沒有做過這個承諾。
+   */
+  buyback?: number | null
 }
 
 /**
@@ -127,8 +134,20 @@ export interface Pool {
   ticketPrice: number
   totalTickets: number
   remainingTickets: number
-  /** 開賣當下算的還元率（獎品總值 ÷ 票收 × 100）。舊池沒有這個數字就是 null */
+  /**
+   * 開賣當下算的**保底回饋率** ＝ Σ(宣告買回價 × 數量) ÷ 票收 × 100。
+   * 意思是「你最少拿得回多少」，是下限不是平均。
+   * null = 這個池沒有宣告過買回價（買回制上線之前開的舊池）。
+   */
+  floorRatio?: number | null
+  /**
+   * 舊制的還元率（Σ 賣家標示的市值 ÷ 票收 × 100）。**只有舊池有。**
+   * 分子是賣家自己填的、沒有外部依據的數字，所以顯示它時一定要標明
+   * 「賣家標示的市值」，不能講得像承諾。新池不會有這個值。
+   */
   returnRatio?: number | null
+  /** 這個池用哪一版 manifest 規則做的承諾（1 / 2 / 3）。驗算端照它重算 */
+  commitVersion?: number | null
   takenSeats: number[]     // 已被抽走的籤位（1-based）
   status: PoolStatus
   commitHash: string       // SHA256(server_seed)，開賣前公布
@@ -176,11 +195,13 @@ export interface UserPrize {
   acquiredAt: string
   stashExpiresAt: string
   /**
-   * 這張卡所屬的池、賣家設定的回收報價比率（市場價的 5–7 成）。
-   * null = 那個池不提供回收。回收現在是**賣家出價**不是平台收購，
-   * 所以前端沒辦法自己算報價 —— 這個值由 API 帶回來（見 src/lib/recycle.ts）。
+   * 這張卡的**宣告買回價**（點）。賣家在建池時一格一格填、寫進 commit 鎖死。
+   * null = 那個池是買回制上線之前開的，沒有做過這個承諾，因此不能回收。
+   *
+   * 前端算不出這個數字也不該猜（它跟 card.refPrice 沒有任何算式關係）——
+   * 由 API 帶回來，見 src/lib/recycle.ts。
    */
-  recycleRate?: number | null
+  buyback?: number | null
   /** 這一籤的結算狀態（保留中／已入帳／已退還…）。舊制抽到的卡沒有結算列 */
   settleStatus?: string | null
 }

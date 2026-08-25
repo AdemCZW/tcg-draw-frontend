@@ -1,6 +1,27 @@
 <script setup lang="ts">
-// 賣家開池。核心是「上架前就把經濟算清楚」——還元率超過 100% 或
-// 低於 55% 都擋下，避免賣家開賠本池、或開對玩家過苛的池砸平台招牌。
+/*
+ * 賣家開池。
+ *
+ * 核心是「上架前就把經濟算清楚」，而算的是**保底回饋率**
+ * ＝ Σ(宣告買回價 × 數量) ÷ 票收，不是賣家標示的市值。
+ * 分子換成「他有義務付出去的錢」之後，這個數字不需要外部價格資料就是誠實的
+ * —— 灌高等於承諾多賠（換分子的完整理由見 src/shared/economics.ts）。
+ *
+ * 買回價**按賞別填**，一個賞別一個絕對金額（A 賞 3000、D 賞 120 這樣）。
+ *
+ * 為什麼不是比率、也不是每張卡一個：
+ *   - 比率要有基準，而唯一的基準是賣家自填的市值 —— 那是循環論證，
+ *     正是這次要擺脫的東西。
+ *   - 每張卡一格在資料上是對的（存進資料庫的確實是每個獎品的絕對金額），
+ *     但要賣家在一個 250 籤的池上填 250 次不現實。
+ *   - 同一個賞別裡的卡價值本來就相近 —— 那正是分賞別的意義。
+ *
+ * 某一張在該賞別裡特別貴的時候可以**單獨覆寫**，那是例外不是常態，
+ * 所以放在展開的細節裡，不佔主要版面。
+ *
+ * 「參考價」那一欄還在但**變成選填**：它已經不參與任何計算，
+ * 強迫賣家填一個沒有外部依據的數字只會製造一個看起來像官方行情的假資料。
+ */
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSellerStore } from '@/stores/sellers'
@@ -9,6 +30,9 @@ import { ApiError } from '@/lib/http'
 import { MOCK } from '@/lib/config'
 import { usePoolStore } from '@/stores/pools'
 import { computeEconomics } from '@/lib/economics'
+import { BUYBACK_MIN, BUYBACK_MAX } from '@/lib/recycle'
+import { buybackValid } from '@/shared/recycle'
+import { FLOOR_RATIO_LABEL, FLOOR_RATIO_MEANING } from '@/shared/economics'
 import type { PoolMode, Tier } from '@/types/models'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 
@@ -84,10 +108,31 @@ const form = reactive({
   mode: 'muteki' as PoolMode,
   ticketPrice: 300,
   shiteiTier: 'A' as Tier,
+  /* 買回價的賞別預設。一個賞別一個絕對金額 —— 沒有基準、沒有比率。
+     預設值刻意讓保底回饋率落在合理區間，賣家一開表單看到的就是一個過得了的池；
+     留空的話第一眼看到的是一個被擋下的表單。
+     只有實際用到的賞別需要有值（下面的 tiersUsed）。 */
+  tierBuyback: { A: 4800, B: 1500, C: 500, D: 36, LAST: 6000, BUST: 36 } as Record<Tier, number>,
+  /* buyback 這一格是**覆寫**：null = 照這個賞別的預設走。
+     不預先幫他從參考價算 —— 那會讓「宣告」變成「系統推導」，
+     而整個改動的重點就是這個數字必須是他自己按下去的。 */
   prizes: [
-    { tier: 'A' as Tier, name: '', qty: 1, unitValue: 8000 },
-    { tier: 'D' as Tier, name: '', qty: 59, unitValue: 60 }
+    { tier: 'A' as Tier, name: '', qty: 1, unitValue: 8000 as number | null, buyback: null as number | null },
+    { tier: 'D' as Tier, name: '', qty: 59, unitValue: 60 as number | null, buyback: null as number | null }
   ]
+})
+
+/** 這個池實際用到哪幾個賞別。沒用到的賞別不必填買回價，也不該擋住送出 */
+const tiersUsed = computed(() => [...new Set(form.prizes.map(p => p.tier))])
+
+/** 解析成每個獎品的絕對金額：個別覆寫優先，否則吃該賞別的預設 */
+const resolved = computed(() =>
+  form.prizes.map(p => p.buyback ?? form.tierBuyback[p.tier] ?? 0))
+
+/** 這個池最差的賞別保底買回多少。池頁那句人話文案就是這個數字 */
+const worstBuyback = computed(() => {
+  const vs = resolved.value.filter(v => v > 0)
+  return vs.length ? Math.min(...vs) : 0
 })
 
 const busy = ref(false)
@@ -96,19 +141,24 @@ const error = ref('')
 const econ = computed(() =>
   computeEconomics(
     form.mode,
-    form.prizes.map(p => ({ tier: p.tier, qty: p.qty, unitValue: p.unitValue })),
+    form.prizes.map((p, i) => ({ tier: p.tier, qty: p.qty, unitValue: p.unitValue ?? 0, buyback: resolved.value[i]! })),
     form.ticketPrice,
     { shiteiTier: form.shiteiTier }
   )
 )
-const blocked = computed(() => econ.value.verdict === 'loss' || econ.value.verdict === 'predatory')
+const blocked = computed(() => econ.value.verdict === 'mint' || econ.value.verdict === 'predatory')
 const nameMissing = computed(() => form.prizes.some(p => p.tier !== 'BUST' && !p.name.trim()))
+/* 解析後每一項都要落在上下限內。爆賞也要 —— 爆賞發的是保底卡，
+   那張卡一樣會被抽到、一樣可以被買回，沒有理由把它排除在承諾之外。
+   檢查解析後的值而不是輸入格：漏填的賞別預設會解析成 0，一樣被這裡擋下。 */
+const buybackBad = computed(() => resolved.value.some(v => !buybackValid(v)))
 const valid = computed(() =>
-  !!form.title.trim() && form.ticketPrice > 0 && econ.value.seatCount > 0 && !nameMissing.value && !blocked.value
+  !!form.title.trim() && form.ticketPrice > 0 && econ.value.seatCount > 0 &&
+  !nameMissing.value && !buybackBad.value && !blocked.value
 )
 
 function addPrize() {
-  form.prizes.push({ tier: 'C', name: '', qty: 1, unitValue: 500 })
+  form.prizes.push({ tier: 'C', name: '', qty: 1, unitValue: 500, buyback: null })
 }
 function removePrize(i: number) {
   if (form.prizes.length > 1) form.prizes.splice(i, 1)
@@ -125,7 +175,12 @@ async function submit() {
       mode: form.mode,
       ticketPrice: form.ticketPrice,
       shiteiTier: form.mode === 'shitei' ? form.shiteiTier : undefined,
-      prizes: form.prizes.map(p => ({ tier: p.tier, name: p.name.trim() || '爆賞', qty: p.qty, unitValue: p.unitValue }))
+      /* 送出去的是**解析後的絕對金額**，不是「賞別預設 + 覆寫」這組規則。
+         存規則的話，事後改一次賞別預設就等於回頭改寫已經公布的承諾。 */
+      prizes: form.prizes.map((p, i) => ({
+        tier: p.tier, name: p.name.trim() || '爆賞', qty: p.qty,
+        unitValue: p.unitValue, buyback: resolved.value[i]!
+      }))
     })
     router.push({ name: 'pool', params: { id: pool.id } })
   } catch {
@@ -254,8 +309,32 @@ async function submit() {
             <span class="chip">共 {{ econ.seatCount }} 籤</span>
           </div>
 
+          <!-- 買回價：一個賞別一個絕對金額。
+               這一塊放在獎項表**之前** —— 它是主要的填法，逐項覆寫才是例外。 -->
+          <section class="tierBuy">
+            <h3>買回價（依賞別）</h3>
+            <p class="tbNote muted">
+              你答應照這個價把卡買回來的金額，<strong>開賣前鎖死、開賣後改不了</strong>
+              （它被寫進公平性承諾的雜湊裡）。玩家按下接受時，這筆錢直接從你這個池的保留額出。
+              同一個賞別的卡價值本來就相近，所以填一個絕對金額就好，<strong>不需要任何基準</strong>。
+            </p>
+            <div class="tbGrid">
+              <label v-for="t in tiersUsed" :key="t" class="tbCell">
+                <span class="tbLbl">{{ t === 'BUST' ? '爆賞' : t === 'LAST' ? '最後賞' : t + ' 賞' }}</span>
+                <input
+                  v-model.number="form.tierBuyback[t]" type="number"
+                  :min="BUYBACK_MIN" :max="BUYBACK_MAX" step="10"
+                  :class="{ missing: !buybackValid(form.tierBuyback[t] ?? 0) }"
+                />
+              </label>
+            </div>
+            <p class="tbLine">
+              買家會看到：<strong class="mono">{{ form.ticketPrice.toLocaleString() }} 點一抽，最差的賞別保底買回 {{ worstBuyback.toLocaleString() }} 點</strong>
+            </p>
+          </section>
+
           <div class="prize-head">
-            <span>賞別</span><span>卡片名稱</span><span>數量</span><span>市值/張</span><span></span>
+            <span>賞別</span><span>卡片名稱</span><span>數量</span><span>參考價/張</span><span>買回價/張</span><span></span>
           </div>
           <div v-for="(p, i) in form.prizes" :key="i" class="prize-row">
             <select v-model="p.tier" aria-label="賞別">
@@ -267,8 +346,23 @@ async function submit() {
               :disabled="p.tier === 'BUST'"
               :class="{ missing: p.tier !== 'BUST' && !p.name.trim() }"
             />
-            <input v-model.number="p.qty" type="number" min="1" aria-label="數量" />
-            <input v-model.number="p.unitValue" type="number" min="0" step="10" :disabled="p.tier === 'BUST'" aria-label="市值" />
+            <!-- 手機把表頭藏起來了（欄寬不夠），所以每一格自己要說得出自己是什麼。
+                 少了 placeholder 的話手機上是三個一模一樣的數字框。 -->
+            <input v-model.number="p.qty" type="number" min="1" aria-label="數量" placeholder="數量" />
+            <!-- 參考價選填：空著就是「賣家沒有標示」，畫面上顯示「未標示」。
+                 不要退回成 0 —— 0 讀起來是「這張卡不值錢」。 -->
+            <input
+              v-model.number="p.unitValue" type="number" min="0" step="10"
+              :disabled="p.tier === 'BUST'" aria-label="參考價（選填）" placeholder="參考價（選填）"
+            />
+            <!-- 這一格是**覆寫**，不是必填：空著就照該賞別的預設走。
+                 placeholder 直接顯示會套用的金額，讓「空著會發生什麼」看得見。 -->
+            <input
+              v-model.number="p.buyback" type="number" :min="BUYBACK_MIN" :max="BUYBACK_MAX" step="10"
+              aria-label="買回價（留空照賞別預設）"
+              :placeholder="(form.tierBuyback[p.tier] ?? 0).toLocaleString()"
+              :class="{ missing: !buybackValid(resolved[i] ?? 0), over: p.buyback != null }"
+            />
             <button type="button" class="del" :disabled="form.prizes.length <= 1" @click="removePrize(i)" aria-label="刪除這列">
               <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
@@ -276,6 +370,16 @@ async function submit() {
             </button>
           </div>
           <button type="button" class="btn add" @click="addPrize">＋ 新增賞別</button>
+
+          <!-- 兩欄的意義完全不同，而且很容易被當成同一件事。講清楚 -->
+          <p class="hint muted twoCols">
+            <strong>參考價</strong>是你自己標示的市場行情，<strong>選填</strong>，
+            只顯示給買家看、<strong>不構成承諾</strong>，也不參與任何金額計算。
+            空著的話買家看到的是「未標示」。<br>
+            <strong>買回價</strong>那一格是<strong>覆寫</strong>：空著就照上面該賞別的金額走，
+            只有某一張在同賞別裡特別貴的時候才需要單獨填。
+            每張 {{ BUYBACK_MIN.toLocaleString() }} 點起跳。
+          </p>
 
           <p v-if="form.mode === 'muteki'" class="hint muted">
             無敵賞的「最後賞」就是籤池裡的一張獎品，它跟其他賞別一樣佔一個籤位，
@@ -292,12 +396,13 @@ async function submit() {
           <h2>經濟試算</h2>
           <div class="ratio">
             <span class="mono big-num">{{ econ.ratio.toFixed(1) }}%</span>
-            <span class="muted lbl">還元率</span>
+            <span class="muted lbl">{{ FLOOR_RATIO_LABEL }}</span>
           </div>
           <p class="verdict">{{ econ.message }}</p>
+          <p class="meaning muted">{{ FLOOR_RATIO_MEANING }}</p>
 
           <dl class="figures">
-            <div><dt>獎池總值</dt><dd class="mono">{{ econ.prizeValue.toLocaleString() }}</dd></div>
+            <div><dt>買回價總額</dt><dd class="mono">{{ econ.floorValue.toLocaleString() }}</dd></div>
             <div><dt>預期票收</dt><dd class="mono">{{ econ.revenue.toLocaleString() }}</dd></div>
           </dl>
         </div>
@@ -312,7 +417,10 @@ async function submit() {
         </div>
 
         <p v-if="nameMissing" class="err">請填寫所有卡片名稱</p>
-        <p v-if="blocked" class="err">還元率不合格，無法開池</p>
+        <p v-if="buybackBad" class="err">
+          每個用到的賞別都要有買回價，範圍 {{ BUYBACK_MIN.toLocaleString() }} – {{ BUYBACK_MAX.toLocaleString() }} 點
+        </p>
+        <p v-if="blocked" class="err">{{ FLOOR_RATIO_LABEL }}不合格，無法開池</p>
         <p v-if="error" class="err">{{ error }}</p>
         <button type="submit" class="btn primary go" :disabled="!valid || busy">
           {{ busy ? '封存籤序中…' : '開池上架' }}
@@ -405,7 +513,9 @@ input.missing { border-color: var(--danger); }
 .mode-rule { display: block; margin: 10px 0 16px; }
 
 .prize-head, .prize-row {
-  display: grid; grid-template-columns: 96px 1fr 72px 96px 32px;
+  /* minmax(0, …) 不是 1fr：grid 子元素預設 min-width: auto，
+     長卡名會把整列撐爆（見 docs/HANDOFF.md 2.1） */
+  display: grid; grid-template-columns: 88px minmax(0, 1fr) 60px 84px 84px 32px;
   gap: 8px; align-items: center;
 }
 .prize-head { font-size: 11.5px; color: var(--muted); font-weight: 600; margin-bottom: 6px; }
@@ -420,20 +530,42 @@ input.missing { border-color: var(--danger); }
 .del:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
 .del:disabled { opacity: .3; cursor: not-allowed; }
 .add { width: 100%; margin-top: 4px; }
+.tierBuy {
+  margin: 0 0 16px; padding: 14px;
+  border: 1px solid var(--line-soft); border-radius: 12px;
+  background: var(--surface-2);
+}
+.tierBuy h3 { font-size: 13.5px; margin: 0 0 6px; }
+.tbNote { font-size: 12px; line-height: 1.7; margin: 0 0 12px; }
+.tbNote strong { color: var(--ink); }
+/* auto-fit + minmax(0, …)：賞別數量會變，而 grid 子元素預設 min-width: auto
+   會讓輸入框撐破容器（見 docs/HANDOFF.md 2.1） */
+.tbGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.tbCell { display: grid; gap: 4px; min-width: 0; }
+.tbLbl { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.tbCell input { width: 100%; min-width: 0; }
+.tbLine { font-size: 12.5px; line-height: 1.7; margin: 12px 0 0; color: var(--muted); }
+.tbLine strong { color: var(--ink); }
+/* 有覆寫的那一格標出來 —— 否則它跟「空著吃預設」長得一模一樣 */
+.prize-row input.over { border-color: var(--accent); }
+
 .hint { font-size: 12px; margin: 12px 0 0; line-height: 1.55; }
+.twoCols { line-height: 1.75; }
+.twoCols strong { color: var(--ink); }
 
 .side { position: sticky; top: 76px; display: grid; gap: 14px; }
 .econ { padding: 16px; }
 .econ.ok { background: var(--ok-wash); }
 .econ.thin { background: var(--warn-wash); }
-.econ.loss, .econ.predatory { background: var(--danger-wash); }
+.econ.mint, .econ.predatory { background: var(--danger-wash); }
 .ratio { display: flex; align-items: baseline; gap: 8px; }
 .big-num { font-size: 34px; font-weight: 600; }
 .econ.ok .big-num { color: var(--ok); }
 .econ.thin .big-num { color: var(--warn); }
-.econ.loss .big-num, .econ.predatory .big-num { color: var(--danger); }
+.econ.mint .big-num, .econ.predatory .big-num { color: var(--danger); }
 .lbl { font-size: 12px; font-weight: 600; }
 .verdict { font-size: 12.5px; font-weight: 600; margin: 8px 0 0; line-height: 1.5; }
+.meaning { font-size: 11.5px; margin: 6px 0 0; line-height: 1.6; }
 .figures { display: grid; gap: 6px; margin: 12px 0 0; padding-top: 10px; border-top: 1px dashed var(--line); }
 .figures div { display: flex; justify-content: space-between; font-size: 12.5px; }
 dt { color: var(--muted); font-weight: 600; }
@@ -452,14 +584,20 @@ dd { margin: 0; font-weight: 600; }
   h1 { font-size: 21px; }
   .row2 { grid-template-columns: 1fr; }
   .prize-head { display: none; }
+  /* 手機一列變三行：
+       1  賞別 ｜ 卡名        ｜ ✕
+       2  數量 ｜ 參考價
+       3  買回價（整行，它是這一列最重要的數字，不跟別的擠） */
   .prize-row {
-    grid-template-columns: 96px 1fr 32px;
+    grid-template-columns: 88px minmax(0, 1fr) 32px;
     gap: 8px 8px; padding: 10px; margin-bottom: 10px;
     border: 1px solid var(--line-soft); border-radius: 10px;
   }
-  .prize-row > input:nth-of-type(1) { grid-column: 2 / 3; }
-  .prize-row > input:nth-of-type(2) { grid-column: 1 / 2; }
-  .prize-row > input:nth-of-type(3) { grid-column: 2 / 4; }
+  .prize-row > select { grid-row: 1; grid-column: 1; }
+  .prize-row > input:nth-of-type(1) { grid-row: 1; grid-column: 2; }   /* 卡名 */
+  .prize-row > input:nth-of-type(2) { grid-row: 2; grid-column: 1; }   /* 數量 */
+  .prize-row > input:nth-of-type(3) { grid-row: 2; grid-column: 2 / 4; } /* 參考價 */
+  .prize-row > input:nth-of-type(4) { grid-row: 3; grid-column: 1 / 4; } /* 買回價 */
   .del { grid-row: 1; grid-column: 3; }
 }
 </style>

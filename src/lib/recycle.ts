@@ -11,59 +11,54 @@
 //   整件事停留在「用點數換商品」的閉環。這條線是這個功能的全部前提，
 //   一旦開放提現，前面所有法律論述同時失效。
 //
-// ⚠️ 誰付這筆錢，2026-08 整個換掉了。
+// ⚠️ 「這筆錢是多少」換過兩次。
 //
-//   舊版：平台照賣家自填的 refPrice 付 70%。那是一台印鈔機 —— refPrice
-//   沒有外部錨點（docs/HANDOFF.md 4.1），賣家把價填高、自己抽光、全部回收，
-//   平台就憑空發行了點數。分錄只有貸方沒有借方。
+//   第一版：平台照賣家自填的 refPrice 付 70%。分錄只有貸方沒有借方 ——
+//   那是一台印鈔機（安全稽核 C-2）。
 //
-//   新版：**賣家出價、玩家選擇接受，錢從那個池自己的保留額出。**
-//   沒有任何新點數被創造 —— 買家拿回的就是他當初付的票金的一部分，原路退。
-//   經濟意義是「這筆交易取消一半」：卡本來就還在賣家手上（從沒出貨），
-//   玩家把卡還回去、拿回部分點數。
+//   第二版：賣家出價、玩家接受，錢從那個池自己的保留額出。印鈔機解掉了，
+//   但金額仍然是 refPrice × 比率 —— 地基還是那個沒有外部依據的自填數字
+//   （docs/HANDOFF.md 4.1）。
 //
-//   因此回收率不再是全站常數，而是**每個池的賣家設定的**（市場價 5–7 成）。
-//   前端拿不到那個比率就算不出報價 —— 這是刻意的：猜一個數字顯示給使用者，
-//   比誠實說「這個池不提供回收」更糟。
+//   第三版（現行）：**賣家在建池時直接宣告每個獎品的買回金額，開賣前鎖死。**
+//   那個金額被寫進 manifest 並綁進 commit，開賣後改不了。它不是「我覺得
+//   這張值多少」，是「我答應照這個價買回來」，而錢從他自己的保留額出。
+//   設太高自己賠、設太低沒人抽 —— 自我修正，不需要任何外部價格資料。
+//
+//   所以前端**不做任何算術**：買回價由 API 帶回來，直接顯示。
+//   拿不到就照實說「這個池沒有宣告買回價」，不要猜一個數字給使用者看。
 // ------------------------------------------------------------------
-import type { CardItem } from '@/types/models'
 import {
-  RECYCLE_MIN_VALUE, RECYCLE_RATE_MIN, RECYCLE_RATE_MAX, recycleOfferPoints
+  BUYBACK_MIN, BUYBACK_MAX, recycleEligible
 } from '@/shared/recycle'
 
-export { RECYCLE_MIN_VALUE, RECYCLE_RATE_MIN, RECYCLE_RATE_MAX }
+export { BUYBACK_MIN, BUYBACK_MAX }
 
 export interface RecycleQuote {
-  /** 接受賣家報價可得的點數（已取整） */
+  /** 接受買回可得的點數。這就是賣家宣告的那個數字本身，沒有經過任何換算 */
   points: number
-  /** 卡片市值，用來對照 */
-  refPrice: number
-  /** 這個池的賣家設定的回收比率。null = 這個池不提供回收 */
-  rate: number | null
+  /** 賣家有沒有對這張卡做過買回承諾。null = 這個池是舊制的池 */
+  buyback: number | null
   eligible: boolean
   reason?: string
 }
 
 /**
- * 賣家的回收報價。
+ * 賣家宣告的買回價。
  *
- * rate 由 API 隨卡片一起帶回來（`GET /v1/prizes` 的 recycle_rate）。
- * 沒有值不是錯誤，是賣家沒有提供回收 —— UI 要照實說，不要顯示一個 0 點的按鈕。
+ * buyback 由 API 隨卡片一起帶回來（`GET /v1/prizes` 的 buyback）。
+ * 沒有值不是錯誤，是那個池從來沒有做過這個承諾 —— UI 要照實說，
+ * 不要顯示一個 0 點的按鈕，也不要拿 refPrice 湊一個數字出來。
  */
-export function recycleQuote(
-  card: Pick<CardItem, 'refPrice'>, rate: number | null | undefined
-): RecycleQuote {
-  const refPrice = card.refPrice
-  if (rate == null) {
-    return { points: 0, refPrice, rate: null, eligible: false, reason: '這個池的賣家沒有提供回收' }
-  }
-  // 無條件捨去：報價寧可低於實際折算，也不要出現賣家多付的零頭
-  const points = recycleOfferPoints(refPrice, rate)
-  if (points < RECYCLE_MIN_VALUE) {
+export function recycleQuote(buyback: number | null | undefined): RecycleQuote {
+  const v = buyback ?? null
+  if (!recycleEligible(v)) {
     return {
-      points, refPrice, rate, eligible: false,
-      reason: `市值過低，賣家的報價只有 ${points} 點，不足最低門檻 ${RECYCLE_MIN_VALUE} 點`
+      points: 0, buyback: v, eligible: false,
+      reason: v == null
+        ? '這個池沒有宣告買回價 —— 它是買回制上線之前開的池'
+        : `賣家宣告的買回價只有 ${v} 點，不足最低門檻 ${BUYBACK_MIN} 點`
     }
   }
-  return { points, refPrice, rate, eligible: true }
+  return { points: v as number, buyback: v, eligible: true }
 }

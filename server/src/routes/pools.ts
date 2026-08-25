@@ -6,16 +6,16 @@
  */
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { returnRatio, poolAllowed, redeemRatio, redeemAllowed } from '../shared/economics.js'
+import { floorRatio, floorAllowed } from '../shared/economics.js'
 import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { walletOf } from '../money.js'
 import { commitPool, draw, tryOpenPool, revealPool } from '../pools-service.js'
 import {
+  BUYBACK_MAX, BUYBACK_MIN,
   FIRST_POOL_TICKET_CAP, FIRST_POOL_VALUE_CAP, PLATFORM_FEE_RATE,
-  POOL_DEFAULT_DAYS, POOL_MAX_DAYS, RECYCLE_RATE_MAX, RECYCLE_RATE_MIN,
-  SELLER_DEFAULT_LIMIT
+  POOL_DEFAULT_DAYS, POOL_MAX_DAYS, SELLER_DEFAULT_LIMIT
 } from '../shared/pool-settlement.js'
 
 export const pools = new Hono()
@@ -41,23 +41,32 @@ function toPublic(p: Row, prizes: Row[], taken: number[], publicTaken: number) {
        兩者因此不一定滿足 remainingTickets = totalTickets − takenSeats.length，
        這是刻意的，不要「修正」成一致。 */
     remainingTickets: Number(p.total_tickets) - publicTaken,
-    /* 開賣當下算的還元率。買家判斷一個池值不值得抽最直接的依據，
-       而同業幾乎沒有人公開它。舊池沒有這個欄位就給 null，
-       前端要能分辨「沒有這個數字」與「這個池還元率是 0」。 */
+    /* 開賣當下算的**保底回饋率** ＝ Σ(宣告買回價 × 數量) ÷ 票收。
+       分子是賣家有義務付出去的錢，不是他喊的市值 —— 這是這個數字跟
+       returnRatio 最重要的差別。null = 這個池沒有宣告過買回價（舊池）。 */
+    floorRatio: p.floor_ratio == null ? null : Number(p.floor_ratio),
+    /* 舊制的還元率（Σ 賣家標示市值 ÷ 票收）。**只有舊池有**，留著是因為
+       那是它們開賣當下對外宣告過的數字，不能事後改寫成一個算不出來的新數字。
+       前端顯示它時必須標明是「賣家標示的市值」，不是承諾。 */
     returnRatio: p.return_ratio === null || p.return_ratio === undefined ? null : Number(p.return_ratio),
+    /* 這個池用哪一版 manifest 規則做的承諾。驗算端照它重算，不「依序嘗試」 */
+    commitVersion: p.commit_version == null ? null : Number(p.commit_version),
     takenSeats: taken,
     status: p.status,
     commitHash: p.commit_hash, clientSeedSource: p.client_seed_source,
     clientSeed: p.status === 'draft' || p.status === 'committed' ? null : p.client_seed,
     serverSeed: revealed ? p.server_seed : null,
     shiteiTier: p.shitei_tier ?? undefined,
-    prizes: prizes.map(x => ({ id: x.id, tier: x.tier, card: x.card, total: Number(x.total), remaining: Number(x.remaining) })),
+    /* buyback 要在**抽卡前**就看得到。抽完才知道能買回多少就是釣魚 ——
+       這是這個欄位出現在公開池快照裡的全部理由。 */
+    prizes: prizes.map(x => ({
+      id: x.id, tier: x.tier, card: x.card,
+      total: Number(x.total), remaining: Number(x.remaining),
+      buyback: x.buyback == null ? null : Number(x.buyback)
+    })),
     /* 到期日。時間到就關池、停止販售，未售出籤位的卡回到賣家手上。
        null = 舊池，沒有到期日 */
     expiresAt: p.expires_at == null ? null : Number(p.expires_at),
-    /* 賣家的回收報價比率（市場價的幾成）。null = 這個池不提供回收。
-       前端要照實顯示 —— 回收現在是賣家出價、玩家選擇接受，不是平台保證收購 */
-    recycleRate: p.recycle_rate == null ? null : Number(p.recycle_rate),
     openedAt: p.opened_at, revealedAt: p.revealed_at
   }
 }
@@ -115,13 +124,19 @@ pools.get('/:id/reveal', async c => {
     select seat, prize_id, taken_at from pool_seats where pool_id = ${p.id} order by seat
   `
   const prizes = await sql<{
-    id: string; total: number; tier: string; card: Record<string, unknown>
-  }[]>`select id, total, tier, card from pool_prizes where pool_id = ${p.id}`
+    id: string; total: number; tier: string; card: Record<string, unknown>; buyback: string | null
+  }[]>`select id, total, tier, card, buyback from pool_prizes where pool_id = ${p.id}`
 
-  /* v2 的池要一起吐出獎品清單，驗算端才重算得出 commit。
+  /* 這個池宣告的 manifest 版本。舊池的 commit_version 由 migration 018 依
+     manifest_hash 是不是 null 回填成 1 或 2；新池一律 3。
+     驗算端照這個版本重算，**不「依序嘗試」**——那等於接受「任何一版算得過就好」，
+     一個作弊的伺服器可以挑對自己有利的那一版送出。 */
+  const version = Number(p.commit_version ?? (p.manifest_hash ? 2 : 1))
+
+  /* v2 以上的池要一起吐出獎品清單，驗算端才重算得出 commit。
      這裡刻意**現在**從 pool_prizes 讀，不是讀一份存起來的快照 ——
-     如果有人在開賣後改了獎品內容，這裡吐出來的就是改過的版本，
-     重算的 commit 對不上，驗算就會抓到。存快照反而會把證據蓋掉。 */
+     如果有人在開賣後改了獎品內容（包括偷改買回價），這裡吐出來的就是改過的
+     版本，重算的 commit 對不上，驗算就會抓到。存快照反而會把證據蓋掉。 */
   const manifest = p.manifest_hash
     ? prizes.map(x => {
         const cd = x.card as {
@@ -132,7 +147,10 @@ pools.get('/:id/reveal', async c => {
           prizeId: x.id, tier: x.tier, total: Number(x.total),
           name: cd.name ?? '', setCode: cd.setCode ?? null, cardNo: cd.cardNo ?? null,
           grader: cd.grader ?? null, grade: cd.grade ?? null,
-          certNo: cd.certNo ?? null, refPrice: cd.refPrice ?? null
+          certNo: cd.certNo ?? null, refPrice: cd.refPrice ?? null,
+          /* v2 的池這一欄一定是 null，而 v2 的序列化根本不讀它 ——
+             帶出來只是為了讓驗算頁面看得到買回價，不影響雜湊。 */
+          buyback: x.buyback == null ? null : Number(x.buyback)
         }
       })
     : undefined
@@ -141,6 +159,7 @@ pools.get('/:id/reveal', async c => {
     serverSeed: p.server_seed, commitHash: p.commit_hash,
     clientSeedSource: p.client_seed_source, clientSeed: p.client_seed,
     manifestHash: p.manifest_hash ?? null,
+    manifestVersion: version,
     manifest,
     prizes: prizes.map(x => ({ prizeId: x.id, total: Number(x.total) })),
     publishedSequence: seq.map(s => s.prize_id),
@@ -158,20 +177,37 @@ pools.get('/:id/reveal', async c => {
 
 /* ---- 以下需要登入 ---- */
 
-/* refPrice 的絕對上限。這個欄位是賣家自己填的，而它同時是護欄的分母
-   與回收付點的分子 —— 沒有上界時一個手滑多打幾個零就是一張「市值一億」的卡。
-   兌現率護欄已經擋住整池的總量，這裡擋的是單張的荒謬值：它進得了 JSON、
-   會出現在卡冊總值與排行榜上，也讓 numeric 運算有機會溢位成 500。
-   一千萬台幣一張的卡不存在於這個平台的商品範圍，超過就是填錯。 */
+/* refPrice 的絕對上限。
+   這個欄位現在**只是顯示**（賣家標示的參考價，不構成承諾，不參與任何金額計算），
+   而且**可以完全不填** —— 它已經沒有任何計算上的用途，強迫賣家填一個
+   沒有外部依據的數字只會製造一個看起來像官方行情的假資料。
+   有填的話上限還是要有：它進得了 JSON、會出現在卡冊總值與排行榜上，
+   也讓 numeric 運算有機會溢位成 500。 */
 const REF_PRICE_MAX = 10_000_000
 
+const TIERS = ['A', 'B', 'C', 'D', 'LAST', 'BUST'] as const
+type TierName = (typeof TIERS)[number]
+
+const buybackAmount = z.number().int()
+  .min(BUYBACK_MIN, `買回價至少 ${BUYBACK_MIN} 點 —— 低於這個數字等於沒有買回`)
+  .max(BUYBACK_MAX, `買回價不能超過 ${BUYBACK_MAX.toLocaleString('zh-TW')} 點`)
+
 const PrizeIn = z.object({
-  tier: z.enum(['A', 'B', 'C', 'D', 'LAST', 'BUST']),
+  tier: z.enum(TIERS),
   card: z.object({
     id: z.string(), name: z.string(),
-    refPrice: z.number().int().nonnegative().max(REF_PRICE_MAX, `參考價不能超過 ${REF_PRICE_MAX.toLocaleString('zh-TW')}`),
+    /* 不填就是「賣家沒有標示參考價」，存成 null。
+       **不要退回成 0** —— 0 在畫面上讀起來是「這張卡不值錢」，
+       那跟「沒有標示」是兩件完全不同的事。 */
+    refPrice: z.number().int().nonnegative()
+      .max(REF_PRICE_MAX, `參考價不能超過 ${REF_PRICE_MAX.toLocaleString('zh-TW')}`)
+      .nullable().optional(),
     certNo: z.string().nullable().optional()
   }).passthrough(),
+  /* 這一項的買回價。**選填 —— 它是「覆寫」不是「必填」。**
+     一般情況下買回價按賞別給（見 CreatePool.tierBuyback），這裡只處理例外：
+     同一個賞別裡某一張特別貴的時候單獨指定。 */
+  buyback: buybackAmount.optional(),
   total: z.number().int().nonnegative()
 }).refine(p => !p.card.certNo || p.total <= 1, {
   /* 一個鑑定編號只對應一張實體卡。開 total > 1 等於宣告「這 N 個籤位都會
@@ -202,13 +238,25 @@ const CreatePool = z.object({
      期待無限期綁住，而且「大獎還沒出」可以永遠掛在首頁上。
      不給就用預設值，不允許不設。 */
   days: z.number().int().positive().max(POOL_MAX_DAYS).default(POOL_DEFAULT_DAYS),
-  /* 賣家的回收報價比率。不給 = 這個池不提供回收（合法的選擇，不是錯誤）。
-     上下限見 shared/pool-settlement.ts；用 refine 而不是 z.number().min/max
-     是為了給一句人看得懂的訊息，那個數字會直接顯示在建池表單上。 */
-  recycleRate: z.number()
-    .refine(r => r >= RECYCLE_RATE_MIN && r <= RECYCLE_RATE_MAX,
-      `回收報價只能設在市場價的 ${RECYCLE_RATE_MIN * 100}% 到 ${RECYCLE_RATE_MAX * 100}% 之間`)
-    .optional()
+  /**
+   * 買回價的賞別預設：一個賞別一個絕對金額。
+   *
+   * 為什麼是「賞別」而不是「每張卡」也不是「一個比率」：
+   *   - 比率要有基準，而唯一的基準是賣家自填的市值 —— 那是循環論證，
+   *     正是這次要擺脫的東西。
+   *   - 每張卡一個金額在資料上是對的（下面就是這樣存的），但要賣家在
+   *     一個 250 籤的池上填 250 次不現實。
+   *   - 同一個賞別裡的卡價值本來就相近 —— 那正是分賞別的意義。
+   *     所以整池只要四五個絕對金額，不需要任何基準。
+   *
+   * **存進資料庫與 manifest 的仍然是每個獎品的絕對金額**（解析後的值）。
+   * 賞別預設只是填表的來源，不是儲存的形式 —— 承諾鎖住的是每一項的實際金額，
+   * 不是一組事後可以重新解讀的規則。
+   */
+  tierBuyback: z.object(
+    Object.fromEntries(TIERS.map(t => [t, buybackAmount.optional()])) as
+      Record<TierName, z.ZodOptional<typeof buybackAmount>>
+  ).partial().optional()
 })
 
 /**
@@ -253,39 +301,47 @@ pools.post('/', requireAuth, async c => {
     }
   }
 
+  /* 把「賞別預設 + 個別覆寫」解析成每個獎品的絕對金額。
+     解析在**建池當下**做一次，之後資料庫裡就只有絕對金額 ——
+     存規則的話，改一次賞別預設就等於回頭改寫已經公布的承諾。 */
+  const resolved: number[] = []
+  for (const p of b.prizes) {
+    const v = p.buyback ?? b.tierBuyback?.[p.tier]
+    if (v == null) {
+      return c.json({
+        error: 'BAD_REQUEST',
+        message: `${p.tier === 'BUST' ? '爆賞' : p.tier === 'LAST' ? '最後賞' : p.tier + ' 賞'}` +
+          `還沒有買回價。每個賞別都要給一個金額，或是替這一項單獨指定。`
+      }, 400)
+    }
+    resolved.push(v)
+  }
+
   const sum = b.prizes.reduce((a, p) => a + p.total, 0)
   if (sum !== b.totalTickets) {
     return c.json({ error: 'BAD_REQUEST', message: `獎品總數 ${sum} 必須等於籤數 ${b.totalTickets}` }, 400)
   }
 
-  /* 還元率護欄。原本這套判斷只存在於前端的 lib/economics.ts —— 也就是說
-     「還元率不合理就不給開」**只在瀏覽器裡**，直接打這支 API 就能繞過。
-     門檻與前端共用 shared/economics.ts，不會分岔。 */
-  const { ratio } = returnRatio(
-    b.prizes.map(p => ({ tier: p.tier, qty: p.total, unitValue: p.card.refPrice })),
+  /* 保底回饋率護欄。原本這套判斷只存在於前端的 lib/economics.ts —— 也就是說
+     「數字不合理就不給開」**只在瀏覽器裡**，直接打這支 API 就能繞過。
+     門檻與前端共用 shared/economics.ts，不會分岔。
+
+     只有一道閘就夠了，舊版需要兩道是因為公開展示不算 BUST、回收卻對每一種
+     賞別都付點 —— 那條縫就是印鈔機。買回價每一種賞別都要宣告，縫消失了。
+     這道閘同時堵住兩件事：Σ(買回價) ≥ 票收（抽光再全部買回有利可圖），
+     以及保底低到形同沒有。 */
+  const { ratio, floorValue } = floorRatio(
+    b.prizes.map((p, i) => ({ tier: p.tier, qty: p.total, buyback: resolved[i]! })),
     b.totalTickets, b.ticketPrice
   )
-  const gate = poolAllowed(ratio)
+  const gate = floorAllowed(ratio)
   if (!gate.allowed) {
     return c.json({
       error: 'BAD_ECONOMICS',
-      message: gate.verdict === 'loss'
-        ? `${gate.message}最常見的原因是獎品的參考價填錯了。`
+      message: gate.verdict === 'mint'
+        ? `${gate.message}買回價總和 ${floorValue.toLocaleString('zh-TW')} 點，票收只有 ${(b.totalTickets * b.ticketPrice).toLocaleString('zh-TW')} 點。`
         : `${gate.message}平台不接受這樣的池。`
     }, 400)
-  }
-
-  /* 第二道閘：兌現率。上面那道刻意不算 BUST，但回收對每一種賞別都照 refPrice
-     付點數 —— 少了這一段，賣家可以用一張便宜的 A 賞把還元率做到 70%，
-     再把爆賞的 refPrice 填成天文數字，自己抽光、全部回收，憑空印出點數。
-     兩道閘一起，公開的還元率跟平台實際要兌現的點數才終於受同一條線約束。 */
-  const redeem = redeemRatio(
-    b.prizes.map(p => ({ tier: p.tier, qty: p.total, unitValue: p.card.refPrice })),
-    b.totalTickets, b.ticketPrice
-  )
-  const redeemGate = redeemAllowed(redeem.ratio)
-  if (!redeemGate.allowed) {
-    return c.json({ error: 'BAD_ECONOMICS', message: redeemGate.message }, 400)
   }
 
   const id = 'p-' + randomBytes(5).toString('hex')
@@ -293,17 +349,26 @@ pools.post('/', requireAuth, async c => {
     const result = await sql.begin(async tx => {
       await tx`
         insert into pools (id, seller_id, mode, title, cover_file_id, ticket_price, total_tickets,
-                           shitei_tier, return_ratio, expires_at, recycle_rate, platform_fee_rate)
+                           shitei_tier, floor_ratio, expires_at, platform_fee_rate)
         values (${id}, ${me}, ${b.mode}, ${b.title}, ${b.coverFileId ?? null}, ${b.ticketPrice}, ${b.totalTickets},
-                ${b.shiteiTier ?? null}, ${ratio.toFixed(2)},
+                ${b.shiteiTier ?? null},
+                /* 開賣當下算的保底回饋率。之後 refPrice 怎麼浮動都不改它 ——
+                   它是承諾的一部分，而且分子（買回價）本來就被 commit 鎖死了。
+                   return_ratio 不寫：那一欄存的是舊制「賣家標示市值 ÷ 票收」，
+                   意義不同，混在同一欄會讓買家在同一個標籤下看到兩種東西。 */
+                ${ratio.toFixed(2)},
                 ${Date.now() + b.days * 86_400_000},
-                ${b.recycleRate ?? null},
                 /* 抽成寫死在池上，不是每次結算去讀全站常數 ——
                    票賣出去之後才調整抽成等於片面改約 */
                 ${PLATFORM_FEE_RATE})
       `
       const rows = b.prizes.map((p, i) => ({
-        id: `${id}-pr${i}`, pool_id: id, tier: p.tier, card: p.card, total: p.total
+        id: `${id}-pr${i}`, pool_id: id, tier: p.tier,
+        // refPrice 沒填就明確存 null（不是 0，也不是「沒有這個鍵」）
+        card: { ...p.card, refPrice: p.card.refPrice ?? null },
+        total: p.total,
+        // 解析後的絕對金額。manifest 與回收都只看這一欄
+        buyback: resolved[i]!
       }))
       await tx`insert into pool_prizes ${tx(rows as never)}`
       return commitPool(tx, id)

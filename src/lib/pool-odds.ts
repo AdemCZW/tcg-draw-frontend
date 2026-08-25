@@ -1,5 +1,5 @@
 /**
- * 池的即時機率與還元率。
+ * 池的即時機率與保底回饋率。
  *
  * 定量池的「中獎率」不是一個設定值，是組成的衍生結果 ——
  * 而且**會隨著銷售改變**：100 籤裡有 1 張最後賞，開賣時是 1/100；
@@ -10,7 +10,7 @@
  * 也是公平會處理原則裡「機會中獎商品的機率」那條所指的東西。
  */
 import type { Pool } from '@/types/models'
-import { returnRatio, verdictOf, type ReturnVerdict } from '@/shared/economics'
+import { floorRatio, floorVerdict, type FloorVerdict } from '@/shared/economics'
 
 export interface TierOdds {
   tier: string
@@ -42,19 +42,29 @@ export function tierOdds(pool: Pool): TierOdds[] {
 }
 
 /**
- * 還元率。優先用伺服器存的（那是**開賣當下**承諾的數字），
- * 舊池或 mock 沒有就從獎項現算 —— 現算的會隨 refPrice 浮動，
- * 所以只當後備，不當承諾。
+ * 保底回饋率 ＝ Σ(賣家宣告的買回價 × 數量) ÷ 票收。
+ * 意思是**你最少拿得回多少**，不是平均回本率。
+ *
+ * 優先用伺服器存的（那是開賣當下承諾的數字），沒有就從獎項現算 ——
+ * 現算跟存的其實會一樣：分子（買回價）被 commit 鎖死了，不像舊制的
+ * refPrice 會隨賣家心情浮動。現算只是給 mock 與還沒存下這個數字的池用。
+ *
+ * 回 null 表示這個池沒有宣告過買回價（買回制上線之前開的舊池）。
+ * **不要退回去用 refPrice 現算一個數字** —— 那正是這次要拆掉的東西。
  */
-export function poolReturn(pool: Pool): { ratio: number; verdict: ReturnVerdict; message: string; stored: boolean } {
-  if (pool.returnRatio !== null && pool.returnRatio !== undefined) {
-    return { ratio: pool.returnRatio, ...verdictOf(pool.returnRatio), stored: true }
+export function poolFloor(
+  pool: Pool
+): { ratio: number; verdict: FloorVerdict; message: string; stored: boolean } | null {
+  if (pool.floorRatio !== null && pool.floorRatio !== undefined) {
+    return { ratio: pool.floorRatio, ...floorVerdict(pool.floorRatio), stored: true }
   }
-  const { ratio } = returnRatio(
-    pool.prizes.map(p => ({ tier: p.tier, qty: p.total, unitValue: p.card.refPrice })),
+  // 每一個獎項都要有宣告的買回價，缺一個就算不出誠實的下限
+  if (!pool.prizes.length || pool.prizes.some(p => p.buyback == null)) return null
+  const { ratio } = floorRatio(
+    pool.prizes.map(p => ({ tier: p.tier, qty: p.total, buyback: p.buyback as number })),
     pool.totalTickets, pool.ticketPrice
   )
-  return { ratio, ...verdictOf(ratio), stored: false }
+  return { ratio, ...floorVerdict(ratio), stored: false }
 }
 
 /** 機率的人話。1/40 比 2.5% 好懂，但兩個都給 */

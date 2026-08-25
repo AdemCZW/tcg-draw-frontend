@@ -64,8 +64,30 @@ export interface PrizeManifestEntry {
   grader?: string | null
   grade?: number | null
   certNo?: string | null
+  /** 賣家標示的參考價。**只是顯示**，不參與任何金額計算（見 docs/HANDOFF.md 4.1） */
   refPrice?: number | null
+  /**
+   * 賣家宣告的買回價。v3 才有的欄位。
+   *
+   * 這是整份 manifest 裡唯一一個「賣家有義務履行的金額」—— refPrice 是他嘴上
+   * 說值多少，buyback 是他答應照這個價收回來，錢從他自己的保留額出。
+   * 綁進承諾之後，開賣後偷偷調低買回價會跟偷換卡一樣被驗算抓到。
+   */
+  buyback?: number | null
 }
+
+/**
+ * manifest 的序列化版本。
+ *
+ *   2  prizeId | tier | total | name | setCode | cardNo | grader | grade | certNo | refPrice
+ *   3  上面那十欄 + | buyback
+ *
+ * 為什麼要版本化而不是直接加欄位：manifestString 用 `|` join，多一欄會讓
+ * **每一行**都變，於是所有既有的池用新程式重算出來的 manifest 對不上它們
+ * 存著的 commit —— 那些 commit 已經對外公布過，不能事後改。
+ * 版本存在池上（pools.commit_version），驗算端照池宣告的版本重算。
+ */
+export type ManifestVersion = 2 | 3
 
 /**
  * 把獎品清單序列化成一個決定性的字串。
@@ -80,19 +102,26 @@ export interface PrizeManifestEntry {
  * 不用 JSON.stringify：它的鍵順序與跳脫規則跟實作綁在一起，
  * 換一個語言重做就可能算出不同的雜湊。
  */
-export function manifestString(prizes: PrizeManifestEntry[]): string {
+export function manifestString(prizes: PrizeManifestEntry[], version: ManifestVersion = 2): string {
   const v = (x: string | number | null | undefined) => (x === null || x === undefined ? '' : String(x))
   return [...prizes]
     .sort((a, b) => (a.prizeId < b.prizeId ? -1 : a.prizeId > b.prizeId ? 1 : 0))
-    .map(p => [
-      p.prizeId, p.tier, p.total, p.name,
-      v(p.setCode), v(p.cardNo), v(p.grader), v(p.grade), v(p.certNo), v(p.refPrice)
-    ].map(v).join('|'))
+    .map(p => {
+      const cols = [
+        p.prizeId, p.tier, p.total, p.name,
+        v(p.setCode), v(p.cardNo), v(p.grader), v(p.grade), v(p.certNo), v(p.refPrice)
+      ]
+      /* v3 只在尾端**追加**一欄，前十欄逐字不動。這樣同一份程式碼算 v2 的池
+         得到的字串跟加這個欄位之前一模一樣 —— 舊池的驗算不會因此壞掉。 */
+      if (version >= 3) cols.push(v(p.buyback))
+      return cols.map(v).join('|')
+    })
     .join('\n')
 }
 
-/** 獎品清單的雜湊 */
-export const manifestHashOf = (prizes: PrizeManifestEntry[]) => sha256Hex(manifestString(prizes))
+/** 獎品清單的雜湊。version 要跟池宣告的一致，否則算出來的是另一份清單的雜湊 */
+export const manifestHashOf = (prizes: PrizeManifestEntry[], version: ManifestVersion = 2) =>
+  sha256Hex(manifestString(prizes, version))
 
 /**
  * v2 的承諾：commit = SHA256(server_seed_bytes ‖ manifest_hash_bytes)。
@@ -189,28 +218,40 @@ export interface Reveal {
   /** 伺服器公布的籤序，index 0 是 1 號籤 */
   publishedSequence: string[]
   /**
-   * v2 才有：開賣前承諾的獎品清單。
+   * v2 以上才有：開賣前承諾的獎品清單。
    * 有帶就會被重新雜湊並綁回 commit —— 這是「獎品內容有沒有被換過」的檢查。
    * 沒帶代表這是 v1 的舊池，只驗得到籤序（見 commitOf 的說明）。
    */
   manifest?: PrizeManifestEntry[]
+  /**
+   * 這個池宣告的 manifest 版本（伺服器從 pools.commit_version 帶出來）。
+   *
+   * **不用「依序嘗試 v2 再試 v3」**：那等於讓驗算端接受「任何一個版本算得過就好」，
+   * 一個作弊的伺服器可以挑對自己有利的那一版本送出，而驗算端會替它背書。
+   * 承諾的一部分就是「我用哪一套規則序列化」，所以版本必須是池事先宣告的、
+   * 只有一個答案。沒帶就是 v2（這個欄位出現之前的池全部是 v2）。
+   */
+  manifestVersion?: ManifestVersion
 }
 
 /**
  * 玩家端的驗證。
  *
- * v2（有 manifest）要四件事都成立：
+ * v2 / v3（有 manifest）要四件事都成立：
  *   1. 用「種子 + 獎品清單」重算的 commit 跟開賣前公布的一樣
  *      —— 這一條同時涵蓋「種子沒被換」與**「獎品內容沒被換」**
  *   2. 籤數跟宣告的一致
  *   3. 重算的籤序跟公布的完全一樣
  *   4. 清單裡的張數跟用來排籤序的張數一致（兩邊都來自伺服器，要對得起來）
  *
+ * v3 跟 v2 的差別只在序列化多了一欄 buyback（賣家宣告的買回價）。
+ * 因為那一欄進了承諾，**開賣後偷改買回價會跟偷換卡一樣被抓到**。
+ *
  * v1（沒有 manifest）只驗得到 1（僅種子）與 2、3。舊池只能到這裡，
  * 那正是加 v2 的原因。
  */
-export async function verifyReveal(r: Reveal): Promise<{ ok: boolean; reason?: string; version: 1 | 2 }> {
-  const version: 1 | 2 = r.manifest ? 2 : 1
+export async function verifyReveal(r: Reveal): Promise<{ ok: boolean; reason?: string; version: 1 | 2 | 3 }> {
+  const version: 1 | 2 | 3 = r.manifest ? (r.manifestVersion ?? 2) : 1
   const fail = (reason: string) => ({ ok: false, reason, version })
 
   if (r.manifest) {
@@ -227,7 +268,7 @@ export async function verifyReveal(r: Reveal): Promise<{ ok: boolean; reason?: s
       return fail(`獎項數量對不上：清單 ${r.manifest.length} 項，籤序用了 ${byId.size} 項`)
     }
 
-    const expect = await commitV2(r.serverSeed, await manifestHashOf(r.manifest))
+    const expect = await commitV2(r.serverSeed, await manifestHashOf(r.manifest, version as ManifestVersion))
     if (expect !== r.commitHash.toLowerCase()) {
       return fail('commit 對不上：server_seed 或獎品內容被換過')
     }

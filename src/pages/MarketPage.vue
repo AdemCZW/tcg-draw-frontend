@@ -25,6 +25,7 @@ import ListSentinel from '@/components/ListSentinel.vue'
 import { useInfiniteList } from '@/composables/useInfiniteList'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { track } from '@/lib/ga'
+import { refDiscount, refPriceText } from '@/lib/refprice'
 
 const wallet = useWalletStore()
 
@@ -81,7 +82,8 @@ onMounted(async () => {
 const laneOf = deliveryOf
 
 /** 掛價相對市值的折數。負數＝比市值便宜 */
-const diffPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card.refPrice) * 100)
+// 沒有標示參考價就沒有折價幅度可言 —— 回 null，畫面不顯示那個標籤
+const diffPct = (l: Listing) => { const d = refDiscount(l); return d == null ? null : Math.round(d * 100) }
 
 /* ---- 分區 ----
    市場原本跟大廳一樣是單一格線，兩頁看起來幾乎一樣。
@@ -131,10 +133,10 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
           class="dealCard" :to="{ name: 'market-listing', params: { id: l.id } }"
         >
           <CardArt class="dealArt" :image="''" :alt="l.card.name" :art-id="l.card.artId" />
-          <span class="dealPct">{{ diffPct(l) }}%</span>
+          <span v-if="diffPct(l) !== null" class="dealPct">{{ diffPct(l) }}%</span>
           <span class="dealFoot">
             <span class="mono dealPrice">{{ l.price.toLocaleString() }}</span>
-            <span class="dealRef mono">市值 {{ l.card.refPrice.toLocaleString() }}</span>
+            <span class="dealRef mono">賣家標示 {{ refPriceText(l.card.refPrice) }}</span>
           </span>
         </RouterLink>
       </div>
@@ -192,12 +194,14 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
           <div class="price">
             <strong class="mono p">{{ l.price.toLocaleString() }}</strong>
             <span class="u">點</span>
-            <span class="tag" :class="diffPct(l) <= 0 ? 'good' : 'over'">
-              {{ diffPct(l) <= 0 ? '' : '+' }}{{ diffPct(l) }}%
+            <!-- 沒有標示參考價就沒有折價幅度可言 —— 不顯示這個標籤，
+                 拿 0 頂替會讓一張沒有基準的卡看起來像「剛好平價」 -->
+            <span v-if="diffPct(l) !== null" class="tag" :class="(diffPct(l) ?? 0) <= 0 ? 'good' : 'over'">
+              {{ (diffPct(l) ?? 0) <= 0 ? '' : '+' }}{{ diffPct(l) }}%
             </span>
           </div>
           <p class="meta mono">
-            市值 {{ l.card.refPrice.toLocaleString() }}
+            賣家標示 {{ refPriceText(l.card.refPrice) }}
           </p>
           <p class="by">{{ l.sellerName }} · {{ l.listedAt }}</p>
         </div>

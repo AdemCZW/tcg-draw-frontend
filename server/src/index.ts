@@ -77,8 +77,28 @@ if (process.env.DEV_LOGIN === '1') {
     await sql`update pools set expires_at = ${Date.now() - 1000} where id = ${parsed.data.poolId}`
     return c.json({ ok: true })
   })
+  /* 把一張卡的 refPrice 改掉。
+     為什麼需要它：這次把回收金額從「refPrice × 比率」換成「賣家宣告的買回價」，
+     核心命題是**refPrice 從此完全不影響任何金額**。那個命題只能正面驗：
+     把 refPrice 改成一個荒謬的數字，回收拿到的點數必須一模一樣。
+     沒有這條路的話，測試只能驗「金額等於某個常數」——
+     而那在舊制底下也會全綠（舊制的常數剛好也算得出同一個數字）。
+
+     只動 prizes.card 那份快照（買家卡冊裡的那一列），**不碰 pool_prizes** ——
+     pool_prizes 的內容在公平性承諾的雜湊裡，動它就等於偽造承諾。 */
+  const RefPriceBody = z.object({ prizeId: z.string(), refPrice: z.number().int().nonnegative() })
+  app.post('/v1/dev/set-ref-price', async c => {
+    const parsed = RefPriceBody.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '參數不合法' }, 400)
+    const rows = await sql`
+      update prizes set card = jsonb_set(card, '{refPrice}', ${String(parsed.data.refPrice)}::jsonb)
+       where id = ${parsed.data.prizeId}
+      returning id
+    `
+    return c.json({ changed: rows.length })
+  })
   console.warn('[auth] DEV_LOGIN 已開啟：/v1/auth/dev-login 給 handle 就發 token，正式環境不要開')
-  console.warn('[dev] /v1/dev/rewind-settlement 與 /v1/dev/expire-pool 也開著，正式環境不要開')
+  console.warn('[dev] /v1/dev/rewind-settlement、/v1/dev/expire-pool、/v1/dev/set-ref-price 也開著，正式環境不要開')
 }
 
 /* 市場掛單的讀取端點搬進 routes/public.ts —— 上架、下架都在那裡，

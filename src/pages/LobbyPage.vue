@@ -58,6 +58,7 @@ import WinnerTicker from '@/components/WinnerTicker.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import SellerChip from '@/components/SellerChip.vue'
 import { track } from '@/lib/ga'
+import { refDiscount, refPriceNum } from '@/lib/refprice'
 
 const pools = usePoolStore()
 const sellers = useSellerStore()
@@ -78,7 +79,7 @@ function topLiveTier(p: Pool): Tier {
 const leftPct = (p: Pool) => (p.remainingTickets / p.totalTickets) * 100
 /** 池裡還沒被抽走的最貴一張的市值 */
 const topLiveValue = (p: Pool) =>
-  p.prizes.filter(x => x.remaining > 0).reduce((m, x) => Math.max(m, x.card.refPrice), 0)
+  p.prizes.filter(x => x.remaining > 0).reduce((m, x) => Math.max(m, refPriceNum(x.card.refPrice)), 0)
 
 /* 今日推薦：開放中、最高賞還沒出的優先；同級比剩餘率（越接近完抽越緊張）。
    用日期輪替前三名，同一天進站看到同一池，隔天會換。 */
@@ -220,10 +221,14 @@ onMounted(async () => {
   const page = await api.listMarket({ sort: 'deal', limit: 8 })
   marketPicks.value = page.items
 })
-const dealPct = (l: Listing) => Math.round(((l.price - l.card.refPrice) / l.card.refPrice) * 100)
+// 沒有標示參考價就沒有折價幅度可言 —— 回 null，畫面不顯示那個標籤
+const dealPct = (l: Listing) => { const d = refDiscount(l); return d == null ? null : Math.round(d * 100) }
 /** 標頭的數據籤直接寫「最多 -14%」，比「8 張」更接近使用者想知道的事 */
-const bestDeal = computed(() =>
-  marketPicks.value.length ? Math.min(...marketPicks.value.map(dealPct)) : 0)
+const bestDeal = computed(() => {
+  // 沒有標示參考價的掛單算不出折價幅度，直接不參與這個「最多 -N%」
+  const pcts = marketPicks.value.map(dealPct).filter((x): x is number => x != null)
+  return pcts.length ? Math.min(...pcts) : 0
+})
 </script>
 
 <template>
@@ -413,7 +418,7 @@ const bestDeal = computed(() =>
             :to="{ name: 'market' }" class="mini"
           >
             <CardArt class="miniArt" :image="''" :alt="l.card.name" :art-id="l.card.artId" />
-            <span class="miniPct">{{ dealPct(l) }}%</span>
+            <span v-if="dealPct(l) !== null" class="miniPct">{{ dealPct(l) }}%</span>
             <span class="miniPrice mono">{{ l.price.toLocaleString() }}</span>
           </RouterLink>
         </div>

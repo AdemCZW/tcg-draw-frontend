@@ -19,6 +19,7 @@ import { recycleQuote } from '@/lib/recycle'
 import type { UserPrize } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 import TierBadge from '@/components/TierBadge.vue'
+import { refPriceText } from '@/lib/refprice'
 
 const route = useRoute()
 const router = useRouter()
@@ -116,19 +117,20 @@ async function submit() {
               <input v-model.number="price[p.id]" type="number" inputmode="numeric" min="1">
               <span class="u">點</span>
             </label>
-            <!-- 兩個對照數字：市值是行情、回收價是「不上架的話賣家願意換回多少」。
-                 定價低於回收價的話上架就沒有意義，要讓人當場看得出來。
-                 沒有回收報價的池就不顯示這個對照 —— 硬湊一個數字會讓人
+            <!-- 兩個對照數字：參考價是賣家標示的行情（僅供參考、不構成承諾），
+                 買回價是賣家宣告、有義務履行的金額。定價低於買回價的話上架
+                 就沒有意義，要讓人當場看得出來。
+                 沒有宣告買回價的池就不顯示這個對照 —— 硬湊一個數字會讓人
                  拿一個不存在的選項來比價。 -->
             <p class="hint mono">
-              市值 {{ (p.card.refPrice || 0).toLocaleString() }}
-              <template v-if="recycleQuote(p.card, p.recycleRate).eligible">
-                · 賣家回收價 {{ recycleQuote(p.card, p.recycleRate).points.toLocaleString() }}
+              賣家標示參考價 {{ refPriceText(p.card.refPrice) }}
+              <template v-if="recycleQuote(p.buyback).eligible">
+                · 賣家宣告買回價 {{ recycleQuote(p.buyback).points.toLocaleString() }}
                 <span
-                  v-if="(price[p.id] ?? 0) > 0 && (price[p.id] ?? 0) < recycleQuote(p.card, p.recycleRate).points"
+                  v-if="(price[p.id] ?? 0) > 0 && (price[p.id] ?? 0) < recycleQuote(p.buyback).points"
                   class="warn"
                 >
-                  　低於回收價
+                  　低於買回價
                 </span>
               </template>
             </p>

@@ -17,6 +17,7 @@ import { share, shareUrl } from '@/lib/social'
 import { ApiError, http } from '@/lib/http'
 import { MOCK } from '@/lib/config'
 import { useAuthStore } from '@/stores/auth'
+import { refPriceText, refPriceNum } from '@/lib/refprice'
 
 const wallet = useWalletStore()
 const auth = useAuthStore()
@@ -319,7 +320,7 @@ function toggleSell(p: UserPrize) {
 }
 
 const sellPickValue = computed(() =>
-  sellPicked.value.reduce((a, p) => a + (p.card.refPrice || 0), 0))
+  sellPicked.value.reduce((a, p) => a + refPriceNum(p.card.refPrice), 0))
 
 function goSell() {
   if (!sellPick.value.length) return
@@ -335,8 +336,9 @@ function askRecycle(p: UserPrize) {
 }
 
 /* 報價由那個池的賣家設定，比率隨卡片一起從 API 帶回來 ——
-   以前那個「全站 70%」的常數已經不存在了（見 src/lib/recycle.ts 的說明）。 */
-const quoteOf = (p: UserPrize) => recycleQuote(p.card, p.recycleRate)
+   前端不做任何算術：買回價是賣家在建池時宣告、寫進公平性承諾鎖死的金額，
+   跟 card.refPrice 沒有算式關係（見 src/lib/recycle.ts 的說明）。 */
+const quoteOf = (p: UserPrize) => recycleQuote(p.buyback)
 
 async function doRecycle(p: UserPrize) {
   const q = quoteOf(p)
@@ -594,7 +596,7 @@ async function copyLink() {
             </div>
             <div class="sMain">
               <strong class="sName">{{ p.card.name }}</strong>
-              <span class="sVal mono">{{ p.card.refPrice.toLocaleString() }}</span>
+              <span class="sVal mono">{{ refPriceText(p.card.refPrice) }}</span>
             </div>
           </div>
 
@@ -648,7 +650,7 @@ async function copyLink() {
               v-if="quoteOf(p).eligible"
               class="btn sm" @click="askRecycle(p)"
             >
-              向賣家換回 {{ quoteOf(p).points.toLocaleString() }} 點
+              按宣告買回價換回 {{ quoteOf(p).points.toLocaleString() }} 點
             </button>
             <span v-else class="muted no-offer">{{ quoteOf(p).reason }}</span>
           </div>
@@ -656,10 +658,15 @@ async function copyLink() {
           <!-- 確認：不可逆，所以把「這是誰的報價、成不成得了」一次講完 -->
           <div v-if="confirming === p.id" class="confirm">
             <dl class="quote">
-              <div><dt>卡片市值</dt><dd class="mono">{{ p.card.refPrice.toLocaleString() }}</dd></div>
+              <!-- 參考價擺在上面只是對照。標籤要寫死「賣家標示」——
+                   不寫的話它讀起來像平台認證過的行情，而它只是賣家自己填的數字。 -->
               <div>
-                <dt>賣家的回收價</dt>
-                <dd class="mono">市值的 {{ Math.round((quoteOf(p).rate ?? 0) * 100) }}%</dd>
+                <dt>賣家標示參考價</dt>
+                <dd class="mono">{{ refPriceText(p.card.refPrice) }}<span class="fyi">僅供參考</span></dd>
+              </div>
+              <div>
+                <dt>宣告買回價</dt>
+                <dd class="mono">{{ quoteOf(p).points.toLocaleString() }} 點</dd>
               </div>
               <div class="tot">
                 <dt>你會拿到</dt>
@@ -667,8 +674,11 @@ async function copyLink() {
               </div>
             </dl>
             <p class="warn">
-              這是<strong>賣家掛出的回收價</strong>，不是平台收購。接受之後卡片歸還賣家、
-              點數由賣家支付，<strong>成立與否以賣家當下的可付款額為準</strong>。
+              上面那個參考價是<strong>賣家自己標示的，僅供參考、不構成承諾</strong>，
+              跟你拿得到的點數沒有任何關係。
+              你拿得到的是<strong>賣家在開賣前宣告、之後改不了的買回價</strong>。
+              接受之後卡片歸還賣家、點數由賣家支付，
+              <strong>成立與否以賣家當下的可付款額為準</strong>。
               卡片還回去之後<strong>無法取回</strong>。
               點數只能用於站內抽選，<strong>不可提領現金、不可轉讓他人</strong>。
             </p>
@@ -1186,6 +1196,7 @@ strong { font-size: 14px; }
   font-weight: 600;
 }
 .quote .tot dd { color: var(--ok); }
+.fyi { margin-left: 6px; font-size: 10.5px; color: var(--faint); }
 .warn { margin: 0; font-size: 11.5px; line-height: 1.55; color: var(--muted); }
 .warn strong { color: var(--danger); font-weight: 600; }
 .confirm .acts { margin-top: 0; }

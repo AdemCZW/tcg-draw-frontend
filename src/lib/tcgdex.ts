@@ -71,8 +71,12 @@ export function artUrlById(id: string, quality: ArtQuality = 'high'): string | n
   const m = id.match(/^([A-Za-z]+\d*[a-zA-Z]*)-(\d+)$/)
   if (!m) return null
   const [, set, num] = m
-  // serie 是 set 開頭的字母部分（SV4a → SV、SV8a → SV、S8a → S）
-  const serie = set.match(/^[A-Za-z]+/)?.[0]?.replace(/\d.*$/, '') ?? set
+  /* 先查修正表（見下方 serieOf 的說明）—— 字母前綴推導在 SVK / CP2 這類
+     set 上會推出 404 的網址。查不到才退回推導：多數 set（SV4a → SV、
+     S8a → S）推導是對的，沒必要為了少數例外去打 API。 */
+  const serie = serieOf.get(set!)
+    ?? set!.match(/^[A-Za-z]+/)?.[0]?.replace(/\d.*$/, '')
+    ?? set!
   return `https://assets.tcgdex.net/ja/${serie}/${set}/${num}/${quality}.webp`
 }
 
@@ -89,4 +93,36 @@ export function canonicalArt(
   const task = search(baseName(name), quality).catch(() => null)
   cache.set(key, task)
   return task
+}
+
+/* ------------------------------------------------------------------
+   serie 修正表
+
+   artUrlById() 是用「set 代號開頭的字母」去猜 serie 的，實測那個規則會錯：
+   TCGdex 的 serie 跟 set 代號沒有字面關係 —— SVK 屬於 SV、CP2 屬於 XY、
+   M2 屬於 M。猜錯的結果是 assets 網址 404（實測
+   /ja/SVK/SVK/001/high.webp → 404，正確的是 /ja/SV/SVK/001/high.webp → 200），
+   畫面上就是一張破圖，而且看起來像「這張卡沒有圖」，很難查。
+
+   正確答案只有 API 知道（卡片詳情的 image 欄位本身就含 serie）。所以這裡
+   開一張「學到就記起來」的表：卡片目錄每查到一張卡的真實圖片網址，就把
+   set → serie 的對應登記進來，之後同一個 set 的其他卡就不必再猜。
+   另外先塞幾組已經實測過的常見錯誤，讓沒經過目錄查詢的頁面也能對。
+------------------------------------------------------------------- */
+const serieOf = new Map<string, string>([
+  // 實測：這三組用字母前綴推導都會推錯
+  ['SVK', 'SV'],
+  ['SV-P', 'SV'],
+  ['CP2', 'XY']
+])
+
+/** 由卡片目錄回填。同一個 set 只要有一張卡查過詳情，整個 set 的網址就都對了 */
+export function registerSerie(setCode: string, serie: string): void {
+  if (setCode && serie) serieOf.set(setCode, serie)
+}
+
+/** 從 TCGdex 給的圖片基底網址反推 serie：.../assets/{lang}/{serie}/{set}/{num} */
+export function serieFromImageUrl(image: string): string | null {
+  const m = image.match(/assets\.tcgdex\.net\/[^/]+\/([^/]+)\/([^/]+)\//)
+  return m ? m[1]! : null
 }

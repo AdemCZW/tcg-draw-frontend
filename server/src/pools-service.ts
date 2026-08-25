@@ -8,7 +8,10 @@
  * 以及抽選時的搶佔。
  */
 import { randomBytes } from 'node:crypto'
-import { bytesToHex, commitV2, manifestHashOf, seatSequence, type PrizeManifestEntry } from './shared/fairness.js'
+import {
+  bytesToHex, commitV2, manifestHashOf, seatSequence,
+  type ManifestVersion, type PrizeManifestEntry
+} from './shared/fairness.js'
 import type { Tx } from './db.js'
 import { sql as sqlRoot } from './db.js'
 import { credit } from './money.js'
@@ -17,6 +20,15 @@ import { notify } from './notify.js'
 
 export const STASH_DAYS = 90
 const DAY = 86_400_000
+
+/**
+ * 新池一律用這個 manifest 版本。
+ *
+ * 改這個常數只影響**之後**建的池 —— 既有的池把自己的版本存在
+ * pools.commit_version 上，驗算照它們宣告的版本重算。
+ * 承諾一旦公布就不能被後來的程式碼追溯改寫，這是這整套的前提。
+ */
+export const COMMIT_VERSION: ManifestVersion = 3
 
 /**
  * drand（League of Entropy）。開池時鎖定一個未來的 round，
@@ -68,33 +80,45 @@ export async function commitPool(tx: Tx, poolId: string) {
     throw new Error(`prize totals (${prizeTotal}) must equal total_tickets (${p.total_tickets})`)
   }
 
-  /* v2 的承諾把獎品清單一起綁進去。
+  /* 承諾把獎品清單一起綁進去。
      v1 只雜湊種子，所以開賣後換掉「第 3 個獎項是哪張卡」籤序不變、
-     驗算照樣通過 —— 那條路必須堵上，否則「可驗證」只涵蓋一半。 */
+     驗算照樣通過 —— 那條路必須堵上，否則「可驗證」只涵蓋一半。
+
+     **新池一律 v3**：序列化尾端多一欄 buyback（賣家宣告的買回價）。
+     那是整份清單裡唯一一個賣家有義務履行的金額，綁進 commit 之後
+     開賣後偷偷調低它會跟偷換卡一樣被驗算抓到。 */
   const rows = await tx<{
-    id: string; tier: string; total: number; card: Record<string, unknown>
-  }[]>`select id, tier, total, card from pool_prizes where pool_id = ${poolId}`
+    id: string; tier: string; total: number; card: Record<string, unknown>; buyback: string | null
+  }[]>`select id, tier, total, card, buyback from pool_prizes where pool_id = ${poolId}`
 
   const manifest: PrizeManifestEntry[] = rows.map(r => {
     const c = r.card as {
       name?: string; setCode?: string | null; cardNo?: string | null
       grader?: string | null; grade?: number | null; certNo?: string | null; refPrice?: number | null
     }
+    /* 少一個買回價就不 commit。這裡是最後一道 ——
+       放行的話會產生一個「宣告了 v3 卻有獎品沒有買回價」的池：
+       它的 manifest 會把 null 序列化成空字串，驗算過得了，
+       但玩家抽到那張卡時按不了回收，而池上又寫著保底回饋率。
+       那種池比開不出來更糟。 */
+    if (r.buyback == null) throw new Error(`prize ${r.id} has no buyback`)
     return {
       prizeId: r.id, tier: r.tier, total: Number(r.total),
       name: c.name ?? '', setCode: c.setCode ?? null, cardNo: c.cardNo ?? null,
       grader: c.grader ?? null, grade: c.grade ?? null,
-      certNo: c.certNo ?? null, refPrice: c.refPrice ?? null
+      certNo: c.certNo ?? null, refPrice: c.refPrice ?? null,
+      buyback: Number(r.buyback)
     }
   })
 
   const serverSeed = bytesToHex(randomBytes(32))
-  const manifestHash = await manifestHashOf(manifest)
+  const manifestHash = await manifestHashOf(manifest, COMMIT_VERSION)
   const commit = await commitV2(serverSeed, manifestHash)
   const source = await reserveClientSeedSource()
   await tx`
     update pools set status = 'committed', server_seed = ${serverSeed},
-      commit_hash = ${commit}, manifest_hash = ${manifestHash}, client_seed_source = ${source}
+      commit_hash = ${commit}, manifest_hash = ${manifestHash},
+      commit_version = ${COMMIT_VERSION}, client_seed_source = ${source}
     where id = ${poolId}
   `
   return { commit, source }

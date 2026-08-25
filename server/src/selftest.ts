@@ -133,6 +133,43 @@ check('v2：manifest 的排序不影響雜湊',
 check('v2：換過 seed 一樣被抓到',
   !(await verifyReveal({ ...baseV2, serverSeed: seed2 })).ok)
 
+/* ---- v3：買回價也在承諾裡 ----
+   買回價是整份清單裡唯一一個「賣家有義務履行的金額」（錢從他的保留額出）。
+   把它綁進 commit 之後，開賣後偷偷調低它會跟偷換卡一樣被抓到。
+   序列化只在尾端**追加**一欄，所以 v2 的池逐字不變 —— 下面第一條就是釘住這件事。 */
+const manifest3 = manifest.map(m => ({
+  ...m, buyback: m.prizeId === 'LAST' ? 26000 : m.prizeId === 'A' ? 15000 : 200
+}))
+const mHash3 = await manifestHashOf(manifest3, 3)
+const commit3 = await commitV2(seed, mHash3)
+const baseV3 = {
+  serverSeed: seed, commitHash: commit3, clientSeed: 'drand:v2',
+  prizes: mPrizes, publishedSequence: mSeq, manifest: manifest3,
+  manifestVersion: 3 as const
+}
+
+/* 這一條是版本化的全部意義：同一份程式碼算 v2 的池，結果跟加 buyback 欄位
+   之前一模一樣。不成立的話所有既有的池會集體變成「被竄改」。 */
+check('v3：帶了 buyback 但用 v2 序列化時，雜湊跟沒有這個欄位時完全相同',
+  (await manifestHashOf(manifest3, 2)) === mHash)
+check('v3：v2 跟 v3 的雜湊不一樣（買回價真的進了承諾）', mHash3 !== mHash)
+
+check('v3：正確的 reveal 通過驗證', (await verifyReveal(baseV3)).ok)
+check('v3：回報的版本是 3', (await verifyReveal(baseV3)).version === 3)
+check('v2 的舊池在 v3 上線之後仍然驗得過', (await verifyReveal(baseV2)).ok)
+
+/* 開賣後偷改買回價 —— 籤序一個字都沒動、卡也沒換，只把承諾的金額調低 */
+const cheaper = manifest3.map(m => m.prizeId === 'LAST' ? { ...m, buyback: 10 } : m)
+check('v3：開賣後偷改買回價被抓到（籤序與卡片完全沒動）',
+  !(await verifyReveal({ ...baseV3, manifest: cheaper })).ok)
+
+/* 版本必須是池宣告的，不能「哪個版本算得過就算哪個」——
+   否則一個作弊的伺服器可以挑對自己有利的那一版送出，驗算端替它背書。 */
+check('v3：拿 v3 的清單謊報成 v2 驗不過',
+  !(await verifyReveal({ ...baseV3, manifestVersion: 2 })).ok)
+check('v2：拿 v2 的清單謊報成 v3 驗不過',
+  !(await verifyReveal({ ...baseV2, manifestVersion: 3 })).ok)
+
 // 分布粗檢：跑 400 個不同 seed，LAST 落在每個位置的次數應該接近均勻。
 // 這不是嚴格統計檢定，只是抓「明顯偏向某一端」這種實作錯誤（例如取餘數偏差、迴圈方向寫錯）。
 const small = [{ prizeId: 'LAST', total: 1 }, { prizeId: 'D', total: 9 }]

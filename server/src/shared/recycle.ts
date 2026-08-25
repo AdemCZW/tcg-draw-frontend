@@ -7,37 +7,32 @@
  *
  * 只換點數、不換現金 —— 這是整套法律論述的前提（見 src/lib/recycle.ts 的說明）。
  *
- * ⚠️ 這套規則在 2026-08 整個換掉了，換的是**誰付這筆錢**。
+ * ⚠️ 這套規則被換過兩次，兩次換的都是「這筆錢憑什麼是這個數字」。
  *
- * 舊版：平台照賣家自填的 refPrice 付 70%。那是一台印鈔機 ——
- * refPrice 沒有外部錨點（見 docs/HANDOFF.md 4.1），賣家把價填高、自己抽光、
- * 全部回收，平台就憑空發行了點數。安全稽核 C-2 講的就是這件事。
+ * 第一版：平台照賣家自填的 refPrice 付 70%。那是一台印鈔機 ——
+ * 分錄只有貸方沒有借方，賣家把價填高、自己抽光、全部回收就憑空發行點數。
  *
- * 新版：**賣家出價、玩家選擇接受，而且錢從那個池自己的保留額出。**
- * 沒有任何新點數被創造 —— 買家拿回的點數就是他當初付的票金的一部分，
- * 原路退回。經濟意義是「這筆交易取消一半」：卡本來就還在賣家手上
- * （從來沒有出貨），玩家把卡還回去、拿回部分點數。
- * 這同時解掉了「保留額被鎖住就付不出回收」的死結：付款來源就是那筆保留額本身。
+ * 第二版：賣家出價、玩家接受，**錢從那個池自己的保留額出**。印鈔機解掉了，
+ * 但金額仍然是 refPrice × 比率 —— 地基還是那個沒有外部依據的自填數字。
  *
- * 報價的比率由賣家在建池時設定，上下限見 pool-settlement.ts。
+ * 第三版（現行）：**賣家在建池時直接宣告每個獎品的買回金額，開賣前鎖死。**
+ * 那個金額被寫進 manifest 並綁進 commit（fairness.ts 的 v3），開賣後改不了。
+ * 它不是「我覺得這張值多少」，是「我答應照這個價買回來」，而錢從他自己的
+ * 保留額出。設太高自己賠、設太低沒人抽 —— 自我修正，不需要任何外部價格資料。
+ *
+ * refPrice 從此**不參與任何金額計算**，只是一個賣家標示的參考數字。
  */
-export {
-  RECYCLE_MIN_VALUE,
-  RECYCLE_RATE_MIN,
-  RECYCLE_RATE_MAX,
-  recycleOfferPoints,
-  recycleRateValid
-} from './pool-settlement'
+export { BUYBACK_MIN, BUYBACK_MAX, buybackValid } from './pool-settlement'
 
-import { RECYCLE_MIN_VALUE, recycleOfferPoints } from './pool-settlement'
+import { BUYBACK_MIN } from './pool-settlement'
 
 /**
  * 這張卡能不能走回收。
  *
- * rate 是**那個池的賣家設定的**，不是全站常數 —— 沒有設定（null）就代表
- * 這個池不提供回收，那不是錯誤，是賣家的選擇，UI 要照實說。
+ * buyback 是**那個池的賣家在開賣前宣告的**，不是全站常數。沒有值（null）
+ * 代表這張卡所屬的池是舊制的池（沒有宣告過買回價），那不是錯誤，
+ * 是那個池從來沒有做過這個承諾 —— UI 要照實說，不要猜一個數字給使用者看。
  */
-export function recycleEligible(refPrice: number, rate: number | null | undefined): boolean {
-  if (rate == null) return false
-  return recycleOfferPoints(refPrice, rate) >= RECYCLE_MIN_VALUE
+export function recycleEligible(buyback: number | null | undefined): boolean {
+  return buyback != null && buyback >= BUYBACK_MIN
 }

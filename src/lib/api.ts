@@ -13,6 +13,7 @@ import * as mock from '@/mocks/data'
 import { MOCK } from './config'
 import { ApiError, http, idem } from './http'
 import { useWalletStore } from '@/stores/wallet'
+import { refDiscount, refPriceNum } from './refprice'
 
 export { MOCK }
 
@@ -31,13 +32,17 @@ function toPool(p: Any): Pool {
     shiteiTier: p.shiteiTier as Tier | undefined,
     ticketPrice: Number(p.ticketPrice), totalTickets: Number(p.totalTickets),
     remainingTickets: Number(p.remainingTickets),
+    floorRatio: p.floorRatio === null || p.floorRatio === undefined ? null : Number(p.floorRatio),
     returnRatio: p.returnRatio === null || p.returnRatio === undefined ? null : Number(p.returnRatio),
+    commitVersion: p.commitVersion == null ? null : Number(p.commitVersion),
     takenSeats: (p.takenSeats as number[]) ?? [],
     status: p.status as PoolStatus,
     commitHash: String(p.commitHash ?? ''), clientSeedSource: String(p.clientSeedSource ?? ''),
     prizes: ((p.prizes as Any[]) ?? []).map(x => ({
       id: String(x.id), tier: x.tier as Tier, card: x.card as CardItem,
-      total: Number(x.total), remaining: Number(x.remaining)
+      total: Number(x.total), remaining: Number(x.remaining),
+      /* 賣家宣告的買回價。要在抽卡前就看得到 —— 抽完才知道能買回多少就是釣魚 */
+      buyback: x.buyback == null ? null : Number(x.buyback)
     })),
     openedAt: ts(p.openedAt),
     escrow: { held: 0, releaseAfterShipDays: 7, released: 0 }
@@ -52,9 +57,10 @@ function toPrize(r: Any): UserPrize {
     /* 舊資料（或還沒跑 014 的後端）沒有 acquired_at，退回 won_at ——
        第一手持有者的兩個時間本來就相同，退回去不會讓畫面說錯話 */
     acquiredAt: ts(r.acquired_at ?? r.won_at), stashExpiresAt: ts(r.stash_expires_at),
-    /* 回收比率跟結算狀態由 /v1/prizes 一起帶回來。舊制的卡兩個都是 null，
-       前端要能分辨「不提供回收」跟「回收 0 點」—— 後者是假的數字。 */
-    recycleRate: r.recycle_rate == null ? null : Number(r.recycle_rate),
+    /* 宣告買回價與結算狀態由 /v1/prizes 一起帶回來。舊制的卡兩個都是 null，
+       前端要能分辨「這個池沒有宣告買回價」跟「買回價 0 點」—— 後者是假的數字。
+       買回價跟 card.refPrice 沒有任何算式關係，前端算不出來也不該猜。 */
+    buyback: r.buyback == null ? null : Number(r.buyback),
     settleStatus: (r.settle_status as string | null) ?? null
   }
 }
@@ -196,6 +202,13 @@ export const api = {
       shiteiTier: input.shiteiTier,
       prizes: input.prizes.map((p, i) => ({
         tier: p.tier, total: p.qty,
+        /* buyback 跟 card 分開送：card.refPrice 是賣家標示的參考價（選填、只顯示），
+           buyback 是他宣告要履行的絕對金額。兩者沒有算式關係，不能混在一起。
+
+           這裡送的一律是**解析後的絕對金額**：表單上是「賞別預設 + 個別覆寫」，
+           但那只是填表的方式。後端仍然收得下 tierBuyback，
+           前端先解析完再送是為了讓畫面上的試算跟送出去的東西逐字相同。 */
+        buyback: p.buyback,
         card: { id: `c-${Date.now().toString(36)}-${i}`, name: p.name, setCode: '', cardNo: '', language: 'JP',
                 grader: 'RAW', grade: null, certNo: null, image: '', refPrice: p.unitValue }
       }))
@@ -234,13 +247,16 @@ export const api = {
       const owned = mock.userPrizes.filter(p => p.status !== 'recycled')
       const mix = new Map<string, number>()
       for (const p of owned) mix.set(p.tier, (mix.get(p.tier) ?? 0) + 1)
-      const best = owned.reduce<UserPrize | null>((b, p) => (!b || p.card.refPrice > b.card.refPrice ? p : b), null)
+      const best = owned.reduce<UserPrize | null>(
+        (b, p) => (!b || refPriceNum(p.card.refPrice) > refPriceNum(b.card.refPrice) ? p : b), null)
       return {
         total: mock.userPrizes.length, counts, owned: owned.length,
-        totalValue: owned.reduce((a, p) => a + p.card.refPrice, 0),
-        best: best ? { name: best.card.name, tier: best.tier, refPrice: best.card.refPrice } : null,
+        /* 沒有標示參考價的卡在總值裡算 0 —— 這是「這本卡冊被標示出來的總值」，
+           不是「它值多少」。那個問題這個平台答不出來，也不該假裝答得出來。 */
+        totalValue: owned.reduce((a, p) => a + refPriceNum(p.card.refPrice), 0),
+        best: best ? { name: best.card.name, tier: best.tier, refPrice: refPriceNum(best.card.refPrice) } : null,
         tierMix: [...mix].map(([tier, n]) => ({ tier: tier as Tier, n })),
-        curve: owned.map(p => ({ wonAt: Date.parse(p.wonAt) || Date.now(), name: p.card.name, refPrice: p.card.refPrice }))
+        curve: owned.map(p => ({ wonAt: Date.parse(p.wonAt) || Date.now(), name: p.card.name, refPrice: refPriceNum(p.card.refPrice) }))
       }
     }
     return http<PrizeSummary>('/v1/prizes/summary')
@@ -252,7 +268,8 @@ export const api = {
     if (MOCK) {
       await delay(160)
       const live = mock.listings.filter(l => l.status === 'live')
-      const d = (l: Listing) => (l.price - l.card.refPrice) / l.card.refPrice
+      // 沒有標示參考價的排在最後：沒有基準可比，不是「零折價」
+      const d = (l: Listing) => refDiscount(l) ?? Number.POSITIVE_INFINITY
       const sorted = [...live].sort(
         opts.sort === 'cheap' ? (a, b) => a.price - b.price
         : opts.sort === 'pricey' ? (a, b) => b.price - a.price
@@ -270,7 +287,7 @@ export const api = {
     if (MOCK) {
       await delay(120)
       const live = mock.listings.filter(l => l.status === 'live')
-      const d = (l: Listing) => (l.price - l.card.refPrice) / l.card.refPrice
+      const d = (l: Listing) => refDiscount(l) ?? Number.POSITIVE_INFINITY
       return {
         deals: [...live].filter(l => d(l) <= -0.08).sort((a, b) => d(a) - d(b)).slice(0, 6),
         graded: [...live].filter(l => l.card.certNo).sort((a, b) => b.price - a.price).slice(0, 4),
@@ -316,7 +333,7 @@ export const api = {
          開發與展示唯一的資料來源，這條路走不完等於整個流程沒被驗過。
          需寄送的不進卡冊：那是託管訂單，卡還在賣家手上，還不是買家的。 */
       if (deliveryOf(l) === 'vault') {
-        const p = l.card.refPrice
+        const p = refPriceNum(l.card.refPrice)
         const stashId = 'up-' + l.id
         mock.userPrizes.unshift({
           id: stashId,
@@ -329,10 +346,10 @@ export const api = {
           wonAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
           acquiredAt: new Date().toISOString(),
           stashExpiresAt: new Date(Date.now() + 90 * 864e5).toISOString().slice(0, 10),
-          /* 市場買來的卡沒有「那個池的賣家回收報價」可言 —— 它已經易主了，
+          /* 市場買來的卡沒有「那個池的賣家宣告買回價」可言 —— 它已經易主了，
              原本那筆結算跟現在的持有人無關。所以 mock 也給 null，
-             讓卡冊照實顯示「沒有回收報價」。 */
-          recycleRate: null
+             讓卡冊照實顯示「沒有買回承諾」。 */
+          buyback: null
         })
         return { listing: l, stashId }
       }
