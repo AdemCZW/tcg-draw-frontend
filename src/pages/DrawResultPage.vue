@@ -11,7 +11,7 @@
  * 2. 煙霧把卡「拼湊出來」比翻卡更有儀式感，也是這個網站想要的調性。
  *
  * 只播最高賞那一張：十抽播十次、每次八秒，沒有人看得完。
- * 其餘的卡在下方明細一次揭曉。
+ * 其餘的卡在下方卡牆一次揭曉。
  */
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
@@ -81,6 +81,44 @@ const pool = computed(() => (result ? pools.byId(result.poolId) : undefined))
    那些池的結果不具備對外驗證的意義，畫面要講實話。 */
 const isFixture = computed(() => (pool.value?.clientSeedSource ?? '').startsWith('fixture:'))
 
+/* ---- 版面：主秀 + 卡牆 ----
+   舊版是「一列一張卡」的清單：46px 的縮圖配四行字，卡圖只佔那一列面積的
+   不到一成。這一頁的主角是卡，不是卡的屬性表 —— 屬性表在卡冊裡本來就有一份。
+
+   所以改成：值得單獨看的那一張放大當主秀，其餘鋪成卡牆，
+   籤號、鑑定這些次要資訊疊回卡面上（同 MyCardsPage 的 .scrim 手法），
+   卡片以外不留任何一行文字，省下來的高度全部還給卡圖。 */
+
+/* 只有 B 賞以上才值得從卡牆裡拉出來單獨放大 —— 十張全是 D 賞時還硬選一張
+   當主秀，等於告訴使用者「這張很特別」，但它不是。謊講一次就不值錢了。
+   單抽例外：只有一張時它本來就是全部，不放大只會讓整頁空著。 */
+const spotlight = computed(() => {
+  if (!result?.items.length) return null
+  if (result.items.length === 1) return result.items[0]!
+  return TIER_RANK[bestTier.value] >= 3 ? heroItem.value : null
+})
+/* 卡牆保留使用者選籤的順序，不依賞別重排 ——
+   籤號是他自己一格一格挑的，打亂順序他就對不回自己挑了什麼。 */
+const wall = computed(() => (result?.items ?? []).filter(it => it !== spotlight.value))
+
+/* 欄數依「卡牆剩幾張」決定，不是固定值：
+   剩兩三張還鋪成三欄，卡片會無謂地縮小，右邊空一格；
+   剩九張鋪成兩欄則要捲三個畫面才看得完。 */
+const cols = computed(() => {
+  const n = wall.value.length
+  return n <= 1 ? 1 : n <= 4 ? 2 : 3
+})
+const colsWide = computed(() => Math.min(wall.value.length, 5) || 1)
+
+/* 賞別色當成一個變數傳進 CSS，邊框、光暈、徽章才不必為六個賞別各寫一次 */
+const TIER_VAR: Record<Tier, string> = {
+  A: 'var(--tier-a)', B: 'var(--tier-b)', C: 'var(--tier-c)',
+  D: 'var(--tier-d)', LAST: 'var(--tier-last)', BUST: 'var(--ink)'
+}
+/* 只有 B 賞以上才給卡面描邊。C/D 也描的話，十張裡有九張都在發光，
+   剩下那張真正的大獎就淹沒在裡面了 —— 強調的前提是別人不強調。 */
+const isRare = (t: Tier) => TIER_RANK[t] >= 3
+
 /* 帶著剛拿到的卡片 id 過去，卡冊才標得出「就是這幾張」。
    舊的結果（reload 前存進 sessionStorage 的）沒有 stashId，那就只導頁不標記。 */
 const cardbookLink = computed(() => {
@@ -90,6 +128,10 @@ const cardbookLink = computed(() => {
 
 onMounted(() => {
   track('view_prize_result')
+  /* 池資料是公平性那一行連結的依據。從池頁抽完過來時 store 裡已經有了，
+     但重整之後結果還在（sessionStorage）、池卻沒了 ——
+     於是最需要驗算的那個時刻，入口反而不見。 */
+  void pools.ensureLoaded()
   /* 保險絲：明細清單原本只在 3D 演出發出 revealed 後才淡入，
      但 WebGL 中途失敗、或分頁在背景導致 rAF 暫停時，那個事件永遠不會來，
      使用者就再也看不到自己抽到什麼。時間到就強制顯示。 */
@@ -131,23 +173,63 @@ onMounted(() => {
     </button>
     </Teleport>
 
-    <!-- 明細（3D 之外仍需可讀、可複製的文字資訊） -->
-    <ul class="detail" :class="{ in: revealed }">
-      <li v-for="(item, i) in result.items" :key="i">
-        <Tilt3D :max="12" radius="10px" class="thumb">
-          <CardArt :image="item.card.image" :alt="item.card.name" :tier="item.tier" :cert-no="item.card.certNo" :art-id="item.card.artId" />
+    <!-- 揭曉後的結果本體：主秀一張 + 卡牆其餘 -->
+    <div class="board" :class="{ in: revealed }">
+      <!-- 主秀。單抽時它就是唯一那張，多抽時是 B 賞以上的那一張。
+           只有這一張的資訊寫在卡片外面 —— 值得讀的就這一張。 -->
+      <figure
+        v-if="spotlight"
+        class="spot"
+        :class="{ solo: result.items.length === 1 }"
+        :style="{ '--t': TIER_VAR[spotlight.tier] }"
+      >
+        <Tilt3D :max="10" radius="16px" class="spotArt">
+          <CardArt
+            :image="spotlight.card.image" :alt="spotlight.card.name" :tier="spotlight.tier"
+            :cert-no="spotlight.card.certNo" :art-id="spotlight.card.artId"
+          />
         </Tilt3D>
-        <div class="meta">
+        <figcaption class="spotMeta">
           <div class="row">
-            <TierBadge :tier="item.tier" />
-            <span v-if="item.bonus" class="bonus">最後賞加贈</span>
-            <span v-else class="mono seat">籤 #{{ item.ticketSeq }}</span>
+            <TierBadge :tier="spotlight.tier" />
+            <span v-if="spotlight.bonus" class="bonus">最後賞加贈</span>
+            <span v-else class="mono seat">籤 #{{ spotlight.ticketSeq }}</span>
           </div>
-          <strong>{{ item.card.name }}</strong>
-          <CertTag :card="item.card" />
-        </div>
-      </li>
-    </ul>
+          <strong>{{ spotlight.card.name }}</strong>
+          <CertTag :card="spotlight.card" />
+        </figcaption>
+      </figure>
+
+      <!-- 卡牆。卡片以外沒有任何一行字：賞別、籤號、鑑定都疊在卡面上，
+           省下來的高度全部給卡圖。--i 只是進場動畫的順序，不影響排版。 -->
+      <ul
+        v-if="wall.length"
+        class="wall"
+        :style="{ '--cols-narrow': cols, '--cols-wide': colsWide }"
+      >
+        <li
+          v-for="(item, i) in wall" :key="i"
+          class="cell" :class="{ rare: isRare(item.tier) }"
+          :style="{ '--t': TIER_VAR[item.tier], '--i': i }"
+        >
+          <CardArt
+            :image="item.card.image" :alt="item.card.name" :tier="item.tier"
+            :cert-no="item.card.certNo" :art-id="item.card.artId"
+          />
+          <TierBadge class="cellTier" :tier="item.tier" />
+          <!-- 鑑定分數只在「有鑑定」時出現。每張都掛一個「RAW · 未鑑定」
+               等於在九張卡上重複同一句廢話，把真正有 PSA 10 的那張稀釋掉；
+               完整的鑑定狀態卡冊裡每一張都有。 -->
+          <span v-if="item.card.grader && item.card.grade != null" class="cellGrade mono">
+            {{ item.card.grader }} {{ item.card.grade }}
+          </span>
+          <div class="scrim">
+            <span class="cellName">{{ item.card.name }}</span>
+            <span class="cellSeat mono">{{ item.bonus ? '加贈' : `#${item.ticketSeq}` }}</span>
+          </div>
+        </li>
+      </ul>
+    </div>
 
     <!-- 這一行是重點：卡在抽完的當下就已經寫進卡冊了（後端在同一個交易裡），
          底下那顆按鈕只是帶你過去看。原本的文案是「收進卡冊」，
@@ -230,16 +312,6 @@ onMounted(() => {
 
 .page { padding-top: 40px; padding-bottom: 72px; text-align: center; }
 
-/* 蓄勢演出的全畫面舞台 */
-.buildupWrap {
-  position: fixed; inset: 0; z-index: 80;
-  display: block; padding: 0; margin: 0;
-  border: none; cursor: pointer;
-  background: #05040a;
-  /* 演出元件是 position:absolute; inset:0，這裡要有定位上下文 */
-  contain: layout;
-}
-.buildupWrap:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
 .skipHint {
   position: absolute; left: 50%; bottom: calc(22px + var(--safe-b));
   transform: translateX(-50%);
@@ -254,43 +326,115 @@ onMounted(() => {
 @keyframes hint-in { to { opacity: 1; } }
 h1 { font-size: 26px; margin: 0; }
 .sub { font-size: 12.5px; margin: 6px 0 30px; }
-/* 兩欄直向排列。舞台寬度要貼近「2 卡寬 : N 列高」的比例 ——
-   太寬時相機會為了框住高度而後退，卡片就被推小、兩側空一大片。 */
-.stage { width: 100%; max-width: 430px; margin: 8px auto 4px; }
-
-/* fallback（無 WebGL / 減少動態）用的平面排列 */
-.grid.flat { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; align-content: center; height: 100%; }
-.grid.flat .slot { width: 150px; }
-.grid.flat .face { padding: 8px; }
-.grid.flat .info { display: grid; gap: 5px; justify-items: start; padding: 8px 2px 2px; text-align: left; }
-.grid.flat .info strong { font-size: 13px; }
-
-/* 明細清單 */
-.detail {
-  list-style: none; padding: 0;
-  margin: 20px auto 0; max-width: 620px;
-  display: grid; gap: 10px;
+/* ---- 結果本體 ---- */
+.board {
+  margin: 18px auto 0; max-width: 620px;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px;
   opacity: 0; transform: translateY(10px);
   transition: opacity .6s ease, transform .6s cubic-bezier(.2,.7,.3,1);
 }
-.detail.in { opacity: 1; transform: none; }
-.detail li {
-  display: flex; align-items: center; gap: 14px;
-  padding: 12px 14px;
-  background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  text-align: left;
+.board.in { opacity: 1; transform: none; }
+
+/* ---- 主秀 ----
+   寬度用 min(vw, px)：手機吃視窗比例，桌機停在一個不會大到失禮的上限。
+   單抽時再放大一階 —— 那一頁沒有別的東西可看，卡片就該佔住畫面。 */
+.spot {
+  margin: 0; justify-self: center;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px;
+  width: min(58vw, 216px);
 }
-.thumb { width: 54px; flex: none; }
-.meta { display: grid; gap: 5px; justify-items: start; min-width: 0; }
-.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.meta strong { font-size: 14.5px; font-weight: 600; }
+.spot.solo { width: min(74vw, 268px); }
+.spotArt {
+  border-radius: 16px;
+  /* 賞別色的光暈。這是「這張跟其他張不一樣」唯一需要說的話，
+     不必再加一行字去講它特別。 */
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--t) 70%, transparent),
+    0 18px 60px color-mix(in srgb, var(--t) 26%, transparent);
+}
+.spotMeta { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; justify-items: center; }
+.spotMeta strong { font-size: 16px; font-weight: 600; line-height: 1.35; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .seat { font-size: 12px; color: var(--muted); }
 .bonus {
   font-size: 12px; font-weight: 600;
   padding: 2px 10px; border-radius: var(--pill);
   background: var(--accent-wash); color: var(--accent);
+}
+
+/* ---- 卡牆 ----
+   用 flex-wrap 而不是 grid：張數不是欄數的倍數時（5 張三欄、3 張兩欄），
+   最後一列只剩一兩張，grid 會把它們靠左黏著，右邊開一個洞；
+   flex 的 justify-content: center 讓那一列自己置中，看起來是收尾不是缺角。
+   欄寬自己算而不是交給 flex 分配：這樣每一列的卡片寬度都一樣，
+   最後一列不會因為東西少而變成兩張特別大的卡。 */
+.wall {
+  /* --cols 在樣式表裡取值、不由 inline style 直接給：inline 的自訂屬性
+     贏過任何選擇器，桌機那條 media query 就再也蓋不掉它。 */
+  --cols: var(--cols-narrow);
+  /* 間距也走變數：欄寬是自己算的，寫死 8px 的話桌機一改 gap，
+     每一列就會多出或少掉幾個像素、最後一欄被擠到下一行。 */
+  --gap: 8px;
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-wrap: wrap; gap: var(--gap); justify-content: center;
+}
+.cell {
+  position: relative; min-width: 0;
+  width: calc((100% - (var(--cols) - 1) * var(--gap)) / var(--cols));
+  border-radius: 12px; overflow: hidden;
+  background: var(--surface-2);
+}
+.cell :deep(.art), .cell :deep(.art-img) { border-radius: 12px; }
+/* B 賞以上的描邊。卡牆裡若還有第二張大獎（主秀只拉得走一張），
+   它靠這圈色仍然找得到。 */
+.cell.rare { box-shadow: inset 0 0 0 2px var(--t), 0 6px 20px color-mix(in srgb, var(--t) 22%, transparent); }
+
+.cellTier {
+  position: absolute; top: 5px; left: 5px;
+  font-size: 10px; padding: 2px 7px;
+}
+.cellGrade {
+  position: absolute; top: 5px; right: 5px;
+  font-size: 9.5px; font-weight: 600; line-height: 1.5;
+  padding: 2px 6px; border-radius: var(--pill);
+  /* 這幾個黑白是「蓋在卡照上的遮罩」不是介面表面色：卡圖在兩套主題下
+     一樣亮，跟著主題翻轉反而會在淺色主題下變成白底白字（同 MyCardsPage）。 */
+  background: rgba(0, 0, 0, .55); color: #fff;
+  white-space: nowrap;
+}
+/* 卡名與籤號疊在卡面下緣。滿版彩色的卡圖上白字會消失，先鋪一層漸層遮罩 */
+.scrim {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 22px 6px 5px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; align-items: baseline;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, .6) 42%, rgba(0, 0, 0, .88));
+  pointer-events: none;
+}
+.cellName {
+  min-width: 0; font-size: 10.5px; font-weight: 600; line-height: 1.3;
+  color: #fff; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cellSeat { font-size: 9.5px; color: rgba(255, 255, 255, .62); }
+
+/* 卡片一張接一張浮出來，不是整面同時亮起 ——
+   演出已經播完了，這裡不再演一次，只是讓眼睛有順序可以跟。 */
+@media (prefers-reduced-motion: no-preference) {
+  .board.in .cell { opacity: 0; animation: cell-in .42s cubic-bezier(.2,.7,.3,1) forwards; animation-delay: calc(var(--i) * 45ms); }
+}
+@keyframes cell-in {
+  from { opacity: 0; transform: translateY(10px) scale(.94); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 桌機放寬一階、欄數開多。620px 是舊清單的寬度 ——
+   那是「一行字讀起來的舒適上限」，卡牆不是字，被限在那個寬度只會
+   讓每張卡比手機上還小，而且兩側各空一大片。 */
+@media (min-width: 721px) {
+  .board { max-width: 780px; gap: 26px; }
+  .wall { --cols: var(--cols-wide); --gap: 10px; }
+  .spot { width: min(40vw, 250px); }
+  .spot.solo { width: min(46vw, 300px); }
 }
 
 .actions { display: flex; gap: 12px; justify-content: center; margin-top: 30px; }
@@ -299,11 +443,6 @@ h1 { font-size: 26px; margin: 0; }
   .page { padding-top: 24px; padding-bottom: 40px; }
   h1 { font-size: 24px; }
   .sub { font-size: 11.5px; margin: 5px 0 14px; }
-  .grid.flat { gap: 12px; }
-  .grid.flat .slot { width: calc(50% - 6px); max-width: 150px; }
-  .detail li { padding: 10px 12px; gap: 11px; }
-  .thumb { width: 46px; }
-  .meta strong { font-size: 13.5px; line-height: 1.35; }
   .actions { margin-top: 24px; }
   .actions .btn { flex: 1; padding: 11px 8px; font-size: 13.5px; }
 }
