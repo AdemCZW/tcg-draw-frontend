@@ -20,9 +20,9 @@
  * 開頭量一次幀率太慢就降 octave。煙是低頻訊號，降解析度幾乎看不出來。
  *
  * ---- uProg 與外層相位的對照表 ----
- * duration 收到的是「到 form 結束為止」的長度（CardEmerge 的 SMOKE_MS = 8400ms），
+ * duration 收到的是「到 form 結束為止」的長度（CardEmerge 的 SMOKE_MS），
  * 不是整段演出 —— settle 是 DOM 那張卡接手之後的餘韻，煙那時已經沒事做。
- * 下面每一個 smoothstep 的常數都是對著這張表算的，**改 SCRIPT 就要回來改這裡**：
+ * 下面每一個 smoothstep 的常數都是對著這張表算的：
  *
  *   uProg   相位            這裡在做什麼
  *   .000    still 起
@@ -32,6 +32,14 @@
  *   .583    burst 起        炸開：往外掀 + 開始消散
  *   .690    form 起         殘料在卡框堆積 → 圖案顯影
  *  1.000    form 結束       圖案完成，等 DOM 接手
+ *
+ * 這張表是**正規時間軸**，跟外層每一拍實際幾毫秒解耦。
+ * 外層的節奏會依賞別變（高賞別在 charge 與 burst 之間多插了兩拍），
+ * 如果讓 uProg 直接等於「經過時間 ÷ 總長」，上面所有常數就會跟著位移，
+ * 每加一拍都得回來重算一次 —— 那是一定會忘記做的事。
+ * 所以改成外層傳 segments（每一組實際毫秒數對應到正規軸上哪一段），
+ * 這裡做分段線性重映射。**這張表因此永遠不用改**，
+ * 高賞別多出來的兩拍只是把 .405 → .583 那一段拉長，煙自然就吸得更久。
  */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
@@ -47,7 +55,22 @@ const props = withDefaults(defineProps<{
   /** 卡片在畫面上的半寬半高（shader 座標，以畫布高為 1）。
       凝聚完成時卡片就落在這個矩形上，DOM 那張卡要能無縫接上去 */
   cardHalf?: [number, number]
-}>(), { duration: 4600, tint: undefined, density: 1, image: null, cardHalf: () => [0.232, 0.325] })
+  /**
+   * 分段線性時間重映射：[實際毫秒, 正規軸起點, 正規軸終點][]。
+   * 見檔頭的對照表 —— 有了它，外層增刪拍子都不會動到 shader 裡的常數。
+   * 不給就退回「經過時間 ÷ duration」的線性版本。
+   */
+  segments?: [number, number, number][] | null
+  /**
+   * 第一次爆的時刻（毫秒）。0 = 沒有第一次爆（低賞別）。
+   * 煙在那一下要被掀一把、邊緣被照亮一次，否則第一次爆只發生在衝擊層上，
+   * 煙原封不動 —— 看起來會像那一聲是疊上去的貼圖，不是這團煙裡炸出來的。
+   */
+  crackAt?: number
+}>(), {
+  duration: 4600, tint: undefined, density: 1, image: null,
+  cardHalf: () => [0.232, 0.325], segments: null, crackAt: 0
+})
 
 const emit = defineEmits<{ (e: 'fail'): void; (e: 'fps', v: number): void; (e: 'cardready'): void }>()
 
@@ -71,7 +94,8 @@ out vec4 outColor;
 
 uniform vec2  uRes;
 uniform float uTime;
-uniform float uProg;      // 0..1 整段演出的進度
+uniform float uProg;      // 0..1 正規時間軸上的進度（見檔頭對照表）
+uniform float uCrack;     // 第一次爆的包絡 0..1（低賞別恆為 0）
 uniform float uQuality;
 uniform vec3  uTint;
 uniform float uDensity;
@@ -159,7 +183,9 @@ void main() {
      蓄力時往內收、爆發那一下往外掀。
      這比改遮罩自然得多：紋理本身跟著一起被壓縮／撐開，
      只動遮罩的話煙的細節站在原地不動，讀起來像一塊布被拉。 */
-  zoom *= 1.0 + squeeze * 0.55 - blast * 0.42;
+  /* 第一次爆只把煙掀開三分之一（0.16 vs 主爆的 0.42）。
+     掀得一樣多的話兩次爆看起來一樣大，第二次就沒有更大一級可言了。 */
+  zoom *= 1.0 + squeeze * 0.55 - blast * 0.42 - uCrack * 0.16;
   float d = smokeField(sp * zoom, uTime, 0.45, gather * 0.5 + squeeze * 0.45, oct);
 
   /* 細絲層：更高頻、跑更快的一層疊上去。
@@ -244,6 +270,11 @@ void main() {
   col *= mix(1.0, 0.38, smoothstep(thr + 0.03, thr + 0.44, d));
   col += uTint * rim * (0.45 + 1.05 * glow);
   col += vec3(1.0, 0.93, 0.86) * rim * glow * glow * 0.8;   // 最靠近光源的邊緣接近白
+  /* 第一次爆：整團煙的邊緣被照亮一下。
+     打在 rim（密度的邊帶）上而不是整片加亮 —— 一團煙被閃光燈打到時，
+     亮起來的是它的輪廓與薄的地方，厚的地方仍然是暗的。
+     整片加亮的話它會變成一片發光的霧，體積感就沒了。 */
+  col += mix(uTint, vec3(1.0), 0.55) * rim * uCrack * 1.1;
   /* 堆在卡片位置上的那團煙被卡背後的光打亮。
      少了這一項，煙堆得越厚反而越黑，看起來像卡片的位置被挖空。 */
   col += mix(uTint, vec3(1.0), 0.30) * slab * acc * (rim * 1.15 + 0.10);
@@ -361,6 +392,7 @@ function resize() {
 let uRes: WebGLUniformLocation | null = null
 let uTime: WebGLUniformLocation | null = null
 let uProg: WebGLUniformLocation | null = null
+let uCrack: WebGLUniformLocation | null = null
 let uQuality: WebGLUniformLocation | null = null
 let uTint: WebGLUniformLocation | null = null
 let uDensity: WebGLUniformLocation | null = null
@@ -410,6 +442,27 @@ function loadCard(url: string) {
 let frames = 0
 let measureStart = 0
 
+/** 經過時間 → 正規時間軸的進度。見檔頭對照表。 */
+function progAt(el: number) {
+  const segs = props.segments
+  if (!segs || !segs.length) return Math.min(1, el / props.duration)
+  let t = 0
+  for (const [ms, a, b] of segs) {
+    if (el < t + ms) return a + (b - a) * ((el - t) / ms)
+    t += ms
+  }
+  return 1
+}
+
+/** 第一次爆的包絡：一下子亮起來（70ms），然後指數退掉。
+    起手不做斜坡的話它會在一幀之內從 0 跳到 1，讀起來像畫面閃了一格壞掉。 */
+function crackAt(el: number) {
+  if (!props.crackAt) return 0
+  const d = el - props.crackAt
+  if (d <= 0) return 0
+  return Math.exp(-d / 380) * Math.min(1, d / 70)
+}
+
 function frame(now: number) {
   raf = requestAnimationFrame(frame)
   if (!gl || !program) return
@@ -417,7 +470,7 @@ function frame(now: number) {
 
   const el = now - startTime
   const t = el / 1000
-  const prog = Math.min(1, el / props.duration)
+  const prog = progAt(el)
 
   gl.clearColor(0, 0, 0, 0)
   gl.clear(gl.COLOR_BUFFER_BIT)
@@ -425,6 +478,7 @@ function frame(now: number) {
   gl.uniform2f(uRes, gl.drawingBufferWidth, gl.drawingBufferHeight)
   gl.uniform1f(uTime, t)
   gl.uniform1f(uProg, prog)
+  gl.uniform1f(uCrack, crackAt(el))
   gl.uniform1f(uQuality, quality)
   const tint = props.tint ?? [0.55, 0.34, 0.92]
   gl.uniform3f(uTint, tint[0], tint[1], tint[2])
@@ -490,6 +544,7 @@ onMounted(() => {
   uRes = g.getUniformLocation(prog, 'uRes')
   uTime = g.getUniformLocation(prog, 'uTime')
   uProg = g.getUniformLocation(prog, 'uProg')
+  uCrack = g.getUniformLocation(prog, 'uCrack')
   uQuality = g.getUniformLocation(prog, 'uQuality')
   uTint = g.getUniformLocation(prog, 'uTint')
   uDensity = g.getUniformLocation(prog, 'uDensity')
