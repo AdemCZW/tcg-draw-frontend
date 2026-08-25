@@ -17,6 +17,21 @@
  * 這段加碼只給高賞別（uEpic = 1）。低賞別維持單一爆點的舊節奏 ——
  * 每抽一張 D 賞都播一場兩段式爆炸，衝擊就變成常態，常態化的衝擊等於沒有衝擊。
  *
+ * ---- 三次改版：三段式 + 靜默 + 卡片自己出力 ----
+ * 兩段式的問題是第二次爆完就到頂了，後面只剩下降。改成三段之後每一級都有量尺
+ * （爆光 0.60 → 1.05 → 3.6、環 1 → 2 → 3、光柱 無 → 3 柱淡 → 7 柱亮），
+ * 而且主爆前多一拍 hush ——**幾乎什麼都不畫的那一拍**。
+ * 前面已經炸過兩次，觀眾的基準線被抬高了；要讓主爆還打得動人，
+ * 唯一的辦法是把基準線一次踩到比開場更低的地方。安靜比更多的光有效。
+ *
+ * 另外兩件新的事：
+ *   1 時間伸縮（warps）：hush 那一拍舞台時間只走 0.45 倍，主爆瞬間跳回 1 倍。
+ *     「慢下來然後突然全速」是在同一段畫面裡讓人感覺到速度變了，
+ *     比單純把每一拍拉長有效得多。
+ *   2 lock：顯影完成的那一刻卡片自己砸進畫面，撞出一圈**方形**衝擊波與地面塵。
+ *     在這之前卡片全程都是被動的（被聚出來、被照亮、被推近）；
+ *     讓它出一次力，它才從「演出的對象」變成「演出的主角」。
+ *
  * 合成方式：canvas 是**不透明黑底、全部加法疊加**，靠 CSS mix-blend-mode: screen
  * 疊回頁面 —— screen 遇到純黑是恆等，所以黑的地方等同透明。
  * 這樣不必處理直通／預乘 alpha 的坑（SmokePlume 那支就是因為輸出帶 alpha
@@ -46,8 +61,16 @@ const props = withDefaults(defineProps<{
   crackAt: number
   /** 深吸氣起點（毫秒）。沒有時就等於 burstAt */
   inhaleAt: number
+  /** 第二次爆的瞬間（毫秒）。沒有時就等於 burstAt */
+  surgeAt: number
+  /** 最深靜默的起點（毫秒）。沒有時就等於 burstAt */
+  hushAt: number
   /** 主爆瞬間（毫秒） */
   burstAt: number
+  /** 卡片砸定的瞬間（毫秒）。0 = 沒有這一拍（低賞別） */
+  lockAt?: number
+  /** 卡片在畫面上的半寬半高（shader 座標，以畫布高為 1）。砸定的方框衝擊波要對齊它 */
+  cardHalf?: [number, number]
   /** 整段長度（毫秒），到了就自己停 rAF，不再燒電 */
   total: number
   /** 演出強度 0..1。低賞別不只是播得快，是真的比較小聲 */
@@ -60,9 +83,20 @@ const props = withDefaults(defineProps<{
    * DOM 的定格跟 shader 的凍結會對不到同一個時刻，那比沒有停頓還糟。
    */
   stops?: [number, number][]
+  /**
+   * 時間伸縮表 [[起點毫秒, 終點毫秒, 倍率], ...]，起點終點是**真實經過時間**。
+   * 倍率 < 1 就是慢動作：這一段裡舞台時間走得比真實時間慢，
+   * 出了這一段又立刻回到 1 倍 —— 「慢下來然後突然全速」比單純加長更有衝擊，
+   * 因為觀眾是在同一段畫面裡感覺到速度**變了**，不是只覺得久。
+   * 跟 stops 共用同一個累加器（見 stageMs），兩者在時間上不重疊。
+   */
+  warps?: [number, number, number][]
   /** 主色 [r,g,b]（0..1） */
   tint?: [number, number, number]
-}>(), { intensity: 1, epic: false, stops: () => [], tint: () => [0.55, 0.34, 0.92] })
+}>(), {
+  intensity: 1, epic: false, lockAt: 0, cardHalf: () => [0.232, 0.325],
+  stops: () => [], warps: () => [], tint: () => [0.55, 0.34, 0.92]
+})
 
 const emit = defineEmits<{ (e: 'fail'): void; (e: 'fps', v: number): void }>()
 
@@ -83,8 +117,15 @@ const BURST_HEADS_EPIC = 900
 const INHALE_HEADS = 150
 const INHALE_HEADS_EPIC = 250
 /* 第一次爆的碎屑要明顯少於主爆。給一樣多的話兩次爆看起來一樣大，
-   主爆就沒有「更大一級」可言了。 */
+   主爆就沒有「更大一級」可言了。
+   三段式的量尺是遞增的：crack 230 → surge 340 → burst 900。
+   數量本身就是「一次比一次大」這句話，觀眾不必數也感覺得到。 */
 const CRACK_HEADS_EPIC = 230
+const SURGE_HEADS_EPIC = 340
+/* 砸定那一拍揚起的地面塵。它不噴、只是被撞開後散在卡片下緣，所以不必多。 */
+const LOCK_HEADS_EPIC = 240
+/* 餘韻裡繞著卡片走的光點。很少 —— 這是裝飾不是事件，多了就變成粒子特效展示。 */
+const ORBIT_HEADS_EPIC = 90
 
 const VERT_FS = `#version 300 es
 void main() {
@@ -102,10 +143,14 @@ uniform float uT;        // 演出時間（秒，已含命中停頓的重映射�
 uniform float uCharge;   // 蓄力起點（秒）
 uniform float uCrack;    // 第一次爆（秒）。無第一次爆時 = uBurst
 uniform float uInhaleAt; // 深吸氣起點（秒）。無時 = uBurst
+uniform float uSurge;    // 第二次爆（秒）。無時 = uBurst
+uniform float uHush;     // 最深靜默起點（秒）。無時 = uBurst
 uniform float uBurst;    // 主爆瞬間（秒）
+uniform float uLock;     // 卡片砸定（秒）。0 = 沒有這一拍
 uniform float uInt;      // 強度 0..1
 uniform float uEpic;     // 1 = 高賞別
 uniform vec3  uTint;
+uniform vec2  uCardHalf; // 卡片最終矩形的半寬半高
 
 const float TAU = 6.28318;
 
@@ -151,13 +196,62 @@ float lines(float ang, float r, float sectors, float prog, float gate,
   return line * step(gate, seed) * thin;
 }
 
+/* ---- 神光（god rays）----
+   少數幾道又寬又長的光柱，從核心射出去、而且**會慢慢轉**。
+   它跟速度線／裂紋的分工要說清楚，否則三者會糊成一團：
+     速度線 = 碎片在飛（多、短、快）
+     裂紋   = 畫面被撞裂（少、細、往外竄）
+     光柱   = 光本身穿過塵埃（極少、極寬、幾乎不動、活很久）
+   光柱是唯一「有體積」的那一個 —— 它讀起來是空氣裡有東西擋著光，
+   所以它負責把爆炸從「一張亮圖」變成「一個現場」。
+
+   只留 sin 的正半邊再取高次方：柱與柱之間才有真正的暗區。
+   衰減故意很慢（exp(-r*1.5)），光柱要掃得到畫面外緣，
+   收太快的話它只是核心旁邊的一圈毛。 */
+float rays(float ang, float r, float t, float n, float speed, float sharp, float seed) {
+  float a = ang + t * speed + angWob(ang, n, seed) * 0.55;
+  float shaft = pow(max(sin(a * n), 0.0), sharp);
+  return shaft * (0.18 + 0.82 * exp(-r * 1.5)) * smoothstep(0.0, 0.07, r);
+}
+
+/* ---- 玻璃裂紋（螢幕空間）----
+   Voronoi 的 F2-F1 就是「到最近那條格線的距離」，細胞邊界即裂縫。
+   它刻意**不從爆心放射** —— 放射狀的裂已經有 cracks 在做了；
+   這一層要的是另一件事：碎的是觀眾這一側的玻璃，不是畫面裡的東西。
+   所以它固定在螢幕上、不跟著爆心轉，而且只活半秒就退掉。 */
+float glassCrack(vec2 p) {
+  vec2 g = p * 5.4 + 11.0;
+  vec2 i = floor(g), f = fract(g);
+  float f1 = 9.0, f2 = 9.0;
+  for (int y = -1; y <= 1; y++) {
+    for (int x = -1; x <= 1; x++) {
+      vec2 o = vec2(float(x), float(y));
+      vec2 ip = i + o;
+      vec2 c = o - f + vec2(h11(ip.x * 1.7 + ip.y * 57.3),
+                            h11(ip.x * 37.1 + ip.y * 7.9));
+      float d = dot(c, c);
+      if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) { f2 = d; }
+    }
+  }
+  return sqrt(f2) - sqrt(f1);
+}
+
+/** 方框距離場。卡片砸定時的衝擊波是**方的** —— 圓的話那一下讀起來又是一次爆炸，
+    方的才讀得出「是這張卡撞出來的」，因為那個形狀就是卡自己。 */
+float boxSD(vec2 p, vec2 b) {
+  vec2 d = abs(p) - b;
+  return length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0);
+}
+
 void main() {
   vec2 p = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
   float r = length(p);
   float ang = atan(p.y, p.x);
 
   float ct = uT - uCrack;    // 負數 = 第一次爆還沒到
+  float st = uT - uSurge;    // 負數 = 第二次爆還沒到
   float bt = uT - uBurst;    // 負數 = 主爆還沒到
+  float lt = uT - uLock;     // 負數 = 卡片還沒砸定
   vec3 col = vec3(0.0);
 
   /* ---- 第一段蓄力：向心速度線 ----
@@ -203,8 +297,11 @@ void main() {
      第一次爆之後畫面要比爆之前**更安靜、更暗、更空**，否則第二次只是重播。
      這一段做三件事：收束線變少變長變快、核心脈動頻率再翻倍、
      以及一圈往內收的內爆環。 */
-  float inh = clamp((uT - uInhaleAt) / max(0.001, uBurst - uInhaleAt), 0.0, 1.0);
-  if (uEpic > 0.5 && inh > 0.0 && bt < 0.0) {
+  /* 終點是 uSurge 不是 uBurst：三段式之後，這一口氣吸完就要交給第二次爆，
+     算到主爆的話這條斜坡會橫跨 surge 與 hush 兩拍，內爆環會在第二次爆
+     已經炸開之後還掛在畫面上往內收 —— 兩件相反方向的事同時發生就都讀不出來。 */
+  float inh = clamp((uT - uInhaleAt) / max(0.001, uSurge - uInhaleAt), 0.0, 1.0);
+  if (uEpic > 0.5 && inh > 0.0 && st < 0.0) {
     col += mix(uTint, vec3(1.0), 0.40)
          * lines(ang, r, 64.0, inh, 0.42, 3.31, 2.0, 90.0, 0.0, true) * inh * 2.4 * uInt;
 
@@ -226,6 +323,69 @@ void main() {
     float pulse = 0.5 + 0.5 * sin(uT * (30.0 + 52.0 * inh));
     col += mix(uTint, vec3(1.0), 0.50) * exp(-r * (6.0 + 10.0 * inh))
          * inh * inh * (0.6 + 1.5 * pulse) * uInt * 1.35;
+  }
+
+  /* ---- 第二次爆：surge（只有高賞別）----
+     三段式的中間那一級。它必須明顯大過 crack、又明顯小過主爆，
+     否則三段就塌回兩段。量尺全部是遞增的：
+       爆光 0.60 → 1.05 → 3.6（主爆）
+       環   一道 → 兩道（其中一道破碎）→ 三道
+       光柱 無   → 三柱、淡    → 七柱、亮
+     這一拍也是**神光第一次出現**的地方。第一次出現的東西自帶份量，
+     所以留給中間這一級，主爆才有東西可以「變本加厲」而不是「再來一次」。 */
+  if (uEpic > 0.5 && st >= 0.0) {
+    float f = exp(-st * 11.0) * uInt;
+    /* 混白比 crack 少（0.62 → 0.46）＝ 更靠賞別色。
+       色彩往賞別色推進本身就是一條進度條：越接近主爆，畫面越「是那個顏色」。
+
+       半徑衰減用 7.0（跟主爆同一個數字）而不是 5.8。第一版給 5.8 + 常數 0.20，
+       結果是整片畫面白掉、連煙的形狀都看不見 —— 那不是更大的爆炸，是換頁。
+       規模要靠「亮度峰值 + 環 + 光柱」表達，不能靠把過曝攤開到整個螢幕。 */
+    col += mix(uTint, vec3(1.0), 0.46) * f * (0.13 + 2.7 * exp(-r * 7.0)) * 1.05;
+
+    for (int i = 0; i < 2; i++) {
+      float rt = st - float(i) * 0.075;
+      if (rt <= 0.0) continue;
+      float wob = (i == 1) ? angWob(ang, 7.0, 5.5) * 0.07 : 0.0;
+      float rad = 0.86 * (1.0 - exp(-rt * 5.2)) + wob * (1.0 - exp(-rt * 7.0));
+      float thick = 0.011 + 0.062 * rt;
+      float e = (r - rad) / thick;
+      col += mix(uTint, vec3(1.0), 0.42) * exp(-e * e) * exp(-rt * 2.6)
+           * (1.0 - smoothstep(0.58, 1.0, rad)) / (1.0 + float(i) * 0.7) * 1.15 * uInt;
+    }
+
+    // 三柱、淡、轉得慢。這是預告不是主秀
+    col += mix(uTint, vec3(1.0), 0.30)
+         * rays(ang, r, uT, 3.0, 0.16, 9.0, 2.3)
+         * exp(-st * 1.25) * 0.60 * uInt;
+
+    col += mix(uTint, vec3(1.0), 0.30)
+         * lines(ang, r, 150.0, st * 1.25, 0.56, 2.11, 7.0, 110.0, 260.0, false)
+         * exp(-st * 4.2) * 1.8 * uInt;
+  }
+
+  /* ---- 最深的靜默：hush（只有高賞別）----
+     這一拍幾乎什麼都不畫，而那正是它的工作。
+     「熱血」的來源往往是主爆前那一下**完全的安靜**，不是更多的光 ——
+     前面已經炸過兩次，觀眾的基準線被抬高了；要讓主爆還打得動人，
+     唯一的辦法是把基準線一次踩到比開場更低的地方。
+
+     所以這裡只留兩樣東西：
+       1 一個縮到幾乎看不見的核心，慢慢喘（0.9 Hz，比心跳還慢）
+       2 最後 18% 的一下急促抬升 —— 那是「要來了」的預告，
+         沒有它，主爆會像是在毫無關係的地方突然開始。
+     真正的壓暗做不到（加法混色沒有減法），那件事在外層 CSS 的 filter。 */
+  float hush = clamp((uT - uHush) / max(0.001, uBurst - uHush), 0.0, 1.0);
+  if (uEpic > 0.5 && hush > 0.0 && bt < 0.0) {
+    float breathe = 0.5 + 0.5 * sin(uT * 5.6);
+    float dying = (1.0 - smoothstep(0.0, 0.55, hush));     // 前半段還在退
+    float tell = smoothstep(0.82, 1.0, hush);              // 最後一下抬起來
+    float amp = 0.10 + 0.30 * dying + 2.6 * tell * tell;
+    col += mix(uTint, vec3(1.0), 0.20) * exp(-r * (22.0 - 8.0 * tell))
+         * amp * (0.55 + 0.45 * breathe) * uInt;
+    // 抬升那一下順便讓核心外圍浮出一圈極細的邊，像壓力容器要裂了
+    float e = (r - 0.055) / 0.012;
+    col += mix(uTint, vec3(1.0), 0.55) * exp(-e * e) * tell * 1.4 * uInt;
   }
 
   if (bt >= 0.0) {
@@ -319,6 +479,30 @@ void main() {
         col += mix(uTint, vec3(1.0), 0.15) * exp(-e * e) * exp(-rt * 1.5)
              * (1.0 - smoothstep(0.70, 1.15, rad)) * 0.55 * uInt;
       }
+
+      /* ---- 神光：主爆的版本 ----
+         七柱、亮、轉得比 surge 快一點，而且**活得比所有環都久**（衰減 0.55）。
+         這是刻意的分工：環在半秒內掃出畫面，光柱要一路撐到卡片顯影，
+         讓那兩秒半不是「爆完之後的空檔」而是「還在發光的現場」。
+         柱子隨時間變寬（sharp 從 16 降到 5）＝ 光散開了，
+         不是同一組柱子在原地變暗。 */
+      float rayT = max(bt - 0.05, 0.0);
+      col += mix(uTint, vec3(1.0), 0.34)
+           * rays(ang, r, uT, 7.0, 0.26, mix(16.0, 5.0, clamp(rayT * 0.5, 0.0, 1.0)), 1.9)
+           * exp(-rayT * 0.55) * (0.35 + 1.55 * exp(-rayT * 2.2)) * uInt;
+
+      /* ---- 玻璃裂紋覆蓋層 ----
+         只在命中後那 0.55 秒。裂縫從畫面中央往外「長」出去（grow），
+         所以它讀得出是被這一下撞裂的，不是本來就裂在那裡。
+         退場要快：留久了會變成畫面上有髒東西。 */
+      float gt = bt - 0.02;
+      if (gt > 0.0 && gt < 0.62) {
+        float grow = smoothstep(0.0, 0.28, gt);
+        float gc = exp(-glassCrack(p) * mix(70.0, 30.0, grow));
+        float reach = 1.0 - smoothstep(grow * 0.95, grow * 1.25, r);
+        col += mix(uTint, vec3(1.0), 0.72) * gc * reach
+             * (1.0 - smoothstep(0.18, 0.62, gt)) * 1.15 * uInt;
+      }
     }
 
     /* ---- 放射狀速度線 ----
@@ -334,6 +518,39 @@ void main() {
     col += uTint * exp(-r * r * 9.0) * exp(-bt * 1.6) * 0.35 * uInt;
   }
 
+  /* ---- 卡片砸定：lock（只有高賞別）----
+     到這裡為止，卡片一直是**被動的**：它被煙聚出來、被光照亮、被爆炸推近。
+     這一拍讓它自己出一次力 —— 顯影完成的瞬間往前砸進畫面，
+     撞出一圈**方形**的衝擊波，底下濺起地面塵（粒子那邊）。
+
+     環是方的不是圓的，這件事是整拍的關鍵：圓的話就只是第四次爆炸，
+     觀眾會讀成「又炸了一次」；方的形狀就是卡片自己，所以讀得出
+     是這張卡撞出來的。expand 從 1 撐到 2.6，同時變糊變淡。 */
+  if (uLock > 0.0 && lt >= 0.0) {
+    float ex = 1.0 + 1.6 * (1.0 - exp(-lt * 5.0));
+    float sd = boxSD(p, uCardHalf * ex);
+    float thick = 0.008 + 0.075 * lt;
+    float e = sd / thick;
+    col += mix(uTint, vec3(1.0), 0.55) * exp(-e * e) * exp(-lt * 3.4)
+         * (1.0 - smoothstep(1.9, 2.6, ex)) * 1.5 * uInt;
+
+    /* 撞擊那一格卡框**邊緣**亮一下。收得很快（exp(-lt*15)）＝ 是一下，不是一段。
+
+       這裡一定要是邊緣而不是把整個卡框填滿：填滿的版本試過，
+       卡片那一塊會整片過曝成純白（393×852 上卡片幾乎佔滿畫面寬），
+       讀起來是換頁不是打光 —— 而且卡片正好在這一刻接手，
+       把主角蓋成一片白等於把它藏起來。這是爆光那一段學過的同一課。 */
+    float edge = exp(-abs(boxSD(p, uCardHalf)) * 44.0);
+    col += mix(uTint, vec3(1.0), 0.70) * edge * exp(-lt * 15.0) * 1.15 * uInt;
+
+    /* 餘韻的環繞光暈：貼著卡框外緣的一圈很淡的呼吸光。
+       它跟 CSS 那圈 aura 的差別是**貼著卡的形狀**（方的）而不是一個圓，
+       所以兩者疊起來是「卡在發光 + 空氣在發光」，不是同一件事畫兩次。 */
+    float halo = exp(-max(boxSD(p, uCardHalf * 1.02), 0.0) * 11.0);
+    col += uTint * halo * (0.10 + 0.07 * sin(uT * 2.1))
+         * smoothstep(0.0, 0.8, lt) * uInt * 0.55;
+  }
+
   outColor = vec4(max(col, 0.0), 1.0);
 }`
 
@@ -345,13 +562,20 @@ uniform vec2  uRes;
 uniform float uT;
 uniform float uCharge;
 uniform float uCrack;
+uniform float uSurge;
+uniform float uHush;
 uniform float uBurst;
+uniform float uLock;
 uniform float uInt;
 uniform float uEpic;
 uniform float uPx;        // 一個「舞台單位」等於幾個 framebuffer 畫素
 uniform vec3  uTint;
+uniform vec2  uCardHalf;
 uniform int   uNInhale;   // 吸入粒子的顆數（頭數 × TRAIL）
-uniform int   uNCrack;    // 第一次爆的顆數（頭數 × TRAIL）
+uniform int   uNCrack;    // 第一次爆的顆數
+uniform int   uNSurge;    // 第二次爆的顆數
+uniform int   uNLock;     // 砸定揚起的地面塵
+uniform int   uNOrbit;    // 餘韻裡繞行的光點
 uniform float uTrail;
 
 out vec4 vCol;
@@ -367,6 +591,16 @@ void main() {
   float life = 0.0;
   float size = 0.0;
   vec3 tone = uTint;
+
+  /* 粒子分成六段連續的索引區間，每一段一種行為。
+     用累加的邊界而不是六個 if：邊界一改只要動一個地方，
+     而且區間必須連續 —— 中間漏一格的話那幾顆會掉進最後的 else，
+     以主爆的參數在完全錯誤的時間噴出來。 */
+  int e1 = uNInhale;
+  int e2 = e1 + uNCrack;
+  int e3 = e2 + uNSurge;
+  int e4 = e3 + uNLock;
+  int e5 = e4 + uNOrbit;
 
   if (gl_VertexID < uNInhale) {
     /* ---- 吸入 ----
@@ -388,8 +622,17 @@ void main() {
       life *= 0.72 + 0.85 * chg * chg;
       size = uPx * (0.010 + 0.010 * h11(id * 8.1)) * (1.0 - sub / uTrail * 0.45);
       tone = mix(uTint, vec3(1.0), 0.25 * (1.0 - f));
+      /* 最深的靜默那一拍要把這些也一起關掉。
+         「安靜」不能只安靜在背景層 —— 畫面上還有幾百顆點在飛的話，
+         觀眾感覺到的是畫面變暗，不是什麼都停了。
+         最後 20% 再放回來（而且比原本更亮）＝ 那是主爆的預告。 */
+      if (uEpic > 0.5 && uT > uHush) {
+        float hu = clamp((uT - uHush) / max(0.001, uBurst - uHush), 0.0, 1.0);
+        life *= 0.16 + 0.84 * (1.0 - smoothstep(0.0, 0.28, hu))
+              + 2.2 * smoothstep(0.80, 1.0, hu);
+      }
     }
-  } else if (gl_VertexID < uNInhale + uNCrack) {
+  } else if (gl_VertexID < e2) {
     /* ---- 第一次爆的碎屑（只有高賞別）----
        阻力係數比主爆大（4.4 vs 3.1）＝ 噴不遠就停住。
        第一次爆的東西要留在畫面中間，主爆才有「這次真的掀到邊緣了」的落差。 */
@@ -404,6 +647,71 @@ void main() {
       life = exp(-t0 * 2.4) * (1.0 - sub / uTrail * 0.55);
       size = uPx * (0.005 + 0.010 * h11(bid * 9.7)) * (1.0 - sub / uTrail * 0.4);
       tone = mix(vec3(1.0), uTint, clamp(t0 * 2.0, 0.0, 1.0));
+    }
+  } else if (gl_VertexID < e3) {
+    /* ---- 第二次爆的碎屑（只有高賞別）----
+       阻力比 crack 小（3.7 vs 4.4）＝ 噴得比第一次遠，但還是不到主爆的 3.1。
+       壽命也拉長（衰減 1.7 vs 2.4）：這批要能撐過整個 hush，
+       在那段全黑裡慢慢往下掉 —— 靜默不是空白，是「剛剛那一下的殘骸還在落」。
+       慢動作（外層的 warps）會讓這段掉落再慢一半，那是它最好看的時候。 */
+    float bid = id + 4231.0;
+    float t0 = uT - uSurge - sub * 0.007 - h11(bid * 5.31) * 0.05;
+    if (t0 > 0.0) {
+      float a = h11(bid * 1.71) * 6.28318;
+      float sp = mix(0.42, 1.75, pow(h11(bid * 3.07), 1.9));
+      vec2 dir = vec2(cos(a), sin(a) * 0.84);
+      pos = dir * sp * (1.0 - exp(-t0 * 3.7)) / 3.7;
+      pos.y -= 0.055 * t0 * t0;               // 重力比主爆輕：要掉得久一點才看得到
+      life = exp(-t0 * 1.7) * (1.0 - sub / uTrail * 0.55);
+      size = uPx * (0.005 + 0.011 * h11(bid * 9.7)) * (1.0 - sub / uTrail * 0.4);
+      tone = mix(vec3(1.0), uTint, clamp(t0 * 1.6, 0.0, 1.0));
+    }
+  } else if (gl_VertexID < e4) {
+    /* ---- 砸定揚起的地面塵（只有高賞別）----
+       卡片撞進畫面時從**卡片下緣**往兩側掀開的塵。
+       它跟爆炸的粒子是相反的語彙：不從中心放射，而是沿著一條線往左右噴，
+       噴出去之後很快被重力拉回來 —— 那條水平線就是「地面」，
+       有了地面，卡片才是「砸下來」而不是「飄過來」。 */
+    float bid = id + 8117.0;
+    float t0 = uT - uLock - sub * 0.010 - h11(bid * 5.31) * 0.06;
+    if (uLock > 0.0 && t0 > 0.0) {
+      float sgn = h11(bid * 2.13) < 0.5 ? -1.0 : 1.0;
+      /* 橫向速度刻意壓低（0.9 上限）。這支 shader 算的是 4:5 舞台，
+         但結果頁把舞台放大到蓋滿視窗，看得到的只有中間 |p.x| < 0.23 那一條 ——
+         噴太快的塵在兩三幀之內就全部飛出可見範圍，等於沒畫。 */
+      float sp = 0.16 + 0.74 * pow(h11(bid * 3.07), 1.7);
+      float up = 0.30 + 0.95 * h11(bid * 6.19);
+      // 起點沿卡片下緣散開，不是同一個點
+      vec2 org = vec2((h11(bid * 11.3) - 0.5) * uCardHalf.x * 1.7, -uCardHalf.y);
+      pos = org + vec2(sgn * sp * (1.0 - exp(-t0 * 4.6)) / 4.6,
+                       up * (1.0 - exp(-t0 * 5.5)) / 5.5 - 0.30 * t0 * t0);
+      life = exp(-t0 * 1.55) * (1.0 - sub / uTrail * 0.6);
+      // 卡片這時已經很亮，塵要疊得上去就得夠大顆
+      size = uPx * (0.010 + 0.018 * h11(bid * 9.7)) * (1.0 - sub / uTrail * 0.4);
+      tone = mix(vec3(1.0), uTint, clamp(t0 * 2.4, 0.0, 1.0));
+    }
+  } else if (gl_VertexID < e5) {
+    /* ---- 餘韻裡繞行的光點（只有高賞別）----
+       砸定之後繞著卡片走的賞別色光點。橢圓軌道、各自的半徑與相位，
+       而且**有的順時針有的逆時針** —— 全部同向的話它會讀成一個轉盤。
+       它不衰減，靠外層在演出結束時整張畫布消失來收尾。 */
+    float bid = id + 20731.0;
+    float t0 = uT - uLock - sub * 0.05;
+    if (uLock > 0.0 && t0 > 0.0) {
+      float dirSgn = h11(bid * 2.9) < 0.5 ? -1.0 : 1.0;
+      float rad = 0.26 + 0.20 * h11(bid * 3.7);
+      float spd = (0.35 + 0.55 * h11(bid * 5.1)) * dirSgn;
+      float ph = h11(bid * 7.3) * 6.28318;
+      float a = ph + t0 * spd;
+      /* 橫軸壓扁、縱軸拉高：畫面上看得到的只有中間那一條（見上面地面塵的說明），
+         正圓軌道會讓光點大半時間都在畫面外，讀起來像它們在閃爍。 */
+      pos = vec2(cos(a) * rad * 0.62, sin(a) * rad * 1.45);
+      // 上下再加一點慢漂，軌道才不像貼在一個固定的環上
+      pos.y += 0.03 * sin(t0 * 0.9 + ph);
+      life = smoothstep(0.0, 0.5, t0) * (0.35 + 0.45 * (0.5 + 0.5 * sin(t0 * 2.3 + ph)))
+           * (1.0 - sub / uTrail * 0.7);
+      size = uPx * (0.004 + 0.006 * h11(bid * 9.7)) * (1.0 - sub / uTrail * 0.5);
+      tone = mix(uTint, vec3(1.0), 0.30);
     }
   } else {
     /* ---- 主爆 ----
@@ -422,6 +730,11 @@ void main() {
     float shard = step(cls, 0.11);
     float ember = step(0.11, cls) * step(cls, 0.27);
     float dust  = step(0.27, cls) * step(cls, 0.42);
+    /* 第五層：殘骸。噴不遠、掉得慢、活得極久（衰減 0.16）——
+       主爆結束之後那三秒（顯影 + 砸定）畫面上仍然有東西在往下落。
+       少了這一層，爆炸的餘波在半秒內就乾淨得像沒發生過，
+       後面那幾拍會變成另一段影片。 */
+    float fall  = step(0.42, cls) * step(cls, 0.54);
 
     /* 拖尾各影像之間的時間差要**小**。太大的話同一顆的幾個影像之間拉開距離，
        畫面上看到的是一串虛線而不是一條尾巴 —— 0.024 就已經明顯斷開了。
@@ -444,11 +757,15 @@ void main() {
         sp = 0.07 + 0.30 * h11(bid * 7.73); decay = 0.30; sz *= 0.72; lifeMul = 0.55;
       } else if (dust > 0.5) {
         sp = 0.05 + 0.16 * h11(bid * 17.3); k = 2.2; decay = 0.14; sz *= 0.50; lifeMul = 0.30;
+      } else if (fall > 0.5) {
+        sp = 0.30 + 0.85 * h11(bid * 17.3); k = 4.0; decay = 0.16; sz *= 0.62; lifeMul = 0.42;
       }
       vec2 dir = vec2(cos(a), sin(a) * 0.82);
       pos = dir * sp * (1.0 - exp(-t0 * k)) / k;
       // 一點重力，餘韻時碎屑會垂下來。餘燼與浮塵不受它管
       pos.y -= 0.10 * t0 * t0 * (1.0 - ember - dust);
+      // 殘骸的重力要大得多：它是「掉下來」的主角，跟其它層的下垂不是同一件事
+      pos.y -= fall * 0.055 * t0 * t0;
       // 餘燼相反：熱的東西往上飄。飄速也要各自不同，否則整群同步平移
       pos.y += ember * (0.012 + 0.055 * h11(bid * 21.1)) * t0;
       /* 浮塵：極慢、活很久。一條直線飄上去會整群同步，
@@ -545,6 +862,13 @@ function stageMs(el: number) {
     if (el <= at) break
     acc += Math.min(ms, el - at)
   }
+  /* 慢動作段：舞台時間在這一段裡只走 scale 倍，剩下的 (1-scale) 記進同一個累加器。
+     出了這一段累加值就不再增加 —— 所以後面每一拍的**相對**時距完全不受影響，
+     只是整體晚了固定的一段。事件時刻也走同一個函式，兩邊永遠對得上。 */
+  for (const [a, b, scale] of props.warps) {
+    if (el <= a) break
+    acc += (1 - scale) * Math.min(b - a, el - a)
+  }
   return el - acc
 }
 
@@ -566,7 +890,11 @@ function frame(now: number) {
   const tCharge = stageMs(props.chargeAt) / 1000
   const tCrack = stageMs(props.crackAt) / 1000
   const tInhale = stageMs(props.inhaleAt) / 1000
+  const tSurge = stageMs(props.surgeAt) / 1000
+  const tHush = stageMs(props.hushAt) / 1000
   const tBurst = stageMs(props.burstAt) / 1000
+  // 0 是「沒有這一拍」的哨兵，不能拿去重映射（會變成某個非零的舞台時刻）
+  const tLock = props.lockAt ? stageMs(props.lockAt) / 1000 : 0
 
   /* 顆數在低強度時也要砍。只縮亮度不縮數量的話，D 賞的畫面上仍然有
      幾千顆很暗的點在飛，成本照付、看起來卻只是髒。 */
@@ -576,7 +904,11 @@ function frame(now: number) {
   const nInh = props.epic ? INHALE_HEADS_EPIC : INHALE_HEADS
   const heads = Math.max(1, Math.floor(nHead * lo * full))
   const inh = Math.max(1, Math.floor(nInh * lo * full))
-  const crk = props.epic ? Math.max(1, Math.floor(CRACK_HEADS_EPIC * lo * full)) : 0
+  const ep = (n: number) => (props.epic ? Math.max(1, Math.floor(n * lo * full)) : 0)
+  const crk = ep(CRACK_HEADS_EPIC)
+  const srg = ep(SURGE_HEADS_EPIC)
+  const lck = ep(LOCK_HEADS_EPIC)
+  const orb = ep(ORBIT_HEADS_EPIC)
   const tint = props.tint
 
   gl.clearColor(0, 0, 0, 1)
@@ -588,10 +920,14 @@ function frame(now: number) {
   gl.uniform1f(uFs.uCharge!, tCharge)
   gl.uniform1f(uFs.uCrack!, tCrack)
   gl.uniform1f(uFs.uInhaleAt!, tInhale)
+  gl.uniform1f(uFs.uSurge!, tSurge)
+  gl.uniform1f(uFs.uHush!, tHush)
   gl.uniform1f(uFs.uBurst!, tBurst)
+  gl.uniform1f(uFs.uLock!, tLock)
   gl.uniform1f(uFs.uInt!, props.intensity)
   gl.uniform1f(uFs.uEpic!, props.epic ? 1 : 0)
   gl.uniform3f(uFs.uTint!, tint[0], tint[1], tint[2])
+  gl.uniform2f(uFs.uCardHalf!, props.cardHalf[0], props.cardHalf[1])
   gl.drawArrays(gl.TRIANGLES, 0, 3)
 
   gl.useProgram(progPt)
@@ -599,15 +935,22 @@ function frame(now: number) {
   gl.uniform1f(uPt.uT!, t)
   gl.uniform1f(uPt.uCharge!, tCharge)
   gl.uniform1f(uPt.uCrack!, tCrack)
+  gl.uniform1f(uPt.uSurge!, tSurge)
+  gl.uniform1f(uPt.uHush!, tHush)
   gl.uniform1f(uPt.uBurst!, tBurst)
+  gl.uniform1f(uPt.uLock!, tLock)
   gl.uniform1f(uPt.uInt!, props.intensity)
   gl.uniform1f(uPt.uEpic!, props.epic ? 1 : 0)
   gl.uniform1f(uPt.uPx!, gl.drawingBufferHeight)
   gl.uniform3f(uPt.uTint!, tint[0], tint[1], tint[2])
+  gl.uniform2f(uPt.uCardHalf!, props.cardHalf[0], props.cardHalf[1])
   gl.uniform1i(uPt.uNInhale!, inh * TRAIL)
   gl.uniform1i(uPt.uNCrack!, crk * TRAIL)
+  gl.uniform1i(uPt.uNSurge!, srg * TRAIL)
+  gl.uniform1i(uPt.uNLock!, lck * TRAIL)
+  gl.uniform1i(uPt.uNOrbit!, orb * TRAIL)
   gl.uniform1f(uPt.uTrail!, TRAIL)
-  gl.drawArrays(gl.POINTS, 0, (heads + inh + crk) * TRAIL)
+  gl.drawArrays(gl.POINTS, 0, (heads + inh + crk + srg + lck + orb) * TRAIL)
 
   if (quality && measureStart) {
     frames++
@@ -648,11 +991,13 @@ onMounted(() => {
   progPt = link(g, VERT_PT, FRAG_PT)
   if (!progFs || !progPt) { emit('fail'); return }
 
-  for (const k of ['uRes', 'uT', 'uCharge', 'uCrack', 'uInhaleAt', 'uBurst', 'uInt', 'uEpic', 'uTint']) {
+  for (const k of ['uRes', 'uT', 'uCharge', 'uCrack', 'uInhaleAt', 'uSurge', 'uHush',
+                   'uBurst', 'uLock', 'uInt', 'uEpic', 'uTint', 'uCardHalf']) {
     uFs[k] = g.getUniformLocation(progFs, k)
   }
-  for (const k of ['uRes', 'uT', 'uCharge', 'uCrack', 'uBurst', 'uInt', 'uEpic',
-                   'uPx', 'uTint', 'uNInhale', 'uNCrack', 'uTrail']) {
+  for (const k of ['uRes', 'uT', 'uCharge', 'uCrack', 'uSurge', 'uHush', 'uBurst', 'uLock',
+                   'uInt', 'uEpic', 'uPx', 'uTint', 'uCardHalf',
+                   'uNInhale', 'uNCrack', 'uNSurge', 'uNLock', 'uNOrbit', 'uTrail']) {
     uPt[k] = g.getUniformLocation(progPt, k)
   }
   /* 一個空的 VAO。粒子沒有任何頂點屬性（全部從 gl_VertexID 算），

@@ -67,9 +67,15 @@ const props = withDefaults(defineProps<{
    * 煙原封不動 —— 看起來會像那一聲是疊上去的貼圖，不是這團煙裡炸出來的。
    */
   crackAt?: number
+  /**
+   * 第二次爆的時刻（毫秒）。0 = 沒有（低賞別）。
+   * 跟 crackAt 走同一條包絡、同一個 uniform，差別只在振幅（1.65 倍）——
+   * 同一個語彙、更大的規模，這是「一次比一次大」在煙這一層的說法。
+   */
+  surgeAt?: number
 }>(), {
   duration: 4600, tint: undefined, density: 1, image: null,
-  cardHalf: () => [0.232, 0.325], segments: null, crackAt: 0
+  cardHalf: () => [0.232, 0.325], segments: null, crackAt: 0, surgeAt: 0
 })
 
 const emit = defineEmits<{ (e: 'fail'): void; (e: 'fps', v: number): void; (e: 'cardready'): void }>()
@@ -95,7 +101,7 @@ out vec4 outColor;
 uniform vec2  uRes;
 uniform float uTime;
 uniform float uProg;      // 0..1 正規時間軸上的進度（見檔頭對照表）
-uniform float uCrack;     // 第一次爆的包絡 0..1（低賞別恆為 0）
+uniform float uCrack;     // 前兩次爆的包絡 0..1.65（低賞別恆為 0）
 uniform float uQuality;
 uniform vec3  uTint;
 uniform float uDensity;
@@ -183,8 +189,9 @@ void main() {
      蓄力時往內收、爆發那一下往外掀。
      這比改遮罩自然得多：紋理本身跟著一起被壓縮／撐開，
      只動遮罩的話煙的細節站在原地不動，讀起來像一塊布被拉。 */
-  /* 第一次爆只把煙掀開三分之一（0.16 vs 主爆的 0.42）。
-     掀得一樣多的話兩次爆看起來一樣大，第二次就沒有更大一級可言了。 */
+  /* 前兩次爆只把煙掀開一部分：uCrack 的振幅本身就是分級的
+     （第一次 1.0 → 0.16，第二次 1.65 → 0.26），主爆才是 0.42。
+     掀得一樣多的話三次爆看起來一樣大，後面兩次就沒有更大一級可言了。 */
   zoom *= 1.0 + squeeze * 0.55 - blast * 0.42 - uCrack * 0.16;
   float d = smokeField(sp * zoom, uTime, 0.45, gather * 0.5 + squeeze * 0.45, oct);
 
@@ -270,11 +277,15 @@ void main() {
   col *= mix(1.0, 0.38, smoothstep(thr + 0.03, thr + 0.44, d));
   col += uTint * rim * (0.45 + 1.05 * glow);
   col += vec3(1.0, 0.93, 0.86) * rim * glow * glow * 0.8;   // 最靠近光源的邊緣接近白
-  /* 第一次爆：整團煙的邊緣被照亮一下。
+  /* 第一次／第二次爆：整團煙的邊緣被照亮一下。
      打在 rim（密度的邊帶）上而不是整片加亮 —— 一團煙被閃光燈打到時，
      亮起來的是它的輪廓與薄的地方，厚的地方仍然是暗的。
      整片加亮的話它會變成一片發光的霧，體積感就沒了。 */
-  col += mix(uTint, vec3(1.0), 0.55) * rim * uCrack * 1.1;
+  /* 振幅在這裡要夾住。uCrack 到第二次爆是 1.65，直接乘進來的話
+     整團煙的邊帶會一起過曝，畫面上只剩一大片白 —— 煙的體積感是靠
+     「暗的 body + 亮的邊」，邊亮過頭就沒有 body 可言了。
+     掀開的幅度（zoom）不夾，那是物理位移；發光的亮度夾，那是曝光。 */
+  col += mix(uTint, vec3(1.0), 0.55) * rim * min(uCrack, 1.15) * 1.0;
   /* 堆在卡片位置上的那團煙被卡背後的光打亮。
      少了這一項，煙堆得越厚反而越黑，看起來像卡片的位置被挖空。 */
   col += mix(uTint, vec3(1.0), 0.30) * slab * acc * (rim * 1.15 + 0.10);
@@ -457,10 +468,16 @@ function progAt(el: number) {
 /** 第一次爆的包絡：一下子亮起來（70ms），然後指數退掉。
     起手不做斜坡的話它會在一幀之內從 0 跳到 1，讀起來像畫面閃了一格壞掉。 */
 function crackAt(el: number) {
-  if (!props.crackAt) return 0
-  const d = el - props.crackAt
-  if (d <= 0) return 0
-  return Math.exp(-d / 380) * Math.min(1, d / 70)
+  const pop = (at: number, amp: number, tau: number) => {
+    if (!at) return 0
+    const d = el - at
+    if (d <= 0) return 0
+    return amp * Math.exp(-d / tau) * Math.min(1, d / 70)
+  }
+  /* 取最大值而不是相加：兩次爆在時間上分得夠開，相加只會在都很小的時候
+     憑空多出一點亮度；取最大值則保證「畫面上正在發生的是比較大的那一次」。
+     第二次的尾巴也拖得長一點（380 → 520 ms）—— 規模大，餘波就該久。 */
+  return Math.max(pop(props.crackAt, 1, 380), pop(props.surgeAt, 1.65, 520))
 }
 
 function frame(now: number) {

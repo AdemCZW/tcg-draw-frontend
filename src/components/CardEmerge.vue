@@ -27,6 +27,15 @@
  * 會讓人想關掉，而且衝擊一旦變成常態就不再是衝擊。
  * B 賞以下的節奏與強度跟改版前一模一樣（七拍、單一爆點）。
  *
+ * ---- 三次改版：三段式、靜默、卡片自己出力 ----
+ * 12.5 s → 16.15 s（十二拍）。多的 3.65 s 沒有一秒是重播：
+ *   surge  第二次爆，三段式的中間那一級（神光第一次出現）
+ *   hush   主爆前最深的靜默 + 慢動作，畫面幾乎全黑、完全不動
+ *   lock   卡片自己砸進畫面，方形衝擊波與地面塵，DOM 那張卡在這裡接手
+ * 主爆本身也加長 0.25 s，用來放神光與玻璃裂紋的退場；
+ * settle 加長 0.4 s，放卡面能量流與繞行光點。
+ * **加碼仍然只給 A／LAST**：B/C/D 的腳本一個字都沒動。
+ *
  * 相位用 setTimeout 推進，不用 rAF：分頁被節流時 rAF 不推進，
  * 整段演出會凍在某一格，使用者切回來看到的是半截卡片。
  */
@@ -71,29 +80,41 @@ const emit = defineEmits<{ (e: 'done'): void }>()
    charge  核心把煙吸進去壓實，畫面收暗、震動累積
    crack   第一次爆（高賞別）。小一號的爆點，語彙跟主爆一樣但規模砍半
    inhale  更深的吸入（高賞別）。比第一次爆之前更暗、更空、吸得更急
-   burst   主爆：命中停頓、爆光、衝擊波、十字光芒、裂紋、粒子
+   surge   第二次爆（高賞別）。中間那一級：兩道環、神光第一次出現
+   hush    最深的靜默（高賞別）。幾乎全黑、慢動作，只有殘骸在落
+   burst   主爆：命中停頓、爆光、衝擊波、十字光芒、裂紋、神光、玻璃裂紋、粒子
    form    卡片從爆散的餘料裡凝聚出來
+   lock    卡片砸定（高賞別）。方形衝擊波、地面塵、第四次停頓；DOM 那張卡接手
    settle  煙散掉，卡片定裝，餘韻
 */
 /* 兩套腳本。
-   低賞別維持原本的七拍（10.0 s），高賞別是九拍（12.5 s）。
+   低賞別維持原本的七拍（10.0 s），高賞別是十二拍（16.15 s）。
 
-   多的兩拍不是為了「更長」，是為了讓主爆有第二個基準線 ——
-   一個是前面的安靜，一個是**剛剛才聽過的那一聲**。
-   單段爆發只能被聽到一次；聽過一次之後再來一次更大的，
-   才會讀成「原來剛剛那個只是前菜」。
+   多的拍子不是為了「更長」。每一拍都要負責一件前面沒做過的事，
+   否則同一個爆點播三次只會讓人想按跳過：
 
-   crack 短（0.55 s）：它是一聲，不是一段。
-   inhale 長（1.25 s）：吸氣一定要比爆炸久，不然那不是吸氣是抽搐。
-   burst 從 0.9 s 拉到 1.2 s：多的三百毫秒全部給爆完之後那一段
-   （裂紋往外竄、後燄環掃過去），原本那裡是空的。
-   settle 從 1.6 s 拉到 2.0 s：餘韻要放得下光暈呼吸與第二道掃光。
+   crack  0.55 s  第一聲。它是一聲不是一段，所以短。
+   inhale 1.25 s  吸氣一定要比爆炸久，不然那不是吸氣是抽搐。
+   surge  0.80 s  第二聲，中間那一級。**神光第一次出現**在這裡 ——
+                  第一次出現的東西自帶份量，把它放在中間級，
+                  主爆才有東西可以變本加厲，而不是重播一次。
+   hush   1.35 s  最深的靜默。**這是整段裡最重要的一拍，而它幾乎不畫東西。**
+                  前面已經炸過兩次，觀眾的基準線被抬高了；主爆要還打得動人，
+                  唯一的辦法是把基準線一次踩到比開場更低的地方。
+                  這一拍同時是慢動作段（見 warps）：時間先慢下來，
+                  主爆瞬間跳回全速 —— 速度的**變化**比長度更有衝擊。
+   burst  1.45 s  主爆。比二版多的 0.25 s 給神光與玻璃裂紋的退場。
+   lock   0.85 s  卡片砸定。在這之前卡片全程是被動的（被聚出來、被照亮、
+                  被推近）；這一拍讓它自己出一次力，撞出方形衝擊波與地面塵。
+                  DOM 那張卡也在這裡接手 —— 接手點本身就是一個事件，
+                  不該躲在餘韻的淡入裡。
+   settle 2.40 s  餘韻：環境光呼吸、兩道掃光、卡面能量流、繞行光點。
 
    form 那一拍裡面還分兩段：煙先堆成卡的形狀，圖案才在上面顯影。
    swell 那一拍（煙已經合攏、卡片還沒開始成形）是刻意留的空白 ——
    演出要有一個「什麼都沒發生」的懸置，後面的凝聚才有份量。 */
 type Phase = 'still' | 'gather' | 'swell' | 'charge' | 'crack' | 'inhale'
-  | 'burst' | 'form' | 'settle'
+  | 'surge' | 'hush' | 'burst' | 'form' | 'lock' | 'settle'
 type Beat = { k: Phase; ms: number }
 const BASE_SCRIPT: Beat[] = [
   { k: 'still', ms: 700 },
@@ -111,16 +132,19 @@ const EPIC_SCRIPT: Beat[] = [
   { k: 'charge', ms: 1500 },
   { k: 'crack', ms: 550 },
   { k: 'inhale', ms: 1250 },
-  { k: 'burst', ms: 1200 },
+  { k: 'surge', ms: 800 },
+  { k: 'hush', ms: 1350 },
+  { k: 'burst', ms: 1450 },
   { k: 'form', ms: 2600 },
-  { k: 'settle', ms: 2000 }
+  { k: 'lock', ms: 850 },
+  { k: 'settle', ms: 2400 }
 ]
 /* 誰值得加碼。用 tier 而不是 intensity 判斷：intensity 是「多大聲」的旋鈕，
    加不加碼是「有沒有這一段」的分岔，兩件事不該共用一個數字。
 
-   注意上限：結果頁有一條 15 s 的保險絲（WebGL 掛掉時強制顯示明細），
+   注意上限：結果頁有一條 20 s 的保險絲（WebGL 掛掉時強制顯示明細），
    整段演出必須明顯短於它，否則保險絲會在演出還沒播完時把它掐掉。
-   九拍是 12.5 s，留了 2.5 s。 */
+   十二拍是 16.15 s，留了 3.85 s。**再加拍之前先確認那條保險絲。** */
 const EPIC_TIERS = new Set<Tier>(['A', 'LAST'])
 const epic = computed(() => EPIC_TIERS.has(props.tier))
 const script = computed(() => (epic.value ? EPIC_SCRIPT : BASE_SCRIPT))
@@ -145,18 +169,25 @@ let timer: number | undefined
 
 /** 整段演出的總長 */
 const TOTAL = computed(() => mark.value.total * rate.value)
-/** 煙霧那一層自己的長度（到 form 結束＝settle 起點為止）。
-    settle 是 DOM 那張卡接手之後的餘韻，煙在那時候已經沒事做了。 */
-const SMOKE_TOTAL = computed(() => mark.value.m.settle * rate.value)
+/** 煙霧那一層自己的長度（到 form 結束為止）。
+    form 之後煙已經沒事做了：高賞別接的是 lock（DOM 那張卡砸定），
+    低賞別接的是 settle。用哪一拍當終點，就等於「shader 那張卡什麼時候完工」。 */
+const SMOKE_TOTAL = computed(() =>
+  (epic.value ? mark.value.m.lock : mark.value.m.settle) * rate.value)
 
 /* ---- 煙霧的時間重映射 ----
    SmokePlume 的 shader 常數是寫在一條**正規時間軸**上的（見那支的檔頭對照表），
    跟這裡每一拍實際幾毫秒無關。高賞別多插的兩拍如果直接改變 uProg 的比例，
    那邊所有 smoothstep 都要重算一次 —— 那是一定會忘記做的事。
-   所以這裡把實際節奏對應回正規軸：crack 與 inhale 併進 charge 那一段，
-   煙看到的只是「charge 這一段變長了」，於是它自己就吸得更久、壓得更實。 */
+   所以這裡把實際節奏對應回正規軸：crack／inhale／surge／hush 全部併進 charge
+   那一段，煙看到的只是「charge 這一段變長了」（1.5 s → 5.45 s），
+   於是它自己就吸得更久、壓得更實。三次改版又多插兩拍，這張表**還是沒有動**。
+
+   lock 不在任何一組裡：它在 form 之後，那時 shader 那張卡已經完工，
+   煙的工作結束了（SMOKE_TOTAL 就是收在那裡）。 */
 const SMOKE_GROUPS: Phase[][] = [
-  ['still'], ['gather'], ['swell'], ['charge', 'crack', 'inhale'], ['burst'], ['form']
+  ['still'], ['gather'], ['swell'],
+  ['charge', 'crack', 'inhale', 'surge', 'hush'], ['burst'], ['form']
 ]
 const CANON_MS = [700, 1600, 1100, 1500, 900, 2600]
 const CANON_TOTAL = 8400
@@ -214,12 +245,16 @@ const reduce = () =>
    「插進一格不動的畫」—— 讀起來是一樣的，而且不必接管任何時間軸。
    衝擊層那邊是把餵給 shader 的秒數重映射，兩邊對的是同一個時刻。
 
-   高賞別有三次停頓：
+   高賞別有五次停頓，長度本身就是三段式的量尺：
      1 第一次爆         70 ms  小格（.hitS）
-     2 主爆            165 ms  大格
-     3 主爆的第二拍     60 ms  大格，跟第 2 次隔 190 ms
-   第 3 次是「回彈」：重物砸下去之後還會再頓一下，只頓一次讀起來像單擊，
+     2 第二次爆        110 ms  中格（.hitM）
+     3 主爆            165 ms  大格（.hit）
+     4 主爆的第二拍     60 ms  大格，跟第 3 次隔 190 ms
+     5 卡片砸定        130 ms  砸定格（.hitL），方向朝下
+   第 4 次是「回彈」：重物砸下去之後還會再頓一下，只頓一次讀起來像單擊，
    頓兩次才有重量。兩次之間一定要放開（190 ms），連在一起就只是一次長停頓。
+   第 5 次是**卡片自己**造成的，所以姿勢跟前四次不同：不推近、不歪，
+   而是往下沉一格再彈回來 —— 受力方向朝下，那是「砸」不是「炸」。
 
    停頓長度不隨 pace 縮放：40–80 ms 這個量級是人眼的門檻，
    按倍率縮下去就低到看不出來了。強度倒是要縮 —— 小獎不該有重擊。
@@ -228,10 +263,14 @@ const reduce = () =>
    要凍在**已經炸開**那一格，凍在還沒亮的那一格是看不出來的。 */
 const CRACK_FLASH = 45
 const CRACK_STOP = 70
+const SURGE_FLASH = 50
+const SURGE_STOP = 110
 const HIT_DELAY = 55
 const HIT_STOP = 165
 const HIT2_GAP = 190
 const HIT2_STOP = 60
+const LOCK_FLASH = 40
+const LOCK_STOP = 130
 
 /** 第一次爆的引爆瞬間（毫秒，實際時間）。低賞別沒有，就等於主爆 */
 const crackAtMs = computed(() =>
@@ -239,37 +278,76 @@ const crackAtMs = computed(() =>
 /** 深吸氣起點。低賞別沒有，就等於主爆 */
 const inhaleAtMs = computed(() =>
   (epic.value ? mark.value.m.inhale : mark.value.m.burst + HIT_DELAY) * rate.value)
+/** 第二次爆的引爆瞬間。低賞別沒有，就等於主爆 */
+const surgeAtMs = computed(() =>
+  (epic.value ? mark.value.m.surge + SURGE_FLASH : mark.value.m.burst + HIT_DELAY) * rate.value)
+/** 最深靜默的起點。低賞別沒有，就等於主爆 */
+const hushAtMs = computed(() =>
+  (epic.value ? mark.value.m.hush : mark.value.m.burst + HIT_DELAY) * rate.value)
 /** 主爆的引爆瞬間 */
 const burstAtMs = computed(() => (mark.value.m.burst + HIT_DELAY) * rate.value)
+/** 卡片砸定的瞬間。低賞別沒有這一拍，傳 0（衝擊層用 0 當哨兵） */
+const lockAtMs = computed(() =>
+  (epic.value ? (mark.value.m.lock + LOCK_FLASH) * rate.value : 0))
+
+/* ---- 時間伸縮：慢動作 → 突然全速 ----
+   hush 那一拍舞台時間只走 0.45 倍，主爆的那一刻跳回 1 倍。
+   加長一拍只會讓人覺得久；讓速度在同一段畫面裡**變一次**才有衝擊 ——
+   觀眾感覺到的不是「這裡比較慢」，是「剛剛那下突然變快了」。
+
+   只作用在衝擊層（它跑自己的 rAF 時鐘，重映射一個數字就好）。
+   DOM 這邊不需要：那些 keyframes 的曲線本來就是照著這一拍實際的秒數寫的，
+   要慢就直接把曲線寫慢，多套一層時間映射只會多一個對不準的地方。
+
+   終點取 burst 那一拍的起點（不是引爆時刻）：全速要在爆之前就恢復，
+   否則爆光的前 55 ms 會是慢動作的，那一下就軟掉了。 */
+const warps = computed<[number, number, number][]>(() =>
+  epic.value
+    ? [[hushAtMs.value, mark.value.m.burst * rate.value, 0.45]]
+    : [])
 
 /** [起點, 長度, 是否小格][]。衝擊層只要前兩欄，DOM 這邊用第三欄選定格的姿勢。
     衝擊層與 DOM 共用**同一份**清單 —— 各算一次的話兩邊會對不到同一個時刻，
     那比沒有停頓還糟（畫面凍住的瞬間爆光已經退掉了）。 */
+type HitKind = 'hit' | 'hitS' | 'hitM' | 'hitL'
 const hitPlan = computed(() => {
-  const out: { at: number; ms: number; small: boolean }[] = []
+  const out: { at: number; ms: number; kind: HitKind }[] = []
   const int = props.intensity
   if (epic.value) {
-    const ms = CRACK_STOP * int
-    if (ms > 20) out.push({ at: crackAtMs.value, ms, small: true })
+    const c = CRACK_STOP * int
+    if (c > 20) out.push({ at: crackAtMs.value, ms: c, kind: 'hitS' })
+    const s = SURGE_STOP * int
+    if (s > 20) out.push({ at: surgeAtMs.value, ms: s, kind: 'hitM' })
   }
   const m1 = HIT_STOP * int
   if (m1 > 20) {
     const a1 = burstAtMs.value
-    out.push({ at: a1, ms: m1, small: false })
-    if (epic.value) out.push({ at: a1 + m1 + HIT2_GAP, ms: HIT2_STOP * int, small: false })
+    out.push({ at: a1, ms: m1, kind: 'hit' })
+    if (epic.value) out.push({ at: a1 + m1 + HIT2_GAP, ms: HIT2_STOP * int, kind: 'hit' })
   }
-  return out
+  if (epic.value) {
+    const l = LOCK_STOP * int
+    if (l > 20) out.push({ at: lockAtMs.value, ms: l, kind: 'hitL' })
+  }
+  /* 衝擊層拿到的必須是**依時間排序**的清單：stageMs 沿著它累加已凍時間，
+     順序亂掉的話累加會提早中斷，後半段的舞台時間就全部錯位。 */
+  return out.sort((a, b) => a.at - b.at)
 })
 const stops = computed<[number, number][]>(() => hitPlan.value.map(s => [s.at, s.ms]))
 
 const hit = ref(false)
 const hitS = ref(false)
+const hitM = ref(false)
+const hitL = ref(false)
+const hitFlag: Record<HitKind, typeof hit> = { hit, hitS, hitM, hitL }
 const hitTimers: number[] = []
 
 function clearHits() {
   while (hitTimers.length) clearTimeout(hitTimers.pop())
   hit.value = false
   hitS.value = false
+  hitM.value = false
+  hitL.value = false
 }
 
 function run(i = 0) {
@@ -287,7 +365,7 @@ function play() {
   run(0)
   for (const s of hitPlan.value) {
     hitTimers.push(window.setTimeout(() => {
-      const flag = s.small ? hitS : hit
+      const flag = hitFlag[s.kind]
       flag.value = true
       hitTimers.push(window.setTimeout(() => { flag.value = false }, s.ms))
     }, s.at))
@@ -302,7 +380,7 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
 <template>
   <div
     class="emerge"
-    :class="[`ph-${phase}`, { sc: shaderCard, hit, hitS, epic }]"
+    :class="[`ph-${phase}`, { sc: shaderCard, hit, hitS, hitM, hitL, epic }]"
     :style="{ '--hue': hue, '--rate': rate, '--int': intensity }"
   >
     <!-- 所有層都住在 .stage 裡，螢幕震動與曝光加在 .stage 上。
@@ -334,6 +412,7 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
             />
             <span class="sheen" aria-hidden="true"></span>
             <span class="sheen sheen2" aria-hidden="true"></span>
+            <span class="flow" aria-hidden="true"></span>
           </div>
         </div>
 
@@ -345,6 +424,7 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
           :duration="SMOKE_TOTAL"
           :segments="smokeSegments"
           :crack-at="epic ? crackAtMs : 0"
+          :surge-at="epic ? surgeAtMs : 0"
           :tint="tint"
           :image="cardUrl"
           :card-half="cardHalf"
@@ -353,8 +433,8 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
         />
         <div v-else class="plumeCss" aria-hidden="true"></div>
 
-        <!-- 4 衝擊：蓄力吸入 → 第一次爆 → 深吸氣 → 主爆 → 粒子餘燼。
-             加法疊在最上面 -->
+        <!-- 4 衝擊：蓄力吸入 → 第一次爆 → 深吸氣 → 第二次爆 → 最深的靜默
+             → 主爆 → 卡片砸定 → 繞行光點。加法疊在最上面 -->
         <ImpactBurst
           v-if="burstGl"
           ref="burst"
@@ -362,11 +442,16 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
           :charge-at="mark.m.charge * rate"
           :crack-at="crackAtMs"
           :inhale-at="inhaleAtMs"
+          :surge-at="surgeAtMs"
+          :hush-at="hushAtMs"
           :burst-at="burstAtMs"
+          :lock-at="lockAtMs"
+          :card-half="cardHalf"
           :total="TOTAL"
           :intensity="intensity"
           :epic="epic"
           :stops="stops"
+          :warps="warps"
           :tint="tint"
           @fail="burstGl = false"
         />
@@ -388,7 +473,7 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
      「這一場是不是雙段爆發」—— 兩件事分開，改其中一個不會動到另一個。 */
   --shake: 1;
 }
-.epic { --shake: 1.45; }
+.epic { --shake: 1.55; }
 
 /* 舞台：震動與曝光的載體。
    它跟 .emerge 一樣大，子元素都不比它大，所以這裡用 grid 置中是安全的 ——
@@ -500,12 +585,75 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
   100% { translate: calc(-4.4px * var(--int)) calc(-3px * var(--int)); }
 }
 
+/* ---- 第二次爆（高賞別）----
+   中間那一級。震幅是 crack 的 1.7 倍、主爆的六成，鏡頭往**正的**方向歪一點點
+   （crack 是 -0.5°、inhale 是 -0.75°），所以三次的方向是 0 → + → 主爆再甩回 +1.15°。
+   彩度在這裡第一次被推上去（1.18）：色彩往賞別色靠攏本身就是一條進度條，
+   越接近主爆，畫面越「是那個顏色」。 */
+.ph-surge .stage {
+  filter: brightness(calc(1 + .22 * var(--int))) contrast(1.14) saturate(1.18);
+  transition: filter .3s ease-out;
+}
+.ph-surge .lens {
+  scale: calc(1 + .012 * var(--int));
+  rotate: calc(.4deg * var(--int));
+  filter: blur(0px);
+  transition: scale .5s cubic-bezier(.1, .85, .25, 1),
+              rotate .5s cubic-bezier(.1, .85, .25, 1),
+              filter .3s ease-out;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ph-surge .stage { animation: emergeShakeM calc(.58s * var(--rate)) cubic-bezier(.2, .7, .3, 1) both; }
+}
+@keyframes emergeShakeM {
+  0%   { translate: 0 0; }
+  7%   { translate: calc(-6px * var(--int)) calc(4.4px * var(--int)); }
+  18%  { translate: calc(4.8px * var(--int)) calc(-4px * var(--int)); }
+  32%  { translate: calc(-3.4px * var(--int)) calc(-2.2px * var(--int)); }
+  50%  { translate: calc(2.2px * var(--int)) calc(1.8px * var(--int)); }
+  70%  { translate: calc(-1.2px * var(--int)) calc(-.8px * var(--int)); }
+  100% { translate: 0 0; }
+}
+
+/* ---- 最深的靜默（高賞別）----
+   **這一拍的內容就是「沒有內容」。**
+   亮度踩到 -0.68（開場的黑場都沒有這麼暗）、彩度掉到一半，
+   而且前 74% 的畫面**完全不動** —— 前面兩拍都有震動漸強，這裡什麼都沒有。
+   這個空白才是主爆真正的基準線；沒有它，主爆只是第三次爆炸。
+
+   鏡頭仍然繼續壓（1.07 → 1.105）並且維持傾斜：畫面停了，但壓力沒有停。
+   最後 26% 才放一段極短促的微震進來 —— 那是「要來了」，不是「又開始了」。 */
+.ph-hush .stage {
+  filter: brightness(calc(1 - .68 * var(--int))) saturate(.5) contrast(1.14);
+  transition: filter calc(.9s * var(--rate)) ease-in;
+}
+.ph-hush .lens {
+  scale: calc(1 + .105 * var(--int));
+  rotate: calc(-1.1deg * var(--int));
+  filter: blur(0px);
+  transition: scale calc(1.35s * var(--rate)) cubic-bezier(.35, 0, .7, .4),
+              rotate calc(1.35s * var(--rate)) ease-in-out,
+              filter .3s ease-out;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ph-hush .stage { animation: emergeHush calc(1.35s * var(--rate)) linear both; }
+}
+@keyframes emergeHush {
+  0%, 74% { translate: 0 0; }
+  81%  { translate: calc(-.7px * var(--int)) calc(.5px * var(--int)); }
+  87%  { translate: calc(1.1px * var(--int)) calc(-.8px * var(--int)); }
+  92%  { translate: calc(-1.7px * var(--int)) calc(1.2px * var(--int)); }
+  96%  { translate: calc(2.4px * var(--int)) calc(-1.7px * var(--int)); }
+  100% { translate: calc(-3.1px * var(--int)) calc(2.2px * var(--int)); }
+}
+
 /* ---- 爆發：指數衰減的螢幕震動 ----
    關鍵在「快速收斂」。一直抖下去畫面就沒法看了，而且抖久了反而不痛 ——
    衝擊是一瞬間的事，之後要立刻讓人看得清楚卡片。
    震幅不隨 pace 縮放但隨 intensity 縮放：小獎不該把畫面搖成這樣。 */
 .ph-burst .stage,
 .ph-form .stage,
+.ph-lock .stage,
 .ph-settle .stage {
   filter: none;
   transition: filter .5s ease-out;
@@ -515,6 +663,7 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
    曲線要一開始就快（.12, .9）：彈回來慢的話讀起來是鏡頭在拉遠，不是回正。 */
 .ph-burst .lens,
 .ph-form .lens,
+.ph-lock .lens,
 .ph-settle .lens {
   scale: 1;
   rotate: 0deg;
@@ -538,6 +687,24 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
   46%  { translate: calc(-3px * var(--int) * var(--shake)) calc(2px * var(--int) * var(--shake)); }
   62%  { translate: calc(2px * var(--int) * var(--shake)) calc(-1.5px * var(--int) * var(--shake)); }
   80%  { translate: calc(-1px * var(--int) * var(--shake)) calc(.6px * var(--int) * var(--shake)); }
+  100% { translate: 0 0; }
+}
+
+/* ---- 砸定的震動（高賞別）----
+   跟前面每一次都不同：這一下是**垂直為主**的。
+   炸開是四面八方，砸下來只有一個方向 —— 震動的方向就是受力的方向，
+   橫向搖一樣多的話它會被讀成第四次爆炸。
+   收得也最快（0.5 s）：卡片已經在定位了，畫面必須立刻穩下來讓人看清楚。 */
+@media (prefers-reduced-motion: no-preference) {
+  .ph-lock .stage { animation: emergeLand calc(.5s * var(--rate)) cubic-bezier(.2, .7, .3, 1) both; }
+}
+@keyframes emergeLand {
+  0%   { translate: 0 0; }
+  8%   { translate: calc(.8px * var(--int)) calc(7px * var(--int)); }
+  20%  { translate: calc(-.6px * var(--int)) calc(-5px * var(--int)); }
+  38%  { translate: calc(.4px * var(--int)) calc(3px * var(--int)); }
+  60%  { translate: calc(-.2px * var(--int)) calc(-1.6px * var(--int)); }
+  82%  { translate: 0 calc(.7px * var(--int)); }
   100% { translate: 0 0; }
 }
 
@@ -574,6 +741,33 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
   scale: calc(1 + .034 * var(--int));
   rotate: calc(-.5deg * var(--int));
   filter: blur(calc(1.3px * var(--int)));
+}
+/* 第二次爆那一格：介於兩者之間，而且鏡頭歪回**正**的方向。
+   三次的傾斜是 -0.5° → +0.72° → +1.15°，每一次都甩過中線 ——
+   同一邊歪三次會被讀成鏡頭卡住了，來回甩才是被連續打中。 */
+.hitM .stage {
+  transition: none;
+  filter: brightness(calc(1 + .26 * var(--int))) contrast(1.17) saturate(1.16);
+}
+.hitM .lens {
+  transition: none;
+  scale: calc(1 + .056 * var(--int));
+  rotate: calc(.72deg * var(--int));
+  filter: blur(calc(1.9px * var(--int)));
+}
+/* 砸定那一格：**不推近、不歪**。
+   前四次是爆炸推開鏡頭，這一次是卡片自己落下 ——
+   鏡頭該做的是被壓下去一點（縮，不是放大），對比拉高把卡框咬出來。
+   鏡頭語言換掉，觀眾才分得出這一下的來源不一樣。 */
+.hitL .stage {
+  transition: none;
+  filter: brightness(calc(1 + .22 * var(--int))) contrast(1.18) saturate(1.14);
+}
+.hitL .lens {
+  transition: none;
+  scale: calc(1 - .022 * var(--int));
+  rotate: 0deg;
+  filter: blur(calc(1.1px * var(--int)));
 }
 
 /* ---- 1 卡背後的光 ----
@@ -616,11 +810,26 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
   opacity: 1; scale: .17;
   transition: opacity .4s ease, scale calc(1.25s * var(--rate)) cubic-bezier(.75, 0, .9, .25);
 }
+/* 第二次爆：撐到 1.55 —— crack 1.1、主爆 2.2，剛好在中間。
+   三次的核心大小是遞增的，那就是「一次比一次大」最直接的量尺。 */
+.ph-surge .coreGlow {
+  opacity: 1; scale: 1.55;
+  transition: opacity .16s ease, scale .32s cubic-bezier(.05, .8, .3, 1);
+}
+/* 最深的靜默：核心不只更小（.17 → .09），**還變暗**（1 → .42）。
+   前面每一次收縮都是越收越亮（能量被壓進去），這一次連光都快沒了 ——
+   那是「熄掉」不是「壓縮」，而熄掉才嚇人。 */
+.ph-hush .coreGlow {
+  opacity: .42; scale: .09;
+  transition: opacity calc(.9s * var(--rate)) ease,
+              scale calc(1.35s * var(--rate)) cubic-bezier(.8, 0, .9, .3);
+}
 .ph-burst .coreGlow {
   opacity: 1; scale: 2.2;
   transition: opacity .2s ease, scale .28s cubic-bezier(.05, .8, .3, 1);
 }
 .ph-form .coreGlow { opacity: 1; scale: 1.1; }
+.ph-lock .coreGlow { opacity: .6; scale: 1.18; }
 .ph-settle .coreGlow { opacity: .45; scale: 1.25; }
 
 /* ---- 稀有度環境光 ----
@@ -644,12 +853,16 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
   mix-blend-mode: screen;
   opacity: 0;
 }
+/* 高賞別提前到 lock 出現：環境光是「這張卡開始發光」，
+   而那件事發生在它砸定的那一刻，不是等到餘韻才慢慢想起來。 */
+.ph-lock .aura,
 .ph-settle .aura {
   opacity: calc(.75 * var(--int));
   transition: opacity .9s ease;
 }
 @media (prefers-reduced-motion: no-preference) {
   /* 呼吸要慢（一個來回約兩秒）。快了就變成閃爍，那是警示不是餘韻。 */
+  .ph-lock .aura,
   .ph-settle .aura { animation: emergeBreath calc(2s * var(--rate)) ease-in-out infinite; }
 }
 @keyframes emergeBreath {
@@ -704,8 +917,15 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
 .ph-crack .card3d { opacity: .52; scale: .56; }
 /* 深吸氣再拉得比蓄力更遠更暗：它跟核心光一起走同一個方向 */
 .ph-inhale .card3d { opacity: .28; scale: .42; }
+/* 第二次爆推得比第一次遠一點（.56 → .64）。仍然不到定位 ——
+   到定位的話主爆就沒有東西可以推了，這條規則對三次爆都成立。 */
+.ph-surge .card3d { opacity: .62; scale: .64; }
+/* 最深的靜默：卡片被吸到整段裡最遠、最暗的位置。
+   它是「等一下要衝出來的東西」，現在必須看起來離得最遠。 */
+.ph-hush .card3d { opacity: .16; scale: .34; }
 .ph-burst .card3d,
 .ph-form .card3d,
+.ph-lock .card3d,
 .ph-settle .card3d {
   opacity: 1; scale: 1; translate: 0 0;
   transform: rotateX(0deg);
@@ -719,6 +939,7 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
 /* 高賞別的定裝再多一圈外擴的賞別色。
    兩層陰影（近的濃、遠的淡）才有厚度；只加一層就只是把光暈調大，
    讀起來是「發光更強」不是「這張比較重要」。 */
+.epic.ph-lock .card3d,
 .epic.ph-settle .card3d {
   box-shadow:
     0 0 26px color-mix(in srgb, var(--hue) 85%, transparent),
@@ -741,14 +962,34 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
   filter: none;
   transition: opacity .5s ease;
 }
+/* 高賞別的接手點提前到 lock。
+   接手本身就是一個事件（卡片砸定），不該躲在餘韻的淡入裡 ——
+   而且交接那一刻正好有一格爆光，位置差被光蓋掉，看不出兩張卡換過手。
+   淡入只給 .12 s：砸下來的東西不會淡入。 */
+.sc.ph-lock .card3d,
 .sc.ph-settle .card3d { opacity: 1; }
+.sc.ph-lock .card3d { transition: opacity .12s ease, scale .42s cubic-bezier(.16, 1.08, .3, 1); }
 .sc .plumeLayer { transition: opacity .7s ease .3s; }
+.sc.ph-lock .plumeLayer,
 .sc.ph-settle .plumeLayer { opacity: 0; }
+/* 交接時煙要退得快（.18 s）。慢慢退的話 shader 那張卡會跟 DOM 這張
+   疊著各自做各自的縮放，短暫出現兩張卡的重影。 */
+.sc.ph-lock .plumeLayer { transition: opacity .18s ease; }
 /* 凝聚開始之後，背光交給 shader 裡的凝聚光。
    但 charge / burst 那兩拍要留著 —— 那時候 shader 還沒開始堆卡，
    核心光正是「能量被壓成一點再炸開」這件事的主角。 */
 .sc.ph-form .coreGlow,
+.sc.ph-lock .coreGlow,
 .sc.ph-settle .coreGlow { opacity: 0; }
+
+/* 砸定那一格卡片被硬推大一格再彈回來。
+   它必須寫在 .sc 的規則之後（權重相同，靠順序），
+   否則會被 .sc .card3d 那條 scale: 1 蓋掉。 */
+.hitL.sc .card3d,
+.hitL .card3d {
+  transition: none;
+  scale: calc(1 + .07 * var(--int));
+}
 
 /* 全像反光：定位後很淡地掃一次。這是卡面的反光，不是掃描線 */
 .sheen {
@@ -782,6 +1023,42 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
   to   { background-position: -70% 0; }
 }
 
+/* ---- 卡面能量流（只有高賞別）----
+   餘韻裡卡面上有幾道很淡的賞別色能量在流。
+   它跟掃光的分工是「事件 vs 狀態」：掃光是一次性的（有人打了一下光，
+   打完就沒了），能量流不會結束（這張卡自己在發電）。
+   所以它是 infinite、很慢、而且淡到只在暗部看得出來 ——
+   濃了就變成一層色紙蓋在卡面上，卡圖本身反而看不清楚。
+
+   只給高賞別：每張卡都在發電的話，它就不再是「這張很特別」。 */
+.flow {
+  position: absolute; inset: 0;
+  border-radius: 10px;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  display: none;
+  opacity: 0;
+  background: repeating-linear-gradient(114deg,
+    transparent 0 13%,
+    color-mix(in srgb, var(--hue) 48%, transparent) 16.5%,
+    rgba(255, 255, 255, .10) 17.5%,
+    transparent 21% 33%);
+  background-size: 240% 100%;
+  transition: opacity .8s ease;
+}
+.epic .flow { display: block; }
+@media (prefers-reduced-motion: no-preference) {
+  .epic.ph-lock .flow,
+  .epic.ph-settle .flow {
+    opacity: calc(.45 * var(--int));
+    animation: emergeFlow calc(4.4s * var(--rate)) linear infinite;
+  }
+}
+@keyframes emergeFlow {
+  from { background-position: 0 0; }
+  to   { background-position: -240% 0; }
+}
+
 /* ---- 3 煙霧羽流 ----
    壓在卡片之上。它不是背景，是「擋在前面然後散掉的東西」。 */
 .plumeLayer { position: absolute; inset: 0; z-index: 3; }
@@ -806,7 +1083,10 @@ onBeforeUnmount(() => { clearTimeout(timer); clearHits() })
 .ph-charge .plumeCss { opacity: 1; transform: scale(.82); }
 .ph-crack .plumeCss { opacity: .9; transform: scale(1.05); }
 .ph-inhale .plumeCss { opacity: 1; transform: scale(.72); }
+.ph-surge .plumeCss { opacity: .88; transform: scale(1.18); }
+.ph-hush .plumeCss { opacity: 1; transform: scale(.6); }
 .ph-burst .plumeCss { opacity: .7; transform: scale(1.45); }
 .ph-form .plumeCss { opacity: .35; transform: scale(1.3); }
+.ph-lock .plumeCss { opacity: .12; transform: scale(1.42); }
 .ph-settle .plumeCss { opacity: 0; transform: scale(1.5); }
 </style>
