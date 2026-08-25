@@ -195,7 +195,10 @@ export const api = {
 
   async createPool(input: mock.NewPoolInput): Promise<Pool> {
     if (MOCK) { await delay(500); return mock.createPool(input) }
-    // 前端的開池表單是「賞別 + 名稱 + 數量 + 單價」，後端要完整的 card 物件
+    /* 開池表單送出來的每一項都已經帶著**挑出來的完整卡片身分**
+       （卡號、系列、卡圖、變體、鑑定編號），所以這裡不再現編任何欄位。
+       原本這裡會拿卡名湊一個 `setCode: ''`、`cardNo: ''` 的空殼送上去 ——
+       那正是「賣家開的池永遠對不到外部價格」的來源。 */
     const total = input.prizes.reduce((a, p) => a + p.qty, 0)
     const r = await http<{ poolId: string }>('/v1/pools', { method: 'POST', json: {
       mode: input.mode, title: input.title, ticketPrice: input.ticketPrice, totalTickets: total,
@@ -209,8 +212,26 @@ export const api = {
            但那只是填表的方式。後端仍然收得下 tierBuyback，
            前端先解析完再送是為了讓畫面上的試算跟送出去的東西逐字相同。 */
         buyback: p.buyback,
-        card: { id: `c-${Date.now().toString(36)}-${i}`, name: p.name, setCode: '', cardNo: '', language: 'JP',
-                grader: 'RAW', grade: null, certNo: null, image: '', refPrice: p.unitValue }
+        /* 逐欄明列不用展開整個物件：card 會被雜湊進 manifest（v4），
+           而 manifest 的欄位集合就是「承諾涵蓋什麼」。順手多送一個欄位
+           等於默默擴張承諾的範圍，之後沒有人知道那一欄是什麼時候進去的。
+           id 沒有就用 artId 補：後端要一個非空字串，而 artId 是這張卡在
+           目錄裡的唯一鍵，比現編一個時間戳誠實。 */
+        card: {
+          id: p.card.id || p.card.artId || `c-${i}`,
+          name: p.card.name,
+          setCode: p.card.setCode,
+          cardNo: p.card.cardNo,
+          language: p.card.language,
+          grader: p.card.grader,
+          grade: p.card.grade,
+          certNo: p.card.certNo,
+          image: p.card.image,
+          artId: p.card.artId,
+          // 變體：manifest v4 的最後一欄，同卡號不同版本靠它分辨
+          variantId: p.card.variantId ?? null,
+          refPrice: p.card.refPrice
+        }
       }))
     } })
     const g = await http<{ pool: Any }>(`/v1/pools/${r.poolId}`)

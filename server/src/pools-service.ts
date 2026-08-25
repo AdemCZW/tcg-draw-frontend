@@ -28,7 +28,7 @@ const DAY = 86_400_000
  * pools.commit_version 上，驗算照它們宣告的版本重算。
  * 承諾一旦公布就不能被後來的程式碼追溯改寫，這是這整套的前提。
  */
-export const COMMIT_VERSION: ManifestVersion = 3
+export const COMMIT_VERSION: ManifestVersion = 4
 
 /**
  * drand（League of Entropy）。開池時鎖定一個未來的 round，
@@ -84,9 +84,11 @@ export async function commitPool(tx: Tx, poolId: string) {
      v1 只雜湊種子，所以開賣後換掉「第 3 個獎項是哪張卡」籤序不變、
      驗算照樣通過 —— 那條路必須堵上，否則「可驗證」只涵蓋一半。
 
-     **新池一律 v3**：序列化尾端多一欄 buyback（賣家宣告的買回價）。
-     那是整份清單裡唯一一個賣家有義務履行的金額，綁進 commit 之後
-     開賣後偷偷調低它會跟偷換卡一樣被驗算抓到。 */
+     **新池一律 v4**：序列化尾端有 buyback（賣家宣告的買回價）與
+     variantId（卡片變體）。
+     buyback 是整份清單裡唯一一個賣家有義務履行的金額；variantId 則堵住
+     「同一組卡號的不同版本」那條縫 —— 少了它，把大師球鏡面換成同卡號的普卡
+     manifest 逐字不變、驗算照樣回 ok，而那兩張卡實測差約 18,000 倍。 */
   const rows = await tx<{
     id: string; tier: string; total: number; card: Record<string, unknown>; buyback: string | null
   }[]>`select id, tier, total, card, buyback from pool_prizes where pool_id = ${poolId}`
@@ -94,7 +96,8 @@ export async function commitPool(tx: Tx, poolId: string) {
   const manifest: PrizeManifestEntry[] = rows.map(r => {
     const c = r.card as {
       name?: string; setCode?: string | null; cardNo?: string | null
-      grader?: string | null; grade?: number | null; certNo?: string | null; refPrice?: number | null
+      grader?: string | null; grade?: number | null; certNo?: string | null
+      refPrice?: number | null; variantId?: string | null
     }
     /* 少一個買回價就不 commit。這裡是最後一道 ——
        放行的話會產生一個「宣告了 v3 卻有獎品沒有買回價」的池：
@@ -107,7 +110,11 @@ export async function commitPool(tx: Tx, poolId: string) {
       name: c.name ?? '', setCode: c.setCode ?? null, cardNo: c.cardNo ?? null,
       grader: c.grader ?? null, grade: c.grade ?? null,
       certNo: c.certNo ?? null, refPrice: c.refPrice ?? null,
-      buyback: Number(r.buyback)
+      buyback: Number(r.buyback),
+      /* 沒挑變體就是 null。這裡不替它猜一個值 —— manifest 把 null 序列化成
+         空字串，而「空字串」在驗算端是一個明確的宣告：這個獎品沒有指定版本。
+         猜一個進去等於平台替賣家宣告了一件他沒說過的事。 */
+      variantId: c.variantId ?? null
     }
   })
 

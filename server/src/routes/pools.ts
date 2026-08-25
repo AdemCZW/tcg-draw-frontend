@@ -128,7 +128,7 @@ pools.get('/:id/reveal', async c => {
   }[]>`select id, total, tier, card, buyback from pool_prizes where pool_id = ${p.id}`
 
   /* 這個池宣告的 manifest 版本。舊池的 commit_version 由 migration 018 依
-     manifest_hash 是不是 null 回填成 1 或 2；新池一律 3。
+     manifest_hash 是不是 null 回填成 1 或 2；新池一律 4（見 COMMIT_VERSION）。
      驗算端照這個版本重算，**不「依序嘗試」**——那等於接受「任何一版算得過就好」，
      一個作弊的伺服器可以挑對自己有利的那一版送出。 */
   const version = Number(p.commit_version ?? (p.manifest_hash ? 2 : 1))
@@ -141,7 +141,8 @@ pools.get('/:id/reveal', async c => {
     ? prizes.map(x => {
         const cd = x.card as {
           name?: string; setCode?: string | null; cardNo?: string | null
-          grader?: string | null; grade?: number | null; certNo?: string | null; refPrice?: number | null
+          grader?: string | null; grade?: number | null; certNo?: string | null
+          refPrice?: number | null; variantId?: string | null
         }
         return {
           prizeId: x.id, tier: x.tier, total: Number(x.total),
@@ -150,7 +151,13 @@ pools.get('/:id/reveal', async c => {
           certNo: cd.certNo ?? null, refPrice: cd.refPrice ?? null,
           /* v2 的池這一欄一定是 null，而 v2 的序列化根本不讀它 ——
              帶出來只是為了讓驗算頁面看得到買回價，不影響雜湊。 */
-          buyback: x.buyback == null ? null : Number(x.buyback)
+          buyback: x.buyback == null ? null : Number(x.buyback),
+          /* 同理：v3 以下的序列化不讀 variantId，帶出來不影響它們的雜湊。
+             v4 的池則是靠這一欄才驗得出「開賣後有沒有被換成同卡號的另一版」。
+             這裡一樣是**現在**從 pool_prizes 讀，不是讀快照 ——
+             有人偷改了 card->>'variantId'，吐出來的就是改過的值，
+             重算的 commit 對不上，驗算就抓到了。 */
+          variantId: cd.variantId ?? null
         }
       })
     : undefined
@@ -202,7 +209,15 @@ const PrizeIn = z.object({
     refPrice: z.number().int().nonnegative()
       .max(REF_PRICE_MAX, `參考價不能超過 ${REF_PRICE_MAX.toLocaleString('zh-TW')}`)
       .nullable().optional(),
-    certNo: z.string().nullable().optional()
+    certNo: z.string().nullable().optional(),
+    /* 卡片變體（TCGdex 的 variantId）。**選填但一旦有值就進承諾**：
+       它跟卡名、鑑定編號一樣是「這是哪一張卡」的一部分（manifest v4），
+       開賣後改不了。同一組卡號的普卡與大師球鏡面實測差約 18,000 倍，
+       少了這一欄，那兩張卡在承諾裡是同一個東西。
+
+       長度上限是防呆不是規則：這個值會逐字進雜湊的輸入，
+       一個超長字串塞進來只會讓 manifest 難以人工核對。 */
+    variantId: z.string().max(120).nullable().optional()
   }).passthrough(),
   /* 這一項的買回價。**選填 —— 它是「覆寫」不是「必填」。**
      一般情況下買回價按賞別給（見 CreatePool.tierBuyback），這裡只處理例外：
@@ -364,8 +379,10 @@ pools.post('/', requireAuth, async c => {
       `
       const rows = b.prizes.map((p, i) => ({
         id: `${id}-pr${i}`, pool_id: id, tier: p.tier,
-        // refPrice 沒填就明確存 null（不是 0，也不是「沒有這個鍵」）
-        card: { ...p.card, refPrice: p.card.refPrice ?? null },
+        /* refPrice 沒填就明確存 null（不是 0，也不是「沒有這個鍵」）。
+           variantId 同理明確寫 null：commitPool 會把它序列化進 manifest v4，
+           讓「有這個鍵但值是 null」與「沒有這個鍵」在資料庫裡讀起來一致。 */
+        card: { ...p.card, refPrice: p.card.refPrice ?? null, variantId: p.card.variantId ?? null },
         total: p.total,
         // 解析後的絕對金額。manifest 與回收都只看這一欄
         buyback: resolved[i]!

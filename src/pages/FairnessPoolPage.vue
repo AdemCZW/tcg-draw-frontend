@@ -38,7 +38,7 @@ interface SeatRow { seat: number; prizeId: string; takenAt: number | null }
 const reveal = ref<Reveal & {
   clientSeedSource?: string; manifestHash?: string | null; seats?: SeatRow[]
 } | null>(null)
-const result = ref<{ ok: boolean; reason?: string; version: 1 | 2 | 3 } | null>(null)
+const result = ref<{ ok: boolean; reason?: string; version: 1 | 2 | 3 | 4 } | null>(null)
 /** 自己重算出來的 commit，跟開賣前公布的並排給使用者看 */
 const recomputed = ref('')
 
@@ -133,7 +133,7 @@ onMounted(async () => {
 
         <template v-if="result">
           <p v-if="result.ok" class="ok" role="status">
-            通過。<template v-if="result.version === 3">籤序、<strong>獎品內容</strong>與<strong>宣告的買回價</strong>都跟開賣前的承諾一致</template><template v-else-if="result.version === 2">籤序<strong>與獎品內容</strong>都跟開賣前的承諾一致</template><template v-else>籤序與開賣前的承諾一致</template>，沒有被更動過。
+            通過。<template v-if="result.version === 4">籤序、<strong>獎品內容（含每一張卡的版本）</strong>與<strong>宣告的買回價</strong>都跟開賣前的承諾一致</template><template v-else-if="result.version === 3">籤序、<strong>獎品內容</strong>與<strong>宣告的買回價</strong>都跟開賣前的承諾一致</template><template v-else-if="result.version === 2">籤序<strong>與獎品內容</strong>都跟開賣前的承諾一致</template><template v-else>籤序與開賣前的承諾一致</template>，沒有被更動過。
           </p>
           <p v-else class="bad" role="alert">
             不一致：{{ result.reason }}。請保留這個畫面並聯繫客服。

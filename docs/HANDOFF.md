@@ -80,6 +80,8 @@ bottom: calc(X + max(var(--nav-total, 0px), var(--safe-b, 0px)));
 - **手機視窗高度一律用 `dvh`，不要用 `vh`**。`vh` 取的是網址列收起時的高度。
 - **同一個 scoped stylesheet 裡不要有兩個同名 class**。曾經有兩個 `.more`（`<details>` 與卡片展開鈕），同權重、後者勝，把 `<summary>` 擠成一字一行。
 - **Vue `Transition` 用 `requestAnimationFrame` 換 class，`:duration` 保護不到**。整頁換頁轉場已經移除（原因寫在 `App.vue` 的註解裡），不要加回來。
+- **`<input type="number">` 的 `min` 配 `step` 會憑空造出 stepMismatch，而且是靜默的**。`min="1" step="10"` 的合法值是 1、11、21…，所以**預設值 300 本身就不合法**；`min="10" step="10"` 讓預設買回價 36 不合法。瀏覽器會在 `submit` 事件**之前**擋下送出，`@submit.prevent` 的處理函式根本不會被呼叫 —— 畫面上一句話都沒有。開池表單就是這樣壞的（使用者回報「為什麼還是無法開池」）。點數是整數，`step` 一律寫 `1`；表單另外加 `novalidate`，讓「還差什麼」只有一份來源。
+- **禁用的按鈕沒有辦法解釋自己**。開池表單原本有六個送出條件，只有一個會顯示訊息，其餘五個只是把按鈕變灰 —— 而缺的欄位常常捲在畫面外。現在改成一份點得動的問題清單（點一項就捲過去並聚焦），按鈕不禁用，按下去指路。
 - **Claude 的 Browser pane 會讓 `document.hidden === true`**，IntersectionObserver 的回呼不會送達，測不了無限捲動。要測捲動請改用 Playwright。
 
 ---
@@ -90,7 +92,8 @@ bottom: calc(X + max(var(--nav-total, 0px), var(--safe-b, 0px)));
 
 - v1：`commit = SHA256(server_seed_bytes)`
 - v2：`commit = SHA256(server_seed_bytes ‖ manifest_hash_bytes)`，manifest 十欄
-- **v3（現行）**：同 v2，但 manifest 尾端多一欄 `buyback`（賣家宣告的買回價）
+- v3：同 v2，但 manifest 尾端多一欄 `buyback`（賣家宣告的買回價）
+- **v4（現行）**：再多一欄 `variantId`（卡片變體）
 
 **版本存在池上（`pools.commit_version`），驗算端照池宣告的版本重算，不「依序嘗試」。**
 依序嘗試等於接受「任何一版算得過就好」，一個作弊的伺服器可以挑對自己有利的那一版送出。
@@ -99,6 +102,14 @@ bottom: calc(X + max(var(--nav-total, 0px), var(--safe-b, 0px)));
 manifest 是整池獎品的規格化字串（`src/shared/fairness.ts` 的 `manifestString`）。
 **刻意不用 `JSON.stringify`** —— 鍵的順序與跳脫規則是實作決定的，不能拿來當雜湊輸入。
 
+v4 補的是「同一組卡號的不同版本」那條縫：v3 為止 `name` / `setCode` / `cardNo`
+三欄相同的兩張卡在承諾裡是同一個東西，而實測 SV2a-025（ピカチュウ）
+普卡 cardmarket €0.02、同卡號的マスターボールミラー €369 —— 差約 18,000 倍。
+已實測：`UPDATE pool_prizes SET card = jsonb_set(card, '{variantId}', …)`
+只換變體、卡名卡號買回價一個字不動，`/reveal` 的驗算從 `{"ok":true,"version":4}`
+變成 `{"ok":false,"reason":"commit 對不上…"}`；而同一個偷換用 v3 的規則序列化出來
+**逐字相同**（v3 hash 前後都是 `db1f6f94…`），那就是非升版不可的理由。
+
 把獎品內容綁進 commit 之後，「開池前偷換卡」會被驗算抓到。已實測：直接
 `UPDATE pool_prizes SET card = jsonb_set(...)` 把最後一個獎換成便宜卡（不動座位順序），
 驗證從 `{"ok":true,"version":2}` 變成 `{"ok":false,"reason":"commit 對不上"}`。
@@ -106,6 +117,10 @@ manifest 是整池獎品的規格化字串（`src/shared/fairness.ts` 的 `manif
 客戶端種子用 **drand（League of Entropy）**，開池時先預約一個未來的輪次，
 賣家沒辦法反覆重算來挑對自己有利的種子。洗牌是 Fisher-Yates 配 `HMAC-SHA256`
 串流，用**拒絕取樣**不是取餘數（取餘數會有偏差）。
+
+種子裡刻意各留一個固定樣本：`p-official-3` 是 v2、`p-official-4` 是 v3、
+`p-official-5` 是 v4（同卡號三個變體）。**三個都 revealed**，
+「升版沒有讓舊池集體變成被竄改」這條迴歸才有東西可驗。
 
 > ⚠️ **正式環境現存的池仍然是 commit v1／v2、`floor_ratio` 是 null** —— 種子只建新池，不回頭改舊的。
 > migration 018 依 `manifest_hash` 是不是 null 把它們回填成 `commit_version` 1 或 2。
@@ -280,7 +295,7 @@ cd server && npm run build
 
 **不要用 `tsc --noEmit` 代替 `npm run build`**，而且**不要接 pipe** —— 接了 pipe 讀到的是 pipe 的 exit code。
 
-### 煙霧測試（目前 254 項）
+### 煙霧測試（目前 278 項）
 
 需要本機 PostgreSQL 與一個跑著的 server：
 

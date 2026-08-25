@@ -41,15 +41,22 @@ const listings: [string, ReturnType<typeof card>, number, string, string, 'vault
 /* 池裡的卡片。上面的 card() 把 setCode / cardNo 寫死成 sv4a 349/190 ——
    一個池看不出來，十幾個池每張卡都同編號就露餡了，所以這裡從 artId 反推。
    artId 是 <套牌>-<編號>，跟前端抓卡圖用的是同一組代碼，不能亂編。 */
-const SET_SIZE: Record<string, string> = { sv4a: '190', sv8a: '187', sv3: '108', sv6: '101' }
-const pcard = (name: string, artId: string, refPrice: number, certNo: string | null = null) => {
+const SET_SIZE: Record<string, string> = { sv4a: '190', sv8a: '187', sv3: '108', sv6: '101', sv2a: '165' }
+const pcard = (
+  name: string, artId: string, refPrice: number,
+  certNo: string | null = null,
+  /* 卡片變體（TCGdex 的 variantId）。同一組卡號的不同版本是完全不同的商品，
+     所以 id 也要跟著分岔 —— 兩個 variantId 共用一個 card.id 的話，
+     「這是哪一張卡」在資料裡就又變回一個值。 */
+  variantId: string | null = null
+) => {
   const set = (artId.split('-')[0] ?? '').toLowerCase()
   const no = artId.split('-')[1] ?? ''
   return {
-    id: (certNo ? 'cg-' : 'c-') + artId, name,
+    id: (certNo ? 'cg-' : 'c-') + artId + (variantId ? '-' + variantId : ''), name,
     setCode: set, cardNo: SET_SIZE[set] ? `${no}/${SET_SIZE[set]}` : no, language: 'JP',
     grader: certNo ? 'PSA' : 'RAW', grade: certNo ? 10 : null, certNo,
-    image: '', refPrice, artId
+    image: '', refPrice, artId, variantId
   }
 }
 
@@ -88,6 +95,15 @@ const C = {
   ironHands: pcard('鐵臂膀 ex', 'SV8a-210', 300),
   ditto: pcard('差不多娃娃 ex', 'SV8a-215', 240),
   finizen: pcard('海豚俠 ex', 'SV8a-207', 150),
+  /* 同一組卡號的三個變體（真實資料，TCGdex SV2a-025 ピカチュウ）。
+     **卡名、套牌、卡號三欄逐字相同，只有 variantId 不同** —— 這正是
+     manifest v4 要處理的那件事：在 v3 的規則下這三張在承諾裡分不出來，
+     所以開賣後把大師球鏡面換成普卡驗算抓不到。
+     cardmarket 實測行情：普卡 €0.02、寶貝球鏡面 €0.28、大師球鏡面 €369。
+     refPrice 是換算後的概略點數，只用來排賞別（它不參與任何金額計算）。 */
+  pikachuMaster: pcard('皮卡丘', 'SV2a-025', 12800, null, '2asus05yghmpd1ud1sdmlq3as4e'),
+  pikachuPoke: pcard('皮卡丘', 'SV2a-025', 400, null, '3739bbtj3i910y5ynn9xc6ryf'),
+  pikachuNormal: pcard('皮卡丘', 'SV2a-025', 100, null, 'endfynwn4n10gzq'),
   // 滿分保庫只收 PSA 10，附鑑定編號讓買家自己去 PSA 網站對
   terapagosPSA: pcard('太樂巴戈斯 ex UR', 'SV8a-237', 19800, '84120031'),
   pikachuPSA: pcard('皮卡丘 ex SAR', 'SV8a-236', 12800, '84120032'),
@@ -129,6 +145,15 @@ interface PoolDef {
    * 這種池的卡不能回收，跟正式環境現有的池行為一致。
    */
   legacyV2?: boolean
+  /**
+   * 刻意停在 v3（有買回價，但獎品沒有變體）的池。
+   *
+   * 跟 legacyV2 是同一個用途、不同的一版：v4 在尾端追加了 variantId，
+   * 種子裡要留一個 v3 的池，「v3 的舊池仍然驗得過」才有固定樣本可測。
+   * 這兩個池加起來釘住的是同一件事 —— **升 manifest 版本沒有讓既有的池
+   * 集體變成「被竄改」**，而那是這套版本化最容易做壞的地方。
+   */
+  legacyV3?: boolean
   prizes: { tier: Tier; card: ReturnType<typeof pcard>; total: number }[]
 }
 
@@ -214,6 +239,9 @@ const poolDefs: PoolDef[] = [
        那在測試裡跑不動。 */
     id: 'p-official-4', sellerId: 'u-official', mode: 'muteki',
     title: '官方旗艦場 #59 · 已開獎',
+    /* **刻意停在 v3**（有買回價、獎品沒有變體）。跟 p-official-3 的 v2
+       同一個用途：v4 之後這一池就是「v3 的舊池仍然驗得過」的固定樣本。 */
+    legacyV3: true,
     ticketPrice: 900, status: 'revealed', sold: 40, openedDaysAgo: 20,
     prizes: [ // 40 籤，票收 36,000
       { tier: 'LAST', card: C.terapagosUR, total: 1 },
@@ -221,6 +249,24 @@ const poolDefs: PoolDef[] = [
       { tier: 'B', card: C.pidgeotSAR, total: 2 },
       { tier: 'C', card: C.hasselSAR, total: 6 },
       { tier: 'D', card: C.glaceon, total: 30 }
+    ]
+  },
+  {
+    /* 已完抽並公布 seed 的 **v4** 池 —— manifest 尾端多一欄 variantId。
+       這一池刻意讓三個獎項的卡名、套牌、卡號**逐字相同**，只有變體不同：
+       在 v3 的規則下這三張卡在承諾裡分不出來，賣家開賣後把大師球鏡面
+       換成普卡，manifest 幾乎不變（只有 refPrice 那一欄，而那一欄本來就
+       允許賣家亂填）。v4 之後那條路被堵死。
+
+       p-official-3 是 v2 的樣本、p-official-4 是 v3 的、這一池是 v4 的 ——
+       三個都 revealed，所以「升版沒有讓舊池變成被竄改」有三個固定樣本可測。 */
+    id: 'p-official-5', sellerId: 'u-official', mode: 'muteki',
+    title: '官方變體場 · 皮卡丘 151 已開獎',
+    ticketPrice: 350, status: 'revealed', sold: 40, openedDaysAgo: 12,
+    prizes: [ // 40 籤，票收 14,000；買回價總和 7,680 + 9×240 + 30×60 = 11,640 → 83.1%
+      { tier: 'A', card: C.pikachuMaster, total: 1 },
+      { tier: 'C', card: C.pikachuPoke, total: 9 },
+      { tier: 'D', card: C.pikachuNormal, total: 30 }
     ]
   },
   {
@@ -416,7 +462,7 @@ async function seedPool(d: PoolDef) {
      這樣改動前後的畫面可以直接對照。 */
   const declaredBuyback = (refPrice: number) => Math.max(BUYBACK_MIN, Math.floor(refPrice * 0.6))
 
-  const version: ManifestVersion = d.legacyV2 ? 2 : 3
+  const version: ManifestVersion = d.legacyV2 ? 2 : d.legacyV3 ? 3 : 4
   const withBuyback = prizeDefs.map(p => ({
     ...p,
     buyback: d.legacyV2 ? null : declaredBuyback((p.card as { refPrice?: number }).refPrice ?? 0)
@@ -429,14 +475,16 @@ async function seedPool(d: PoolDef) {
   const manifest = withBuyback.map(p => {
     const c = p.card as {
       name?: string; setCode?: string | null; cardNo?: string | null
-      grader?: string | null; grade?: number | null; certNo?: string | null; refPrice?: number | null
+      grader?: string | null; grade?: number | null; certNo?: string | null
+      refPrice?: number | null; variantId?: string | null
     }
     return {
       prizeId: p.id, tier: p.tier, total: p.total,
       name: c.name ?? '', setCode: c.setCode ?? null, cardNo: c.cardNo ?? null,
       grader: c.grader ?? null, grade: c.grade ?? null,
       certNo: c.certNo ?? null, refPrice: c.refPrice ?? null,
-      buyback: p.buyback
+      buyback: p.buyback,
+      variantId: c.variantId ?? null
     }
   })
   const manifestHash = await manifestHashOf(manifest, version)

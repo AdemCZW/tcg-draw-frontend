@@ -29,15 +29,13 @@ export interface PickedCard {
   /**
    * 目錄來源選中的變體。
    *
-   * **刻意不寫進 CardItem**：CardItem 的每個欄位都會進 fairness 的 manifest
-   * （src/shared/fairness.ts），而 manifest 是 commit 的一部分。加一個欄位
-   * 就得升一版 manifest（v4），否則既有的池重算會對不上已經公布的 commit。
-   * manifest 版本化目前由另一條線在處理，所以這裡先把變體帶在 CardItem 外層，
-   * 介面留好 —— 等 manifest 升版之後把這個欄位搬進 CardItem 即可，
-   * 呼叫端的程式碼不用改。
+   * **變體的識別碼（variantId）已經寫進 card 裡**，而且進了 manifest v4，
+   * 所以它是公平性承諾的一部分 —— 開賣後把大師球鏡面換成同卡號的普卡
+   * 會被驗算抓到（那兩張卡實測差約 18,000 倍）。
    *
-   * 在那之前，變體只是「賣家挑的時候看得到、系統記得住」，
-   * 還沒有被綁進公平性承諾。這是已知的缺口，不要當成已經解決。
+   * 這裡留著整個 CatalogVariant 物件是給**畫面**用的：label 是我們自己翻的
+   * 中文、priceEur 是外站行情，兩者都會變，所以都不進承諾（改一次文案
+   * 不該讓所有池變成「被竄改」）。承諾裡只有那個不會變的 variantId。
    */
   variant?: CatalogVariant | null
   /** 卡圖網址。已經算好，呼叫端不用再推 */
@@ -82,7 +80,12 @@ export function pickFromCatalog(c: CatalogCard, variant: CatalogVariant | null):
       certNo: null,
       image: '',
       refPrice: null,
-      artId: c.artId
+      artId: c.artId,
+      /* 變體識別碼進 card —— 它是「這是哪一張卡」的一部分，
+         而且會被序列化進 manifest v4 綁死。沒選變體就是 null，不要填空字串：
+         manifest 把 null 與空字串序列化成同一個東西，但資料庫裡兩者
+         讀起來意思不同（「沒有變體」vs「變體是空的」）。 */
+      variantId: variant?.variantId ?? null
     },
     variant,
     artUrl: artUrlOf(c)

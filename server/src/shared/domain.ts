@@ -35,6 +35,21 @@ export interface CardItem {
   refPrice: number | null
   /** TCGdex 卡片編號，例如 'SV4a-349' */
   artId?: string
+  /**
+   * 卡片變體（TCGdex variants_detailed 的 variantId）。
+   *
+   * 為什麼卡號不夠：同一組卡號可能是完全不同的商品。實測 SV2a-025（ピカチュウ）
+   * 普卡 cardmarket €0.02、同一組卡號的マスターボールミラー €369 —— 差約 18,000 倍。
+   * 少了這一欄，「SV2a-025」在系統裡（包括公平性承諾的 manifest 裡）
+   * 是同一個東西，賣家可以在開賣後把貴的那一版換成便宜的那一版而不被抓到。
+   *
+   * 這一欄**會進 manifest v4**（src/shared/fairness.ts），所以它跟卡名、
+   * 鑑定編號一樣是承諾的一部分，開賣後改不了。
+   *
+   * null / undefined = 沒有指定變體。卡冊來的實體卡靠 certNo 定位，
+   * 本來就不需要它；目錄卡沒有變體資料時也是空的。
+   */
+  variantId?: string | null
 }
 
 /**

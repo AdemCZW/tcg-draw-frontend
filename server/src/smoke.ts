@@ -10,7 +10,7 @@
  *
  * 會改資料，不要對正式環境跑。
  */
-import { verifyReveal, manifestHashOf, commitV2, type Reveal } from './shared/fairness.js'
+import { verifyReveal, manifestHashOf, manifestString, commitV2, type Reveal } from './shared/fairness.js'
 
 const base = (process.argv[2] ?? 'http://localhost:8080').replace(/\/$/, '')
 
@@ -645,8 +645,8 @@ async function run() {
 
      這一段就是釘住「加了欄位之後舊池沒有集體變成被竄改」。
      p-official-3 是刻意留在 v2 的種子池，p-official-4 是 v3 的。 */
-  console.log('\n公平性驗算（v2 / v3）：')
-  for (const [poolId, want] of [['p-official-3', 2], ['p-official-4', 3]] as const) {
+  console.log('\n公平性驗算（v2 / v3 / v4）：')
+  for (const [poolId, want] of [['p-official-3', 2], ['p-official-4', 3], ['p-official-5', 4]] as const) {
     const r = await fetch(`${base}/v1/pools/${poolId}/reveal`)
     if (!r.ok) { check(`${poolId} 取得 reveal`, false, String(r.status)); continue }
     const rv = await json(r) as Reveal & { manifestVersion?: number }
@@ -658,11 +658,17 @@ async function run() {
 
     /* 版本必須是池宣告的，不能「哪個版本算得過就算哪個」——
        依序嘗試等於讓一個作弊的伺服器挑對自己有利的那一版送出。 */
-    const wrong = await verifyReveal({ ...rv, manifestVersion: (want === 2 ? 3 : 2) as 2 | 3 })
-    check(`${poolId} 用錯的版本重算就驗不過`, !wrong.ok, wrong.reason ?? '（竟然通過了）')
+    /* 用**每一個**別的版本重算都要失敗，不是只試一個。
+       只試一個的話「v4 的池用 v3 算得過」這種洞漏得掉，而那正好是
+       「依序嘗試就會被作弊的伺服器利用」的具體長相。 */
+    for (const other of [2, 3, 4] as const) {
+      if (other === want) continue
+      const wrong = await verifyReveal({ ...rv, manifestVersion: other })
+      check(`${poolId} 用 v${other} 的規則重算就驗不過`, !wrong.ok, wrong.reason ?? '（竟然通過了）')
+    }
 
-    if (want === 3) {
-      check('v3 的清單每一項都帶宣告買回價',
+    if (want >= 3) {
+      check(`${poolId} 的清單每一項都帶宣告買回價`,
         (rv.manifest ?? []).every(m => typeof m.buyback === 'number'),
         JSON.stringify((rv.manifest ?? []).map(m => m.buyback)))
       /* 偷改買回價 —— 籤序一個字都沒動、卡也沒換，只把承諾的金額調低。
@@ -670,9 +676,48 @@ async function run() {
          等同於「有人在資料庫裡動了 pool_prizes.buyback」之後驗算端會看到的東西。 */
       const tampered = (rv.manifest ?? []).map((m, i) => i === 0 ? { ...m, buyback: 10 } : m)
       const bad = await verifyReveal({ ...rv, manifest: tampered })
-      check('開賣後偷改買回價會被驗算抓到（跟偷換卡一樣）', !bad.ok, bad.reason ?? '（竟然通過了）')
-      const reHash = await commitV2(rv.serverSeed, await manifestHashOf(tampered, 3))
-      check('而且重算出來的 commit 真的不一樣', reHash !== rv.commitHash.toLowerCase())
+      check(`${poolId} 開賣後偷改買回價會被驗算抓到（跟偷換卡一樣）`, !bad.ok, bad.reason ?? '（竟然通過了）')
+      const reHash = await commitV2(rv.serverSeed, await manifestHashOf(tampered, want))
+      check(`${poolId} 而且重算出來的 commit 真的不一樣`, reHash !== rv.commitHash.toLowerCase())
+    }
+
+    if (want === 4) {
+      /* ---- 這一輪的重點：變體被鎖進承諾了 ----
+
+         p-official-5 的三個獎項卡名、套牌、卡號**逐字相同**，只有變體不同
+         （SV2a-025 ピカチュウ 的普卡 / 寶貝球鏡面 / 大師球鏡面，
+         cardmarket 實測 €0.02 / €0.28 / €369）。
+         在 v3 的規則下這三張在承諾裡分不出來 —— 下面兩條就是釘住這件事。 */
+      const man = rv.manifest ?? []
+      check('v4 的清單每一項都帶變體識別碼',
+        man.length > 0 && man.every(m => typeof m.variantId === 'string' && m.variantId.length > 0),
+        JSON.stringify(man.map(m => m.variantId)))
+      check('而且同一組卡號的不同版本真的是不同的變體識別碼',
+        new Set(man.map(m => m.variantId)).size === man.length,
+        JSON.stringify(man.map(m => `${m.cardNo}/${m.variantId}`)))
+
+      /* 偷換版本：卡名、卡號、賞別、張數、買回價**一個字都沒動**，
+         只把最貴那一項的變體換成同一個池裡最便宜那一項的變體 ——
+         也就是「大師球鏡面偷偷變成普卡」在資料庫裡的長相。
+         v3 為止這個改動不會讓 manifest 有任何變化，驗算會回 ok。 */
+      const cheap = man.find(m => m.variantId !== man[0]!.variantId)
+      const swapped = man.map((m, i) => i === 0 ? { ...m, variantId: cheap!.variantId } : m)
+      const swapBad = await verifyReveal({ ...rv, manifest: swapped })
+      check('開賣後把卡偷換成同卡號的另一個版本會被驗算抓到', !swapBad.ok,
+        swapBad.reason ?? '（竟然通過了）')
+
+      /* 反證：同一份被偷換過的清單，用 v3 的規則序列化出來跟原本**逐字相同** ——
+         這就是「為什麼非升版不可」最直接的證據，不是推論。 */
+      const v3Same = manifestString(swapped, 3) === manifestString(man, 3)
+      check('同一個偷換在 v3 的序列化下逐字看不出來（所以非升 v4 不可）', v3Same)
+      const v4Diff = manifestString(swapped, 4) !== manifestString(man, 4)
+      check('但在 v4 的序列化下就不一樣了', v4Diff)
+
+      /* 加一欄不能動到前面的欄位 —— v4 的字串必須是「v3 的字串 + |variantId」。
+         這一條釘住「舊池不受影響」的機制本身：v2 / v3 的分支逐字沒有被改。 */
+      const appendOnly = man.every(m =>
+        manifestString([m], 4) === `${manifestString([m], 3)}|${m.variantId ?? ''}`)
+      check('v4 只在每行尾端追加一欄，前面的欄位逐字不動', appendOnly)
     }
   }
 
@@ -796,8 +841,89 @@ async function run() {
       check('新池的保底回饋率算得對', s2.pool?.floorRatio === 77, `floorRatio=${s2.pool?.floorRatio}`)
       check('新池不再寫舊制的還元率（兩個數字意義不同，不共用一欄）',
         s2.pool?.returnRatio === null, `returnRatio=${s2.pool?.returnRatio}`)
-      check('新池宣告的 commit 版本是 3', s2.pool?.commitVersion === 3, `${s2.pool?.commitVersion}`)
+      check('新池宣告的 commit 版本是 4', s2.pool?.commitVersion === 4, `${s2.pool?.commitVersion}`)
     }
+  }
+
+  /* ---- 挑卡帶回的身分要完整寫進獎品 ----
+
+     開池的獎品原本只有一個打出來的 `name`，沒有卡號、沒有系列、沒有卡圖、
+     沒有版本 —— 那樣的池永遠對不到外部價格，也沒辦法驗證賣家手上是哪一張。
+     建池表單改成用 CardPicker 挑卡之後，挑到的整份身分要**原樣**進資料庫，
+     這一段就是釘住「中間沒有任何一欄被吃掉」。
+
+     同時測「同一組卡號的兩個版本是兩個獎品」：兩項的卡名 / 套牌 / 卡號
+     逐字相同，只有 variantId 不同（SV2a-025 的大師球鏡面與普卡，
+     cardmarket 實測差約 18,000 倍）。 */
+  console.log('\n挑卡帶回的身分：')
+  {
+    const master = {
+      id: 'c-SV2a-025-master', name: '皮卡丘', setCode: 'sv2a', cardNo: '025/165',
+      language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '',
+      artId: 'SV2a-025', variantId: '2asus05yghmpd1ud1sdmlq3as4e', refPrice: 12800
+    }
+    const normal = { ...master, id: 'c-SV2a-025-normal', variantId: 'endfynwn4n10gzq', refPrice: 100 }
+
+    const made = await call(seller, '/v1/pools', {
+      /* 票價 1,200 × 10 籤 = 12,000；買回價總和 7,680 + 9×60 = 8,220 → 68.5%，
+         落在護欄的 25–100 之間。這一段測的是身分有沒有被吃掉，
+         不是經濟護欄，所以數字要刻意調成過得了的。 */
+      mode: 'muteki', title: 'smoke-pick-identity', ticketPrice: 1200, totalTickets: 10,
+      prizes: [
+        { tier: 'A', card: master, buyback: 7680, total: 1 },
+        { tier: 'D', card: normal, buyback: 60, total: 9 }
+      ]
+    })
+    check('帶完整卡片身分的池開得出來', made.ok, `${made.status} ${await made.clone().text()}`)
+    const mj = await json(made)
+    if (mj.poolId) {
+      const snap = await json(await fetch(`${base}/v1/pools/${mj.poolId}`))
+      const rows: Any[] = snap.pool?.prizes ?? []
+      const a = rows.find((x: Any) => x.tier === 'A')?.card
+      check('卡號、系列、TCGdex 編號原樣寫進獎品（不是被吃掉的空字串）',
+        a?.setCode === 'sv2a' && a?.cardNo === '025/165' && a?.artId === 'SV2a-025',
+        JSON.stringify(a))
+      check('變體識別碼也原樣寫進獎品',
+        a?.variantId === '2asus05yghmpd1ud1sdmlq3as4e', `variantId=${a?.variantId}`)
+      check('同一組卡號的兩個版本是兩個獨立的獎品（變體不同）',
+        new Set(rows.map((x: Any) => x.card?.variantId)).size === 2,
+        JSON.stringify(rows.map((x: Any) => x.card?.variantId)))
+      check('這個新池宣告的是 manifest v4', snap.pool?.commitVersion === 4,
+        `${snap.pool?.commitVersion}`)
+    }
+
+    /* 卡冊來源的卡本來就帶著鑑定編號，那份資訊也要進得去。
+       一個編號對應一張實體卡，所以只能開 1 籤 —— 這條規則反過來也要成立：
+       帶了編號又開 2 籤要被擋（一卡多賣正是平台聲稱要防的事）。 */
+    const graded = {
+      id: 'cg-smoke-pick', name: '噴火龍 ex UR', setCode: 'sv4a', cardNo: '349/190',
+      language: 'JP', grader: 'PSA', grade: 10, certNo: '84129901', image: '',
+      artId: 'SV4a-349', variantId: null, refPrice: 42000
+    }
+    const g = await call(seller, '/v1/pools', {
+      mode: 'muteki', title: 'smoke-pick-graded', ticketPrice: 900, totalTickets: 10,
+      tierBuyback: { A: 6000, D: 200 },
+      prizes: [
+        { tier: 'A', card: graded, total: 1 },
+        { tier: 'D', card: { ...graded, id: 'c-smoke-plain', grader: 'RAW', grade: null, certNo: null, refPrice: 400 }, total: 9 }
+      ]
+    })
+    check('從卡冊挑的鑑定卡開得出池', g.ok, `${g.status} ${await g.clone().text()}`)
+    const gj = await json(g)
+    if (gj.poolId) {
+      const snap = await json(await fetch(`${base}/v1/pools/${gj.poolId}`))
+      const a = (snap.pool?.prizes ?? []).find((x: Any) => x.tier === 'A')?.card
+      check('鑑定資訊（grader / grade / certNo）完整保留',
+        a?.grader === 'PSA' && a?.grade === 10 && a?.certNo === '84129901', JSON.stringify(a))
+    }
+
+    const dup = await call(seller, '/v1/pools', {
+      mode: 'muteki', title: 'smoke-pick-graded-dup', ticketPrice: 900, totalTickets: 10,
+      tierBuyback: { A: 6000 },
+      prizes: [{ tier: 'A', card: { ...graded, certNo: '84129902' }, total: 10 }]
+    })
+    check('帶鑑定編號卻開 10 籤被擋（一個編號對應一張實體卡）', dup.status === 400,
+      String(dup.status))
   }
 
   console.log('\n下架：')

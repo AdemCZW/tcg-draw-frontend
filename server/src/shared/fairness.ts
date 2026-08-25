@@ -78,6 +78,24 @@ export interface PrizeManifestEntry {
    * 綁進承諾之後，開賣後偷偷調低買回價會跟偷換卡一樣被驗算抓到。
    */
   buyback?: number | null
+  /**
+   * 卡片變體。v4 才有的欄位。
+   *
+   * 為什麼一個字串值得單獨進承諾：**同一組卡號可能是完全不同的商品。**
+   * 實測 SV2a-025（ピカチュウ）普卡 cardmarket €0.02、同一組卡號的
+   * マスターボールミラー €369 —— 差約 18,000 倍。在 v3 以前，
+   * setCode / cardNo / name 三欄全部逐字相同的兩張卡是「同一個獎品」，
+   * 於是賣家可以在開賣後把大師球鏡面換成普卡，籤序不變、manifest 不變、
+   * 驗算回 ok。那是「開賣後偷換卡」這條路唯一還沒堵上的縫。
+   *
+   * 存 variantId（TCGdex 的 variants_detailed 給的唯一鍵）不存人看的標籤：
+   * 標籤是我們自己翻的中文，改一次文案就等於讓所有池變成「被竄改」。
+   *
+   * null = 賣家沒有指定變體（卡冊來的實體卡本來就是特定一張，靠 certNo 定位；
+   * 目錄卡沒有變體資料時也是 null）。**不要用空字串以外的哨兵值** ——
+   * 序列化時 null 與 undefined 都寫成空字串，兩者在承諾裡不可分辨。
+   */
+  variantId?: string | null
 }
 
 /**
@@ -85,13 +103,18 @@ export interface PrizeManifestEntry {
  *
  *   2  prizeId | tier | total | name | setCode | cardNo | grader | grade | certNo | refPrice
  *   3  上面那十欄 + | buyback
+ *   4  上面那十一欄 + | variantId
  *
  * 為什麼要版本化而不是直接加欄位：manifestString 用 `|` join，多一欄會讓
  * **每一行**都變，於是所有既有的池用新程式重算出來的 manifest 對不上它們
  * 存著的 commit —— 那些 commit 已經對外公布過，不能事後改。
  * 版本存在池上（pools.commit_version），驗算端照池宣告的版本重算。
+ *
+ * 每一版都只在**尾端追加**，前面的欄位一個字都不動 —— 這是這套版本化能
+ * 成立的全部理由：同一份程式碼算 v2 的池，得到的字串跟 v3 / v4 這兩欄
+ * 存在之前逐字相同。加欄位不會讓既有的池集體變成「被竄改」。
  */
-export type ManifestVersion = 2 | 3
+export type ManifestVersion = 2 | 3 | 4
 
 /**
  * 把獎品清單序列化成一個決定性的字串。
@@ -100,6 +123,7 @@ export type ManifestVersion = 2 | 3
  *   - 依 prizeId 以 UTF-16 碼位排序（跟 seatSequence 的展開順序同一個規則）
  *   - 每個獎項一行，欄位以 `|` 分隔，順序固定為
  *     prizeId | tier | total | name | setCode | cardNo | grader | grade | certNo | refPrice
+ *     （v3 起在尾端追加 buyback、v4 起再追加 variantId，見 ManifestVersion）
  *   - null / undefined 一律寫成空字串
  *   - 行與行之間用 `\n`，結尾不加換行
  *
@@ -118,6 +142,10 @@ export function manifestString(prizes: PrizeManifestEntry[], version: ManifestVe
       /* v3 只在尾端**追加**一欄，前十欄逐字不動。這樣同一份程式碼算 v2 的池
          得到的字串跟加這個欄位之前一模一樣 —— 舊池的驗算不會因此壞掉。 */
       if (version >= 3) cols.push(v(p.buyback))
+      /* v4 同一套做法：再追加一欄 variantId，前十一欄逐字不動。
+         這一欄讓「同卡號不同版本」變成兩個不同的獎品 ——
+         沒有它，把大師球鏡面換成普卡在 v3 的規則下算出來的字串完全一樣。 */
+      if (version >= 4) cols.push(v(p.variantId))
       return cols.map(v).join('|')
     })
     .join('\n')
@@ -251,11 +279,14 @@ export interface Reveal {
  * v3 跟 v2 的差別只在序列化多了一欄 buyback（賣家宣告的買回價）。
  * 因為那一欄進了承諾，**開賣後偷改買回價會跟偷換卡一樣被抓到**。
  *
+ * v4 再多一欄 variantId。少了它，「同一組卡號的不同版本」在承諾裡
+ * 是同一個東西 —— 而那兩張卡的市價實測差到 18,000 倍。
+ *
  * v1（沒有 manifest）只驗得到 1（僅種子）與 2、3。舊池只能到這裡，
  * 那正是加 v2 的原因。
  */
-export async function verifyReveal(r: Reveal): Promise<{ ok: boolean; reason?: string; version: 1 | 2 | 3 }> {
-  const version: 1 | 2 | 3 = r.manifest ? (r.manifestVersion ?? 2) : 1
+export async function verifyReveal(r: Reveal): Promise<{ ok: boolean; reason?: string; version: 1 | 2 | 3 | 4 }> {
+  const version: 1 | 2 | 3 | 4 = r.manifest ? (r.manifestVersion ?? 2) : 1
   const fail = (reason: string) => ({ ok: false, reason, version })
 
   if (r.manifest) {

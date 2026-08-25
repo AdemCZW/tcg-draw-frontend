@@ -637,14 +637,29 @@ export interface NewPoolInput {
   mode: Pool['mode']
   ticketPrice: number
   shiteiTier?: Tier
-  /** unitValue 是賣家標示的參考價（**選填**、只顯示）；buyback 是他宣告的買回價（要履行的絕對金額） */
-  prizes: { tier: Tier; name: string; qty: number; unitValue: number | null; buyback: number }[]
+  /**
+   * 一個獎項。
+   *
+   * `card` 是**挑出來的完整卡片身分**，不是打出來的一串字：卡號、系列、
+   * 卡圖、變體、（卡冊來源的）鑑定編號全都在裡面。原本這裡只有一個
+   * `name: string` —— 那樣開出來的池沒有卡圖，也永遠對不到外部價格，
+   * 而且「同一組卡號的哪一個版本」在系統裡根本不存在（見 CardItem.variantId）。
+   *
+   * card.refPrice 是賣家標示的參考價（**選填**、只顯示、不參與計算）；
+   * buyback 是他宣告的買回價（要履行的絕對金額）。
+   */
+  prizes: { tier: Tier; card: CardItem; qty: number; buyback: number }[]
 }
 
 /** 賣家開池。籤序在此刻預洗並產生 commit hash（mock 以假雜湊代替） */
 export function createPool(input: NewPoolInput): Pool {
   const seats = input.prizes.reduce((s, p) => s + p.qty, 0)
-  const seq = pools.length + 1
+  /* 序號要**避開已經被用掉的 id**，不能用 pools.length + 1。
+     示範資料的 id 不是連號的（p1–p5、p8–p16），所以 length + 1 一開始就撞上
+     既有的 p15 —— 開完池導到 /pools/p15，畫面上是別人的池。
+     開池的最後一步跳出一個不是自己的池，是這條動線上最糟的一種錯。 */
+  let seq = pools.length + 1
+  while (pools.some(p => p.id === `p${seq}`)) seq++
   const hex = (n: number) => Array.from({ length: n }, (_, i) => 'abcdef0123456789'[(seq * 7 + i * 13) % 16]).join('')
 
   const prizes: PoolPrize[] = input.prizes.map((p, i) => ({
@@ -654,17 +669,14 @@ export function createPool(input: NewPoolInput): Pool {
     remaining: p.qty,
     // 賣家宣告的買回價。原樣存下來，不做任何換算
     buyback: p.buyback,
+    /* 挑到的身分**原封不動**存下來。原本這裡是拿卡名現編一個 setCode: 'new'、
+       cardNo: '1/2' 的假身分 —— 那讓 mock 看起來能開池，卻把「這是哪一張卡」
+       這件事整個抹掉。只有 image 在沒有卡圖時補一張佔位圖：
+       圖不進公平性承諾，補一張不會讓任何東西說謊。 */
     card: {
-      id: `nc${seq}-${i}`,
-      name: p.name,
-      setCode: 'new',
-      cardNo: `${i + 1}/${input.prizes.length}`,
-      language: 'JP',
-      grader: 'RAW',
-      grade: null,
-      certNo: null,
-      image: ph((i * 47 + seq * 23) % 360),
-      refPrice: p.unitValue
+      ...p.card,
+      id: p.card.id || `nc${seq}-${i}`,
+      image: p.card.image || ph((i * 47 + seq * 23) % 360)
     }
   }))
 
