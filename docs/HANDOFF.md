@@ -185,20 +185,34 @@ SSE 端點 `GET /v1/social/notifications/stream` 把訊號推給該使用者的�
 
 延伸問題：使用者問過「萬一上傳的卡片是沒有經過檢驗的卡片，我該怎麼知道他是否真的持有這張」。這個問題還沒有答案。
 
-### 4.3 池的結算不存在
+### 4.3 池的結算 —— 已補（2026-08-25）
 
-`draw()` 從來不會把錢**貸記給賣家**。玩家抽卡的點數進了系統，但沒有任何流程
-把它結算給開池的人。第三方賣家目前實際上收不到錢。
+原本 `draw()` 從來不會把錢貸記給賣家，票金只有借方沒有貸方。現在有了：
 
-我曾提過的順序（使用者還沒選）：
-1. 抽卡結算（帶保留額）
-2. 賣家出貨佇列
-3. 開池保證金
-4. `refPrice` 錨定
+- 規則與參數在 `src/shared/pool-settlement.ts`（前後端共用），
+  資料層在 `server/src/pool-settlement.ts`，資料表是 `pool_settlements`（migration 017）。
+- **保留額是推導的**（`SUM(amount) where status in ('held','awaiting_ship','shipped')`），
+  跟餘額一樣沒有可以直接改的欄位。`walletOf()` 把它算進 `locked` 並另外回一個 `reserved`。
+- **逐筆釋放**，一張卡一列 —— 賣家的現金流不綁在池會不會抽完上。
+- 回收改成**賣家出價、玩家接受，錢從那個池的保留額出**。舊的「平台照 refPrice 付 70%」
+  已經整組移除（那是安全稽核 C-2 的印鈔機）。
+- 全站 `SUM(points_ledger.delta)` 恆等於發行量。對帳走 `GET /v1/admin/reconcile`，
+  `drift` 不是 0 就代表有一筆分錄只有單邊。
+- **既有的 draws 不回填**：那些票金當初真的被銷毀了，補一筆貸方等於現在才印鈔票。
+  有舊資料的環境上 `drift` 會停在一個不再增加的常數；要看的是它會不會繼續增加。
+- 時限測試靠 `DEV_LOGIN=1` 才開的 `/v1/dev/rewind-settlement` 與 `/v1/dev/expire-pool`
+  把時鐘往回撥。**正式環境不設 `DEV_LOGIN` 就沒有這兩條路。**
 
-### 4.4 出貨佇列只通往後台
+剩下的順序（使用者還沒選）：
+1. 開池保證金
+2. `refPrice` 錨定
 
-出貨請求只送到管理後台，不會送給賣家。第三方賣家的出貨流程是斷的。
+### 4.4 出貨佇列 —— 賣家端已補、後台那條仍在
+
+抽卡池的出貨現在有賣家端：`GET /v1/seller/settlements` 看得到自己的保留額與待出貨，
+`POST /v1/seller/settlements/:id/ship` 標記出貨。後台 `POST /v1/admin/shipments/:id/status`
+仍然存在，而且會同步更新結算狀態（兩條路指的是同一件事實）。
+**前端還沒有賣家出貨的介面**，目前只有 API。
 
 ### 4.5 其他
 
@@ -236,7 +250,7 @@ cd server && npm run build
 
 **不要用 `tsc --noEmit` 代替 `npm run build`**，而且**不要接 pipe** —— 接了 pipe 讀到的是 pipe 的 exit code。
 
-### 煙霧測試（目前 175 項）
+### 煙霧測試（目前 214 項）
 
 需要本機 PostgreSQL 與一個跑著的 server：
 

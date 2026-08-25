@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
+import { markShipped } from '../pool-settlement.js'
 import { credit, walletOf } from '../money.js'
 import { notify } from '../notify.js'
 import { act } from './orders.js'
@@ -249,6 +250,11 @@ admin.post('/shipments/:id/status', async c => {
        私下交易也不行，等於使用者的卡被鎖死而且沒有任何端點救得回來。 */
     if (status === 'shipped' || status === 'delivered') {
       await tx`update prizes set status = 'shipped' where id = any(${sh.prize_ids})`
+      /* 抽卡池的結算也要跟著走。後台標出貨與賣家自己標出貨是同一件事實，
+         只是誰按的不同 —— 少了這一行，走後台那條路的卡會出貨了卻永遠
+         停在 awaiting_ship，鑑賞期不會開始，賣家的保留額永遠釋放不掉，
+         而且 72 小時後還會被判成「逾期未出貨」記賣家一次違約。 */
+      await markShipped(tx, sh.prize_ids as string[], Date.now())
       const shipped = status === 'shipped'
       await notify({
         userId: sh.user_id as string, kind: 'shipment',
@@ -344,4 +350,47 @@ admin.post('/verifications/:id/review', async c => {
 admin.get('/actions', async c => {
   const rows = await sql`select * from admin_actions order by id desc limit 200`
   return c.json({ actions: rows })
+})
+
+/**
+ * 對帳：全站的點數有沒有憑空生出或消失。
+ *
+ * 這是抽卡結算那一整套設計唯一的驗收標準。點數只有三個發行來源
+ * （儲值、平台發放、註冊禮），其餘每一筆移動都必須借貸成對 ——
+ * 所以 SUM(points_ledger.delta) 必須恆等於發行總額。
+ *
+ * 對不上就代表有一筆分錄只有單邊。差額的方向講得出是哪一種病：
+ *   總量 < 發行量  → 有點數被銷毀（抽卡只扣不貸，就是稽核的 C-2）
+ *   總量 > 發行量  → 有點數被憑空創造（舊的平台回收，安全稽核的 C-2）
+ *
+ * ⚠️ 這支遷移（017）之前抽的卡，票金當初是真的被銷毀的，而且**不回填**
+ * （回填等於現在才印一批鈔票）。所以在有舊資料的環境上，差額會停在一個
+ * **不再增加**的常數 —— 會不會增加才是這支端點要看的東西，不是差額為 0。
+ */
+admin.get('/reconcile', async c => {
+  const ISSUE = ['topup', 'seed', 'admin-grant', 'line-signup-bonus']
+  const [r] = await sql<{ total: string; issued: string }[]>`
+    select
+      (select coalesce(sum(delta),0) from points_ledger)::text as total,
+      (select coalesce(sum(delta),0) from points_ledger where reason = any(${ISSUE}))::text as issued
+  `
+  const byReason = await sql<{ reason: string; n: string; sum: string }[]>`
+    select reason, count(*)::text as n, sum(delta)::text as sum
+      from points_ledger group by reason order by reason
+  `
+  const total = Number(r?.total ?? 0)
+  const issued = Number(r?.issued ?? 0)
+  const [held] = await sql<{ sum: string }[]>`
+    select coalesce(sum(amount),0)::text as sum from pool_settlements
+     where status in ('held','awaiting_ship','shipped')
+  `
+  return c.json({
+    total, issued,
+    /* 0 = 完全對得上。非 0 一定要查得出來源，不要當成捨去誤差 ——
+       這裡沒有任何一筆分錄是浮點數，捨去只發生在拆票金的時候，
+       而那一步的餘數是刻意歸給賣家的（splitTicket），三方相加仍然是票價。 */
+    drift: total - issued,
+    reserved: Number(held?.sum ?? 0),
+    byReason: byReason.map(x => ({ reason: x.reason, count: Number(x.n), sum: Number(x.sum) }))
+  })
 })

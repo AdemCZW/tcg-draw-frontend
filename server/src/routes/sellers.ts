@@ -14,6 +14,9 @@ import { z } from 'zod'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { notify } from '../notify.js'
+import { walletOf } from '../money.js'
+import { markShipped, sweepSettlements, toSettlement } from '../pool-settlement.js'
+import { validateTracking } from '../shared/escrow.js'
 
 export const sellers = new Hono()
 sellers.use('*', requireAuth)
@@ -21,7 +24,11 @@ sellers.use('*', requireAuth)
 /** 我的賣家狀態。沒申請過回 null，前端用它決定要顯示申請表還是開池表 */
 sellers.get('/me', async c => {
   const [s] = await sql`
-    select id, handle, name, origin, tier, bio, joined_at from sellers where id = ${c.get('userId')}
+    /* default_count（逾期未出貨的次數）要給賣家自己看得到 ——
+       它會直接決定「還能不能開新池」，看不到的話賣家只會在建池時
+       撞到一個沒有預警的 403 */
+    select id, handle, name, origin, tier, bio, joined_at, default_count
+      from sellers where id = ${c.get('userId')}
   `
   if (!s) return c.json({ seller: null })
   const [v] = await sql`
@@ -89,5 +96,80 @@ sellers.post('/apply', async c => {
     return { seller: { id: me, tier: 'pending' }, already: false }
   })
   if ('error' in r) return c.json(r, r.status as 400 | 404)
+  return c.json(r)
+})
+
+/* ---------------- 抽卡池的結算 ---------------- */
+
+/**
+ * 賣家的結算清單 + 保留額。
+ *
+ * 這條路原本整段不存在，而缺它的後果是賣家看不到自己的錢：票金貸記給賣家
+ * 之後是**保留額** —— 看得到、動不了 —— 但如果連「看得到」都沒有介面，
+ * 賣家只會看到錢包裡多了一筆不能用的數字，不知道它為什麼被扣著、什麼時候放。
+ *
+ * 讀取時順手把時限補算到現在，理由跟訂單那邊一樣（「拉」不是「推」）。
+ */
+sellers.get('/settlements', async c => {
+  const me = c.get('userId')
+  await sql.begin(tx => sweepSettlements(tx, me)).catch(() => {})
+  const rows = await sql`
+    select st.*, p.card, p.status as prize_status, pl.title as pool_title
+      from pool_settlements st
+      join prizes p on p.id = st.prize_id
+      join pools  pl on pl.id = st.pool_id
+     where st.seller_id = ${me}
+     order by st.created_at desc limit 200
+  `
+  return c.json({
+    settlements: rows,
+    wallet: await walletOf(me),
+    serverTime: Date.now()
+  })
+})
+
+const ShipOne = z.object({
+  /* 單號選填：這一段是抽卡池的實體交付，賣家直接寄給買家（平台不代管實體卡，
+     見 docs/HANDOFF.md 4.2），所以單號是給買家追蹤用的憑據，不是放款條件。
+     驗證沿用託管訂單那一套 —— 同一個平台不該有兩種單號規則。 */
+  tracking: z.string().min(4).max(32).optional(),
+  carrier: z.enum(['post', 'tcat', 'seven', 'family', 'hilife', 'shopee', 'other']).optional()
+})
+
+/**
+ * 賣家出貨：awaiting_ship → shipped，鑑賞期開始跑。
+ *
+ * 出貨之後**不是立刻放款**：買家確認收貨或 7 天鑑賞期滿才釋放那一筆。
+ * 逐筆，不等整池抽完。
+ */
+sellers.post('/settlements/:id/ship', async c => {
+  const me = c.get('userId')
+  const parsed = ShipOne.safeParse(await c.req.json().catch(() => ({})))
+  if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '參數不合法' }, 400)
+  const { tracking, carrier } = parsed.data
+  if (tracking) {
+    const v = validateTracking(carrier ?? 'other', tracking)
+    if (!v.ok) return c.json({ error: 'BAD_TRACKING', message: v.reason ?? '單號格式不正確' }, 400)
+  }
+
+  const r = await sql.begin(async tx => {
+    const [row] = await tx`
+      select * from pool_settlements where id = ${c.req.param('id') ?? ''} and seller_id = ${me} for update
+    `
+    if (!row) return { error: 'NOT_FOUND', message: '找不到這筆結算', status: 404 }
+    const s = toSettlement(row as Record<string, unknown>)
+    if (s.status !== 'awaiting_ship') {
+      return { error: 'WRONG_STATE', message: '這筆目前不是等待出貨的狀態', status: 409 }
+    }
+    await markShipped(tx, [s.prizeId], Date.now())
+    await notify({
+      userId: s.buyerId, kind: 'shipment',
+      title: '賣家已出貨',
+      body: tracking ? `單號 ${tracking}。收到卡片後請確認收貨，或 7 天後自動結案。` : '收到卡片後請確認收貨，或 7 天後自動結案。',
+      link: '/cards', refId: 'pool-ship:' + s.id
+    }, tx)
+    return { ok: true }
+  })
+  if ('error' in r) return c.json(r, r.status as 404 | 409)
   return c.json(r)
 })

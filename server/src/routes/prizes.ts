@@ -6,14 +6,18 @@ import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
-import { credit, walletOf } from '../money.js'
-import { recycleEligible, recyclePoints } from '../shared/recycle.js'
+import { walletOf } from '../money.js'
+import { recycleEligible } from '../shared/recycle.js'
+import { recycleOfferPoints } from '../shared/pool-settlement.js'
+import {
+  acceptRecycle, markShipRequested, release, sweepSettlements, toSettlement
+} from '../pool-settlement.js'
 import { PageQuery, decodeCursor, encodeCursor, isNumeric, slicePage } from '../pagination.js'
 
 export const prizes = new Hono()
 prizes.use('*', requireAuth)
 
-const STATUSES = ['stashed', 'listed', 'ship_requested', 'shipped', 'recycled'] as const
+const STATUSES = ['stashed', 'listed', 'ship_requested', 'shipped', 'recycled', 'refunded'] as const
 
 /**
  * 狀態過濾在這裡做，不在前端做。
@@ -28,6 +32,9 @@ const PrizeQuery = PageQuery.extend({
 })
 
 prizes.get('/', async c => {
+  /* 讀取時先把時限補算到現在。跟訂單那邊同一個模型（「拉」不是「推」）：
+     排程掛掉不會讓狀態算錯，只會讓沒人看的那幾筆晚一點結案。 */
+  await sql.begin(tx => sweepSettlements(tx, c.get('userId'))).catch(() => {})
   const parsed = PrizeQuery.safeParse(c.req.query())
   if (!parsed.success) {
     return c.json({ error: 'BAD_REQUEST', message: '分頁參數不合法（limit 介於 1 到 100）' }, 400)
@@ -45,12 +52,20 @@ prizes.get('/', async c => {
      庫內轉移只換 owner，被買走的卡帶著賣家當初抽到的時間 —— 用 won_at 排的話，
      剛買到的卡會落在幾天前的位置，卡冊一超過一頁它就不在第一頁上，
      使用者看到的就是「我買的卡沒進卡冊」。見 migrations/014_acquired_at.sql。 */
+  /* 一併帶出這張卡的回收報價與結算狀態。
+     回收現在是**賣家出價**，比率存在池上，所以前端沒辦法自己算 ——
+     以前那個「全站 70%」的常數已經不存在了。少了這兩欄，卡冊只能顯示
+     一個猜出來的數字，那正是要避免的事。 */
   const rows = await sql<{ id: string; acquired_at: string }[]>`
-    select * from prizes
-    where user_id = ${c.get('userId')}
-      ${status ? sql`and status = ${status}` : sql``}
-      ${after ? sql`and (acquired_at, id) < (${after[0]}::bigint, ${after[1]}::text)` : sql``}
-    order by acquired_at desc, id desc
+    select p.*, pl.recycle_rate, st.status as settle_status,
+           st.ship_due_at as settle_ship_due_at, st.shipped_at as settle_shipped_at
+      from prizes p
+      join pools pl on pl.id = p.pool_id
+      left join pool_settlements st on st.prize_id = p.id
+    where p.user_id = ${c.get('userId')}
+      ${status ? sql`and p.status = ${status}` : sql``}
+      ${after ? sql`and (p.acquired_at, p.id) < (${after[0]}::bigint, ${after[1]}::text)` : sql``}
+    order by p.acquired_at desc, p.id desc
     limit ${limit + 1}
   `
   return c.json(slicePage(rows, limit, r => encodeCursor([String(r.acquired_at), String(r.id)])))
@@ -74,19 +89,21 @@ prizes.get('/summary', async c => {
     sql<{ status: string; n: string }[]>`
       select status, count(*)::text as n from prizes where user_id = ${me} group by status
     `,
-    // 已回收的卡已經交還平台，不算持有 —— 總值、賞別分佈、最高價都要排除
+    /* 已回收與已退還的卡都不在這個人手上了 —— 總值、賞別分佈、最高價都要排除。
+       refunded 是賣家逾期未出貨、票金已經退回買家的那些：卡從來沒有離開賣家，
+       留在統計裡會讓卡冊總值長期高估。 */
     sql<{ tier: string; n: string }[]>`
       select tier, count(*)::text as n from prizes
-      where user_id = ${me} and status <> 'recycled' group by tier
+      where user_id = ${me} and status not in ('recycled', 'refunded') group by tier
     `,
     sql<{ card: { name?: string; refPrice?: number }; tier: string }[]>`
       select card, tier from prizes
-      where user_id = ${me} and status <> 'recycled'
+      where user_id = ${me} and status not in ('recycled', 'refunded')
       order by (card->>'refPrice')::numeric desc nulls last limit 1
     `,
     sql<{ acquired_at: string; name: string | null; ref: string | null }[]>`
       select acquired_at, card->>'name' as name, card->>'refPrice' as ref
-      from prizes where user_id = ${me} and status <> 'recycled'
+      from prizes where user_id = ${me} and status not in ('recycled', 'refunded')
       order by acquired_at asc, id asc
     `
   ])
@@ -96,7 +113,7 @@ prizes.get('/summary', async c => {
   let total = 0
   for (const r of counts) { byStatus[r.status] = Number(r.n); total += Number(r.n) }
 
-  const owned = total - (byStatus.recycled ?? 0)
+  const owned = total - (byStatus.recycled ?? 0) - (byStatus.refunded ?? 0)
   const totalValue = curve.reduce((a, r) => a + (Number(r.ref) || 0), 0)
   const b = best[0]
 
@@ -111,24 +128,91 @@ prizes.get('/summary', async c => {
 })
 
 /**
- * 回收：卡 → 點數。只有 stashed 的卡能回收（已上架、已申請出貨的不行）。
- * 報價用 shared/recycle.ts，跟前端試算是同一個數字。
+ * 回收：買家接受賣家的回收報價。
+ *
+ * ⚠️ 這支的語意在 2026-08 整個換掉了。
+ *
+ * 舊版是「平台照賣家自填的 refPrice 付 70%」—— 那是安全稽核 C-2 的印鈔機：
+ * refPrice 沒有外部錨點，賣家把價填高、自己抽光、全部回收，平台就憑空
+ * 發行了點數。分錄只有貸方沒有借方，全站的點數總量會單向膨脹。
+ *
+ * 新版是「**賣家出價、玩家選擇接受，錢從那個池自己的保留額出**」。
+ * 沒有任何新點數被創造 —— 買家拿回的就是他當初付的票金的一部分，原路退回。
+ * 經濟意義是「這筆交易取消一半」：卡本來就還在賣家手上（從沒出貨），
+ * 玩家把卡還回去、拿回部分點數。所以賣家不必另外掏錢包，
+ * 「保留額被鎖住就付不出回收」這個死結也一併解掉了。
+ *
+ * 因為錢的來源是那一筆保留額，**已經出貨的卡不能回收**：卡已經寄出去了，
+ * 取消一半在實體上不成立。舊制的池（recycle_rate is null）也不能回收，
+ * 它們沒有保留額可以付。
  */
 prizes.post('/:id/recycle', async c => {
   const me = c.get('userId')
   const r = await sql.begin(async tx => {
+    /* 鎖 prizes 那一列。這是「同時被回收與被申請出貨」的仲裁點 ——
+       兩條路都要先拿到這一列的鎖，而且都要求 status = 'stashed'，
+       所以先到的那個把狀態改掉，後到的必然看到不合的狀態而退出。 */
     const [p] = await tx`select * from prizes where id = ${c.req.param('id') ?? ''} and user_id = ${me} for update`
     if (!p) return { error: 'NOT_FOUND', message: '找不到這張卡', status: 404 }
     if (p.status !== 'stashed') return { error: 'WRONG_STATE', message: '只有保管中的卡可以回收', status: 409 }
+
+    const [row] = await tx`
+      select * from pool_settlements where prize_id = ${p.id} for update
+    `
+    if (!row) {
+      /* 舊制抽到的卡沒有結算列。它們的票金當初是被銷毀的，沒有保留額可以付，
+         補一筆貸方就是真的印鈔票 —— 照實拒絕，不要假裝這裡還有錢。 */
+      return { error: 'NO_OFFER', message: '這張卡沒有賣家的回收報價', status: 409 }
+    }
+    const s = toSettlement(row as Record<string, unknown>)
+
+    const [pool] = await tx`select recycle_rate from pools where id = ${s.poolId}`
+    const rate = pool?.recycle_rate == null ? null : Number(pool.recycle_rate)
     const refPrice = Number((p.card as { refPrice?: number }).refPrice ?? 0)
-    if (!recycleEligible(refPrice)) return { error: 'TOO_LOW', message: '這張卡的市值太低，不開放回收', status: 409 }
-    const pts = recyclePoints(refPrice)
-    await tx`update prizes set status = 'recycled' where id = ${p.id}`
-    await credit(tx, me, pts, 'recycle', p.id as string)
-    return { points: pts }
+    if (!recycleEligible(refPrice, rate)) {
+      return {
+        error: 'NO_OFFER',
+        message: rate == null ? '這個池的賣家沒有提供回收' : '這張卡的市值太低，不開放回收',
+        status: 409
+      }
+    }
+    const points = recycleOfferPoints(refPrice, rate as number)
+
+    const out = await acceptRecycle(tx, s, points, Date.now())
+    if (!out.ok) {
+      return out.error === 'SELLER_UNFUNDED'
+        ? { error: 'SELLER_UNFUNDED', message: '賣家目前的保留額不足以支付這筆回收，請稍後再試或改為申請出貨', status: 409 }
+        : { error: 'WRONG_STATE', message: '這張卡的結算狀態已經改變，不能回收', status: 409 }
+    }
+    return { points, rate }
   })
   if ('error' in r) return c.json(r, r.status as 404 | 409)
   return c.json({ ...r, wallet: await walletOf(me) })
+})
+
+/**
+ * 買家確認收貨：那一筆票金立刻釋放給賣家。
+ *
+ * 「那一筆」不是「那一池」—— 逐筆釋放，賣家的現金流不必等整池抽完。
+ * 不確認也沒關係，鑑賞期滿會自動釋放（shared/pool-settlement.ts）。
+ */
+prizes.post('/:id/confirm', async c => {
+  const me = c.get('userId')
+  const r = await sql.begin(async tx => {
+    const [row] = await tx`
+      select * from pool_settlements where prize_id = ${c.req.param('id') ?? ''} and buyer_id = ${me} for update
+    `
+    if (!row) return { error: 'NOT_FOUND', message: '找不到這筆結算', status: 404 }
+    const s = toSettlement(row as Record<string, unknown>)
+    if (s.status !== 'shipped') {
+      return { error: 'WRONG_STATE', message: '賣家還沒出貨，不能確認收貨', status: 409 }
+    }
+    await release(tx, s, 'buyer-confirm', Date.now())
+    await tx`update prizes set status = 'shipped' where id = ${s.prizeId}`
+    return { ok: true }
+  })
+  if ('error' in r) return c.json(r, r.status as 404 | 409)
+  return c.json(r)
 })
 
 const ShipBody = z.object({
@@ -160,6 +244,10 @@ prizes.post('/ship', async c => {
     await tx`insert into shipments (id, user_id, prize_ids, address, created_at)
              values (${id}, ${me}, ${prizeIds}, ${address as never}, ${Date.now()})`
     await tx`update prizes set status = 'ship_requested' where id = any(${prizeIds})`
+    /* 出貨申請同時啟動賣家的出貨時鐘。這是「保留額什麼時候釋放」與
+       「賣家什麼時候算違約」兩件事的共同起點 —— 少了這一步，
+       買家申請了出貨，賣家卻沒有任何期限壓力，而錢也永遠釋放不掉。 */
+    await markShipRequested(tx, prizeIds, Date.now())
     return { shipmentId: id }
   })
   if ('error' in r) return c.json(r, r.status as 409)

@@ -412,12 +412,22 @@ async function seedPool(d: PoolDef) {
   await sql`
     insert into pools (id, seller_id, mode, title, ticket_price, total_tickets, status,
                        server_seed, commit_hash, manifest_hash, client_seed_source, client_seed,
-                       shitei_tier, opened_at, revealed_at, return_ratio)
+                       shitei_tier, opened_at, revealed_at, return_ratio,
+                       expires_at, recycle_rate, platform_fee_rate)
     values (${d.id}, ${d.sellerId}, ${d.mode}, ${d.title}, ${d.ticketPrice}, ${total}, ${d.status},
             ${serverSeed}, ${await commitV2(serverSeed, manifestHash)}, ${manifestHash},
             ${clientSeed}, ${clientSeed},
             ${d.shiteiTier ?? null}, ${openedAt},
-            ${d.status === 'revealed' ? new Date() : null}, ${ratio.toFixed(2)})
+            ${d.status === 'revealed' ? new Date() : null}, ${ratio.toFixed(2)},
+            /* 池一定要有到期日。種子給 30 天，剛好長到示範資料不會在開發途中
+               自己關掉，又短到「到期會關」這件事在種子裡也是真的。 */
+            ${Date.now() + 30 * 86_400_000},
+            /* 賣家的回收報價。種子一律給 6 成（區間 5–7 成的中間值），
+               這樣示範資料上的回收流程是走得通的 —— 但它是**賣家出的價**，
+               錢從這個池的保留額出，不是平台收購。 */
+            ${0.6},
+            /* 平台抽成先填 0。做成參數是為了改的時候只改一個地方 */
+            ${0})
   `
   await sql`insert into pool_prizes ${sql(prizeDefs.map(p => ({ id: p.id, pool_id: d.id, tier: p.tier, card: p.card, total: p.total })) as never)}`
 

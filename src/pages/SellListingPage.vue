@@ -116,14 +116,21 @@ async function submit() {
               <input v-model.number="price[p.id]" type="number" inputmode="numeric" min="1">
               <span class="u">點</span>
             </label>
-            <!-- 兩個對照數字：市值是行情、回收價是「不上架的話平台給多少」。
-                 定價低於回收價的話上架就沒有意義，要讓人當場看得出來 -->
+            <!-- 兩個對照數字：市值是行情、回收價是「不上架的話賣家願意換回多少」。
+                 定價低於回收價的話上架就沒有意義，要讓人當場看得出來。
+                 沒有回收報價的池就不顯示這個對照 —— 硬湊一個數字會讓人
+                 拿一個不存在的選項來比價。 -->
             <p class="hint mono">
               市值 {{ (p.card.refPrice || 0).toLocaleString() }}
-              · 回收價 {{ recycleQuote(p.card).points.toLocaleString() }}
-              <span v-if="(price[p.id] ?? 0) > 0 && (price[p.id] ?? 0) < recycleQuote(p.card).points" class="warn">
-                　低於回收價
-              </span>
+              <template v-if="recycleQuote(p.card, p.recycleRate).eligible">
+                · 賣家回收價 {{ recycleQuote(p.card, p.recycleRate).points.toLocaleString() }}
+                <span
+                  v-if="(price[p.id] ?? 0) > 0 && (price[p.id] ?? 0) < recycleQuote(p.card, p.recycleRate).points"
+                  class="warn"
+                >
+                  　低於回收價
+                </span>
+              </template>
             </p>
           </div>
         </li>

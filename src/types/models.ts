@@ -49,7 +49,10 @@ export type PoolOrigin = 'official' | 'merchant' | 'personal'
 export type PoolMode = 'classic' | 'shitei' | 'muteki'
 
 export type PoolStatus = 'committed' | 'open' | 'sold_out' | 'revealed'
-export type PrizeStatus = 'stashed' | 'listed' | 'ship_requested' | 'shipped' | 'recycled'
+export type PrizeStatus =
+  | 'stashed' | 'listed' | 'ship_requested' | 'shipped' | 'recycled'
+  /** 賣家逾期未出貨，票金已從保留額退回買家。卡從來沒有離開賣家手上 */
+  | 'refunded'
 
 
 export interface PoolPrize {
@@ -172,6 +175,14 @@ export interface UserPrize {
       卡冊的排序與累積曲線都看這個，不看 wonAt（見 server migrations/014） */
   acquiredAt: string
   stashExpiresAt: string
+  /**
+   * 這張卡所屬的池、賣家設定的回收報價比率（市場價的 5–7 成）。
+   * null = 那個池不提供回收。回收現在是**賣家出價**不是平台收購，
+   * 所以前端沒辦法自己算報價 —— 這個值由 API 帶回來（見 src/lib/recycle.ts）。
+   */
+  recycleRate?: number | null
+  /** 這一籤的結算狀態（保留中／已入帳／已退還…）。舊制抽到的卡沒有結算列 */
+  settleStatus?: string | null
 }
 
 export interface LedgerEntry {

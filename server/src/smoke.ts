@@ -979,11 +979,11 @@ async function run() {
     const sum = await json(await call(buyer, '/v1/prizes/summary'))
     check('總覽的總張數等於整本卡冊', sum.total === full.length, `${sum.total} vs ${full.length}`)
     check('總覽的各狀態張數對得上',
-      ['stashed', 'listed', 'ship_requested', 'shipped', 'recycled'].every(st =>
+      ['stashed', 'listed', 'ship_requested', 'shipped', 'recycled', 'refunded'].every(st =>
         sum.counts[st] === full.filter((p: { status: string }) => p.status === st).length))
-    check('總覽的總值不含已回收的卡',
+    check('總覽的總值不含已回收與已退還的卡',
       sum.totalValue === full
-        .filter((p: { status: string }) => p.status !== 'recycled')
+        .filter((p: { status: string }) => !['recycled', 'refunded'].includes(p.status))
         .reduce((a: number, p: { card: { refPrice?: number } }) => a + Number(p.card?.refPrice ?? 0), 0),
       `${sum.totalValue}`)
 
@@ -1046,6 +1046,227 @@ async function run() {
     }
     check('公開卡冊的 limit 超過上限被拒',
       (await fetch(`${base}/v1/share/cardbook/${st.slug}?limit=101`)).status === 400)
+  }
+
+
+  /* ---- 抽卡結算 ----
+     這一整段驗的是 docs/pool-modes-audit.md 的 C-2：在它被修好之前，
+     玩家抽卡付掉的點數只有借方沒有貸方 —— 賣家一毛都收不到，
+     而全站的點數總量每抽一次就少一次。
+
+     每一條規則一組檢查。時限（72 小時 / 7 天 / 14 天）用 DEV_LOGIN 開的
+     /v1/dev/rewind-settlement 把時鐘往回撥 —— 那支端點只改時間戳，
+     該發生什麼仍然由正常的掃描邏輯判斷，所以測到的是產品邏輯不是測試工具。 */
+  console.log('\n抽卡結算：')
+  {
+    const shop = await login('shop', '關都卡舖')
+    const walletOf = async (t: string) => (await json(await call(t, '/v1/wallet'))).wallet
+    const rewind = (prizeId: string, ms: number) =>
+      fetch(`${base}/v1/dev/rewind-settlement`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prizeId, ms })
+      })
+    const freeSeat = async (poolId: string, skip = new Set<number>()) => {
+      const snap = await json(await fetch(`${base}/v1/pools/${poolId}`))
+      const taken = new Set<number>(snap.pool?.takenSeats ?? [])
+      const n = Number(snap.pool?.totalTickets ?? 0)
+      for (let i = 1; i <= n; i++) if (!taken.has(i) && !skip.has(i)) return i
+      return null
+    }
+    const drawOne = async (token: string, poolId: string) => {
+      const seat = await freeSeat(poolId)
+      if (seat == null) return null
+      const r = await json(await call(token, `/v1/pools/${poolId}/draw`,
+        { seats: [seat], idempotencyKey: `smoke-st-${poolId}-${seat}-${Date.now()}` }))
+      return r.items?.[0] ? { ...r.items[0], seat } as Any : null
+    }
+    const ADDR = { name: '測試', phone: '0912345678', line1: '中山路 1 號', city: '台北市' }
+    const settlementOf = async (token: string, prizeId: string) => {
+      const r = await json(await call(token, '/v1/seller/settlements'))
+      return (r.settlements ?? []).find((x: Any) => x.prize_id === prizeId)
+    }
+
+    /* 規則 1：抽卡時貸記賣家的「保留額」—— 看得到、動不了 */
+    const before = await walletOf(seller)
+    const got = await drawOne(buyer, 'p-seed-1')
+    check('抽得到卡（結算測試的前提）', !!got, JSON.stringify(got))
+    if (got) {
+      const after = await walletOf(seller)
+      check('抽卡後賣家的總餘額增加了票價',
+        after.points === before.points + 3250, `${before.points} → ${after.points}`)
+      check('增加的部分全部進保留額',
+        after.reserved === before.reserved + 3250, `${before.reserved} → ${after.reserved}`)
+      check('賣家的可動用點數沒有增加（看得到、動不了）',
+        after.available === before.available, `${before.available} → ${after.available}`)
+
+      /* 規則 2：逐筆釋放 —— 出貨 + 鑑賞期滿。不等整池抽完 */
+      await call(buyer, '/v1/prizes/ship', { prizeIds: [got.stashId], address: ADDR })
+      const st1 = await settlementOf(seller, got.stashId)
+      check('買家申請出貨後那一筆變成等待賣家出貨',
+        st1?.status === 'awaiting_ship', `${st1?.status}`)
+      check('等待出貨期間仍然是保留額',
+        (await walletOf(seller)).reserved === before.reserved + 3250)
+
+      const shipRes = await call(seller, `/v1/seller/settlements/${st1.id}/ship`, {})
+      check('賣家標記出貨', shipRes.ok, `${shipRes.status} ${await shipRes.clone().text()}`)
+      check('出貨後還沒釋放（鑑賞期還在跑）',
+        (await walletOf(seller)).reserved === before.reserved + 3250)
+
+      // 鑑賞期 7 天。撥回 8 天之後讀一次清單就會補算
+      await rewind(got.stashId, 8 * 86_400_000)
+      const st2 = await settlementOf(seller, got.stashId)
+      check('鑑賞期滿後那一筆釋放', st2?.status === 'released', `${st2?.status}`)
+      const rel = await walletOf(seller)
+      check('釋放後保留額回到原本', rel.reserved === before.reserved, `${rel.reserved}`)
+      check('釋放後可動用增加了票價',
+        rel.available === before.available + 3250, `${before.available} → ${rel.available}`)
+      check('釋放不寫新分錄（總餘額沒有再變）',
+        rel.points === before.points + 3250, `${rel.points}`)
+    }
+
+    /* 規則 2 的另一半：買家確認收貨，立刻釋放，不用等 7 天 */
+    {
+      const b0 = await walletOf(seller)
+      const g = await drawOne(buyer, 'p-seed-1')
+      if (g) {
+        await call(buyer, '/v1/prizes/ship', { prizeIds: [g.stashId], address: ADDR })
+        const st = await settlementOf(seller, g.stashId)
+        await call(seller, `/v1/seller/settlements/${st.id}/ship`, {})
+        const cf = await call(buyer, `/v1/prizes/${g.stashId}/confirm`, {})
+        check('買家確認收貨', cf.ok, `${cf.status} ${await cf.clone().text()}`)
+        const w = await walletOf(seller)
+        check('確認收貨後立刻釋放，不必等鑑賞期',
+          w.reserved === b0.reserved && w.available === b0.available + 3250,
+          `reserved ${w.reserved} available ${w.available}`)
+      } else check('（跳過確認收貨：抽不到卡）', false)
+    }
+
+    /* 規則 3：沒出貨逾期 → 從保留額退還買家，並累計賣家違約次數。
+       跑三次把 u-shop 推到門檻上（shared/pool-settlement.ts 的 SELLER_DEFAULT_LIMIT）。 */
+    const TICKET = 350   // p-shop-1
+    for (let i = 0; i < 3; i++) {
+      const bBefore = await walletOf(buyer)
+      const sBefore = await walletOf(shop)
+      const g = await drawOne(buyer, 'p-shop-1')
+      if (!g) { check(`（跳過逾期未出貨第 ${i + 1} 次：抽不到卡）`, false); continue }
+      await call(buyer, '/v1/prizes/ship', { prizeIds: [g.stashId], address: ADDR })
+      // 出貨期限 72 小時。撥回 4 天
+      await rewind(g.stashId, 4 * 86_400_000)
+      // 讀自己的卡冊會順手補算時限（「拉」不是「推」）
+      const mine = await allPrizes(buyer)
+      const card = mine.find((x: Any) => x.id === g.stashId)
+      if (i === 2) {
+        check('逾期未出貨：那張卡標成已退還', card?.status === 'refunded', `${card?.status}`)
+        const bAfter = await walletOf(buyer)
+        check('逾期未出貨：票金原路退回買家',
+          bAfter.points === bBefore.points, `${bBefore.points} → ${bAfter.points}`)
+        const sAfter = await walletOf(shop)
+        check('逾期未出貨：賣家的保留額吐回去，總餘額回到抽卡之前',
+          sAfter.points === sBefore.points && sAfter.reserved === sBefore.reserved,
+          `points ${sBefore.points}→${sAfter.points} reserved ${sBefore.reserved}→${sAfter.reserved}`)
+      }
+    }
+    const shopSeller = await json(await call(shop, '/v1/seller/me'))
+    check('逾期未出貨會累計賣家的違約次數',
+      Number(shopSeller.seller?.default_count ?? 0) >= 3, `${shopSeller.seller?.default_count}`)
+
+    /* 規則 3 的後果：超過門檻不能再開池 */
+    const blocked = await call(shop, '/v1/pools', {
+      mode: 'muteki', title: 'smoke-blocked', ticketPrice: 100, totalTickets: 10,
+      prizes: [{ tier: 'D', card: { id: 'c-x', name: '測試卡', refPrice: 85 }, total: 10 }]
+    })
+    const bj = await json(blocked)
+    check('違約次數達門檻的賣家開不了新池',
+      blocked.status === 403 && bj.error === 'SELLER_SUSPENDED', `${blocked.status} ${JSON.stringify(bj)}`)
+
+    /* 規則 4：池到期就關池、停止販售；但已售出的仍照走出貨與鑑賞期 */
+    {
+      const g = await drawOne(buyer, 'p-shop-4')
+      await fetch(`${base}/v1/dev/expire-pool`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ poolId: 'p-shop-4' })
+      })
+      const seat = await freeSeat('p-shop-4')
+      const late = await call(buyer, '/v1/pools/p-shop-4/draw',
+        { seats: [seat], idempotencyKey: 'smoke-expired-' + Date.now() })
+      const lj = await json(late)
+      check('池到期後不能再抽', late.status === 409 && lj.error === 'POOL_EXPIRED',
+        `${late.status} ${JSON.stringify(lj)}`)
+
+      if (g) {
+        await call(buyer, '/v1/prizes/ship', { prizeIds: [g.stashId], address: ADDR })
+        const st = await settlementOf(shop, g.stashId)
+        check('池到期不影響已售出的那一筆：仍然進得了出貨流程',
+          st?.status === 'awaiting_ship', `${st?.status}`)
+        const shipped = await call(shop, `/v1/seller/settlements/${st.id}/ship`, {})
+        check('池到期後賣家仍然出得了貨', shipped.ok, `${shipped.status}`)
+        const cf = await call(buyer, `/v1/prizes/${g.stashId}/confirm`, {})
+        check('池到期後買家仍然確認得了收貨（那一筆照樣結算）', cf.ok, `${cf.status}`)
+        const st2 = await settlementOf(shop, g.stashId)
+        check('池到期後已售出的那一筆照樣釋放', st2?.status === 'released', `${st2?.status}`)
+      } else check('（跳過到期池的已售出流程：抽不到卡）', false)
+    }
+
+    /* 規則 5：回收改成賣家出價、玩家接受，而且錢從那個池自己的保留額出。
+       關鍵是**沒有任何新點數被創造** —— 舊制是平台照 refPrice 付 70%，
+       那是安全稽核 C-2 的印鈔機。 */
+    {
+      const total0 = (await json(await call(platform, '/v1/admin/reconcile'))).total
+      const sBefore = await walletOf(seller)
+      const bBefore = await walletOf(buyer)
+      const g = await drawOne(buyer, 'p-seed-1')
+      if (g) {
+        const refPrice = Number((g.card as Any)?.refPrice ?? 0)
+        const expect = Math.floor(refPrice * 0.6)   // 種子池的回收率是 6 成
+        const r = await call(buyer, `/v1/prizes/${g.stashId}/recycle`, {})
+        const rj = await json(r)
+        check('回收照賣家設定的報價成交', r.ok && rj.points === expect,
+          `${r.status} ${JSON.stringify(rj)} 期望 ${expect}`)
+        const sAfter = await walletOf(seller)
+        const bAfter = await walletOf(buyer)
+        check('回收的錢是賣家付的（不是平台憑空給的）',
+          sAfter.points === sBefore.points + 3250 - expect,
+          `${sBefore.points} → ${sAfter.points}`)
+        check('買家拿回報價的點數（其餘留給賣家＝這筆交易取消一半）',
+          bAfter.points === bBefore.points - 3250 + expect,
+          `${bBefore.points} → ${bAfter.points}`)
+        check('回收之後那一筆不再是保留額', sAfter.reserved === sBefore.reserved,
+          `${sBefore.reserved} → ${sAfter.reserved}`)
+        const total1 = (await json(await call(platform, '/v1/admin/reconcile'))).total
+        check('整輪回收沒有創造任何新點數', total1 === total0, `${total0} → ${total1}`)
+      } else check('（跳過回收：抽不到卡）', false)
+    }
+
+    /* 規則 8：賣家自抽自池不禁止（錢從自己流到自己），但不計入公開的進度顯示 */
+    {
+      const b4 = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+      const remain0 = b4.pool.remainingTickets
+      const taken0 = b4.pool.takenSeats.length
+      const g = await drawOne(seller, 'p-seed-1')
+      check('賣家抽得了自己的池', !!g, JSON.stringify(g))
+      const a4 = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+      check('自抽不會推動公開的剩餘籤數',
+        a4.pool.remainingTickets === remain0, `${remain0} → ${a4.pool.remainingTickets}`)
+      check('但籤位本身確實被佔走（前端才畫得對）',
+        a4.pool.takenSeats.length === taken0 + 1, `${taken0} → ${a4.pool.takenSeats.length}`)
+      /* 反面：買家抽同一個池會推動進度。少了這一條，把 remainingTickets
+         寫死成常數也會全綠 */
+      const g2 = await drawOne(buyer, 'p-seed-1')
+      const a5 = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+      check('真人抽卡照常推動公開的剩餘籤數',
+        !!g2 && a5.pool.remainingTickets === remain0 - 1,
+        `${remain0} → ${a5.pool.remainingTickets}`)
+    }
+
+    /* 對帳：全站的點數總量必須等於實際發行量。
+       這條是整套設計唯一的驗收標準 —— 對不上就代表有一筆分錄只有單邊。 */
+    {
+      const rec = await json(await call(platform, '/v1/admin/reconcile'))
+      check('全站帳本對得起來（總量 = 發行量，沒有憑空生出或消失的點數）',
+        rec.drift === 0,
+        `total=${rec.total} issued=${rec.issued} drift=${rec.drift} ` +
+        JSON.stringify(rec.byReason))
+    }
   }
 
   console.log(`\n${pass} passed, ${fail} failed`)

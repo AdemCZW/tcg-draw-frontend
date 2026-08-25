@@ -51,7 +51,11 @@ function toPrize(r: Any): UserPrize {
     wonAt: ts(r.won_at),
     /* 舊資料（或還沒跑 014 的後端）沒有 acquired_at，退回 won_at ——
        第一手持有者的兩個時間本來就相同，退回去不會讓畫面說錯話 */
-    acquiredAt: ts(r.acquired_at ?? r.won_at), stashExpiresAt: ts(r.stash_expires_at)
+    acquiredAt: ts(r.acquired_at ?? r.won_at), stashExpiresAt: ts(r.stash_expires_at),
+    /* 回收比率跟結算狀態由 /v1/prizes 一起帶回來。舊制的卡兩個都是 null，
+       前端要能分辨「不提供回收」跟「回收 0 點」—— 後者是假的數字。 */
+    recycleRate: r.recycle_rate == null ? null : Number(r.recycle_rate),
+    settleStatus: (r.settle_status as string | null) ?? null
   }
 }
 
@@ -324,7 +328,11 @@ export const api = {
              買來的卡兩者不同，而卡冊是照 acquiredAt 排的（見後端 migrations/014）。 */
           wonAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
           acquiredAt: new Date().toISOString(),
-          stashExpiresAt: new Date(Date.now() + 90 * 864e5).toISOString().slice(0, 10)
+          stashExpiresAt: new Date(Date.now() + 90 * 864e5).toISOString().slice(0, 10),
+          /* 市場買來的卡沒有「那個池的賣家回收報價」可言 —— 它已經易主了，
+             原本那筆結算跟現在的持有人無關。所以 mock 也給 null，
+             讓卡冊照實顯示「沒有回收報價」。 */
+          recycleRate: null
         })
         return { listing: l, stashId }
       }

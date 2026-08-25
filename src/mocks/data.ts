@@ -694,13 +694,16 @@ export function mockDraw(poolId: string, seats: number[]): DrawResult {
   return { drawId: `d-${Date.now()}`, poolId, items, cost: seats.length * pool.ticketPrice }
 }
 
+/* recycleRate 是那個池的賣家設定的回收報價比率（市場價的 5–7 成）。
+   mock 一律給 0.6，跟種子資料一致 —— 沒有這個值的話卡冊會顯示
+   「這個池的賣家沒有提供回收」，而 mock 模式就看不到回收這條動線了。 */
 export const userPrizes: UserPrize[] = [
-  { id: 'up1', card: cards[1], tier: 'B', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03' },
-  { id: 'up2', card: cards[4], tier: 'D', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03' },
-  { id: 'up3', card: cards[5], tier: 'C', status: 'shipped', wonAt: '2026-07-20T14:02:00+08:00', acquiredAt: '2026-07-20T14:02:00+08:00', stashExpiresAt: '—' },
-  { id: 'up4', card: cards[16], tier: 'A', status: 'stashed', wonAt: '2026-08-09T18:40:00+08:00', acquiredAt: '2026-08-09T18:40:00+08:00', stashExpiresAt: '2026-11-07' },
-  { id: 'up5', card: cards[19], tier: 'D', status: 'ship_requested', wonAt: '2026-08-10T11:05:00+08:00', acquiredAt: '2026-08-10T11:05:00+08:00', stashExpiresAt: '2026-11-08' },
-  { id: 'up6', card: cards[21], tier: 'C', status: 'stashed', wonAt: '2026-08-11T09:30:00+08:00', acquiredAt: '2026-08-11T09:30:00+08:00', stashExpiresAt: '2026-11-09' }
+  { id: 'up1', card: cards[1], tier: 'B', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03', recycleRate: 0.6 },
+  { id: 'up2', card: cards[4], tier: 'D', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03', recycleRate: 0.6 },
+  { id: 'up3', card: cards[5], tier: 'C', status: 'shipped', wonAt: '2026-07-20T14:02:00+08:00', acquiredAt: '2026-07-20T14:02:00+08:00', stashExpiresAt: '—', recycleRate: 0.6 },
+  { id: 'up4', card: cards[16], tier: 'A', status: 'stashed', wonAt: '2026-08-09T18:40:00+08:00', acquiredAt: '2026-08-09T18:40:00+08:00', stashExpiresAt: '2026-11-07', recycleRate: 0.6 },
+  { id: 'up5', card: cards[19], tier: 'D', status: 'ship_requested', wonAt: '2026-08-10T11:05:00+08:00', acquiredAt: '2026-08-10T11:05:00+08:00', stashExpiresAt: '2026-11-08', recycleRate: 0.6 },
+  { id: 'up6', card: cards[21], tier: 'C', status: 'stashed', wonAt: '2026-08-11T09:30:00+08:00', acquiredAt: '2026-08-11T09:30:00+08:00', stashExpiresAt: '2026-11-09', recycleRate: 0.6 }
 ]
 
 export const ledger: LedgerEntry[] = [

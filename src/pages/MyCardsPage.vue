@@ -11,7 +11,7 @@ import ValueCurve from '@/components/ValueCurve.vue'
 import ListSentinel from '@/components/ListSentinel.vue'
 import { useInfiniteList } from '@/composables/useInfiniteList'
 import { useWalletStore } from '@/stores/wallet'
-import { recycleQuote, RECYCLE_RATE } from '@/lib/recycle'
+import { recycleQuote } from '@/lib/recycle'
 import { track } from '@/lib/ga'
 import { share, shareUrl } from '@/lib/social'
 import { ApiError, http } from '@/lib/http'
@@ -107,7 +107,8 @@ const TABS: { k: Tab; label: string }[] = [
   { k: 'listed', label: '市場販售中' },
   { k: 'ship_requested', label: '待出貨' },
   { k: 'shipped', label: '已出貨' },
-  { k: 'recycled', label: '已回收' }
+  { k: 'recycled', label: '已回收' },
+  { k: 'refunded', label: '已退還' }
 ]
 /* 張數也來自總覽。從已載入的陣列數的話，「已回收 3」在你捲到第 3 批之前
    會顯示成 0，而使用者會據此以為自己的卡不見了。 */
@@ -139,7 +140,10 @@ const statusShort: Record<UserPrize['status'], string> = {
   listed: '販售中',
   ship_requested: '待出貨',
   shipped: '已出貨',
-  recycled: '已回收'
+  recycled: '已回收',
+  /* 賣家逾期未出貨、票金已退回。跟「已回收」不同：回收是自己接受報價，
+     退還是賣家沒有履約，責任歸屬不一樣，用同一個字會抹掉這個差別 */
+  refunded: '已退還'
 }
 
 /* ---- 一張卡佔多高 ----
@@ -330,11 +334,18 @@ function askRecycle(p: UserPrize) {
   confirming.value = confirming.value === p.id ? null : p.id
 }
 
+/* 報價由那個池的賣家設定，比率隨卡片一起從 API 帶回來 ——
+   以前那個「全站 70%」的常數已經不存在了（見 src/lib/recycle.ts 的說明）。 */
+const quoteOf = (p: UserPrize) => recycleQuote(p.card, p.recycleRate)
+
 async function doRecycle(p: UserPrize) {
-  const q = recycleQuote(p.card)
+  const q = quoteOf(p)
   if (!q.eligible) return
   try {
-    // mock 直接入點；API 模式由後端結算（規則同一份 shared/recycle.ts）並回最新錢包
+    /* mock 直接入點；API 模式由後端從賣家的保留額付款並回最新錢包。
+       這裡有可能失敗而且是正常的：報價不是保證成交 —— 賣家的保留額
+       不足、或這張卡剛好同時被申請出貨，後端都會擋下來。
+       所以失敗要照實顯示，不要事先把畫面改成已回收。 */
     const r = await api.recyclePrize(p.id, q.points, `回收 ${p.card.name}`)
     p.status = 'recycled'
     confirming.value = null
@@ -346,7 +357,7 @@ async function doRecycle(p: UserPrize) {
     void refreshSummary()
     track('recycle_success')
   } catch (e) {
-    alert(e instanceof Error ? e.message : '回收失敗')
+    alert(e instanceof Error ? e.message : '賣家沒有接受這筆回收，請稍後再試')
   }
 }
 
@@ -629,31 +640,40 @@ async function copyLink() {
 
           <div class="acts">
             <button class="btn primary sm" @click="openShip(p)">申請出貨</button>
+            <!-- 文案刻意不寫「回收 +N 點」：那句話讀起來像平台保證收購，
+                 而實際上這是**賣家掛出來的報價**，錢從賣家那個池的保留額出，
+                 接受之後卡片歸還賣家。不是保證成交 —— 賣家的保留額不足時
+                 會被擋下來，所以按鈕講的是「提出」不是「換到」。 -->
             <button
+              v-if="quoteOf(p).eligible"
               class="btn sm" @click="askRecycle(p)"
-              :disabled="!recycleQuote(p.card).eligible"
-              :title="recycleQuote(p.card).reason"
             >
-              回收 +{{ recycleQuote(p.card).points.toLocaleString() }} 點
+              向賣家換回 {{ quoteOf(p).points.toLocaleString() }} 點
             </button>
+            <span v-else class="muted no-offer">{{ quoteOf(p).reason }}</span>
           </div>
 
-          <!-- 回收確認：不可逆，所以把報價與提現限制一次講完 -->
+          <!-- 確認：不可逆，所以把「這是誰的報價、成不成得了」一次講完 -->
           <div v-if="confirming === p.id" class="confirm">
             <dl class="quote">
               <div><dt>卡片市值</dt><dd class="mono">{{ p.card.refPrice.toLocaleString() }}</dd></div>
-              <div><dt>回收率</dt><dd class="mono">{{ Math.round(RECYCLE_RATE * 100) }}%</dd></div>
+              <div>
+                <dt>賣家的回收價</dt>
+                <dd class="mono">市值的 {{ Math.round((quoteOf(p).rate ?? 0) * 100) }}%</dd>
+              </div>
               <div class="tot">
                 <dt>你會拿到</dt>
-                <dd class="mono">+{{ recycleQuote(p.card).points.toLocaleString() }} 點</dd>
+                <dd class="mono">+{{ quoteOf(p).points.toLocaleString() }} 點</dd>
               </div>
             </dl>
             <p class="warn">
-              卡片交還平台後<strong>無法取回</strong>。
+              這是<strong>賣家掛出的回收價</strong>，不是平台收購。接受之後卡片歸還賣家、
+              點數由賣家支付，<strong>成立與否以賣家當下的可付款額為準</strong>。
+              卡片還回去之後<strong>無法取回</strong>。
               點數只能用於站內抽選，<strong>不可提領現金、不可轉讓他人</strong>。
             </p>
             <div class="acts">
-              <button class="btn primary sm" @click="doRecycle(p)">確認回收</button>
+              <button class="btn primary sm" @click="doRecycle(p)">提出回收</button>
               <button class="btn sm" @click="confirming = null">取消</button>
             </div>
           </div>
@@ -1127,6 +1147,9 @@ h1 { font-size: 22px; margin: 0 0 6px; }
 strong { font-size: 14px; }
 .exp { font-size: 11.5px; }
 .acts { display: flex; gap: 8px; margin-top: 4px; }
+/* 沒有回收報價時放的那一行說明。min-width: 0 是這個 repo 的通則
+   （flex 子元素預設 min-width: auto，長字串會把整列撐爆，見 docs/HANDOFF.md 2.1） */
+.no-offer { font-size: 12px; line-height: 1.4; min-width: 0; align-self: center; }
 .btn.sm { padding: 6px 12px; font-size: 12.5px; }
 
 /* 剛拿到的那張：外框 + 一行字。只靠外框不夠 ——

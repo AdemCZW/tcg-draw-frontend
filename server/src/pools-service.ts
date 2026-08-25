@@ -12,6 +12,7 @@ import { bytesToHex, commitV2, manifestHashOf, seatSequence, type PrizeManifestE
 import type { Tx } from './db.js'
 import { sql as sqlRoot } from './db.js'
 import { credit } from './money.js'
+import { creditDraw } from './pool-settlement.js'
 import { notify } from './notify.js'
 
 export const STASH_DAYS = 90
@@ -136,7 +137,7 @@ export async function openPool(tx: Tx, poolId: string, clientSeed: string): Prom
 export type DrawOutcome =
   | { ok: true; drawId: string; items: { seat: number; prizeId: string; tier: string; card: unknown }[]; cost: number }
   | { ok: false; error: 'SEATS_TAKEN'; taken: number[] }
-  | { ok: false; error: 'POOL_NOT_OPEN' | 'INSUFFICIENT_POINTS' | 'BAD_SEATS' }
+  | { ok: false; error: 'POOL_NOT_OPEN' | 'POOL_EXPIRED' | 'INSUFFICIENT_POINTS' | 'BAD_SEATS' }
 
 /**
  * 抽選。全成功或全失敗。
@@ -155,6 +156,11 @@ export async function draw(
 
   const [p] = await tx`select * from pools where id = ${poolId} for update`
   if (!p || p.status !== 'open') return { ok: false, error: 'POOL_NOT_OPEN' }
+  /* 到期就不能再抽。這裡要判一次而不是只靠背景掃描把 status 改掉：
+     掃描每五分鐘一輪，中間那段時間池的 status 還是 'open'。
+     判斷跟 FOR UPDATE 在同一個交易裡，所以「同時到期與被抽」不會兩邊都成立 ——
+     關池的那筆交易也要拿同一列的鎖，兩者必然排成先後。 */
+  if (p.expires_at != null && now >= Number(p.expires_at)) return { ok: false, error: 'POOL_EXPIRED' }
   if (uniq.some(s => s > Number(p.total_tickets))) return { ok: false, error: 'BAD_SEATS' }
 
   const cost = Number(p.ticket_price) * uniq.length
@@ -208,6 +214,18 @@ export async function draw(
     won_at: now, acquired_at: now, stash_expires_at: now + STASH_DAYS * DAY
   }))
   await tx`insert into prizes ${tx(prizeIns as never)}`
+
+  /* 票金的貸方。這一段以前整個不存在 —— 買家被扣了 cost，但沒有任何分錄
+     把那筆錢給誰，於是賣家收不到錢、全站的點數總量每抽一次就少一次
+     （docs/pool-modes-audit.md 的 C-2）。
+     必須排在 prizes 插入之後：pool_settlements.prize_id 是外鍵，
+     指向買家卡冊裡的那一列，出貨與回收都要靠它把兩邊接起來。 */
+  await creditDraw(tx, {
+    poolId, sellerId: p.seller_id as string, buyerId: userId, drawId,
+    ticketPrice: Number(p.ticket_price), feeRate: Number(p.platform_fee_rate ?? 0),
+    items: items.map(i => ({ seat: i.seat, prizeId: i.stashId })),
+    now
+  })
 
   /* 抽到高賞才通知。每抽一次都發通知會讓鈴鐺變成雜訊 ——
      使用者剛剛才在開卡畫面上看過結果，重複告知一次沒有資訊量；
@@ -269,9 +287,25 @@ export async function tryOpenPool(poolId: string): Promise<boolean> {
  */
 const SWEEP_LIMIT = 20
 
-export async function sweepPools(): Promise<{ opened: number; revealed: number }> {
+export async function sweepPools(): Promise<{ opened: number; revealed: number; expired: number }> {
   let opened = 0
   let revealed = 0
+
+  /* 到期的池先關。
+     關池**只停止販售** —— 已售出但還沒出貨的卡，出貨與鑑賞期照跑完才結算
+     （那些結算列在 pool_settlements 裡，跟池的狀態完全脫鉤，這是刻意的：
+     賣家的現金流不該綁在池的生命週期上）。
+     未售出的籤位從來沒有產生過 prizes 列，所以「卡回到賣家手上」不需要
+     任何搬移動作，停止賣就是了。
+     沿用 'cancelled' 而不是新增一個狀態：提前收攤已經是這個語意，
+     而 revealPool 本來就接受 cancelled —— 到期的池一樣要揭曉種子，
+     否則已經抽過的人永遠驗不了自己那一抽。 */
+  const expiredRows = await sqlRoot<{ id: string }[]>`
+    update pools set status = 'cancelled'
+     where status = 'open' and expires_at is not null and expires_at <= ${Date.now()}
+     returning id
+  `
+  const expired = expiredRows.length
 
   const committed = await sqlRoot<{ id: string }[]>`
     select id from pools where status = 'committed' order by created_at limit ${SWEEP_LIMIT}
@@ -300,7 +334,7 @@ export async function sweepPools(): Promise<{ opened: number; revealed: number }
     }
   }
 
-  return { opened, revealed }
+  return { opened, revealed, expired }
 }
 
 /** sold_out → revealed。從此 server_seed 可以公開 */

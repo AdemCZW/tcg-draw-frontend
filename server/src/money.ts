@@ -14,7 +14,21 @@ import { sql as root } from './db.js'
 
 export const OPEN = ['escrowed', 'shipped', 'delivered', 'disputed'] as const
 
-export interface Wallet { points: number; locked: number; available: number }
+export interface Wallet {
+  points: number
+  /** 凍結：進行中訂單的貨款與保證金、pending 的交易報價，再加上抽卡的保留額 */
+  locked: number
+  /**
+   * 保留額。抽卡的票金已經貸記給賣家，但那一張卡還沒出貨、還沒過鑑賞期 ——
+   * 看得到、動不了。它是 locked 的一部分，另外報出來只是為了讓賣家的
+   * 錢包畫面能分辨「這筆是買東西被凍住」還是「這筆是我還沒交付的貨款」。
+   *
+   * 跟餘額一樣是**推導**的：SUM(pool_settlements.amount) where status 還沒結束。
+   * 不存欄位的理由見這個檔案開頭。
+   */
+  reserved: number
+  available: number
+}
 
 export async function walletOf(userId: string, db: Db = root): Promise<Wallet> {
   const [bal] = await db<{ sum: string | null }[]>`
@@ -39,9 +53,19 @@ export async function walletOf(userId: string, db: Db = root): Promise<Wallet> {
        where o.from_user = ${userId} and o.status = 'pending'
     ) t
   `
+  /* 抽卡的保留額也是一種凍結，而且**跟訂單的凍結是同一個模型**：
+     票金在抽卡當下就已經貸記給賣家（否則帳本會單向蒸發，見 pool-settlement.ts），
+     但那張卡還沒交付，所以那筆錢不該是可動用的。
+     用「已入帳但仍受限」表達，而不是「先不入帳、之後再補一筆」——
+     後者要在釋放時再寫一次分錄，而任何「之後再補」的分錄都有補不到的一天。 */
+  const [held] = await db<{ sum: string | null }[]>`
+    select sum(amount)::text as sum from pool_settlements
+     where seller_id = ${userId} and status in ('held', 'awaiting_ship', 'shipped')
+  `
   const points = Number(bal?.sum ?? 0)
-  const locked = Number(lock?.sum ?? 0)
-  return { points, locked, available: points - locked }
+  const reserved = Number(held?.sum ?? 0)
+  const locked = Number(lock?.sum ?? 0) + reserved
+  return { points, locked, reserved, available: points - locked }
 }
 
 /**

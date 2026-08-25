@@ -12,6 +12,11 @@ import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { walletOf } from '../money.js'
 import { commitPool, draw, tryOpenPool, revealPool } from '../pools-service.js'
+import {
+  FIRST_POOL_TICKET_CAP, FIRST_POOL_VALUE_CAP, PLATFORM_FEE_RATE,
+  POOL_DEFAULT_DAYS, POOL_MAX_DAYS, RECYCLE_RATE_MAX, RECYCLE_RATE_MIN,
+  SELLER_DEFAULT_LIMIT
+} from '../shared/pool-settlement.js'
 
 export const pools = new Hono()
 
@@ -20,14 +25,22 @@ type Row = Record<string, unknown>
 const pid = (c: { req: { param: (k: 'id') => string | undefined } }) => c.req.param('id') ?? ''
 
 /** 對外的池資料。這裡決定什麼能出去 —— server_seed 只在 revealed 之後 */
-function toPublic(p: Row, prizes: Row[], taken: number[]) {
+function toPublic(p: Row, prizes: Row[], taken: number[], publicTaken: number) {
   const revealed = p.status === 'revealed'
   return {
     id: p.id, sellerId: p.seller_id, sellerName: p.seller_name, origin: p.origin,
     mode: p.mode, title: p.title,
     coverFileId: p.cover_file_id, cover: '',
     ticketPrice: Number(p.ticket_price), totalTickets: Number(p.total_tickets),
-    remainingTickets: Number(p.total_tickets) - taken.length,
+    /* 剩餘籤數**不算賣家自抽的那幾籤**。
+       自抽本身不禁止（錢從自己流到自己，沒有新點數被創造），但如果它會
+       推動公開的進度條，賣家就可以把「剩 3/50」刷出來誘導真人跟進 ——
+       那是這個模型下唯一殘留的濫用面，所以擋在顯示這一層。
+       takenSeats 仍然是完整的：那是功能性的資料，前端靠它把已售的格子畫成
+       不可選，少了自抽的格子會讓玩家點下去才收到 SEATS_TAKEN。
+       兩者因此不一定滿足 remainingTickets = totalTickets − takenSeats.length，
+       這是刻意的，不要「修正」成一致。 */
+    remainingTickets: Number(p.total_tickets) - publicTaken,
     /* 開賣當下算的還元率。買家判斷一個池值不值得抽最直接的依據，
        而同業幾乎沒有人公開它。舊池沒有這個欄位就給 null，
        前端要能分辨「沒有這個數字」與「這個池還元率是 0」。 */
@@ -39,6 +52,12 @@ function toPublic(p: Row, prizes: Row[], taken: number[]) {
     serverSeed: revealed ? p.server_seed : null,
     shiteiTier: p.shitei_tier ?? undefined,
     prizes: prizes.map(x => ({ id: x.id, tier: x.tier, card: x.card, total: Number(x.total), remaining: Number(x.remaining) })),
+    /* 到期日。時間到就關池、停止販售，未售出籤位的卡回到賣家手上。
+       null = 舊池，沒有到期日 */
+    expiresAt: p.expires_at == null ? null : Number(p.expires_at),
+    /* 賣家的回收報價比率（市場價的幾成）。null = 這個池不提供回收。
+       前端要照實顯示 —— 回收現在是賣家出價、玩家選擇接受，不是平台保證收購 */
+    recycleRate: p.recycle_rate == null ? null : Number(p.recycle_rate),
     openedAt: p.opened_at, revealedAt: p.revealed_at
   }
 }
@@ -48,16 +67,24 @@ async function loadPublic(id: string) {
     select p.*, s.origin, s.name as seller_name from pools p join sellers s on s.id = p.seller_id where p.id = ${id}
   `
   if (!p) return null
+  /* 各賞別的剩餘數同樣排除賣家自抽 —— 「A 賞還剩 1 張」是玩家決定要不要跟進
+     最直接的依據，那個數字被自抽推動就等於誘餌。條件寫在 join 上而不是
+     where 上：寫在 where 會把「一張都沒被抽走」的獎項整列濾掉。 */
   const prizes = await sql`
     select pp.*, (pp.total - count(ps.taken_by))::int as remaining
     from pool_prizes pp
-    left join pool_seats ps on ps.prize_id = pp.id and ps.taken_by is not null
+    left join pool_seats ps
+      on ps.prize_id = pp.id and ps.taken_by is not null and ps.taken_by <> ${p.seller_id as string}
     where pp.pool_id = ${id} group by pp.id order by pp.tier
   `
   const taken = await sql<{ seat: number }[]>`
     select seat from pool_seats where pool_id = ${id} and taken_by is not null order by seat
   `
-  return toPublic(p as Row, prizes as Row[], taken.map(t => Number(t.seat)))
+  const [pub] = await sql<{ n: string }[]>`
+    select count(*)::text as n from pool_seats
+     where pool_id = ${id} and taken_by is not null and taken_by <> ${p.seller_id as string}
+  `
+  return toPublic(p as Row, prizes as Row[], taken.map(t => Number(t.seat)), Number(pub?.n ?? 0))
 }
 
 pools.get('/', async c => {
@@ -170,7 +197,18 @@ const CreatePool = z.object({
   totalTickets: z.number().int().positive().max(5000),
   prizes: z.array(PrizeIn).min(1),
   shiteiTier: z.enum(['A', 'B', 'C', 'D', 'LAST']).optional(),
-  coverFileId: z.string().optional()
+  coverFileId: z.string().optional(),
+  /* 販售天數。池一定要有到期日 —— 沒有到期日的池會把賣家的獎品與買家的
+     期待無限期綁住，而且「大獎還沒出」可以永遠掛在首頁上。
+     不給就用預設值，不允許不設。 */
+  days: z.number().int().positive().max(POOL_MAX_DAYS).default(POOL_DEFAULT_DAYS),
+  /* 賣家的回收報價比率。不給 = 這個池不提供回收（合法的選擇，不是錯誤）。
+     上下限見 shared/pool-settlement.ts；用 refine 而不是 z.number().min/max
+     是為了給一句人看得懂的訊息，那個數字會直接顯示在建池表單上。 */
+  recycleRate: z.number()
+    .refine(r => r >= RECYCLE_RATE_MIN && r <= RECYCLE_RATE_MAX,
+      `回收報價只能設在市場價的 ${RECYCLE_RATE_MIN * 100}% 到 ${RECYCLE_RATE_MAX * 100}% 之間`)
+    .optional()
 })
 
 /**
@@ -182,9 +220,39 @@ pools.post('/', requireAuth, async c => {
   const parsed = CreatePool.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: parsed.error.issues[0]?.message ?? '參數不合法' }, 400)
   const b = parsed.data
-  const [s] = await sql`select tier from sellers where id = ${me}`
+  const [s] = await sql`select tier, default_count from sellers where id = ${me}`
   if (!s) return c.json({ error: 'NOT_SELLER', message: '請先申請成為賣家' }, 403)
   if (s.tier === 'pending') return c.json({ error: 'SELLER_PENDING', message: '賣家審核通過後才能開池' }, 403)
+
+  /* 違約門檻。逾期未出貨會從保留額退還買家並累計違約次數；
+     累到門檻就不能再開池。沒有保證金，所以這是唯一擋得住連續違約的手段 ——
+     擋在「能不能開新池」而不是「能不能抽」：已經在跑的池要讓它把出貨與
+     鑑賞期走完，中途凍結只會讓已經付錢的買家更難拿到卡。 */
+  if (Number(s.default_count ?? 0) >= SELLER_DEFAULT_LIMIT) {
+    return c.json({
+      error: 'SELLER_SUSPENDED',
+      message: `你有 ${s.default_count} 次逾期未出貨的紀錄，已達 ${SELLER_DEFAULT_LIMIT} 次上限，暫時不能開新池。請聯絡平台。`
+    }, 403)
+  }
+
+  /* 新賣家的第一個池有額度上限。
+     沒有保證金，所以這是替代手段：把第一次違約的最大損失壓住。
+     「新」的定義是「還沒有任何一個池走完生命週期」—— 用 revealed / cancelled
+     而不是「開過幾個池」，因為同時開十個池然後全部不出貨正是要防的那件事。 */
+  const [done] = await sql<{ n: string }[]>`
+    select count(*)::text as n from pools
+     where seller_id = ${me} and status in ('revealed', 'cancelled')
+  `
+  if (Number(done?.n ?? 0) === 0) {
+    const value = b.ticketPrice * b.totalTickets
+    if (b.totalTickets > FIRST_POOL_TICKET_CAP || value > FIRST_POOL_VALUE_CAP) {
+      return c.json({
+        error: 'FIRST_POOL_CAP',
+        message: `第一個池的上限是 ${FIRST_POOL_TICKET_CAP} 籤、票收 ${FIRST_POOL_VALUE_CAP.toLocaleString('zh-TW')} 點。這個池是 ${b.totalTickets} 籤、票收 ${value.toLocaleString('zh-TW')} 點。完成第一個池之後就會解除。`
+      }, 403)
+    }
+  }
+
   const sum = b.prizes.reduce((a, p) => a + p.total, 0)
   if (sum !== b.totalTickets) {
     return c.json({ error: 'BAD_REQUEST', message: `獎品總數 ${sum} 必須等於籤數 ${b.totalTickets}` }, 400)
@@ -225,9 +293,14 @@ pools.post('/', requireAuth, async c => {
     const result = await sql.begin(async tx => {
       await tx`
         insert into pools (id, seller_id, mode, title, cover_file_id, ticket_price, total_tickets,
-                           shitei_tier, return_ratio)
+                           shitei_tier, return_ratio, expires_at, recycle_rate, platform_fee_rate)
         values (${id}, ${me}, ${b.mode}, ${b.title}, ${b.coverFileId ?? null}, ${b.ticketPrice}, ${b.totalTickets},
-                ${b.shiteiTier ?? null}, ${ratio.toFixed(2)})
+                ${b.shiteiTier ?? null}, ${ratio.toFixed(2)},
+                ${Date.now() + b.days * 86_400_000},
+                ${b.recycleRate ?? null},
+                /* 抽成寫死在池上，不是每次結算去讀全站常數 ——
+                   票賣出去之後才調整抽成等於片面改約 */
+                ${PLATFORM_FEE_RATE})
       `
       const rows = b.prizes.map((p, i) => ({
         id: `${id}-pr${i}`, pool_id: id, tier: p.tier, card: p.card, total: p.total
@@ -305,6 +378,7 @@ pools.post('/:id/draw', requireAuth, async c => {
 const MSG: Record<string, string> = {
   SEATS_TAKEN: '有籤位剛被別人抽走了，請重選',
   POOL_NOT_OPEN: '這個池目前不能抽',
+  POOL_EXPIRED: '這個池已經到期，停止販售了',
   INSUFFICIENT_POINTS: '可動用點數不足',
   BAD_SEATS: '籤位不合法'
 }
