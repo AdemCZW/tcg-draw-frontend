@@ -112,6 +112,13 @@ export const router = createRouter({
       meta: { requiresAuth: true, depth: 1, title: '開池' }
     },
     {
+      /* 開卡演出的試看頁。刻意不掛進任何導覽 ——
+         給開發與驗收用的，知道網址的人才進得來。 */
+      path: '/fx', name: 'fx-lab',
+      component: () => import('@/pages/FxLabPage.vue'),
+      meta: { depth: 1, title: '開卡演出試看' }
+    },
+    {
       path: '/fairness', name: 'fairness',
       component: () => import('@/pages/FairnessPage.vue'),
       meta: { depth: 1, title: '公平性驗證' }
