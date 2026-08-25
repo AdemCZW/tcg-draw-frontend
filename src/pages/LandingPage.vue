@@ -360,18 +360,22 @@ function goLine() {
       <!-- 7 文字
            英文當主視覺（動態標題），中文留在下面當真正讀的那一行 ——
            使用者是台灣人，資訊要用中文讀；英文負責的是氣勢不是傳達。
-           key 綁 cycle：每一輪短片回到「靜夜」時標題重新演一次。 -->
+           key 綁 cycle：每一輪短片回到「靜夜」時標題重新演一次。
+
+           不用「寶可夢」當主標：那是別人的商標，放成自己的招牌會讀起來
+           像官方授權或聯名，跟「我們賣寶可夢卡」這種描述性使用不是同一件事。
+           主標講的是這個站是什麼（鑑定卡的交易場），品類留在說明行。 -->
       <h1 class="title">
         <KineticTitle
           :key="cycle"
-          :lines="['SEALED', 'BEFORE THE DRAW']"
-          label="Sealed before the draw"
+          :lines="['GRADED', 'CARD EXCHANGE']"
+          label="Graded card exchange"
           :stagger="46"
           :delay="180"
         />
       </h1>
-      <p class="zh">每一支籤，開賣前就已封存</p>
-      <p class="tag muted">PSA 鑑定卡 · 定量抽選 · 完抽可驗算</p>
+      <p class="zh">鑑定卡的交易中心</p>
+      <p class="tag muted">抽選 · 市場 · 卡冊 · 玩家互換</p>
 
       <!-- mock：一鍵進站 -->
       <template v-if="MOCK">
