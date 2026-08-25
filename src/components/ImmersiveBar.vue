@@ -2,11 +2,11 @@
 /**
  * 沉浸頁的頂部返回列。
  *
- * 選籤牆與連莊進行中走 chrome:'none'（不掛全域 header / 底部導覽），
+ * 選籤牆走 chrome:'none'（不掛全域 header / 底部導覽），
  * 沒有這一條的話使用者會被困在頁面裡。它是唯一的出口，所以要：
  * 一直在頂上（sticky）、讓出瀏海（safe-area）、返回鍵夠大。
  *
- * 返回走 router.back()：這兩頁一定是從池詳情進來的，back 就是回去。
+ * 返回走 router.back()：這一頁一定是從池詳情進來的，back 就是回去。
  * 有 fallback 是防直接輸網址進來（history 裡沒有上一頁）。
  */
 import { useRouter } from 'vue-router'

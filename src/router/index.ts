@@ -6,8 +6,8 @@ import { applySeo } from '@/lib/seo'
  *  - full    一般頁面，三者都在
  *  - none    沉浸模式：開卡演出這種頁面不該同時出現全域導覽與頁面自己的操作列
  *
- * 走 none 的頁面：開卡結果（自己有三個出口）、選籤牆、連莊進行中
- * （後兩者用 ImmersiveBar 提供返回鍵，並在有未完成動作時攔截離開）。
+ * 走 none 的頁面：開卡結果（自己有三個出口）、選籤牆
+ * （後者用 ImmersiveBar 提供返回鍵，並在有未完成動作時攔截離開）。
  */
 export type Chrome = 'full' | 'none'
 
@@ -95,11 +95,6 @@ export const router = createRouter({
       path: '/pools/:id/pick', name: 'pool-pick',
       component: () => import('@/pages/TicketPickPage.vue'),
       meta: { requiresAuth: true, depth: 3, chrome: 'none', title: '選籤' }
-    },
-    {
-      path: '/pools/:id/streak', name: 'streak',
-      component: () => import('@/pages/StreakRunPage.vue'),
-      meta: { requiresAuth: true, depth: 3, chrome: 'none', title: '連莊' }
     },
     {
       path: '/draw/:drawId', name: 'draw-result',

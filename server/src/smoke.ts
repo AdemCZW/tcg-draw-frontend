@@ -770,7 +770,7 @@ async function run() {
        後端一行都沒有，開得出來就等於繼續掛著不存在的規則收錢（見 migration 016） */
     const onePrize = [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, total: 1 }]
     const badMode = await call(seller, '/v1/pools', {
-      title: '連莊池', mode: 'streak', ticketPrice: 100, totalTickets: 1, prizes: onePrize
+      title: '指定賞池', mode: 'shitei', ticketPrice: 100, totalTickets: 1, prizes: onePrize
     })
     check('後端不收 muteki 以外的玩法', badMode.status === 400, `${badMode.status}`)
     const oldMode = await call(seller, '/v1/pools', {

@@ -1,4 +1,4 @@
-import type { Pool, CardItem, Listing, DrawResult, UserPrize, LedgerEntry, WinnerEvent, PoolPrize, StreakRun, AuctionLot, Seller, Escrow, Tier } from '@/types/models'
+import type { Pool, CardItem, Listing, DrawResult, UserPrize, LedgerEntry, WinnerEvent, PoolPrize, Seller, Escrow, Tier } from '@/types/models'
 
 // 卡圖先用漸層佔位；正式版換 R2 實拍圖 URL
 const ph = (hue: number) => `placeholder:${hue}`
@@ -16,9 +16,8 @@ const cards: CardItem[] = [
   { id: 'c7', name: '沙奈朵 ex UR', setCode: 'sv4a', cardNo: '348/190', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345677', image: '', artId: 'SV4a-348', refPrice: 7600 },
   { id: 'c8', name: '夢幻 ex UR', setCode: 'sv4a', cardNo: '347/190', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV4a-347', refPrice: 6400 },
   { id: 'c9', name: '月亮伊布 ex SAR', setCode: 'sv8a', cardNo: '217/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-217', refPrice: 5400 },
-  /* 保底卡：價值必須低於票價，否則「輸了反而划算」會破壞獎池 */
-  { id: 'c10', name: '謎擬Ｑ SAR（保底）', setCode: 'sv4a', cardNo: '341/190', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV4a-341', refPrice: 200 },
-  // 以下為擴充卡池，象徵性測試各玩法在「多樣卡片」下的顯示與抽取
+  { id: 'c10', name: '謎擬Ｑ SAR', setCode: 'sv4a', cardNo: '341/190', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV4a-341', refPrice: 200 },
+  // 以下為擴充卡池，象徵性測試玩法在「多樣卡片」下的顯示與抽取
   { id: 'c11', name: '多龍巴魯托 ex SAR', setCode: 'sv8a', cardNo: '221/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-221', refPrice: 4200 },
   { id: 'c12', name: '伊布 ex SAR', setCode: 'sv8a', cardNo: '223/187', language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', artId: 'SV8a-223', refPrice: 3800 },
   { id: 'c13', name: '猛雷鼓 ex SAR', setCode: 'sv8a', cardNo: '222/187', language: 'JP', grader: 'PSA', grade: 10, certNo: '82345680', image: '', artId: 'SV8a-222', refPrice: 3400 },
@@ -58,13 +57,12 @@ function seatsOf(total: number, taken: number, step = 7): number[] {
  * 還元率設計，全部以 computeEconomics() 實際跑過驗證（不是手算）：
  *
  *  p1 classic  87.6%    p2 classic  87.5%    p3 muteki 72.6%（已完抽）
- *  p4 shitei   83.8%    p5 classic  90.4%    p6 streak 84.4%（最佳策略 86.2%）
- *  p7 auction  85.0%    p8 classic  84.6%（低價入門池）
+ *  p4 shitei   83.8%    p5 classic  90.4%    p8 classic  84.6%（低價入門池）
  *
- * 三個模式不能用「獎池總值 ÷ 票收」直接算，各有專屬模型：
- *  - streak  玩家爆掉時獎品不發出，蒙地卡羅模擬各種收手策略
- *  - shitei  抽中指定賞就結束整池，期望只賣出約一半的籤
- *  - auction 末尾席位由喊標決定成交價，只評估固定價格那一段
+ * shitei 不能用「獎池總值 ÷ 票收」直接算：抽中指定賞就結束整池，
+ * 期望只賣出約一半的籤，直接除會嚴重高估支出。
+ *
+ * p6（連莊爆賞）與 p7（尾籤競標）已隨那兩個玩法一起移除。
  *
  * 各池 prizes 加總 = totalTickets；classic/shitei 的 LAST 為額外贈獎不佔籤位。
  */
@@ -392,75 +390,6 @@ export const pools: Pool[] = [
     ]
   },
   {
-    /* 爆賞 20 / 總 66 籤 / 保底卡 200 元。
-       抽到爆賞不再空手 —— 暫持獎品沒收，但改發保底卡，
-       確保「付入場費一定帶走一張卡」。經模擬：一般玩法還元率 86.5%、
-       玩家最佳策略 90.3%。保底卡若給到 120 元以上，最佳策略會衝破 100% 打爆莊家。 */
-    sellerId: 's3',
-    origin: 'merchant',
-    id: 'p6',
-    title: '夢幻 連莊爆賞',
-    cover: ph(300),
-    mode: 'streak',
-    ticketPrice: 500,
-    totalTickets: 66,
-    remainingTickets: 52,
-    takenSeats: seatsOf(66, 14, 5),
-    status: 'open',
-    commitHash: 'b00mb00mfeed1234567890abcdefb00mb00mfeed1234567890abcdefb00mb00m',
-    clientSeedSource: 'drand:5620355',
-    openedAt: '2026-08-11T09:00:00+08:00',
-    escrow: escrowOf(14, 500),
-    prizes: [
-      { id: 'pr18', tier: 'A', card: cards[2], total: 1, remaining: 1 },
-      { id: 'pr19', tier: 'B', card: cards[6], total: 3, remaining: 2 },
-      { id: 'pr20a', tier: 'C', card: cards[5], total: 7, remaining: 5 },
-      { id: 'pr20b', tier: 'C', card: cards[19], total: 5, remaining: 4 },
-      { id: 'pr21a', tier: 'D', card: cards[8], total: 12, remaining: 9 },
-      { id: 'pr21b', tier: 'D', card: cards[17], total: 10, remaining: 8 },
-      { id: 'pr21c', tier: 'D', card: cards[27], total: 8, remaining: 6 },
-      // BUST 必須是「唯一一項」——多處程式碼用 .find(tier === 'BUST') 抓保底卡，拆成多項會讓其餘項目被忽略
-      { id: 'pr22', tier: 'BUST', card: cards[9], total: 20, remaining: 17 }
-    ]
-  },
-  {
-    /* 77 支正常販售 + 最後 3 支競標。
-       原本這池的 D 賞被錯放成 暴鯉龍 SAR（7,600）×20 與 傑尼龜 AR（420）×25，
-       獎品總值 186,550 對上固定席票收 23,100 —— 卡片索引寫錯造成的資料錯誤。
-       重組後：三個大獎（莉莉艾 9,800 / 快龍 6,800 / 夢幻 3,600）留給競標席，
-       固定 77 席獎品總值 19,640，還元率 85.0%。 */
-    sellerId: 's1',
-    origin: 'merchant',
-    id: 'p7',
-    title: '噴火龍 尾籤競標',
-    cover: ph(28),
-    mode: 'auction',
-    auctionSeats: 3,
-    ticketPrice: 300,
-    totalTickets: 80,
-    remainingTickets: 3,
-    takenSeats: Array.from({ length: 77 }, (_, i) => i + 1),
-    status: 'open',
-    commitHash: 'a0c7104ebeef55aa11bb22cc33dd44ee55ff6600771188229933aa44bb55cc66',
-    clientSeedSource: 'drand:5620361',
-    openedAt: '2026-08-09T12:00:00+08:00',
-    escrow: escrowOf(77, 300),
-    prizes: [
-      // 三個大獎留在最後 3 席競標，因此仍是 remaining: 1
-      { id: 'pr23', tier: 'A', card: cards[3], total: 1, remaining: 1 },
-      { id: 'pr24a', tier: 'B', card: cards[14], total: 1, remaining: 1 },
-      { id: 'pr24b', tier: 'B', card: cards[2], total: 1, remaining: 1 },
-      // 固定價格的 77 席已全數售出
-      { id: 'pr25a', tier: 'C', card: cards[6], total: 3, remaining: 0 },
-      { id: 'pr25b', tier: 'C', card: cards[10], total: 4, remaining: 0 },
-      { id: 'pr25c', tier: 'C', card: cards[5], total: 5, remaining: 0 },
-      { id: 'pr26a', tier: 'D', card: cards[15], total: 15, remaining: 0 },
-      { id: 'pr26b', tier: 'D', card: cards[18], total: 20, remaining: 0 },
-      { id: 'pr26c', tier: 'D', card: cards[25], total: 15, remaining: 0 },
-      { id: 'pr26d', tier: 'D', card: cards[8], total: 15, remaining: 0 }
-    ]
-  },
-  {
     /* 低價入門池 —— 漏斗上緣。
        競品最低入手價：cc1kuji NT$25、gacha.game US$0.5，本站原本最低 NT$120，
        等於沒有給新使用者一個「先試一次」的價位。
@@ -657,7 +586,6 @@ export interface NewPoolInput {
   mode: Pool['mode']
   ticketPrice: number
   shiteiTier?: Tier
-  auctionSeats?: number
   prizes: { tier: Tier; name: string; qty: number; unitValue: number }[]
 }
 
@@ -696,7 +624,6 @@ export function createPool(input: NewPoolInput): Pool {
     cover: prizes[0]?.card.image ?? ph(200),
     mode: input.mode,
     shiteiTier: input.shiteiTier,
-    auctionSeats: input.auctionSeats,
     ticketPrice: input.ticketPrice,
     totalTickets: seats,
     remainingTickets: seats,
@@ -722,112 +649,6 @@ export function createPool(input: NewPoolInput): Pool {
 export function poolSnapshot(poolId: string): Pool {
   const p = pools.find(x => x.id === poolId)!
   return { ...p, takenSeats: [...p.takenSeats], prizes: p.prizes.map(pr => ({ ...pr })) }
-}
-
-// ---------------------------------------------------------------
-// 連莊爆賞
-// ---------------------------------------------------------------
-const streakRuns = new Map<string, StreakRun>()
-
-export function startStreak(poolId: string): StreakRun {
-  const pool = pools.find(p => p.id === poolId)!
-  const run: StreakRun = {
-    runId: `s-${Date.now()}`,
-    poolId,
-    entryCost: pool.ticketPrice,
-    items: [],
-    heldValue: 0,
-    drawnSeats: [],
-    status: 'live'
-  }
-  streakRuns.set(run.runId, run)
-  return { ...run, items: [...run.items] }
-}
-
-export function streakDraw(runId: string, seat: number): StreakRun {
-  const run = streakRuns.get(runId)!
-  const pool = pools.find(p => p.id === run.poolId)!
-  const alive = pool.prizes.filter(p => p.remaining > 0)
-  const bag: PoolPrize[] = alive.flatMap(p => Array(p.remaining).fill(p))
-  const prize = bag[Math.floor(Math.random() * bag.length)]
-
-  prize.remaining--
-  pool.remainingTickets--
-  pool.takenSeats.push(seat)
-  run.drawnSeats.push(seat)
-
-  if (prize.tier === 'BUST') {
-    /* 爆掉：暫持獎品全數沒收（流入賣家下一池，不回本池以保籤序可驗證），
-       但改發保底卡 —— 確保每次入場至少帶走一張卡，維持「必得商品」的對價關係。 */
-    run.items = [{ ticketSeq: seat, tier: 'BUST', card: prize.card }]
-    run.heldValue = prize.card.refPrice
-    run.status = 'busted'
-  } else {
-    run.items.push({ ticketSeq: seat, tier: prize.tier, card: prize.card })
-    run.heldValue += prize.card.refPrice
-  }
-  if (pool.remainingTickets <= 0) pool.status = 'sold_out'
-  return { ...run, items: [...run.items] }
-}
-
-/** 收手落袋，把暫持獎品轉成正式抽選結果 */
-export function bankStreak(runId: string): DrawResult {
-  const run = streakRuns.get(runId)!
-  run.status = 'banked'
-  return { drawId: `d-${run.runId}`, poolId: run.poolId, items: [...run.items], cost: run.entryCost }
-}
-
-// ---------------------------------------------------------------
-// 尾籤競標
-// ---------------------------------------------------------------
-const YOU = 'VD-3F2A'
-const auctionLots: AuctionLot[] = [
-  { id: 'lot1', poolId: 'p7', seat: 78, startBid: 300, currentBid: 1250, bidCount: 7, topBidder: 'VD-A8**', youAreTop: false, endsAt: 0, status: 'live' },
-  { id: 'lot2', poolId: 'p7', seat: 79, startBid: 300, currentBid: 800, bidCount: 3, topBidder: 'VD-11**', youAreTop: false, endsAt: 0, status: 'live' },
-  { id: 'lot3', poolId: 'p7', seat: 80, startBid: 300, currentBid: 300, bidCount: 0, topBidder: null, youAreTop: false, endsAt: 0, status: 'live' }
-]
-// endsAt 於首次讀取時才錨定，避免模組載入時間與實際開啟時間落差
-let auctionAnchored = false
-
-export function listLots(poolId: string): AuctionLot[] {
-  if (!auctionAnchored) {
-    const now = Date.now()
-    auctionLots[0].endsAt = now + 3 * 60_000
-    auctionLots[1].endsAt = now + 8 * 60_000
-    auctionLots[2].endsAt = now + 15 * 60_000
-    auctionAnchored = true
-  }
-  const now = Date.now()
-  for (const l of auctionLots) if (now >= l.endsAt) l.status = 'ended'
-  return auctionLots.filter(l => l.poolId === poolId).map(l => ({ ...l }))
-}
-
-/** 出價。回傳被退還的金額（若你先前是最高出價者，舊出價全額退還） */
-export function placeBid(lotId: string, amount: number): { lot: AuctionLot; refunded: number } {
-  const lot = auctionLots.find(l => l.id === lotId)!
-  const refunded = lot.youAreTop ? lot.currentBid : 0
-  lot.currentBid = amount
-  lot.bidCount++
-  lot.topBidder = YOU
-  lot.youAreTop = true
-  // 接近結束時出價自動延長 60 秒，避免「最後一秒偷襲」
-  const now = Date.now()
-  if (lot.endsAt - now < 60_000) lot.endsAt = now + 60_000
-  return { lot: { ...lot }, refunded }
-}
-
-/** 模擬對手加價（僅 mock 用；正式版由後端 / SSE 推播） */
-export function rivalBid(lotId: string): AuctionLot | null {
-  const lot = auctionLots.find(l => l.id === lotId)
-  if (!lot || lot.status === 'ended' || lot.currentBid > 4000) return null
-  const bump = 100 + Math.floor(Math.random() * 4) * 50
-  lot.currentBid += bump
-  lot.bidCount++
-  lot.topBidder = Math.random() > 0.5 ? 'VD-A8**' : 'VD-7C**'
-  lot.youAreTop = false
-  const now = Date.now()
-  if (lot.endsAt - now < 60_000) lot.endsAt = now + 60_000
-  return { ...lot }
 }
 
 /**
@@ -895,6 +716,6 @@ export const winners: WinnerEvent[] = [
   { user: 'VD-11**', poolTitle: '朱紫 SAR 精選', tier: 'C', cardName: '夢幻 SAR', at: '17 分鐘前' },
   { user: 'VD-C2**', poolTitle: '莉莉艾 無敵賞', tier: 'LAST', cardName: '莉莉艾 SR', at: '1 小時前' },
   { user: 'VD-7Q**', poolTitle: '皮卡丘 指定賞挑戰', tier: 'D', cardName: '妙蛙種子 AR', at: '1 小時前' },
-  { user: 'VD-9K**', poolTitle: '夢幻 連莊爆賞', tier: 'C', cardName: '三合一磁怪 V', at: '2 小時前' },
-  { user: 'VD-4M**', poolTitle: '噴火龍 尾籤競標', tier: 'A', cardName: '莉莉艾 SR', at: '3 小時前' }
+  { user: 'VD-9K**', poolTitle: '銅板場 #72 · 快開快抽', tier: 'C', cardName: '三合一磁怪 V', at: '2 小時前' },
+  { user: 'VD-4M**', poolTitle: '滿分場 #30 · 全 PSA 10', tier: 'A', cardName: '莉莉艾 SR', at: '3 小時前' }
 ]

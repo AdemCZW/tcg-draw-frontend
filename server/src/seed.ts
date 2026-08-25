@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto'
 import { sql } from './db.js'
 import { PLATFORM_ID } from './orders-service.js'
 import { commitV2, manifestHashOf, seatSequence } from './shared/fairness.js'
-import { returnRatio } from './shared/economics.js'
+import { poolAllowed, redeemAllowed, redeemRatio, returnRatio } from './shared/economics.js'
 
 const users: [string, string, string][] = [
   [PLATFORM_ID, 'platform', 'VaultDraw 官方'],
@@ -75,12 +75,31 @@ const C = {
   glaceon: pcard('冰伊布 ex', 'SV8a-206', 340),
   morpeko: pcard('桃歹郎 ex', 'SV8a-219', 180),
   sandyShocks: pcard('砂鐵蜥 ex', 'SV8a-216', 120),
+  /* 補進來的第二批。原本的目錄集中在 sv8a 的伊布家族，每個池看起來都一樣；
+     多幾張 sv4a / sv6 / sv3 的卡，池與池之間才分得出來。 */
+  botanSAR: pcard('牡丹 SAR', 'SV4a-354', 15600),
+  mewUR: pcard('夢幻 ex UR', 'SV4a-347', 6400),
+  raidenSAR: pcard('猛雷鼓 ex SAR', 'SV8a-222', 3400),
+  blisseySAR: pcard('幸福蛋 ex SAR', 'SV6-121', 1500),
+  dragapultSV6: pcard('多龍巴魯托 ex', 'SV6-120', 980),
+  jolteon: pcard('雷伊布 ex', 'SV8a-209', 520),
+  vaporeon: pcard('水伊布 ex', 'SV8a-205', 460),
+  ironHands: pcard('鐵臂膀 ex', 'SV8a-210', 300),
+  ditto: pcard('差不多娃娃 ex', 'SV8a-215', 240),
+  finizen: pcard('海豚俠 ex', 'SV8a-207', 150),
   // 滿分保庫只收 PSA 10，附鑑定編號讓買家自己去 PSA 網站對
   terapagosPSA: pcard('太樂巴戈斯 ex UR', 'SV8a-237', 19800, '84120031'),
   pikachuPSA: pcard('皮卡丘 ex SAR', 'SV8a-236', 12800, '84120032'),
   charizardPSA: pcard('噴火龍 ex SAR', 'SV3-125', 9800, '84120033'),
   dragapultPSA: pcard('多龍巴魯托 ex SAR', 'SV8a-221', 4200, '84120034'),
-  flareonPSA: pcard('火伊布 ex', 'SV8a-202', 420, '84120035')
+  flareonPSA: pcard('火伊布 ex', 'SV8a-202', 420, '84120035'),
+  /* 給非「全 PSA」的池用的鑑定卡。編號一定要跟上面那批不同 ——
+     一個編號對應一張實體卡，兩個池共用同一個編號等於宣告同一張卡有兩個得主，
+     而 listings_cert_live 會在第二個人上架時把他擋下來。 */
+  botanPSA: pcard('牡丹 SAR', 'SV4a-354', 15600, '84120041'),
+  gardevoirPSA: pcard('沙奈朵 ex UR', 'SV4a-348', 7600, '84120042'),
+  umbreonPSA: pcard('月亮伊布 ex SAR', 'SV8a-217', 5400, '84120043'),
+  raidenPSA: pcard('猛雷鼓 ex SAR', 'SV8a-222', 3400, '84120044')
 }
 
 type Tier = 'A' | 'B' | 'C' | 'D' | 'LAST' | 'BUST'
@@ -88,27 +107,47 @@ type Tier = 'A' | 'B' | 'C' | 'D' | 'LAST' | 'BUST'
 interface PoolDef {
   id: string
   sellerId: string
-  mode: 'muteki' | 'shitei' | 'muteki' | 'streak' | 'auction'
+  mode: 'muteki'
   title: string
   ticketPrice: number
   /** 只用 002_core.sql 允許的值：draft / committed / open / sold_out / revealed */
   status: 'open' | 'sold_out' | 'revealed'
   /** 已售出的籤數。沒有人抽過的池看起來像壞掉，所以先預填一部分 */
   sold: number
-  /** 籤位排列：預設散落（像真的有人挑籤），競標池要留最後幾支所以從頭填 */
+  /** 籤位排列：預設散落（像真的有人挑籤）；接近完抽的池從頭填比較像真的賣光 */
   soldLayout?: 'scatter' | 'head'
   openedDaysAgo: number
   shiteiTier?: 'A' | 'B' | 'C' | 'D'
-  auctionSeats?: number
   /** 只有既有的 p-seed-1 需要 —— 它的籤序已經在正式資料庫裡，不能因為改規則就變 */
   clientSeed?: string
   prizes: { tier: Tier; card: ReturnType<typeof pcard>; total: number }[]
 }
 
 /* 池清單。設計原則：
-   還元率（獎品總值 ÷ 票收）一律壓在 80～90%，太高莊家賠錢、太低沒人抽。
-   D 賞的單價必須遠低於票價，否則「每抽都回本」會讓池失去意義。
-   模式五種都各留一個池，前端每條路徑都有東西可以點。 */
+
+   一、還元率（獎品總值 ÷ 票收）一律壓在 80～90%，太高莊家賠錢、太低沒人抽。
+       D 賞的單價必須遠低於票價，否則「每抽都回本」會讓池失去意義。
+
+   二、票價要橫跨整個區間，低／中／高各約三分之一。示範資料如果全擠在同一個
+       價位，看的人會以為平台只做那個價位的生意；四個 300 塊的池證明不了
+       這裡開得起 3,000 塊的池，反過來也一樣。目前的分佈（12 池）：
+         低價 ≤400   p-official-2 200 / p-promo-1 250 / p-shop-1 350 / p-seller-2 400
+         中價 ~1000  p-shop-5 550 / p-shop-4 700 / p-official-3 800 / p-official-1 1280
+         高價 >1500  p-vault-3 1900 / p-vault-1 2500 / p-grade10-1 3200 / p-seed-1 3250
+
+   三、賣家的 origin 三種都要有池（官方／商家／個人）—— 前端會依 origin 顯示
+       不同的信任標示，只有一種就驗不到那段畫面。
+
+   四、籤數也要有變化（20～250），卡片要跨套牌、鑑定卡與裸卡都有。
+       每個池長得一樣的話，籤牆與卡圖的問題要等到正式資料進來才會被發現。
+
+   原本這裡還有幾個池是從指定賞／連莊／競標「改標成 muteki」留下來的
+   （p-shop-2 多龍巴魯托 50 抽、p-shop-3 夢幻 66 抽、p-vault-2 噴火龍 80 抽）。
+   那些玩法的前端介面已經整組移除，池只剩下一個被硬調過票價的空殼，
+   跟其他池比沒有多示範任何東西，所以一併刪掉（個人賣家的 p-seller-1 也刪了，
+   它跟 p-promo-1 示範的是同一件事）。新的池用新的 id（p-shop-5 / p-vault-3）——
+   seedPool 看到 id 已存在就整個跳過，沿用舊 id 的話在既有的資料庫上重跑
+   只會靜靜地跳過，新池永遠不會出現。 */
 const poolDefs: PoolDef[] = [
   {
     /* 官方旗艦池：平台自營，規格刻意做得比商家池好一階。
@@ -168,39 +207,19 @@ const poolDefs: PoolDef[] = [
     ]
   },
   {
-    /* 指定賞：抽中 A 賞就結束整池，所以不能用「獎品總值 ÷ 全部票收」評估 ——
-       A 賞平均落在第 25.5 支，期望只賣得掉一半的籤。
-       期望票收 25.5 × 350 = 8,925，期望發出 4,200 + 24.5 × 144.5 ≈ 7,740，
-       還元約 87%。用整池票收去算會誤判成 63%，那個數字沒有意義。 */
-    /* 原本設計成指定賞（shitei）。改回 muteki（無敵賞）是因為 pools-service.ts 完全沒有
-       讀 pools.mode —— 抽卡一律照籤位發獎，那正是無敵賞的規則。掛著 shitei 的話
-       前端會顯示指定賞的徽章與期望值，實際抽起來卻是無敵賞，那比沒有這個模式更糟。
-       等後端補上模式邏輯再把 mode 改回來即可，獎項結構不用動。 */
-    id: 'p-shop-2', sellerId: 'u-shop', mode: 'muteki',
-    title: '多龍巴魯托 精選 50 抽',
-    ticketPrice: 350, status: 'open', sold: 9, openedDaysAgo: 5,
-    prizes: [ // 50 籤
-      { tier: 'A', card: C.dragapultSAR, total: 1 },
-      { tier: 'C', card: C.morpeko, total: 20 },
-      { tier: 'D', card: C.sandyShocks, total: 29 }
-    ]
-  },
-  {
-    /* 原本設計成連莊爆賞（streak）。改回 muteki 的原因比 shitei 更硬：
-       前端的 DrawPanel 看到 mode === 'streak' 會把人導去 StreakRunPage，
-       而連莊在 API 模式下沒有後端（只有 mock 有），點下去就是死路。
-       BUST 賞也一併拿掉 —— 爆賞只有在「抽到就收手」的規則下才有意義，
-       在無敵賞裡它會變成一張可以被正常抽走的廢卡。那 20 席併進 D 賞。 */
-    id: 'p-shop-3', sellerId: 'u-shop', mode: 'muteki',
-    title: '夢幻 精選 66 抽',
-    /* 票價 500 → 640。原本是連莊爆賞，抽到 BUST 的人暫持獎品會被沒收，
-       那部分不用發出去。改成無敵賞之後每一格都要真的發，還元率變成 108%。 */
-    ticketPrice: 640, status: 'open', sold: 14, openedDaysAgo: 2,
-    prizes: [ // 66 籤
-      { tier: 'A', card: C.dragapultSAR, total: 1 },
-      { tier: 'B', card: C.pidgeotSAR, total: 3 },
-      { tier: 'C', card: C.hasselSAR, total: 6 },
-      { tier: 'D', card: C.flareon, total: 36 },
+    /* 商家的中價位池。低價池靠量、高價池靠一張大卡，中間這一段兩者都不是 ——
+       它要證明的是「45 籤也排得出完整的賞別階梯」，而那是最多賣家實際會開的規模。
+       這一池刻意混了 PSA 鑑定卡與裸卡：買家看得到兩種標示並排的樣子，
+       才知道 CertTag 有出現跟沒出現的差別在哪。 */
+    id: 'p-shop-5', sellerId: 'u-shop', mode: 'muteki',
+    title: '關都精選 · 中額場 45 抽',
+    ticketPrice: 550, status: 'open', sold: 19, openedDaysAgo: 4,
+    prizes: [ // 45 籤，票收 24,750、獎品總值 21,640 → 還元 87.4%
+      { tier: 'LAST', card: C.mewUR, total: 1 },
+      { tier: 'A', card: C.raidenPSA, total: 1 },
+      { tier: 'B', card: C.blisseySAR, total: 2 },
+      { tier: 'C', card: C.jolteon, total: 5 },
+      { tier: 'D', card: C.ditto, total: 16 },
       { tier: 'D', card: C.sandyShocks, total: 20 }
     ]
   },
@@ -214,18 +233,6 @@ const poolDefs: PoolDef[] = [
       { tier: 'B', card: C.dragapultSAR, total: 2 },
       { tier: 'C', card: C.pepperSAR, total: 6 },
       { tier: 'D', card: C.sandyShocks, total: 51 }
-    ]
-  },
-  {
-    // 個人賣家的小池：40 籤，抽起來很快就完抽
-    id: 'p-seller-1', sellerId: 'u-seller', mode: 'muteki',
-    title: '個人開池 · 伊布小場 40 抽',
-    ticketPrice: 800, status: 'open', sold: 12, openedDaysAgo: 1,
-    prizes: [ // 40 籤，還元 86.6%
-      { tier: 'A', card: C.umbreonSAR, total: 1 },
-      { tier: 'B', card: C.eeveeSAR, total: 1 },
-      { tier: 'C', card: C.pidgeotSAR, total: 3 },
-      { tier: 'D', card: C.glaceon, total: 35 }
     ]
   },
   {
@@ -256,25 +263,19 @@ const poolDefs: PoolDef[] = [
     ]
   },
   {
-    /* 尾籤競標：前 77 支固定價賣掉，最後 3 支的大獎改用喊標。
-       固定席的還元 86.1%（19,880 ÷ 23,100），競標席不含在內 ——
-       成交價由市場決定，事前算不出來。 */
-    /* 原本是尾籤競標（auction）。競標同樣只有 mock 有實作，API 模式下
-       沒有出價端點，開出來只會是一個按了沒反應的池。改回 muteki。 */
-    id: 'p-vault-2', sellerId: 'u-vaultkeeper', mode: 'muteki',
-    title: '保庫堂 · 噴火龍 80 抽',
-    /* 票價 300 → 580。這個池原本是尾籤競標，收入有一部分來自喊標；
-       改成無敵賞之後只剩固定票價，還元率變成 164%。調價回到 ~85%。 */
-    ticketPrice: 580, status: 'open', sold: 77, soldLayout: 'head',
-    openedDaysAgo: 9,
-    prizes: [ // 80 籤
-      { tier: 'A', card: C.charizardSAR, total: 1 },
+    /* 保庫堂的鑑定精選：24 籤、票價 1,900。這一池補的是「高價但不是最高價」——
+       只有 3,000 級的池的話，高價區看起來像個懸崖而不是連續的區間。
+       頂三賞刻意用兩張 PSA 加一張裸卡：同一池裡並排才看得出鑑定溢價。 */
+    id: 'p-vault-3', sellerId: 'u-vaultkeeper', mode: 'muteki',
+    title: '保庫堂 · 鑑定精選 24 抽',
+    ticketPrice: 1900, status: 'open', sold: 6, openedDaysAgo: 2,
+    prizes: [ // 24 籤，票收 45,600、獎品總值 38,740 → 還元 85.0%
+      { tier: 'LAST', card: C.botanPSA, total: 1 },
+      { tier: 'A', card: C.gardevoirPSA, total: 1 },
       { tier: 'B', card: C.umbreonSAR, total: 1 },
-      { tier: 'B', card: C.dragapultSAR, total: 1 },
-      { tier: 'C', card: C.hasselSAR, total: 3 },
-      { tier: 'D', card: C.flareon, total: 10 },
-      { tier: 'D', card: C.glaceon, total: 20 },
-      { tier: 'D', card: C.sandyShocks, total: 44 }
+      { tier: 'C', card: C.dragapultSV6, total: 4 },
+      { tier: 'D', card: C.vaporeon, total: 7 },
+      { tier: 'D', card: C.ironHands, total: 10 }
     ]
   },
   {
@@ -282,7 +283,7 @@ const poolDefs: PoolDef[] = [
     id: 'p-grade10-1', sellerId: 'u-grade10', mode: 'muteki',
     title: '滿分場 #30 · 全 PSA 10',
     ticketPrice: 3200, status: 'open', sold: 9, openedDaysAgo: 5,
-    prizes: [ // 20 籤，還元 89.2%
+    prizes: [ // 20 籤，票收 64,000、獎品總值 54,440 → 還元 85.1%
       { tier: 'LAST', card: C.terapagosPSA, total: 1 },
       { tier: 'A', card: C.pikachuPSA, total: 1 },
       { tier: 'B', card: C.charizardPSA, total: 1 },
@@ -293,8 +294,12 @@ const poolDefs: PoolDef[] = [
          這個池的賣點是「全部可查證」，就用不帶編號的卡湊籤數，
          真正有編號的只開一籤。 */
       { tier: 'C', card: C.dragapultPSA, total: 1 },
-      { tier: 'D', card: C.flareonPSA, total: 1 },
-      { tier: 'D', card: C.sandyShocks, total: 15 }
+      /* 湊籤的 16 席原本是 flareonPSA ×1 + 砂鐵蜥 ×15（單價 120）。
+         票價 3,200 的池配 120 元的墊底卡，還元率只有 76.3% —— 註解寫的 89.2%
+         是拆掉重號那批卡之前的舊數字，沒有跟著改。高價池的墊底不能是銅板卡：
+         付 3,200 抽到一張 120 的卡，那不是運氣不好，是池本身不合理。 */
+      { tier: 'D', card: C.jolteon, total: 8 },
+      { tier: 'D', card: C.vaporeon, total: 8 }
     ]
   },
   {
@@ -388,19 +393,30 @@ async function seedPool(d: PoolDef) {
 
   /* 種子池也要有還元率，否則示範資料上看不到這個數字，
      而它正是買家判斷值不值得抽最直接的依據。 */
-  const { ratio } = returnRatio(
-    prizeDefs.map(p => ({ tier: p.tier, qty: p.total, unitValue: (p.card as { refPrice?: number }).refPrice ?? 0 })),
-    total, d.ticketPrice
-  )
+  const values = prizeDefs.map(p => ({
+    tier: p.tier, qty: p.total, unitValue: (p.card as { refPrice?: number }).refPrice ?? 0
+  }))
+  const { ratio } = returnRatio(values, total, d.ticketPrice)
+
+  /* 種子走的是 insert，繞過了 POST /v1/pools 上的兩道經濟護欄。
+     繞過去的後果不是「示範資料醜一點」：示範池是所有人第一眼看到的東西，
+     一個還元率 160% 的池會被當成平台的正常水準，而且回收（recycle）照 refPrice
+     付點數，那種池自己就是一台印鈔機（安全稽核 C-2）。
+     所以這裡自己補上同樣的兩道閘，而且是 throw 不是 warn ——
+     算錯的池應該在 seed 就停下來，不是安靜地進資料庫。 */
+  const gate = poolAllowed(ratio)
+  if (!gate.allowed) throw new Error(`種子池 ${d.id} 過不了還元率護欄：${gate.message}`)
+  const redeem = redeemAllowed(redeemRatio(values, total, d.ticketPrice).ratio)
+  if (!redeem.allowed) throw new Error(`種子池 ${d.id} 過不了兌現率護欄：${redeem.message}`)
 
   await sql`
     insert into pools (id, seller_id, mode, title, ticket_price, total_tickets, status,
                        server_seed, commit_hash, manifest_hash, client_seed_source, client_seed,
-                       shitei_tier, auction_seats, opened_at, revealed_at, return_ratio)
+                       shitei_tier, opened_at, revealed_at, return_ratio)
     values (${d.id}, ${d.sellerId}, ${d.mode}, ${d.title}, ${d.ticketPrice}, ${total}, ${d.status},
             ${serverSeed}, ${await commitV2(serverSeed, manifestHash)}, ${manifestHash},
             ${clientSeed}, ${clientSeed},
-            ${d.shiteiTier ?? null}, ${d.auctionSeats ?? null}, ${openedAt},
+            ${d.shiteiTier ?? null}, ${openedAt},
             ${d.status === 'revealed' ? new Date() : null}, ${ratio.toFixed(2)})
   `
   await sql`insert into pool_prizes ${sql(prizeDefs.map(p => ({ id: p.id, pool_id: d.id, tier: p.tier, card: p.card, total: p.total })) as never)}`
@@ -415,7 +431,7 @@ async function seedPool(d: PoolDef) {
     taken_by: taken.has(i + 1) ? 'u-buyer' : null,
     taken_at: taken.has(i + 1) ? takenAt : null
   })) as never)}`
-  console.log(`seed pool ${d.id}: ${total} seats, ${taken.size} sold, ${d.status}`)
+  console.log(`seed pool ${d.id}: 票價 ${d.ticketPrice} × ${total} 籤，還元 ${ratio.toFixed(1)}%，已售 ${taken.size}，${d.status}`)
 }
 
 async function run() {

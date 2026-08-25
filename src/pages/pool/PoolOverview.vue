@@ -13,7 +13,6 @@ import Tilt3D from '@/components/Tilt3D.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import PoolOriginBadge from '@/components/PoolOriginBadge.vue'
 import SellerChip from '@/components/SellerChip.vue'
-import AuctionPanel from '@/components/AuctionPanel.vue'
 import DrawPanel from '@/components/DrawPanel.vue'
 
 const props = defineProps<{ pool: Pool }>()
@@ -28,8 +27,6 @@ const topLive = computed(() =>
     .reduce<typeof props.pool.prizes[number] | undefined>((best, p) =>
       !best || RANK[p.tier] > RANK[best.tier] ? p : best, undefined))
 const topPrize = computed(() => props.pool.prizes.find(p => p.tier === 'A') ?? props.pool.prizes[0])
-const inAuctionPhase = computed(() =>
-  props.pool.mode === 'auction' && props.pool.remainingTickets <= (props.pool.auctionSeats ?? 0))
 const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.totalTickets) * 100))
 </script>
 
@@ -70,15 +67,12 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
       </div>
     </section>
 
-    <!-- 競標階段：面板只在這一頁掛載，離開就拆（它有兩個 interval） -->
-    <AuctionPanel v-if="pool.mode === 'auction' && inAuctionPhase" :pool="pool" class="auction" />
-
     <!-- 手機主 CTA：桌機的側欄面板在這裡看不到，所以總覽頁自己放一份。
          這一份走 sheet 版 —— 手機一屏就這麼高，合計與按鈕不該一進頁就先佔掉一塊；
          選了抽數才從畫面下緣把購買列叫出來（見 DrawPanel 的 variant 說明） -->
     <div class="mobileCta">
-      <DrawPanel v-if="pool.status === 'open' && !inAuctionPhase" :pool="pool" variant="sheet" />
-      <div v-else-if="pool.status !== 'open'" class="done card">
+      <DrawPanel v-if="pool.status === 'open'" :pool="pool" variant="sheet" />
+      <div v-else class="done card">
         <p>本池已完抽</p>
         <RouterLink :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn">驗證抽選結果</RouterLink>
       </div>
@@ -111,7 +105,6 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
 .fill { height: 100%; border-radius: var(--pill); background: linear-gradient(90deg, var(--accent), var(--accent-soft)); }
 .sellerRow { display: flex; align-items: center; gap: 8px; }
 .by { font-size: 12px; font-weight: 600; }
-.auction { margin-top: 2px; }
 .mobileCta { display: none; }
 .done { padding: 20px; text-align: center; display: grid; gap: 10px; }
 .done p { margin: 0; }

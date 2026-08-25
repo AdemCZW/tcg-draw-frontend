@@ -39,7 +39,7 @@ const paths: Record<string, string> = {
 const current = computed(() => String(route.name ?? ''))
 const isOn = (match: readonly string[]) => match.includes(current.value)
 /** 中央鍵：抽選相關的頁面都算 */
-const playOn = computed(() => ['play', 'pool', 'pool-pick', 'streak'].includes(current.value))
+const playOn = computed(() => ['play', 'pool', 'pool-pick'].includes(current.value))
 </script>
 
 <template>

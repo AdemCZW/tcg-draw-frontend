@@ -35,10 +35,8 @@ const cost = computed(() => (selected.value ?? 0) * props.pool.ticketPrice)
 const soldOut = computed(() => props.pool.remainingTickets <= 0)
 const notEnoughTickets = computed(() => (selected.value ?? 0) > props.pool.remainingTickets)
 
-const isStreak = computed(() => props.pool.mode === 'streak')
-
 /** 購買列真的浮著的時候才成立；完抽時 sheet 版退回面板內顯示，不浮出來 */
-const barUp = computed(() => isSheet.value && !isStreak.value && !soldOut.value && selected.value !== null)
+const barUp = computed(() => isSheet.value && !soldOut.value && selected.value !== null)
 
 const countsEl = ref<HTMLElement | null>(null)
 
@@ -56,19 +54,8 @@ function pick(c: number) {
 
 function goPick() {
   error.value = ''
-  if (!isStreak.value && selected.value === null) return
+  if (selected.value === null) return
   track(`click_draw_${selected.value}` as Parameters<typeof track>[0])
-
-  // 連莊爆賞是自己的流程（付一次入場費後連抽），不走選抽數
-  if (isStreak.value) {
-    if (!wallet.canAfford(props.pool.ticketPrice)) {
-      track('draw_failed_insufficient')
-      error.value = '點數不足，請先儲值'
-      return
-    }
-    router.push({ name: 'streak', params: { id: props.pool.id } })
-    return
-  }
 
   if (soldOut.value || notEnoughTickets.value) {
     track('draw_failed_soldout')
@@ -86,45 +73,31 @@ function goPick() {
 
 <template>
   <div class="panel card">
-    <template v-if="isStreak">
+    <div ref="countsEl" class="counts" :class="{ sheet: isSheet }" role="radiogroup" aria-label="抽數">
+      <button
+        v-for="c in counts" :key="c"
+        class="count" :class="{ on: selected === c }"
+        role="radio" :aria-checked="selected === c"
+        :disabled="c > pool.remainingTickets"
+        @click="pick(c)"
+      >{{ c }} 抽</button>
+    </div>
+
+    <!-- 面板版（桌機側欄）：合計與按鈕就在原位 -->
+    <template v-if="!isSheet || soldOut">
       <div class="total">
-        <span class="muted">入場費</span>
-        <strong class="mono">{{ pool.ticketPrice.toLocaleString() }} 點</strong>
+        <span class="muted">合計</span>
+        <strong class="mono">{{ cost.toLocaleString() }} 點</strong>
       </div>
       <button class="btn primary go" :disabled="soldOut" @click="goPick">
-        {{ soldOut ? '已完抽' : '進場連莊' }}
+        {{ soldOut ? '已完抽' : '去選籤 →' }}
       </button>
       <p v-if="error" class="err" role="alert">{{ error }}</p>
-      <p class="note muted">付一次入場費即可連續抽，隨時可收手落袋。抽到爆賞則該輪全數沒收。</p>
     </template>
 
-    <template v-else>
-      <div ref="countsEl" class="counts" :class="{ sheet: isSheet }" role="radiogroup" aria-label="抽數">
-        <button
-          v-for="c in counts" :key="c"
-          class="count" :class="{ on: selected === c }"
-          role="radio" :aria-checked="selected === c"
-          :disabled="c > pool.remainingTickets"
-          @click="pick(c)"
-        >{{ c }} 抽</button>
-      </div>
-
-      <!-- 面板版（桌機側欄）：合計與按鈕就在原位 -->
-      <template v-if="!isSheet || soldOut">
-        <div class="total">
-          <span class="muted">合計</span>
-          <strong class="mono">{{ cost.toLocaleString() }} 點</strong>
-        </div>
-        <button class="btn primary go" :disabled="soldOut" @click="goPick">
-          {{ soldOut ? '已完抽' : '去選籤 →' }}
-        </button>
-        <p v-if="error" class="err" role="alert">{{ error }}</p>
-      </template>
-
-      <!-- 公平性揭露留在面板裡，不跟著進購買列：那條列只有一行的高度，
-           塞這段字會擠成三行，把真正要按的鍵推出拇指範圍 -->
-      <p class="note muted">下一步由你親手選籤位。籤序已於開賣前封存（見下方 commit hash），結果不可事後變更。</p>
-    </template>
+    <!-- 公平性揭露留在面板裡，不跟著進購買列：那條列只有一行的高度，
+         塞這段字會擠成三行，把真正要按的鍵推出拇指範圍 -->
+    <p class="note muted">下一步由你親手選籤位。籤序已於開賣前封存（見下方 commit hash），結果不可事後變更。</p>
   </div>
 
   <!-- 浮出的購買列。Teleport／讓位／進出場動畫都在 BottomActionBar 裡，

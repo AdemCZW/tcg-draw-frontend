@@ -37,7 +37,7 @@ function toPublic(p: Row, prizes: Row[], taken: number[]) {
     commitHash: p.commit_hash, clientSeedSource: p.client_seed_source,
     clientSeed: p.status === 'draft' || p.status === 'committed' ? null : p.client_seed,
     serverSeed: revealed ? p.server_seed : null,
-    shiteiTier: p.shitei_tier ?? undefined, auctionSeats: p.auction_seats ?? undefined,
+    shiteiTier: p.shitei_tier ?? undefined,
     prizes: prizes.map(x => ({ id: x.id, tier: x.tier, card: x.card, total: Number(x.total), remaining: Number(x.remaining) })),
     openedAt: p.opened_at, revealedAt: p.revealed_at
   }
@@ -159,8 +159,9 @@ const CreatePool = z.object({
      draw() 沒有讀過 pools.mode，它的行為就是「最後賞是籤池裡的一張普通獎品，
      抽走最後一籤不加送」—— 那正是無敵賞的定義。原本這裡收的是 classic，
      但 classic 的賣點（抽走最後一籤額外得最後賞）後端一行都沒有（見 migration 016）。
-     其餘三種收下來只會開出標示著某種玩法、實際照無敵賞發獎的池，
-     streak / auction 更會讓前端把玩家導去沒有後端的流程。
+     其餘兩種收下來只會開出標示著某種玩法、實際照無敵賞發獎的池。
+     （原本還有 streak / auction，前端那兩套介面已整組移除 —— 後端零實作，
+     留著只是把死路做得像活路。）
      前端也鎖了，但那只是不讓人誤按；直接打 API 的要在這裡擋，
      資料庫的 check 是最後一道（016）。補上模式邏輯時再把該玩法加回三個地方。 */
   mode: z.enum(['muteki']),
@@ -169,7 +170,6 @@ const CreatePool = z.object({
   totalTickets: z.number().int().positive().max(5000),
   prizes: z.array(PrizeIn).min(1),
   shiteiTier: z.enum(['A', 'B', 'C', 'D', 'LAST']).optional(),
-  auctionSeats: z.number().int().positive().optional(),
   coverFileId: z.string().optional()
 })
 
@@ -225,9 +225,9 @@ pools.post('/', requireAuth, async c => {
     const result = await sql.begin(async tx => {
       await tx`
         insert into pools (id, seller_id, mode, title, cover_file_id, ticket_price, total_tickets,
-                           shitei_tier, auction_seats, return_ratio)
+                           shitei_tier, return_ratio)
         values (${id}, ${me}, ${b.mode}, ${b.title}, ${b.coverFileId ?? null}, ${b.ticketPrice}, ${b.totalTickets},
-                ${b.shiteiTier ?? null}, ${b.auctionSeats ?? null}, ${ratio.toFixed(2)})
+                ${b.shiteiTier ?? null}, ${ratio.toFixed(2)})
       `
       const rows = b.prizes.map((p, i) => ({
         id: `${id}-pr${i}`, pool_id: id, tier: p.tier, card: p.card, total: p.total

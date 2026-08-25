@@ -2,13 +2,10 @@
 // API layer。
 //
 // MOCK 由 VITE_API_URL 決定（見 lib/config.ts）：沒設就全走 mock，有設就打後端。
-// 每個方法兩條路徑並存。後端沒建的功能（連莊、競標）在 API 模式下**丟錯**，
-// 不落回 mock —— 落回去會變成一場伺服器不知情的遊戲（見底下那幾支的說明）。
-//
 // 後端的回應形狀在這裡轉成前端既有的型別，頁面元件不用改。
 // ------------------------------------------------------------------
 import type {
-  Pool, DrawResult, UserPrize, LedgerEntry, WinnerEvent, StreakRun, AuctionLot,
+  Pool, DrawResult, UserPrize, LedgerEntry, WinnerEvent,
   Seller, Listing, CardItem, PoolStatus, Tier
 } from '@/types/models'
 import { deliveryOf } from '@/shared/domain'
@@ -31,7 +28,7 @@ function toPool(p: Any): Pool {
     origin: (p.origin as Pool['origin']) ?? 'personal',
     title: String(p.title), cover: (p.cover as string) ?? '',
     mode: p.mode as Pool['mode'],
-    shiteiTier: p.shiteiTier as Tier | undefined, auctionSeats: p.auctionSeats as number | undefined,
+    shiteiTier: p.shiteiTier as Tier | undefined,
     ticketPrice: Number(p.ticketPrice), totalTickets: Number(p.totalTickets),
     remainingTickets: Number(p.remainingTickets),
     returnRatio: p.returnRatio === null || p.returnRatio === undefined ? null : Number(p.returnRatio),
@@ -59,7 +56,7 @@ function toPrize(r: Any): UserPrize {
 }
 
 const REASON_TYPE: Record<string, LedgerEntry['type']> = {
-  'admin-grant': 'topup', topup: 'topup', draw: 'draw', 'streak-entry': 'draw',
+  'admin-grant': 'topup', topup: 'topup', draw: 'draw',
   refund: 'refund', recycle: 'recycle', 'vault-buy': 'redeem', 'vault-sell': 'redeem',
   'order-pay': 'redeem', 'order-receive': 'redeem'
 }
@@ -192,7 +189,7 @@ export const api = {
     const total = input.prizes.reduce((a, p) => a + p.qty, 0)
     const r = await http<{ poolId: string }>('/v1/pools', { method: 'POST', json: {
       mode: input.mode, title: input.title, ticketPrice: input.ticketPrice, totalTickets: total,
-      shiteiTier: input.shiteiTier, auctionSeats: input.auctionSeats,
+      shiteiTier: input.shiteiTier,
       prizes: input.prizes.map((p, i) => ({
         tier: p.tier, total: p.qty,
         card: { id: `c-${Date.now().toString(36)}-${i}`, name: p.name, setCode: '', cardNo: '', language: 'JP',
@@ -201,44 +198,6 @@ export const api = {
     } })
     const g = await http<{ pool: Any }>(`/v1/pools/${r.poolId}`)
     return toPool(g.pool)
-  },
-
-  /* ---- 連莊爆賞 / 尾籤競標 ----
-     這兩套玩法後端零實作。原本這幾支在 API 模式下也照樣呼叫 mock，理由是
-     「不要讓按鈕沒反應」—— 但那個選擇讓失敗變成靜默的：mock 的入場費扣在
-     瀏覽器記憶體裡（wallet 的 spend/topup 在 !MOCK 時整支 return），
-     伺服器完全不知道有人在玩，收手拿到的卡也不會進伺服器的卡冊。
-     玩家會在一場沒人記帳的遊戲裡花真的錢，而畫面上一切正常。
-
-     沒反應的按鈕只是難用，靜默的假成功是會賠錢的。所以正式模式直接丟錯，
-     讓它在第一次被觸發時就吵起來。mock 模式維持原樣 —— 那是 demo 的資料來源。
-
-     今天正常情況下走不到這裡（建池 API 只收 muteki、DB 的 check 也只允許
-     muteki，所以線上不會有 streak / auction 的池）。這裡擋的是那三道閘
-     哪天被打開、而後端還沒補上的那個空窗。 */
-  async startStreak(poolId: string): Promise<StreakRun> {
-    if (!MOCK) throw new Error('連莊爆賞尚未上線：後端沒有這個玩法的實作')
-    await delay(250); return mock.startStreak(poolId)
-  },
-
-  async streakDraw(runId: string, seat: number): Promise<StreakRun> {
-    if (!MOCK) throw new Error('連莊爆賞尚未上線：後端沒有這個玩法的實作')
-    await delay(500); return mock.streakDraw(runId, seat)
-  },
-
-  async bankStreak(runId: string): Promise<DrawResult> {
-    if (!MOCK) throw new Error('連莊爆賞尚未上線：後端沒有這個玩法的實作')
-    await delay(300); return mock.bankStreak(runId)
-  },
-
-  async listLots(poolId: string): Promise<AuctionLot[]> {
-    if (!MOCK) throw new Error('尾籤競標尚未上線：後端沒有出價端點')
-    await delay(150); return mock.listLots(poolId)
-  },
-
-  async placeBid(lotId: string, amount: number): Promise<{ lot: AuctionLot; refunded: number }> {
-    if (!MOCK) throw new Error('尾籤競標尚未上線：後端沒有出價端點')
-    await delay(300); return mock.placeBid(lotId, amount)
   },
 
   /**

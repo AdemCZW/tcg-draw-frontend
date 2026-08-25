@@ -66,8 +66,8 @@ async function submitApply() {
    pools.mode，抽卡一律照籤位發獎 —— 那就是無敵賞的規則。所以
      - classic / shitei 開得出來的話，賣的是後端不存在的規則（經典賞宣傳的
        「抽走最後一籤額外得最後賞」一行都沒有），那是對買家的不實陳述
-     - streak / auction 更糟：前端會把人導去連莊／競標流程，而那兩個在 API 模式下
-       沒有後端，是死路
+   （連莊／競標原本也列在這裡，已經整組移除 —— 它們後端零實作，前端卻有完整
+   的頁面會把人導進去，留著只是把死路做得更像活路。）
    讓賣家選得到等於讓他開一個對玩家壞掉的池，所以先鎖住，但仍然列出來 ——
    藏起來的話賣家不會知道之後會有這些玩法。後端補上模式邏輯後把 enabled 打開即可
    （同時要放寬建池 API 的 enum 與資料庫的 check，見 migration 016）。
@@ -75,9 +75,7 @@ async function submitApply() {
 const MODES: { m: PoolMode; enabled: boolean }[] = [
   { m: 'muteki', enabled: true },
   { m: 'classic', enabled: false },
-  { m: 'shitei', enabled: false },
-  { m: 'streak', enabled: false },
-  { m: 'auction', enabled: false }
+  { m: 'shitei', enabled: false }
 ]
 const TIERS: Tier[] = ['A', 'B', 'C', 'D', 'LAST', 'BUST']
 
@@ -86,7 +84,6 @@ const form = reactive({
   mode: 'muteki' as PoolMode,
   ticketPrice: 300,
   shiteiTier: 'A' as Tier,
-  auctionSeats: 3,
   prizes: [
     { tier: 'A' as Tier, name: '', qty: 1, unitValue: 8000 },
     { tier: 'D' as Tier, name: '', qty: 59, unitValue: 60 }
@@ -101,7 +98,7 @@ const econ = computed(() =>
     form.mode,
     form.prizes.map(p => ({ tier: p.tier, qty: p.qty, unitValue: p.unitValue })),
     form.ticketPrice,
-    { shiteiTier: form.shiteiTier, auctionSeats: form.auctionSeats }
+    { shiteiTier: form.shiteiTier }
   )
 )
 const blocked = computed(() => econ.value.verdict === 'loss' || econ.value.verdict === 'predatory')
@@ -128,7 +125,6 @@ async function submit() {
       mode: form.mode,
       ticketPrice: form.ticketPrice,
       shiteiTier: form.mode === 'shitei' ? form.shiteiTier : undefined,
-      auctionSeats: form.mode === 'auction' ? form.auctionSeats : undefined,
       prizes: form.prizes.map(p => ({ tier: p.tier, name: p.name.trim() || '爆賞', qty: p.qty, unitValue: p.unitValue }))
     })
     router.push({ name: 'pool', params: { id: pool.id } })
@@ -226,7 +222,7 @@ async function submit() {
           </label>
 
           <span class="field-label">玩法</span>
-          <p class="modeNote">目前開放無敵賞。經典賞、指定賞、連莊、競標還在做，開放後會在這裡解鎖。</p>
+          <p class="modeNote">目前開放無敵賞。經典賞與指定賞還在做，開放後會在這裡解鎖。</p>
           <div class="modes">
             <button
               v-for="o in MODES" :key="o.m" type="button"
@@ -240,7 +236,7 @@ async function submit() {
 
           <div class="row2">
             <label class="field">
-              <span>{{ form.mode === 'streak' ? '入場費（點）' : '每抽價格（點）' }}</span>
+              <span>每抽價格（點）</span>
               <input v-model.number="form.ticketPrice" type="number" min="1" step="10" />
             </label>
             <label v-if="form.mode === 'shitei'" class="field">
@@ -248,10 +244,6 @@ async function submit() {
               <select v-model="form.shiteiTier">
                 <option v-for="t in ['A','B','C','D']" :key="t" :value="t">{{ t }} 賞</option>
               </select>
-            </label>
-            <label v-if="form.mode === 'auction'" class="field">
-              <span>最後幾支轉競標</span>
-              <input v-model.number="form.auctionSeats" type="number" min="1" max="10" />
             </label>
           </div>
         </section>
@@ -285,11 +277,7 @@ async function submit() {
           </div>
           <button type="button" class="btn add" @click="addPrize">＋ 新增賞別</button>
 
-          <p v-if="form.mode === 'streak'" class="hint muted">
-            連莊爆賞必須放「爆賞」籤，玩家抽到就該輪歸零。爆賞越少玩家越容易連莊，
-            但你的還元率會飆高——右側會即時算給你看。
-          </p>
-          <p v-else-if="form.mode === 'muteki'" class="hint muted">
+          <p v-if="form.mode === 'muteki'" class="hint muted">
             無敵賞的「最後賞」就是籤池裡的一張獎品，它跟其他賞別一樣佔一個籤位，
             所有賞別的數量加總必須剛好等於總籤數。抽走最後一籤沒有額外贈獎。
           </p>
@@ -311,15 +299,7 @@ async function submit() {
           <dl class="figures">
             <div><dt>獎池總值</dt><dd class="mono">{{ econ.prizeValue.toLocaleString() }}</dd></div>
             <div><dt>預期票收</dt><dd class="mono">{{ econ.revenue.toLocaleString() }}</dd></div>
-            <div v-if="econ.worstCaseRatio !== undefined">
-              <dt>玩家最佳策略</dt><dd class="mono">{{ econ.worstCaseRatio.toFixed(1) }}%</dd>
-            </div>
           </dl>
-
-          <p v-if="econ.worstCaseRatio !== undefined" class="hint muted">
-            連莊玩法無法直接相除——玩家爆掉時獎品不發出。此處以蒙地卡羅模擬各種
-            收手策略，取玩家能拿到的最高值作為你的風險上限。
-          </p>
         </div>
 
         <div class="card fair">

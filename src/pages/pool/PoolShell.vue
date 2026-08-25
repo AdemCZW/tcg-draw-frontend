@@ -2,16 +2,13 @@
 /**
  * 池的外殼 —— 標題列 + tab + 桌機側欄，子頁只管自己的內容。
  *
- * 原本 PoolDetailPage 一頁塞六件事（封面、獎項表、競標面板、托管、承諾雜湊、
+ * 原本 PoolDetailPage 一頁塞六件事（封面、獎項表、玩法面板、托管、承諾雜湊、
  * 購買面板），手機上購買面板還被 order:-1 頂到最上面 —— 使用者先看到
  * 「買幾抽」才看得到「有什麼獎」，決策順序反了。
  *
  * 拆成三個 tab：總覽 / 獎項 / 驗證。tab 之間用 router.replace 切換，
  * 不推 history —— 返回鍵應該直接跳出池，不該在 tab 之間來回彈。
  * 桌機保留側欄的購買面板：同一屏邊看獎項邊決定抽數，這是桌機該有的效率。
- *
- * 尾籤競標面板有一個 500ms 的倒數 ticker，原本只要打開池詳情就在跑。
- * 現在只在「總覽」tab 且進入競標階段時掛載，離開就拆。
  */
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -36,8 +33,6 @@ const pools = usePoolStore()
 const sellers = useSellerStore()
 
 const pool = computed(() => pools.byId(String(route.params.id)))
-const inAuctionPhase = computed(() =>
-  pool.value?.mode === 'auction' && pool.value.remainingTickets <= (pool.value.auctionSeats ?? 0))
 
 onMounted(async () => {
   await Promise.all([pools.ensureLoaded(), sellers.ensureLoaded()])
@@ -101,11 +96,7 @@ const activeTab = computed(() => String(route.name))
 
       <!-- 桌機側欄：購買面板一直在。手機收進總覽頁的主 CTA -->
       <aside class="side">
-        <div v-if="pool.status === 'open' && inAuctionPhase" class="done card">
-          <p><strong>已進入尾籤競標</strong></p>
-          <p class="muted fine">剩下的 {{ pool.remainingTickets }} 支籤改由競標決定得主，請到「總覽」出價。</p>
-        </div>
-        <DrawPanel v-else-if="pool.status === 'open'" :pool="pool" />
+        <DrawPanel v-if="pool.status === 'open'" :pool="pool" />
         <div v-else class="done card">
           <p>本池已完抽</p>
           <RouterLink :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn">驗證抽選結果</RouterLink>
@@ -170,7 +161,6 @@ h1 { font-size: 22px; margin: 0; letter-spacing: -.01em; }
 .side { position: sticky; top: 76px; }
 .done { padding: 20px; text-align: center; display: grid; gap: 10px; }
 .done p { margin: 0; }
-.done .fine { font-size: 12.5px; }
 
 .skel { display: grid; gap: 12px; max-width: 520px; }
 .skel i { display: block; height: 18px; border-radius: 6px; background: var(--surface-2); }

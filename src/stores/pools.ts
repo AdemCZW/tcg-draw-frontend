@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
-import type { Pool, DrawResult, StreakRun } from '@/types/models'
+import type { Pool, DrawResult } from '@/types/models'
 
 /* 開卡結果只活在記憶體裡的話，使用者抽完手滑重整就變成「沒有可顯示的抽選結果」。
    鏡射一份到 sessionStorage（分頁關掉就消失，不會累積）；
@@ -69,27 +69,10 @@ export const usePoolStore = defineStore('pools', {
       return result
     },
 
-    // ---- 連莊爆賞 ----
-    async startStreak(poolId: string): Promise<StreakRun> {
-      return api.startStreak(poolId)
-    },
-    async streakDraw(poolId: string, runId: string, seat: number): Promise<StreakRun> {
-      const run = await api.streakDraw(runId, seat)
-      await this.syncPool(poolId)
-      return run
-    },
     async createPool(input: Parameters<typeof api.createPool>[0]): Promise<Pool> {
       const pool = await api.createPool(input)
       this.pools.push(pool)
       return pool
-    },
-
-    async bankStreak(runId: string): Promise<DrawResult> {
-      const result = await api.bankStreak(runId)
-      this.lastResult = result
-      stashResult(result)
-      await this.syncPool(result.poolId)
-      return result
     }
   }
 })

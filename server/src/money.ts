@@ -20,15 +20,14 @@ export async function walletOf(userId: string, db: Db = root): Promise<Wallet> {
   const [bal] = await db<{ sum: string | null }[]>`
     select sum(delta)::text as sum from points_ledger where user_id = ${userId}
   `
+  /* 這裡原本還 union 了一段「尾籤競標的最高出價也要凍結」。尾籤競標整組移除了
+     （前端沒有介面、後端從來沒有寫入 bids 的端點），那段子查詢永遠回空集合 ——
+     留著會讓讀的人以為平台有競標，而且每次查餘額都白掃兩張表。 */
   const [lock] = await db<{ sum: string | null }[]>`
     select sum(amount)::text as sum from (
       select price   as amount from orders where buyer_id  = ${userId} and status = any(${OPEN as unknown as string[]})
       union all
       select deposit as amount from orders where seller_id = ${userId} and status = any(${OPEN as unknown as string[]})
-      union all
-      -- 競標中的最高出價也是凍結：被超過就自動解凍（is_top 變 false）
-      select b.amount from bids b join auction_lots l on l.id = b.lot_id
-       where b.user_id = ${userId} and b.is_top and l.status = 'live'
       union all
       /* 待回應的交易邀約也要凍結。
          沒有這一段的話，餘額 1000 的人可以同時對十張卡各出價 1000 ——

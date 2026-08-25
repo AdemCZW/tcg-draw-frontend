@@ -10,24 +10,31 @@ export type {
 /* re-export 不會把名字帶進本檔的作用域，底下還有型別直接引用 CardItem，
    所以要再 import 一次 */
 import type { CardItem } from '@/shared/domain'
-/** BUST = 連莊爆賞的「爆」籤，抽中即該輪歸零（僅 streak 模式使用） */
+/**
+ * BUST = 保底籤：這一格不發獎品，只發一張保底卡。
+ *
+ * 沒有任何玩法在用它了（連莊爆賞已移除），但它必須留在型別與後端的 enum 裡 ——
+ * shared/economics.ts 的 redeemAllowed 就是為了「賣家把價值藏在 BUST 裡」
+ * 這條攻擊路徑存在的（安全稽核 C-2）。把賞別從型別拿掉不會讓那道閘變得不必要，
+ * 只會讓它看起來沒有理由。
+ */
 export type Tier = 'A' | 'B' | 'C' | 'D' | 'LAST' | 'BUST'
 
 /**
  * 玩法模式（源自市場調查：金證N/oneone 四玩法 + DOPA ニブイチ）
  *
- * 五種只有 muteki 是後端真的實作了的 —— pools-service.ts 的 draw() 從來沒讀過
+ * 三種只有 muteki 是後端真的實作了的 —— pools-service.ts 的 draw() 從來沒讀過
  * pools.mode，它做的事就是無敵賞。所以建池 API 只收 muteki，資料庫的 check
- * 也只允許 muteki（migration 016）。另外四種在 API 模式下開不出池，
+ * 也只允許 muteki（migration 016）。另外兩種在 API 模式下開不出池，
  * 型別留著是因為 mock（demo 模式）還在示範它們，而且將來要實作。
+ *
+ * streak（連莊爆賞）與 auction（尾籤競標）已經整組移除：它們後端零實作，
+ * 前端卻有完整的頁面會把玩家導進去，是一條看得到、走不通的死路。
+ * 要實作的時候從 git 歷史撿回來比留著一份沒人維護的假介面便宜。
  *
  * - classic  經典賞：最後賞送給抽走最後一籤的人（LAST 不佔籤位）
  * - shitei   指定賞：抽中指定賞 → 加送最後賞，整池立刻結束
  * - muteki   無敵賞：最後賞作為一般大獎放在籤池內，無額外贈獎
- * - streak   連莊爆賞：付一次入場費可連續免費抽，隨時可收手落袋；
- *            抽到 BUST 籤則該輪全數沒收（沒收品流入賣家下一池，不回本池，
- *            以免破壞開賣前封存的籤序）
- * - auction  尾籤競標：最後 N 支籤不固定售價，改限時英式競標，落標全額退還
  */
 /**
  * 池的來源。三級的差別必須是「實際保障不同」，不能只是顏色不同 ——
@@ -39,7 +46,7 @@ export type Tier = 'A' | 'B' | 'C' | 'D' | 'LAST' | 'BUST'
  */
 export type PoolOrigin = 'official' | 'merchant' | 'personal'
 
-export type PoolMode = 'classic' | 'shitei' | 'muteki' | 'streak' | 'auction'
+export type PoolMode = 'classic' | 'shitei' | 'muteki'
 
 export type PoolStatus = 'committed' | 'open' | 'sold_out' | 'revealed'
 export type PrizeStatus = 'stashed' | 'listed' | 'ship_requested' | 'shipped' | 'recycled'
@@ -114,8 +121,7 @@ export interface Pool {
   cover: string
   mode: PoolMode
   shiteiTier?: Tier        // shitei 模式：抽中此賞即觸發結束+送最後賞
-  auctionSeats?: number    // auction 模式：最後幾支籤轉為競標（賣家設定）
-  ticketPrice: number      // streak 模式為「入場費」，續抽不再收費
+  ticketPrice: number
   totalTickets: number
   remainingTickets: number
   /** 開賣當下算的還元率（獎品總值 ÷ 票收 × 100）。舊池沒有這個數字就是 null */
@@ -144,31 +150,6 @@ export interface DrawResult {
   poolId: string
   items: DrawResultItem[]
   cost: number
-}
-
-/** 連莊爆賞的一輪進行狀態。items 為「暫持中」，收手才真正入袋 */
-export interface StreakRun {
-  runId: string
-  poolId: string
-  entryCost: number
-  items: DrawResultItem[]
-  heldValue: number
-  drawnSeats: number[]
-  status: 'live' | 'banked' | 'busted'
-}
-
-/** 尾籤競標的一個標的。籤內容不公開——競標的張力來自「已知還剩什麼賞」 */
-export interface AuctionLot {
-  id: string
-  poolId: string
-  seat: number
-  startBid: number
-  currentBid: number
-  bidCount: number
-  topBidder: string | null
-  youAreTop: boolean
-  endsAt: number          // epoch ms
-  status: 'live' | 'ended'
 }
 
 /**
