@@ -14,11 +14,13 @@
  * 對外介面：v-model 綁一個 PickedCard[]（見 lib/card-pick.ts）。
  * 呼叫端要 CardItem 就取每一筆的 .card。
  */
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '@/lib/api'
 import type { UserPrize } from '@/types/models'
 import { useInfiniteList } from '@/composables/useInfiniteList'
+import { useMediaQuery } from '@/composables/useMediaQuery'
 import ListSentinel from '@/components/ListSentinel.vue'
+import BottomActionBar from '@/components/BottomActionBar.vue'
 import {
   searchCards, cardDetail, artUrlOf, CatalogError,
   type CatalogCard, type CatalogHit, type CatalogVariant
@@ -242,6 +244,35 @@ function removeOne(g: PickGroup) {
   remove(g.members[g.members.length - 1])
 }
 
+/* ---------- 已選清單的開合 ---------- */
+/**
+ * 為什麼已選清單不常駐：挑卡的當下要看的是**還沒挑的卡**，已經挑好的
+ * 只需要一個「幾張」的數字；細節要看的時候再展開就好。常駐的縮圖格就算
+ * 壓到 197px，也是永遠橫在挑卡器與底下的表單之間，把「獎項配置」「買回價」
+ * 推得更遠。改成：有選卡才浮出一條列（只有數字），點開才是清單。
+ */
+const chosenOpen = ref(false)
+function closeChosen() { chosenOpen.value = false }
+
+/* 桌機（≥900px）用 inline 的 sticky 列而不是從視窗下緣飛進來的浮列：
+   900 是開池頁換成兩欄版面的斷點，右欄那份試算與送出鈕本來就一直看得到，
+   再讓一條列橫過整個視窗只是噪音。用 inline 而不是整條關掉，
+   是因為「已選幾張」在桌機一樣需要一個固定的位置，而且這樣任何寬度下
+   畫面上都**只會有一條**這種列。 */
+const wide = useMediaQuery('(min-width: 900px)')
+
+/* 移到剩零張時面板自己收掉：一個空的「已選的卡」面板沒有東西可看，
+   而它底下那條列也已經跟著消失，關不掉就變成孤兒 */
+watch(() => picked.value.length, n => { if (!n) chosenOpen.value = false })
+
+/* Esc 關面板。面板是 Teleport 到 body 的，焦點不一定落在裡面，
+   所以監聽掛在 window 上而不是面板節點上 */
+function onKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && chosenOpen.value) closeChosen()
+}
+onMounted(() => window.addEventListener('keydown', onKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+
 /** 鑑定編號的尾碼。合併不掉的兩張同款卡靠這個分辨，不然畫面上看起來一樣就像出錯 */
 const certTail = (p: PickedCard) => (p.card.certNo ? `#${p.card.certNo.slice(-4)}` : '')
 
@@ -266,46 +297,6 @@ const hitPickedCount = (h: CatalogHit) =>
         搜卡片目錄
       </button>
     </div>
-
-    <!-- 已選清單。放在最上面：挑到第二十張時要知道自己挑了什麼，
-         而不是捲到最下面去找。
-         版面是**縮圖格狀**不是一張一列：一列一張時 14 張就要 832px、
-         60 張要 3587px，把下面的表單推到看不見的地方；而且挑選這件事
-         本來就是用卡圖認卡的，卡名那一行吃掉整個寬度卻沒多說什麼。
-         同一款卡合併成 ×N（規則見 mergeKeyOf），整區自己捲、有高度上限。 -->
-    <section v-if="picked.length" class="chosen" aria-label="已選的卡">
-      <p class="chosenHead">
-        <span>已選 {{ picked.length }} 張</span>
-        <span v-if="max" class="muted">上限 {{ max }}</span>
-      </p>
-      <ul class="picks">
-        <li v-for="g in groups" :key="g.key" class="pickCell">
-          <!-- 整張縮圖就是移除鍵：叉叉只畫成一顆小的角標，真正可按的範圍是
-               整格（最窄也有 56×78），遠超過 44px 的觸控下限，
-               又不必為了那顆叉叉在格子裡挖掉一塊空間 -->
-          <button
-            type="button" class="pickTile"
-            :aria-label="g.members.length > 1
-              ? `移除一張 ${g.head.card.name}，目前 ${g.members.length} 張`
-              : `移除 ${g.head.card.name}`"
-            @click="removeOne(g)">
-            <span class="pickArt">
-              <img
-                v-if="g.head.artUrl" :src="g.head.artUrl" :alt="g.head.card.name"
-                loading="lazy" decoding="async">
-              <span v-else class="pickPh" aria-hidden="true">{{ g.head.card.name }}</span>
-              <span class="pickX" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
-              </span>
-              <!-- 鑑定編號尾碼。有編號的卡不會被合併，兩張同款卡並排時
-                   沒有這個標就真的看不出差別 -->
-              <span v-if="certTail(g.head)" class="pickCert mono">{{ certTail(g.head) }}</span>
-              <span v-if="g.members.length > 1" class="pickQty">×{{ g.members.length }}</span>
-            </span>
-          </button>
-        </li>
-      </ul>
-    </section>
 
     <p v-if="atMax" class="note warn">已達上限 {{ max }} 張，要再加請先移除。</p>
 
@@ -472,6 +463,79 @@ const hitPickedCount = (h: CatalogHit) =>
         </div>
       </div>
     </Teleport>
+
+    <!-- 已選的卡：貼底列只報數字，清單在面板裡。
+         列的內容刻意只有一行 —— 它跟池頁的購買列一樣是「隨時看得到的狀態」，
+         塞進縮圖就等於把常駐清單搬到下緣，一點都沒省。 -->
+    <BottomActionBar
+      :open="picked.length > 0"
+      label="已選的卡"
+      :inline="wide"
+      :spacer="84"
+      :max-width="560"
+    >
+      <div class="pickBar">
+        <span class="pickBarSum">
+          <strong>已選 {{ picked.length }} 張</strong>
+          <span v-if="max" class="muted">上限 {{ max }}</span>
+        </span>
+        <button type="button" class="btn pickBarBtn" @click="chosenOpen = true">
+          查看清單
+        </button>
+      </div>
+    </BottomActionBar>
+
+    <!-- 清單面板。跟詳情面板同樣要 Teleport 到 body（祖先的 transform 會變成
+         position:fixed 的定位基準），也共用同一組 .sheetWrap / .sheet 視覺。
+         關法三種：點遮罩、右上角關閉鍵、Esc。 -->
+    <Teleport to="body">
+      <div v-if="chosenOpen" class="sheetWrap" @click.self="closeChosen">
+        <div class="sheet" role="dialog" aria-modal="true" aria-label="已選的卡">
+          <button type="button" class="close" aria-label="關閉" @click="closeChosen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+
+          <p class="chosenHead">
+            <span>已選 {{ picked.length }} 張</span>
+            <span v-if="max" class="muted">上限 {{ max }}</span>
+          </p>
+          <p class="sheetWhy muted">點一張卡＝移除一張。同一款卡合併成 ×N；有鑑定編號的卡各自獨立，不合併。</p>
+
+          <!-- 版面是**縮圖格狀**不是一張一列：一列一張時 14 張就要 832px、
+               60 張要 3587px，在面板裡一樣捲不完；而且挑選這件事本來就是
+               用卡圖認卡的，卡名那一行吃掉整個寬度卻沒多說什麼。 -->
+          <ul class="picks">
+            <li v-for="g in groups" :key="g.key" class="pickCell">
+              <!-- 整張縮圖就是移除鍵：叉叉只畫成一顆小的角標，真正可按的範圍是
+                   整格（最窄也有 56×78），遠超過 44px 的觸控下限，
+                   又不必為了那顆叉叉在格子裡挖掉一塊空間 -->
+              <button
+                type="button" class="pickTile"
+                :aria-label="g.members.length > 1
+                  ? `移除一張 ${g.head.card.name}，目前 ${g.members.length} 張`
+                  : `移除 ${g.head.card.name}`"
+                @click="removeOne(g)">
+                <span class="pickArt">
+                  <img
+                    v-if="g.head.artUrl" :src="g.head.artUrl" :alt="g.head.card.name"
+                    loading="lazy" decoding="async">
+                  <span v-else class="pickPh" aria-hidden="true">{{ g.head.card.name }}</span>
+                  <span class="pickX" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                  </span>
+                  <!-- 鑑定編號尾碼。有編號的卡不會被合併，兩張同款卡並排時
+                       沒有這個標就真的看不出差別 -->
+                  <span v-if="certTail(g.head)" class="pickCert mono">{{ certTail(g.head) }}</span>
+                  <span v-if="g.members.length > 1" class="pickQty">×{{ g.members.length }}</span>
+                </span>
+              </button>
+            </li>
+          </ul>
+
+          <button type="button" class="btn primary wide" @click="closeChosen">完成</button>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -496,13 +560,32 @@ const hitPickedCount = (h: CatalogHit) =>
 }
 .tab.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
 
-/* ---- 已選 ---- */
-.chosen { min-width: 0; display: grid; gap: 8px; }
+/* ---- 已選：貼底列 ---- */
+/* 一行兩塊：左邊是狀態（幾張／上限），右邊是唯一的動作。
+   兩塊之間用 auto 欄寬而不是 space-between，卡數變成三位數時
+   按鈕才不會跟著左右跳。 */
+.pickBar {
+  min-width: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; gap: 12px;
+}
+.pickBarSum {
+  min-width: 0; display: flex; align-items: baseline; gap: 8px;
+  font-size: 13.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pickBarSum .muted { font-size: 12px; }
+.pickBarBtn { flex: none; padding: 10px 16px; font-size: 13.5px; }
+
+/* ---- 已選：面板裡的清單 ---- */
 .chosenHead {
   min-width: 0; margin: 0;
-  display: flex; justify-content: space-between; gap: 10px;
-  font-size: 13px; font-weight: 600;
+  display: flex; align-items: baseline; gap: 10px;
+  font-size: 15px; font-weight: 700;
+  /* 右上角那顆關閉鍵是絕對定位的，標題自己要讓出那塊 */
+  padding-right: 42px;
 }
+.chosenHead .muted { font-size: 12px; font-weight: 600; }
 /* 縮圖格狀。auto-fill + minmax(0, 1fr) 讓一列塞得下幾張就塞幾張，
    手機約 5 張、桌機更多；欄寬給 minmax(0, …) 是這個 repo 的老規矩
    （預設 min-width: auto 會讓內容把格線撐破） */
@@ -510,11 +593,11 @@ const hitPickedCount = (h: CatalogHit) =>
   min-width: 0; list-style: none; margin: 0; padding: 2px;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(54px, 1fr));
   gap: 8px;
-  /* 高度上限 + 自己捲：不加這一條，60 張會長出三千多像素，
-     把下面的「獎項配置」「買回價」推到使用者找不到的地方 */
-  max-height: 232px; overflow-y: auto; overscroll-behavior: contain;
 }
-@media (min-width: 720px) { .picks { max-height: 300px; } }
+/* 這一格**不再**自己設高度上限與捲動：清單現在住在 .sheet 裡，
+   而 .sheet 本身就是 max-height + overflow:auto。再套一層內捲會變成
+   兩個巢狀的捲動區 —— 手指在格子上滑動時到底捲哪一個要看落點，
+   那是實測會讓人以為「捲不動」的東西。 */
 .pickCell { min-width: 0; }
 .pickTile {
   min-width: 0; width: 100%;
