@@ -236,7 +236,7 @@ async function doDispute(o: Order) {
         <button type="button" class="btn sm" @click="store.travel(DAY)">+1 天</button>
         <button type="button" class="btn sm" @click="store.travel(3 * DAY)">+3 天</button>
         <button type="button" class="btn sm" @click="store.travel(8 * DAY)">+8 天</button>
-        <button type="button" class="btn sm ghost" @click="store.seedSellerOrder({ id: 'demo', name: '噴火龍 ex UR', artId: 'SV4a-349', refPrice: 43680, rarity: 'UR', certNo: '82345671', grade: 10 } as any, 41000)">
+        <button type="button" class="btn sm ghost" @click="store.seedSellerOrder({ id: 'demo', name: '噴火龍 ex UR', image: '', artId: 'SV4a-349', refPrice: 43680, rarity: 'UR', certNo: '82345671', grade: 10 } as any, 41000)">
           + 賣家視角訂單
         </button>
         <button type="button" class="btn sm ghost" @click="store.reset()">全部清除</button>

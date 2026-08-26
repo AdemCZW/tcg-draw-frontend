@@ -42,9 +42,15 @@ export const useAuthStore = defineStore('auth', {
         const r = await http<{ user: { id: string; handle: string; name: string; email: string | null; role: string } }>('/v1/auth/me')
         this.user = { id: r.user.id, name: r.user.name, handle: r.user.handle, email: r.user.email, role: r.user.role, isAdult: true }
         save(this.user)
-      } catch {
-        // token 失效：http() 已經清掉 token，這裡把畫面上的登入狀態也拿掉
-        this.user = null; save(null)
+      } catch (e) {
+        /* 只有「真的登入失效」才清掉登入狀態，網路失敗不清。
+           判準是 token 還在不在：http() 收到 401 時會 token.clear()，
+           所以 token 沒了＝這次是憑證問題。而 Railway 冷啟動那幾秒
+           /v1/auth/me 會逾時或連不上，那時 token 仍在 —— 一律清 user 的話，
+           使用者每次後端冷啟動都會被踢回登入頁，症狀還像帳號出問題，最傷信任。
+           連不上就保留上一次記住的登入狀態，等後端醒來下一個請求自然恢復。 */
+        if (!token.get()) { this.user = null; save(null) }
+        else console.warn('[auth] /me 暫時連不上，保留登入狀態', e instanceof Error ? e.message : e)
       }
       return this.user
     },

@@ -33,7 +33,7 @@ const remoteUrl = ref<string | null>(null)
 const { el: rootEl, near } = useNearViewport()
 
 const hue = computed(() => {
-  const m = props.image.match(/^placeholder:(\d+)/)
+  const m = (props.image || '').match(/^placeholder:(\d+)/)
   return m ? Number(m[1]) : 220
 })
 const TIER_LABEL: Record<Tier, string> = {
