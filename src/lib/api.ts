@@ -14,6 +14,9 @@ import { MOCK } from './config'
 import { ApiError, http, idem } from './http'
 import { useWalletStore } from '@/stores/wallet'
 import { refDiscount, refPriceNum } from './refprice'
+import type { SettlementStatus } from '@/shared/pool-settlement'
+import { RESERVED_STATUSES } from '@/shared/pool-settlement'
+import type { Carrier } from '@/shared/escrow'
 
 export { MOCK }
 
@@ -62,6 +65,64 @@ function toPrize(r: Any): UserPrize {
        買回價跟 card.refPrice 沒有任何算式關係，前端算不出來也不該猜。 */
     buyback: r.buyback == null ? null : Number(r.buyback),
     settleStatus: (r.settle_status as string | null) ?? null
+  }
+}
+
+/* ---------- 賣家結算 ---------- */
+
+/** 賣家錢包。reserved 是「已貸記但還動不了」的那一塊，locked 已經含它 */
+export interface SellerWallet {
+  points: number
+  locked: number
+  reserved: number
+  available: number
+}
+
+/** 一筆結算 = 一個籤位 = 一張卡。逐筆釋放，不等整池抽完 */
+export interface SellerSettlement {
+  id: string
+  poolId: string
+  poolTitle: string
+  buyerName: string
+  buyerMemberNo: string | null
+  card: CardItem
+  amount: number
+  status: SettlementStatus
+  createdAt: number
+  shipDueAt: number | null
+  shippedAt: number | null
+  closedAt: number | null
+  closedBy: string | null
+  selfDraw: boolean
+}
+
+export interface SellerSettlements {
+  settlements: SellerSettlement[]
+  wallet: SellerWallet
+  serverTime: number
+}
+
+/** bigint 過了 JSON 可能是 number 也可能是字串，兩種都要吃；null 保持 null */
+const ms = (v: unknown): number | null => (v == null ? null : Number(v))
+
+function toSettlement(r: Any): SellerSettlement {
+  return {
+    id: String(r.id),
+    poolId: String(r.pool_id),
+    /* 池標題可能是空字串（舊資料），退回 id 而不是留白 ——
+       「哪一個池」是賣家找卡的第一個線索，空白等於問號 */
+    poolTitle: String(r.pool_title || r.pool_id),
+    buyerName: String(r.buyer_name ?? ''),
+    buyerMemberNo: (r.buyer_member_no as string | null) ?? null,
+    card: r.card as CardItem,
+    amount: Number(r.amount),
+    status: r.status as SettlementStatus,
+    createdAt: Number(r.created_at),
+    shipDueAt: ms(r.ship_due_at),
+    shippedAt: ms(r.shipped_at),
+    closedAt: ms(r.closed_at),
+    closedBy: (r.closed_by as string | null) ?? null,
+    selfDraw: Boolean(r.self_draw)
   }
 }
 
@@ -475,6 +536,68 @@ export const api = {
     if (MOCK) { await delay(300); return { seller: { id: 'me', tier: 'pending' }, already: false } }
     return http<{ seller: { id: string; tier: string }; already: boolean }>('/v1/seller/apply', {
       method: 'POST', json: input
+    })
+  },
+
+  /**
+   * 賣家的結算清單 + 錢包。
+   *
+   * 這兩支後端早就有了，前端一行都沒接 —— 結果是賣家看得到保留額
+   * （錢包的「凍結」裡有一塊），卻沒有任何地方按得下「已出貨」，
+   * 而不出貨那筆錢永遠不會釋放。整條金流缺的就是這一段。
+   *
+   * 後端回的是資料庫的原始列（snake_case）：那是 `select st.*` 直接吐出來的，
+   * 不是後端偷懶，是這張表的欄位就是結算的定義本身。轉成前端型別的工作
+   * 一律在這一層做完，頁面不該認得 `ship_due_at` 這種名字。
+   *
+   * 時間全部是毫秒數（bigint 經過 JSON 會變成 number 或字串，兩種都要吃）。
+   * serverTime 一起帶回來是為了讓倒數以**伺服器的時鐘**為基準 ——
+   * 使用者的電腦慢十分鐘，畫面就會說「還有時間」而後端已經判逾期。
+   */
+  async sellerSettlements(): Promise<SellerSettlements> {
+    if (MOCK) {
+      await delay(180)
+      const w = useWalletStore()
+      const reserved = mock.sellerSettlements
+        .filter(s => RESERVED_STATUSES.includes(s.status))
+        .reduce((a, s) => a + s.amount, 0)
+      const locked = w.locked + reserved
+      return {
+        settlements: mock.sellerSettlements.map(s => ({ ...s })),
+        /* mock 的保留額是從清單推出來的，不是另外記一個數字 ——
+           跟後端的 walletOf() 同一個模型（保留額沒有可以直接改的欄位）。 */
+        wallet: { points: w.points, locked, reserved, available: w.points - locked },
+        serverTime: Date.now()
+      }
+    }
+    const r = await http<{ settlements: Any[]; wallet: SellerWallet; serverTime: number }>('/v1/seller/settlements')
+    applyWallet(r)
+    return {
+      settlements: r.settlements.map(toSettlement),
+      wallet: r.wallet,
+      serverTime: Number(r.serverTime) || Date.now()
+    }
+  },
+
+  /**
+   * 標記某一筆已出貨。單號選填 —— 平台不代管實體卡，賣家直接寄給買家
+   * （docs/HANDOFF.md 4.2），所以單號是給買家追蹤用的憑據，不是放款條件。
+   *
+   * 一次只送一筆是刻意的：後端沒有批次端點，而在前端硬湊一個
+   * 「一次成功或一次失敗」的假原子操作，會在中間某一筆撞到 409 時
+   * 讓賣家不知道到底寄出了幾筆。呼叫端自己迴圈，並逐筆回報結果。
+   */
+  async shipSettlement(id: string, opts: { carrier?: Carrier; tracking?: string } = {}): Promise<void> {
+    if (MOCK) {
+      await delay(240)
+      if (!mock.mockShipSettlement(id)) throw new Error('這筆目前不是等待出貨的狀態')
+      return
+    }
+    const tracking = opts.tracking?.trim()
+    await http(`/v1/seller/settlements/${id}/ship`, {
+      method: 'POST',
+      // 沒填單號就整個欄位不送：送空字串會被 zod 的 min(4) 擋成 400
+      json: tracking ? { tracking, carrier: opts.carrier ?? 'other' } : {}
     })
   },
 

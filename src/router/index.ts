@@ -112,6 +112,14 @@ export const router = createRouter({
       meta: { requiresAuth: true, depth: 1, title: '開池' }
     },
     {
+      /* 賣家的出貨與結算。放在 /seller 底下跟開池同一層 ——
+         它們是同一個身分要做的兩件事（開池是進貨、出貨是履約），
+         而不是「我的」底下的一項個人設定。 */
+      path: '/seller/shipping', name: 'seller-shipping',
+      component: () => import('@/pages/SellerShippingPage.vue'),
+      meta: { requiresAuth: true, depth: 1, title: '出貨與結算' }
+    },
+    {
       /* 開卡演出的試看頁。刻意不掛進任何導覽 ——
          給開發與驗收用的，知道網址的人才進得來。 */
       path: '/fx', name: 'fx-lab',

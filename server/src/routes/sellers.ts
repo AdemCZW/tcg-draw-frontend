@@ -114,10 +114,15 @@ sellers.get('/settlements', async c => {
   const me = c.get('userId')
   await sql.begin(tx => sweepSettlements(tx, me)).catch(() => {})
   const rows = await sql`
-    select st.*, p.card, p.status as prize_status, pl.title as pool_title
+    select st.*, p.card, p.status as prize_status, pl.title as pool_title,
+           b.name as buyer_name, b.member_no as buyer_member_no
       from pool_settlements st
       join prizes p on p.id = st.prize_id
       join pools  pl on pl.id = st.pool_id
+      /* 買家的名字要一起帶出來：這條清單的用途是「我現在要寄哪幾張、寄給誰」，
+         只給 buyer_id 的話賣家看到的是一串內部鍵，對不上任何一張出貨單。
+         只取 name 與會員編號 —— 收件地址在 shipments 那張表，不屬於結算列。 */
+      join users  b on b.id = st.buyer_id
      where st.seller_id = ${me}
      order by st.created_at desc limit 200
   `

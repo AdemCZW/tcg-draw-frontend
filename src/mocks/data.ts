@@ -1,4 +1,5 @@
 import type { Pool, CardItem, Listing, DrawResult, UserPrize, LedgerEntry, WinnerEvent, PoolPrize, Seller, Escrow, Tier } from '@/types/models'
+import type { SettlementStatus } from '@/shared/pool-settlement'
 
 // 卡圖先用漸層佔位；正式版換 R2 實拍圖 URL
 const ph = (hue: number) => `placeholder:${hue}`
@@ -790,3 +791,69 @@ export const winners: WinnerEvent[] = [
   { user: 'VD-9K**', poolTitle: '銅板場 #72 · 快開快抽', tier: 'C', cardName: '三合一磁怪 V', at: '2 小時前' },
   { user: 'VD-4M**', poolTitle: '滿分場 #30 · 全 PSA 10', tier: 'A', cardName: '莉莉艾 SR', at: '3 小時前' }
 ]
+
+/* ------------------------------------------------------------------
+ * 賣家的結算清單（mock）。
+ *
+ * 為什麼 mock 也要有一份：出貨那條金流從「玩家抽卡」到「賣家入帳」中間
+ * 隔著 72 小時的出貨期限與 7 天鑑賞期，沒有後端就永遠看不到中段長什麼樣。
+ * mock 是本機開發與 demo 唯一的資料來源，這裡不鋪滿六種狀態的話，
+ * 「已退還買家」「已入帳」那幾條分支在改版面時等於沒有被看過。
+ *
+ * 時間一律用「相對現在」算：寫死時間戳的話，過幾天再打開 mock，
+ * 每一筆都變成已逾期，倒數與警示色全部退化成同一種。
+ * ------------------------------------------------------------------ */
+const H = 3_600_000
+const D = 24 * H
+const T0 = Date.now()
+
+export interface SellerSettlementRow {
+  id: string
+  poolId: string
+  poolTitle: string
+  buyerName: string
+  buyerMemberNo: string | null
+  card: CardItem
+  amount: number
+  status: SettlementStatus
+  createdAt: number
+  shipDueAt: number | null
+  shippedAt: number | null
+  closedAt: number | null
+  closedBy: string | null
+  selfDraw: boolean
+}
+
+export const sellerSettlements: SellerSettlementRow[] = [
+  /* 快到期的那一筆刻意排第一：警示區的文案與顏色只有在真的剩幾小時時才看得出來 */
+  { id: 'st-1', poolId: 'p-shop-1', poolTitle: '關都卡舖 · 無敵賞 #1', buyerName: '林小魚', buyerMemberNo: 'VD-000431',
+    card: cards[0]!, amount: 1280, status: 'awaiting_ship', createdAt: T0 - 69 * H, shipDueAt: T0 + 3 * H, shippedAt: null, closedAt: null, closedBy: null, selfDraw: false },
+  { id: 'st-2', poolId: 'p-shop-1', poolTitle: '關都卡舖 · 無敵賞 #1', buyerName: '林小魚', buyerMemberNo: 'VD-000431',
+    card: cards[9]!, amount: 1280, status: 'awaiting_ship', createdAt: T0 - 69 * H, shipDueAt: T0 + 3 * H, shippedAt: null, closedAt: null, closedBy: null, selfDraw: false },
+  { id: 'st-3', poolId: 'p-shop-5', poolTitle: '關都卡舖 · 銅板場', buyerName: '陳阿凱', buyerMemberNo: 'VD-000512',
+    card: cards[15]!, amount: 550, status: 'awaiting_ship', createdAt: T0 - 20 * H, shipDueAt: T0 + 52 * H, shippedAt: null, closedAt: null, closedBy: null, selfDraw: false },
+  { id: 'st-4', poolId: 'p-shop-4', poolTitle: '關都卡舖 · 精選場', buyerName: '黃品叡', buyerMemberNo: 'VD-000078',
+    card: cards[4]!, amount: 700, status: 'shipped', createdAt: T0 - 5 * D, shipDueAt: T0 - 2 * D, shippedAt: T0 - 2 * D, closedAt: null, closedBy: null, selfDraw: false },
+  { id: 'st-5', poolId: 'p-shop-5', poolTitle: '關都卡舖 · 銅板場', buyerName: '陳阿凱', buyerMemberNo: 'VD-000512',
+    card: cards[20]!, amount: 550, status: 'held', createdAt: T0 - 2 * D, shipDueAt: null, shippedAt: null, closedAt: null, closedBy: null, selfDraw: false },
+  { id: 'st-6', poolId: 'p-shop-5', poolTitle: '關都卡舖 · 銅板場', buyerName: '吳庭安', buyerMemberNo: 'VD-000903',
+    card: cards[23]!, amount: 550, status: 'held', createdAt: T0 - 6 * H, shipDueAt: null, shippedAt: null, closedAt: null, closedBy: null, selfDraw: false },
+  { id: 'st-7', poolId: 'p-shop-4', poolTitle: '關都卡舖 · 精選場', buyerName: '黃品叡', buyerMemberNo: 'VD-000078',
+    card: cards[6]!, amount: 700, status: 'released', createdAt: T0 - 21 * D, shipDueAt: T0 - 19 * D, shippedAt: T0 - 19 * D, closedAt: T0 - 12 * D, closedBy: 'inspect-timeout', selfDraw: false },
+  { id: 'st-8', poolId: 'p-shop-1', poolTitle: '關都卡舖 · 無敵賞 #1', buyerName: '蔡宜庭', buyerMemberNo: 'VD-000221',
+    card: cards[13]!, amount: 1280, status: 'refunded', createdAt: T0 - 16 * D, shipDueAt: T0 - 13 * D, shippedAt: null, closedAt: T0 - 13 * D, closedBy: 'ship-timeout', selfDraw: false },
+  { id: 'st-9', poolId: 'p-shop-5', poolTitle: '關都卡舖 · 銅板場', buyerName: '吳庭安', buyerMemberNo: 'VD-000903',
+    card: cards[27]!, amount: 550, status: 'recycled', createdAt: T0 - 9 * D, shipDueAt: null, shippedAt: null, closedAt: T0 - 8 * D, closedBy: 'recycle', selfDraw: false }
+]
+
+/**
+ * mock 的「標記已出貨」。只動狀態與 shippedAt —— 釋放是鑑賞期滿之後的事，
+ * 這裡立刻加進可動用會讓 demo 教錯：出貨不等於入帳。
+ */
+export function mockShipSettlement(id: string): boolean {
+  const s = sellerSettlements.find(x => x.id === id)
+  if (!s || s.status !== 'awaiting_ship') return false
+  s.status = 'shipped'
+  s.shippedAt = Date.now()
+  return true
+}

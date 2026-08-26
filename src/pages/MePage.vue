@@ -43,6 +43,10 @@ const rows = [
   { name: 'offers', t: '交易邀約', icon: 'swap' },
   { name: 'profile', t: '會員資料', icon: 'user' },
   { name: 'seller-new', t: '我要開池', icon: 'box' },
+  /* 出貨緊接著開池：那是同一個賣家身分的下一步，而且是**有時限的**那一步。
+     藏在別的地方等於讓賣家在逾期之後才發現有東西該寄，
+     而逾期的代價是退款給買家加一次違約。 */
+  { name: 'seller-shipping', t: '出貨與結算', icon: 'truck' },
   { name: 'fairness', t: '公平性驗證', icon: 'shield' }
 ]
 
@@ -57,6 +61,7 @@ const paths: Record<string, string> = {
   wallet: 'M4 8a2 2 0 0 1 2-2h11a1 1 0 0 1 1 1v1M4 8v9a2 2 0 0 0 2 2h12a1 1 0 0 0 1-1v-3M4 8h14M20 11v4h-4a2 2 0 0 1 0-4z',
   plus: 'M12 5v14M5 12h14',
   box: 'M4 8l8-4 8 4-8 4-8-4zM4 8v8l8 4 8-4V8M12 12v8',
+  truck: 'M3 7h10v9H3zM13 10h4l3 3v3h-7zM7.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z',
   shield: 'M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-3z'
 }
 </script>
