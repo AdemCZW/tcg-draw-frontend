@@ -192,6 +192,59 @@ onBeforeUnmount(() => {
    賣家看得到「普卡 €0.02 / 大師球 €369」就足以避免挑錯那一張。 */
 const eur = (n: number | null) => (n === null ? '—' : `€${n < 10 ? n.toFixed(2) : Math.round(n)}`)
 
+/* ---------- 已選清單的合併顯示 ---------- */
+/**
+ * 為什麼要合併：從卡冊挑的每一張都是**不同的實體卡**（不同 prizeId），
+ * 挑三張同款的水伊布 ex 就會排出三列一模一樣的東西，看起來像系統出錯。
+ * 但合併只能是**畫面上的事** —— 底下的 PickedCard[] 一張都不能少，
+ * 移除也必須真的移除其中某一張實體卡。
+ *
+ * 合併的鍵怎麼選：
+ *   有鑑定編號的卡 → 鍵裡帶上 certNo，等於**永遠不合併**。
+ *     PSA 10 #82345671 跟 PSA 10 #82345672 是兩張可以各自查證的卡，
+ *     買家看到的也是兩個不同的獎品；把它們併成「×2」會讓賣家以為
+ *     自己挑的是同一張，也讓「哪一張出了問題」變得說不清。
+ *   沒有鑑定編號（RAW / 目錄卡）→ 用「這是哪一張卡」本身：
+ *     artId（沒有就退回 setCode/cardNo）＋ 變體＋ 鑑定機構/分數＋ 語言。
+ *     變體一定要進鍵：同卡號的大師球鏡面與普卡實測差約 18,000 倍，
+ *     併在一起等於把兩種商品講成同一種。
+ */
+function mergeKeyOf(p: PickedCard): string {
+  const c = p.card
+  const who = c.artId || `${c.setCode}/${c.cardNo}`
+  if (c.certNo) return `one:${who}:${c.grader}:${c.certNo}`
+  return `same:${who}|${c.variantId ?? ''}|${c.grader}|${c.grade ?? ''}|${c.language}`
+}
+
+interface PickGroup {
+  key: string
+  /** 這一組底下的每一張實體卡，順序＝挑選順序 */
+  members: PickedCard[]
+  /** 代表卡，拿來顯示卡圖與卡名 */
+  head: PickedCard
+}
+
+/* 順序用「第一次出現」的順序，不重排：賣家是照自己的順序挑的，
+   數量變化時整排卡跳位比多佔幾列還難用 */
+const groups = computed<PickGroup[]>(() => {
+  const byKey = new Map<string, PickGroup>()
+  for (const p of picked.value) {
+    const k = mergeKeyOf(p)
+    const g = byKey.get(k)
+    if (g) g.members.push(p)
+    else byKey.set(k, { key: k, members: [p], head: p })
+  }
+  return [...byKey.values()]
+})
+
+/** 移除這一組裡**最後挑進來的那一張**。手誤多按一下時，撤銷的就該是剛剛那一下 */
+function removeOne(g: PickGroup) {
+  remove(g.members[g.members.length - 1])
+}
+
+/** 鑑定編號的尾碼。合併不掉的兩張同款卡靠這個分辨，不然畫面上看起來一樣就像出錯 */
+const certTail = (p: PickedCard) => (p.card.certNo ? `#${p.card.certNo.slice(-4)}` : '')
+
 const prizeArt = (p: UserPrize) => pickFromPrize(p).artUrl
 const isPrizePicked = (p: UserPrize) => pickedKeys.value.has(`prize:${p.id}`)
 const hitPickedCount = (h: CatalogHit) =>
@@ -215,30 +268,40 @@ const hitPickedCount = (h: CatalogHit) =>
     </div>
 
     <!-- 已選清單。放在最上面：挑到第二十張時要知道自己挑了什麼，
-         而不是捲到最下面去找 -->
+         而不是捲到最下面去找。
+         版面是**縮圖格狀**不是一張一列：一列一張時 14 張就要 832px、
+         60 張要 3587px，把下面的表單推到看不見的地方；而且挑選這件事
+         本來就是用卡圖認卡的，卡名那一行吃掉整個寬度卻沒多說什麼。
+         同一款卡合併成 ×N（規則見 mergeKeyOf），整區自己捲、有高度上限。 -->
     <section v-if="picked.length" class="chosen" aria-label="已選的卡">
       <p class="chosenHead">
         <span>已選 {{ picked.length }} 張</span>
         <span v-if="max" class="muted">上限 {{ max }}</span>
       </p>
-      <ul class="chips">
-        <li v-for="p in picked" :key="p.key" class="pickChip">
-          <img
-            v-if="p.artUrl" class="chipArt" :src="p.artUrl" :alt="''"
-            loading="lazy" decoding="async">
-          <span v-else class="chipArt ph" aria-hidden="true"></span>
-          <span class="chipText">
-            <span class="chipName">{{ p.card.name }}</span>
-            <span class="chipMeta">
-              {{ p.card.setCode || '—' }} · {{ p.card.cardNo || '—' }}
-              <template v-if="p.variant"> · {{ p.variant.label }}</template>
-            </span>
-          </span>
+      <ul class="picks">
+        <li v-for="g in groups" :key="g.key" class="pickCell">
+          <!-- 整張縮圖就是移除鍵：叉叉只畫成一顆小的角標，真正可按的範圍是
+               整格（最窄也有 56×78），遠超過 44px 的觸控下限，
+               又不必為了那顆叉叉在格子裡挖掉一塊空間 -->
           <button
-            type="button" class="x" :aria-label="`移除 ${p.card.name}`" @click="remove(p)">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 6l12 12M18 6L6 18" />
-            </svg>
+            type="button" class="pickTile"
+            :aria-label="g.members.length > 1
+              ? `移除一張 ${g.head.card.name}，目前 ${g.members.length} 張`
+              : `移除 ${g.head.card.name}`"
+            @click="removeOne(g)">
+            <span class="pickArt">
+              <img
+                v-if="g.head.artUrl" :src="g.head.artUrl" :alt="g.head.card.name"
+                loading="lazy" decoding="async">
+              <span v-else class="pickPh" aria-hidden="true">{{ g.head.card.name }}</span>
+              <span class="pickX" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              </span>
+              <!-- 鑑定編號尾碼。有編號的卡不會被合併，兩張同款卡並排時
+                   沒有這個標就真的看不出差別 -->
+              <span v-if="certTail(g.head)" class="pickCert mono">{{ certTail(g.head) }}</span>
+              <span v-if="g.members.length > 1" class="pickQty">×{{ g.members.length }}</span>
+            </span>
           </button>
         </li>
       </ul>
@@ -440,32 +503,58 @@ const hitPickedCount = (h: CatalogHit) =>
   display: flex; justify-content: space-between; gap: 10px;
   font-size: 13px; font-weight: 600;
 }
-.chips { min-width: 0; list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.pickChip {
-  min-width: 0;
-  display: grid; grid-template-columns: 30px minmax(0, 1fr) 32px;
-  align-items: center; gap: 10px;
-  padding: 6px 8px 6px 6px;
-  background: var(--surface-2); border-radius: 12px;
+/* 縮圖格狀。auto-fill + minmax(0, 1fr) 讓一列塞得下幾張就塞幾張，
+   手機約 5 張、桌機更多；欄寬給 minmax(0, …) 是這個 repo 的老規矩
+   （預設 min-width: auto 會讓內容把格線撐破） */
+.picks {
+  min-width: 0; list-style: none; margin: 0; padding: 2px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(54px, 1fr));
+  gap: 8px;
+  /* 高度上限 + 自己捲：不加這一條，60 張會長出三千多像素，
+     把下面的「獎項配置」「買回價」推到使用者找不到的地方 */
+  max-height: 232px; overflow-y: auto; overscroll-behavior: contain;
 }
-.chipArt { width: 30px; aspect-ratio: 63 / 88; object-fit: cover; border-radius: 4px; }
-.chipArt.ph { background: var(--surface-3); }
-.chipText { min-width: 0; display: grid; gap: 1px; }
-.chipName {
-  min-width: 0; font-size: 13px; font-weight: 600;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+@media (min-width: 720px) { .picks { max-height: 300px; } }
+.pickCell { min-width: 0; }
+.pickTile {
+  min-width: 0; width: 100%;
+  display: block; padding: 0; border: 0; background: transparent;
+  transition: transform .12s;
 }
-.chipMeta {
-  min-width: 0; font-size: 11px; color: var(--muted);
-  font-family: var(--font-mono);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.pickTile:active { transform: scale(.94); }
+.pickArt {
+  position: relative; min-width: 0;
+  display: block; aspect-ratio: 63 / 88;
+  border-radius: 7px; overflow: hidden; background: var(--surface-3);
+  box-shadow: var(--shadow-sm);
 }
-.x {
-  width: 32px; height: 32px; min-width: 0;
+.pickArt img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pickPh {
+  display: grid; place-items: center; width: 100%; height: 100%;
+  padding: 4px; background: var(--surface-3); color: var(--muted);
+  font-size: 9px; line-height: 1.3; text-align: center;
+  overflow: hidden;
+}
+/* 叉叉只是「按了會移除」的提示，不是它自己要被瞄準 —— 可按範圍是整格 */
+.pickX {
+  position: absolute; right: 2px; top: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
   display: grid; place-items: center;
-  border: 0; background: transparent; color: var(--muted); border-radius: 50%;
+  background: rgba(0, 0, 0, .62); color: #fff;
 }
-.x svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.pickX svg { width: 9px; height: 9px; fill: none; stroke: currentColor; stroke-width: 3.2; stroke-linecap: round; }
+.pickQty {
+  position: absolute; right: 2px; bottom: 2px;
+  min-width: 20px; padding: 1px 4px; border-radius: var(--pill);
+  background: var(--accent); color: var(--on-accent);
+  font-size: 10px; font-weight: 700; line-height: 1.5; text-align: center;
+}
+.pickCert {
+  position: absolute; left: 2px; bottom: 2px;
+  padding: 1px 3px; border-radius: 4px;
+  background: rgba(0, 0, 0, .62); color: #fff;
+  font-size: 8.5px; line-height: 1.5;
+}
 
 /* ---- 面板共用 ---- */
 .pane { min-width: 0; display: grid; gap: 10px; }
