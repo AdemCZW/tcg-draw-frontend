@@ -217,3 +217,67 @@ POST https://alt-platform-server.production.internal.onlyalt.com/graphql/{Operat
 **不建議做的事**：不要去破 `psacard.com/cert/{cert}` 前面的 Cloudflare。PSA 已經用兩種方式（API 閘門 + Cloudflare）表態不歡迎自動化存取，繞過它在法務上和工程上都是負債。要走非官方路徑，就用 Parse.bot 或 TCGAPIs 這種付費代理，讓合規責任落在服務商身上。
 
 **還有一件必須先釐清的事**：在把任何 PSA 資料顯示給你的使用者之前，**登入 PSA 帳號、把 API End User Agreement 全文讀出來**。第 6 節說明了我為什麼拿不到它，而「能不能顯示給第三方」這個問題如果答案是否定的，會直接改變產品設計——這比 403 本身更重要，而且不解決它，就算 PSA 明天核准了你也還是不能上線。
+
+---
+
+## 9. 已接上的實作（2026-08-26）與「明天啟用的一步」
+
+前面第 1–8 節是調查。這一節寫**程式已經做了什麼**，以及 PSA 核准後要動哪裡。
+目標很明確：**API 現在全 403，所以整條路必須能在 API 還不通的情況下優雅降級，
+核准後只要環境變數就能啟用，不用改碼。**
+
+### 做了什麼
+
+| 元件 | 位置 |
+|---|---|
+| 後端查證 + 快取 | `server/src/psa.ts` |
+| 查證端點 `POST /v1/psa/verify` | `server/src/routes/psa.ts` |
+| 開池時的驗證接入 | `server/src/routes/pools.ts`（`POST /v1/pools`） |
+| 快取資料表 `psa_certs` | `server/migrations/020_psa_cert_cache.sql` |
+| 前端顯示（已向 PSA 查證 · 連到官網） | `src/components/PsaBadge.vue`、用在 `src/components/PrizeTable.vue` |
+| 前端查證方法 / 對不上時的確認 | `src/lib/api.ts` 的 `verifyCert`、`src/pages/SellerNewPoolPage.vue` |
+
+`token` 只在後端（`env.PSA_API_TOKEN`），絕不進前端 bundle。查到的結果快取進
+`psa_certs`（一張卡一輩子查一次，配額每天才 100 次）；**只快取成功查到的**，
+not_found / api_unavailable 不快取（理由見 migration 020）。
+
+### 五種分支的行為（開池端）
+
+| 查證結果 | 行為 |
+|---|---|
+| `invalid_format`（編號格式錯，PSA 回 `IsValidRequest:false`） | **擋**，不准進池 |
+| `not_found`（格式對但查無此卡＝假編號，`IsValidRequest:true` + `No data found`） | **擋**，不准進池 |
+| `api_unavailable`（403／500／429／網路錯） | 預設**不硬擋**，卡標 `pending`（未驗證），記 log、當我方問題 |
+| `not_configured`（沒設 token） | 預設**不硬擋**，卡標 `pending` |
+| 查到但 PSA 的 `CardNumber` 跟賣家挑的卡對不上 | 回 `CERT_MISMATCH`，要賣家**確認是同一張**（`certConfirmed`）才放行 |
+
+「暫時無法驗證就標 pending 不硬擋」是刻意的：API 現在全 403，硬擋等於**完全
+開不了鑑定卡的池**。500 一律當「我方憑證問題」記錄，**不對賣家說 PSA 掛了**。
+
+### 明天 PSA 核准後，要做的（不用改任何一行程式碼）
+
+1. **核准本身**：`env.PSA_API_TOKEN` 已經在 Railway 設好。PSA 一旦把帳號改成
+   approved，同一段程式就會開始從 `cert/GetByCertNumber` 拿到真資料、回 `ok`
+   —— `api_unavailable` 自動消失，鑑定卡開始標成 `verified`。**這一步只等 PSA，
+   我方不動任何東西。**
+2. **從「暫不驗證」切成「強制驗證」**：把 Railway 環境變數
+   **`PSA_VERIFY_ENFORCE` 設成 `1`**。這會讓 `api_unavailable` / `not_configured`
+   從「標 pending 放行」變成「驗不過就開不了鑑定卡的池」（回 `VERIFY_REQUIRED`）。
+   預設是 `0`（不強制）。**這是明天要動的唯一一格設定。**
+   - 已實測：`PSA_VERIFY_ENFORCE=1` 時，帶查不到的鑑定編號開池回
+     `503 VERIFY_REQUIRED`；`=0`（預設）時同一個請求池照開得成、卡標 pending。
+
+### 測試（不打正式環境的 PSA）
+
+`server/src/psa.ts` 有一個 **`PSA_STUB=1`** 的注入：用 cert 編號的前綴選分支
+（`STUB-OK-<卡號>` / `STUB-NOTFOUND` / `STUB-INVALID` / `STUB-403` / `STUB-500`
+/ `STUB-NOTCONFIG`），smoke 靠它在一台伺服器、不碰網路的情況下把每一條分支都
+走一遍。正式環境**不設 `PSA_STUB`** 就走真的 PSA。煙霧測試對應的檢查在
+`server/src/smoke.ts` 的「PSA 鑑定編號查證」一節（沒開 stub 時整段自動跳過）。
+
+### 還沒做（刻意的）
+
+- **不下載或轉存 PSA 的照片**：EULA 未確認（見第 6 節）。`verified` 的卡是
+  連到 `psacard.com/cert/{certNo}` 讓買家自己去對，不是把 slab 照片搬過來。
+- 顯示先只做在池頁的獎項表（`PrizeTable`）。卡冊 / 分享頁要不要一起標，等
+  API 真的回得了資料、看得到實際樣子再決定。

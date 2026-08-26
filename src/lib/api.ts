@@ -20,6 +20,24 @@ import type { Carrier } from '@/shared/escrow'
 
 export { MOCK }
 
+/** PSA 查證的結果形狀（跟後端 server/src/psa.ts 的 VerifyResult 對齊） */
+export interface PsaCert {
+  certNumber: string
+  subject: string | null
+  brand: string | null
+  year: string | null
+  cardNumber: string | null
+  variety: string | null
+  cardGrade: string | null
+  gradeDescription: string | null
+  totalPopulation: number | null
+  populationHigher: number | null
+  itemStatus: string | null
+}
+export type VerifyCertResult =
+  | { ok: true; cert: PsaCert; cached: boolean }
+  | { ok: false; reason: 'invalid_format' | 'not_found' | 'api_unavailable' | 'not_configured' }
+
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 /* ---------- 後端 → 前端 的形狀轉換 ---------- */
@@ -273,6 +291,9 @@ export const api = {
            但那只是填表的方式。後端仍然收得下 tierBuyback，
            前端先解析完再送是為了讓畫面上的試算跟送出去的東西逐字相同。 */
         buyback: p.buyback,
+        /* 賣家確認過「PSA 查到的卡就是這張」時才帶（卡號對不上時後端會要求確認）。
+           沒設就不送，undefined 不會進 JSON。 */
+        certConfirmed: p.certConfirmed,
         /* 逐欄明列不用展開整個物件：card 會被雜湊進 manifest（v4），
            而 manifest 的欄位集合就是「承諾涵蓋什麼」。順手多送一個欄位
            等於默默擴張承諾的範圍，之後沒有人知道那一欄是什麼時候進去的。
@@ -297,6 +318,21 @@ export const api = {
     } })
     const g = await http<{ pool: Any }>(`/v1/pools/${r.poolId}`)
     return toPool(g.pool)
+  },
+
+  /**
+   * 向 PSA 查證一個鑑定編號。讓賣家在**送出開池表單之前**就知道結果。
+   *
+   * 真正的把關在建池 API（直接打那支的人不會先來這裡），這支只是提前給回饋。
+   * 四種結果的語意見 server/src/psa.ts：invalid_format / not_found 是硬擋，
+   * api_unavailable / not_configured 是「暫時無法驗證」（目前 PSA 待核准全走這裡）。
+   *
+   * MOCK 模式沒有後端可查，回 api_unavailable —— 對應「暫時無法驗證」，
+   * 不會把卡誤判成假卡（那會擋掉 demo 裡的鑑定卡）。
+   */
+  async verifyCert(certNumber: string): Promise<VerifyCertResult> {
+    if (MOCK) { await delay(200); return { ok: false, reason: 'api_unavailable' } }
+    return http<VerifyCertResult>('/v1/psa/verify', { method: 'POST', json: { certNumber } })
   },
 
   /**

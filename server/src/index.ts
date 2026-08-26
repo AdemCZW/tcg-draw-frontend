@@ -20,6 +20,7 @@ import { pub } from './routes/public.js'
 import { files } from './routes/files.js'
 import { social, socialPublic } from './routes/social.js'
 import { sellers } from './routes/sellers.js'
+import { psa } from './routes/psa.js'
 import { sweep } from './orders-service.js'
 import { sweepPools } from './pools-service.js'
 import { sweepSettlementsAll } from './pool-settlement.js'
@@ -123,6 +124,9 @@ app.route('/v1/share', socialPublic)
    （GET /v1/sellers 賣家列表、GET /v1/sellers/:id 賣家頁，兩個都是公開的）。
    這支有 use('*', requireAuth)，掛同一個前綴會把那兩個公開端點一起變成要登入。 */
 app.route('/v1/seller', sellers)
+/* PSA 鑑定編號查證。要登入（查證吃 PSA 每天 100 次配額，不開放匿名）。
+   真正的把關在建池 API，這支只是讓前端在送出前先問一次。 */
+app.route('/v1/psa', psa)
 
 /* 逾期掃描。
    時限本身是用時間戳算的，所以這支排程不是唯一真相 —— 它掛掉不會讓狀態算錯，

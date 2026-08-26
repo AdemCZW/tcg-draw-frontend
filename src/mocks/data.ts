@@ -649,7 +649,12 @@ export interface NewPoolInput {
    * card.refPrice 是賣家標示的參考價（**選填**、只顯示、不參與計算）；
    * buyback 是他宣告的買回價（要履行的絕對金額）。
    */
-  prizes: { tier: Tier; card: CardItem; qty: number; buyback: number }[]
+  prizes: {
+    tier: Tier; card: CardItem; qty: number; buyback: number
+    /* 賣家已確認「PSA 查到的卡就是我挑的這張」。只在 PSA 查得到但卡號對不上時
+       才需要（PSA 英文、目錄日文，卡名無法字串相等）。見 server/src/routes/pools.ts。 */
+    certConfirmed?: boolean
+  }[]
 }
 
 /** 賣家開池。籤序在此刻預洗並產生 commit hash（mock 以假雜湊代替） */

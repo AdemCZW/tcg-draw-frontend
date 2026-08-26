@@ -381,6 +381,117 @@ async function run() {
     }
   }
 
+  /* ---- PSA 鑑定編號查證 ----
+     全部走 stub（伺服器要設 PSA_STUB=1）：不能真的打正式環境的 PSA
+     （會吃掉 100/天配額，而且帳號待核准全 403，見 docs/psa-api-access.md）。
+     stub 用 cert 編號的前綴選分支，見 src/psa.ts 的 stubExchange。
+     沒開 stub 時（例如對正式環境跑）整段跳過，不製造假警報。 */
+  console.log('\nPSA 鑑定編號查證：')
+  {
+    const probe = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-OK-025' }))
+    const stubbed = probe.ok === true && probe.cert?.cardNumber === '025'
+    if (!stubbed) {
+      check('（跳過 PSA 查證：伺服器沒開 PSA_STUB=1）', true)
+    } else {
+      // ── 直接打端點，逐條驗四種 reason ──
+      const noAuthPsa = await fetch(`${base}/v1/psa/verify`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ certNumber: 'STUB-OK-025' })
+      })
+      check('查證端點沒帶 token 回 401', noAuthPsa.status === 401)
+
+      const notFound = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-NOTFOUND-1' }))
+      check('查無此卡 → not_found', notFound.ok === false && notFound.reason === 'not_found', JSON.stringify(notFound))
+
+      const invalid = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-INVALID-1' }))
+      check('格式錯 → invalid_format', invalid.ok === false && invalid.reason === 'invalid_format', JSON.stringify(invalid))
+
+      const un403 = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-403-1' }))
+      check('403 待核准 → api_unavailable（不是賣家的錯）', un403.ok === false && un403.reason === 'api_unavailable', JSON.stringify(un403))
+
+      const un500 = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-500-1' }))
+      check('500 憑證問題 → api_unavailable（我方問題，不說 PSA 掛了）', un500.ok === false && un500.reason === 'api_unavailable', JSON.stringify(un500))
+
+      const noCfg = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-NOTCONFIG-1' }))
+      check('沒設 token → not_configured', noCfg.ok === false && noCfg.reason === 'not_configured', JSON.stringify(noCfg))
+
+      // 查到就快取，第二次同一張是 cached（省配額，一張卡一輩子查一次）
+      const first = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-OK-CACHE' }))
+      const second = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-OK-CACHE' }))
+      check('查到的結果進快取，第二次同一張讀快取',
+        first.ok === true && first.cached === false && second.ok === true && second.cached === true,
+        `${JSON.stringify(first).slice(0, 60)} / ${JSON.stringify(second).slice(0, 60)}`)
+
+      // ── 開鑑定卡池：每條分支走一遍 ──
+      // 一個小到穩過經濟護欄的鑑定卡池：A 賞是鑑定卡（1 籤）、D 賞是生卡湊數。
+      // floor = (50+50)/(100×2) = 50%，過關；票收 200 遠低於新賣家上限。
+      const gradedPool = (certNo: string, sellerCardNo: string, certConfirmed?: boolean) => ({
+        mode: 'muteki', title: 'PSA 測試池', ticketPrice: 100, totalTickets: 2,
+        prizes: [
+          {
+            tier: 'A', total: 1, buyback: 50, certConfirmed,
+            card: {
+              id: 'c-psa-a', name: 'テストカード', setCode: 'SV8a', cardNo: sellerCardNo,
+              language: 'JP', grader: 'PSA', grade: 10, certNo, image: '', variantId: null, refPrice: null
+            }
+          },
+          {
+            tier: 'D', total: 1, buyback: 50,
+            card: {
+              id: 'c-psa-d', name: '生卡', setCode: 'SV8a', cardNo: '001',
+              language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', variantId: null, refPrice: null
+            }
+          }
+        ]
+      })
+      // 讀回某個池的鑑定卡（tier A）的 psaStatus
+      const gradedStatus = async (poolId: string): Promise<string | null | undefined> => {
+        const pj = await json(await fetch(`${base}/v1/pools/${poolId}`))
+        const a = (pj.pool?.prizes ?? []).find((x: Any) => x.tier === 'A')
+        return a?.card?.psaStatus
+      }
+
+      // 1) 格式錯 → 擋
+      const cInvalid = await call(seller, '/v1/pools', gradedPool('STUB-INVALID-9', '025'))
+      const cInvalidJ = await json(cInvalid)
+      check('開池：鑑定編號格式錯 → 擋下，不准進池',
+        cInvalid.status === 400 && cInvalidJ.error === 'CERT_INVALID', `${cInvalid.status} ${JSON.stringify(cInvalidJ)}`)
+
+      // 2) 查無此卡（假編號）→ 擋
+      const cNotFound = await call(seller, '/v1/pools', gradedPool('STUB-NOTFOUND-9', '025'))
+      const cNotFoundJ = await json(cNotFound)
+      check('開池：查無此卡（假編號）→ 擋下',
+        cNotFound.status === 400 && cNotFoundJ.error === 'CERT_NOT_FOUND', `${cNotFound.status} ${JSON.stringify(cNotFoundJ)}`)
+
+      // 3) 查到且卡號對得上 → 放行、標 verified
+      const cOk = await call(seller, '/v1/pools', gradedPool('STUB-OK-025', '025'))
+      const cOkJ = await json(cOk)
+      check('開池：查到且卡號對得上 → 放行', cOk.ok === true && typeof cOkJ.poolId === 'string', `${cOk.status} ${JSON.stringify(cOkJ)}`)
+      if (cOk.ok) check('放行的鑑定卡標記為 verified', (await gradedStatus(cOkJ.poolId)) === 'verified')
+
+      // 4) API 不可用（403）→ 不硬擋，標 pending
+      const cUnavail = await call(seller, '/v1/pools', gradedPool('STUB-403-9', '025'))
+      const cUnavailJ = await json(cUnavail)
+      check('開池：暫時無法驗證（403）→ 不硬擋，池照開得成',
+        cUnavail.ok === true && typeof cUnavailJ.poolId === 'string', `${cUnavail.status} ${JSON.stringify(cUnavailJ)}`)
+      if (cUnavail.ok) check('無法驗證的鑑定卡標記為 pending（未驗證）', (await gradedStatus(cUnavailJ.poolId)) === 'pending')
+
+      // 5) 卡號對不上、賣家沒確認 → 要賣家確認（擋，但講清楚）
+      const cMismatch = await call(seller, '/v1/pools', gradedPool('STUB-OK-999', '025'))
+      const cMismatchJ = await json(cMismatch)
+      check('開池：PSA 卡號跟賣家挑的對不上、又沒確認 → 要賣家確認',
+        cMismatch.status === 409 && cMismatchJ.error === 'CERT_MISMATCH' &&
+        Array.isArray(cMismatchJ.mismatches) && cMismatchJ.mismatches[0]?.psaCardNumber === '999',
+        `${cMismatch.status} ${JSON.stringify(cMismatchJ)}`)
+
+      // 6) 同樣對不上、但賣家確認了是同一張 → 放行、標 verified
+      const cConfirmed = await call(seller, '/v1/pools', gradedPool('STUB-OK-999', '025', true))
+      const cConfirmedJ = await json(cConfirmed)
+      check('開池：卡號對不上但賣家確認過 → 放行', cConfirmed.ok === true, `${cConfirmed.status} ${JSON.stringify(cConfirmedJ)}`)
+      if (cConfirmed.ok) check('賣家確認後的鑑定卡標記為 verified', (await gradedStatus(cConfirmedJ.poolId)) === 'verified')
+    }
+  }
+
   /* ---- 檔案上傳 ---- */
   console.log('\n檔案上傳：')
   const noAuth = await fetch(`${base}/v1/files/presign`, {
@@ -896,9 +1007,13 @@ async function run() {
     /* 卡冊來源的卡本來就帶著鑑定編號，那份資訊也要進得去。
        一個編號對應一張實體卡，所以只能開 1 籤 —— 這條規則反過來也要成立：
        帶了編號又開 2 籤要被擋（一卡多賣正是平台聲稱要防的事）。 */
+    /* 鑑定編號用 STUB-OK-349190：開池現在會向 PSA 查證（見 PSA 那一節），
+       stub 讓 PSA 回 CardNumber=349190，跟這張卡的 cardNo「349/190」的數字部分
+       對得上 → 查證通過、標 verified。用真的編號在 stub 下會被當成查無此卡擋掉，
+       那是 stub 的安全預設，不是這條測試要驗的東西。 */
     const graded = {
       id: 'cg-smoke-pick', name: '噴火龍 ex UR', setCode: 'sv4a', cardNo: '349/190',
-      language: 'JP', grader: 'PSA', grade: 10, certNo: '84129901', image: '',
+      language: 'JP', grader: 'PSA', grade: 10, certNo: 'STUB-OK-349190', image: '',
       artId: 'SV4a-349', variantId: null, refPrice: 42000
     }
     const g = await call(seller, '/v1/pools', {
@@ -915,13 +1030,14 @@ async function run() {
       const snap = await json(await fetch(`${base}/v1/pools/${gj.poolId}`))
       const a = (snap.pool?.prizes ?? []).find((x: Any) => x.tier === 'A')?.card
       check('鑑定資訊（grader / grade / certNo）完整保留',
-        a?.grader === 'PSA' && a?.grade === 10 && a?.certNo === '84129901', JSON.stringify(a))
+        a?.grader === 'PSA' && a?.grade === 10 && a?.certNo === 'STUB-OK-349190', JSON.stringify(a))
+      check('卡冊挑的鑑定卡查證通過後標記為 verified', a?.psaStatus === 'verified', JSON.stringify(a?.psaStatus))
     }
 
     const dup = await call(seller, '/v1/pools', {
       mode: 'muteki', title: 'smoke-pick-graded-dup', ticketPrice: 900, totalTickets: 10,
       tierBuyback: { A: 6000 },
-      prizes: [{ tier: 'A', card: { ...graded, certNo: '84129902' }, total: 10 }]
+      prizes: [{ tier: 'A', card: { ...graded, certNo: 'STUB-OK-349191' }, total: 10 }]
     })
     check('帶鑑定編號卻開 10 籤被擋（一個編號對應一張實體卡）', dup.status === 400,
       String(dup.status))

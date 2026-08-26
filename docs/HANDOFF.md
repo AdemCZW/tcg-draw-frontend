@@ -295,7 +295,11 @@ cd server && npm run build
 
 **不要用 `tsc --noEmit` 代替 `npm run build`**，而且**不要接 pipe** —— 接了 pipe 讀到的是 pipe 的 exit code。
 
-### 煙霧測試（目前 278 項）
+### 煙霧測試（目前 295 項）
+
+> PSA 相關（+17 項，含「PSA 鑑定編號查證」整段與挑鑑定卡開池那條的 verified 檢查）
+> 要伺服器設 `PSA_STUB=1` 才會實跑，否則整段自動跳過（不打正式 PSA）。
+> 見 docs/psa-api-access.md 第 9 節。
 
 需要本機 PostgreSQL 與一個跑著的 server：
 

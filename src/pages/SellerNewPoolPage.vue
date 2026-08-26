@@ -146,6 +146,14 @@ interface PrizeRow {
    * 不擋住的話賣家會開出一個「本來是 PSA 10、現在悄悄變成裸卡」的池。
    */
   needsRepick?: boolean
+  /**
+   * PSA 查到的卡跟這一張對不上時，後端回來的資訊（PSA 的卡號與主體）。
+   * 有值時這一列會冒出一個「這確實是同一張卡」的確認勾選。
+   * null / undefined = 沒有對不上的問題。
+   */
+  certMismatch?: { psaCardNumber: string | null; psaSubject: string | null } | null
+  /** 賣家勾了「確實是同一張卡」。勾了才會把 certConfirmed 送給後端放行 */
+  certConfirmed?: boolean
 }
 
 const form = reactive({
@@ -404,12 +412,27 @@ async function submit() {
            所以最後蓋回 card 上 —— 賣家在表單上改的是這一格，不是挑卡時的原值。 */
         card: { ...p.pick.card, refPrice: p.unitValue },
         qty: p.qty,
-        buyback: resolved.value[i]!
+        buyback: resolved.value[i]!,
+        /* 只有賣家勾過「確實是同一張卡」才送 certConfirmed。
+           一般情況卡號對得上、根本不會用到這個旗標。 */
+        certConfirmed: p.certConfirmed || undefined
       }))
     })
     router.push({ name: 'pool', params: { id: pool.id } })
   } catch (e) {
-    error.value = e instanceof ApiError ? e.message : '開池失敗，請稍後再試'
+    /* PSA 查到的卡跟賣家挑的對不上：後端不硬擋，要賣家自己確認是不是同一張
+       （PSA 是英文、目錄是日文，卡名無法字串相等）。把對不上的列標出來、
+       冒出確認勾選，賣家勾了再送一次就會過。 */
+    if (e instanceof ApiError && e.code === 'CERT_MISMATCH') {
+      const list = (e.data as { mismatches?: { certNo: string; psaCardNumber: string | null; psaSubject: string | null }[] })?.mismatches ?? []
+      for (const m of list) {
+        const row = form.prizes.find(p => p.pick.card.certNo === m.certNo)
+        if (row) row.certMismatch = { psaCardNumber: m.psaCardNumber, psaSubject: m.psaSubject }
+      }
+      error.value = e.message
+    } else {
+      error.value = e instanceof ApiError ? e.message : '開池失敗，請稍後再試'
+    }
   } finally { busy.value = false }
 }
 </script>
@@ -651,6 +674,17 @@ async function submit() {
                 <span v-else-if="p.needsRepick" class="idWarn">
                   範本裡這一張是鑑定卡。一個鑑定編號只對應一張實體卡，不能複製——請從卡冊重挑一張。
                 </span>
+                <!-- PSA 查到的卡跟這一張的卡號對不上。PSA 是英文、目錄是日文，
+                     卡名沒辦法直接比對，所以不硬擋 —— 讓賣家看過 PSA 查到的卡號後
+                     自己確認是不是同一張，勾了才會放行。 -->
+                <label v-if="p.certMismatch" class="certConfirm">
+                  <input type="checkbox" v-model="p.certConfirmed" />
+                  <span>
+                    PSA 查到的卡號是「{{ p.certMismatch.psaCardNumber || '未提供' }}」<template
+                      v-if="p.certMismatch.psaSubject">（{{ p.certMismatch.psaSubject }}）</template>，
+                    跟你挑的「{{ p.pick.card.cardNo || '—' }}」對不上。確認是同一張卡再勾選並重新送出。
+                  </span>
+                </label>
               </span>
 
               <select v-model="p.tier" aria-label="賞別">
@@ -902,6 +936,14 @@ input.missing { border-color: var(--danger); }
 .idMeta, .idCert { font-size: 11px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .idCert { color: var(--accent); }
 .idWarn { font-size: 11px; line-height: 1.55; color: var(--danger); }
+/* PSA 卡號對不上時的確認勾選。用 grid 讓勾選框與文字對齊，
+   文字自己會換行（min-width: 0 讓它縮得下，見 docs/HANDOFF.md 2.1）。 */
+.certConfirm {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px;
+  align-items: start; font-size: 11px; line-height: 1.55; color: var(--gold-deep);
+  margin-top: 3px; cursor: pointer;
+}
+.certConfirm input { margin-top: 2px; }
 .del {
   display: grid; place-items: center;
   border: 1px solid var(--line); border-radius: 8px;
