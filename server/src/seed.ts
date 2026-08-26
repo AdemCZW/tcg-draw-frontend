@@ -6,6 +6,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { sql } from './db.js'
+import { GEN, genId } from './seed-gen.js'
 import { PLATFORM_ID } from './orders-service.js'
 import { BUYBACK_MIN } from './shared/pool-settlement.js'
 import { commitV2, manifestHashOf, seatSequence, type ManifestVersion } from './shared/fairness.js'
@@ -440,10 +441,12 @@ function pickSeats(total: number, sold: number, layout: 'scatter' | 'head'): Set
  * 這裡不走 drand（測試不能等兩分鐘），用固定的 server_seed 與 client_seed 算籤序。
  * commit-reveal 的結構完全一樣，只是亂數來源是 fixture —— 標在 client_seed_source 裡。
  */
+
 async function seedPool(d: PoolDef) {
-  const [exists] = await sql`select 1 from pools where id = ${d.id}`
+  const id = genId(d.id)
+  const [exists] = await sql`select 1 from pools where id = ${id}`
   if (exists) return
-  const clientSeed = d.clientSeed ?? `fixture:${d.id}`
+  const clientSeed = d.clientSeed ?? `fixture:${id}`
   /* server_seed 一定要是密碼學隨機，不能寫死。
      commitHash、clientSeed、整份獎品清單都由 GET /v1/pools/:id 公開，
      只要 server_seed 可預測（例如寫死成 'a1' 重複 32 次，全空間才 256 種），
@@ -451,7 +454,7 @@ async function seedPool(d: PoolDef) {
      開獎前的盲盒就被看穿了。改用 32 bytes 隨機值，這條路整個封死。
      （安全稽核 C-1：docs/security-audit.md） */
   const serverSeed = randomBytes(32).toString('hex')
-  const prizeDefs = d.prizes.map((p, i) => ({ ...p, id: `${d.id}-pr${i}` }))
+  const prizeDefs = d.prizes.map((p, i) => ({ ...p, id: `${id}-pr${i}` }))
   const total = prizeDefs.reduce((a, p) => a + p.total, 0)
   const openedAt = new Date(Date.now() - d.openedDaysAgo * 86_400_000)
 
@@ -503,7 +506,7 @@ async function seedPool(d: PoolDef) {
      算錯的池應該在 seed 就停下來，不是安靜地進資料庫。 */
   if (ratio !== null) {
     const gate = floorAllowed(ratio)
-    if (!gate.allowed) throw new Error(`種子池 ${d.id} 過不了保底回饋率護欄：${gate.message}`)
+    if (!gate.allowed) throw new Error(`種子池 ${id} 過不了保底回饋率護欄：${gate.message}`)
   }
 
   /* v2 的舊池存的是舊制還元率（Σ 賣家標示市值 ÷ 票收），v3 存的是保底回饋率。
@@ -521,7 +524,7 @@ async function seedPool(d: PoolDef) {
                        client_seed_source, client_seed,
                        shitei_tier, opened_at, revealed_at, return_ratio, floor_ratio,
                        expires_at, platform_fee_rate)
-    values (${d.id}, ${d.sellerId}, ${d.mode}, ${d.title}, ${d.ticketPrice}, ${total}, ${d.status},
+    values (${id}, ${d.sellerId}, ${d.mode}, ${d.title}, ${d.ticketPrice}, ${total}, ${d.status},
             ${serverSeed}, ${await commitV2(serverSeed, manifestHash)}, ${manifestHash}, ${version},
             ${clientSeed}, ${clientSeed},
             ${d.shiteiTier ?? null}, ${openedAt},
@@ -535,7 +538,7 @@ async function seedPool(d: PoolDef) {
             ${0})
   `
   await sql`insert into pool_prizes ${sql(withBuyback.map(p => ({
-    id: p.id, pool_id: d.id, tier: p.tier, card: p.card, total: p.total, buyback: p.buyback
+    id: p.id, pool_id: id, tier: p.tier, card: p.card, total: p.total, buyback: p.buyback
   })) as never)}`
 
   const seq = await seatSequence(serverSeed, clientSeed, prizeDefs.map(p => ({ prizeId: p.id, total: p.total })))
@@ -544,11 +547,11 @@ async function seedPool(d: PoolDef) {
   const taken = pickSeats(total, d.sold, d.soldLayout ?? 'scatter')
   const takenAt = openedAt.getTime() + 3_600_000
   await sql`insert into pool_seats ${sql(seq.map((prizeId, i) => ({
-    pool_id: d.id, seat: i + 1, prize_id: prizeId,
+    pool_id: id, seat: i + 1, prize_id: prizeId,
     taken_by: taken.has(i + 1) ? 'u-buyer' : null,
     taken_at: taken.has(i + 1) ? takenAt : null
   })) as never)}`
-  console.log(`seed pool ${d.id}: 票價 ${d.ticketPrice} × ${total} 籤，` +
+  console.log(`seed pool ${id}: 票價 ${d.ticketPrice} × ${total} 籤，` +
     (ratio === null ? `舊制 v2（無買回價）` : `保底回饋 ${ratio.toFixed(1)}%`) +
     `，已售 ${taken.size}，${d.status}`)
 }
@@ -594,7 +597,33 @@ async function run() {
               on conflict (id) do nothing`
   }
 
+/* 把「上一個世代」的示範池收攤。
+   判準是**世代**不是「有沒有買回價」：只挑 client_seed 以 fixture: 開頭
+   （＝種子建的）、還開著、而且 id 不屬於目前世代的池。
+
+   第一版寫成「沒有買回價就收攤」，結果誤殺了 p-promo-1 —— 那是**刻意**
+   停在舊制的示範池，存在的理由就是讓「舊池抽到的卡回收不了」這條迴歸
+   有一個還在賣的對象。用世代判斷就不會誤傷：它屬於當前世代，留著。
+
+   關掉不是刪掉：prizes.pool_id 是 not null 外鍵，刪池等於毀掉使用者
+   卡冊裡已經抽到的卡。cancelled 只是停止販售，已抽出的卡與出貨流程照跑
+   （見 rules.md 第七節）。
+
+   條件寫得很窄是刻意的：真人開的池 client_seed 不是 fixture:，
+   有買回價的新世代池也不符合 —— 這段永遠不會誤傷它們。 */
+async function retireStalePools() {
+  const rows = await sql`
+    update pools set status = 'cancelled'
+     where status = 'open'
+       and client_seed like 'fixture:%'
+       and id not like ${'%' + GEN}
+    returning id
+  `
+  if (rows.length) console.log(`收攤舊世代示範池 ${rows.length} 個：${rows.map(r => r.id).join(', ')}`)
+}
+
   for (const d of poolDefs) await seedPool(d)
+  await retireStalePools()
 
   /* vault 掛單一定要有對應的 prizes 那一列 —— 「庫內轉移」的交付就是把那一列改 owner。
      原本種子只寫 listings 不寫 prizes，買家付了錢、賣家入了帳，卡卻不存在。

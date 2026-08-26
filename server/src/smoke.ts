@@ -11,6 +11,7 @@
  * 會改資料，不要對正式環境跑。
  */
 import { verifyReveal, manifestHashOf, manifestString, commitV2, type Reveal } from './shared/fairness.js'
+import { genId } from './seed-gen.js'
 
 const base = (process.argv[2] ?? 'http://localhost:8080').replace(/\/$/, '')
 
@@ -300,7 +301,7 @@ async function run() {
   /* ---- 抽選 ---- */
   console.log('\n抽選：')
   const poolsRes = await json(await fetch(`${base}/v1/pools`))
-  const pool = poolsRes.pools.find((p: { id: string }) => p.id === 'p-seed-1')
+  const pool = poolsRes.pools.find((p: { id: string }) => p.id === genId('p-seed-1'))
   check('種子池存在且 open', pool?.status === 'open', '先跑 npm run seed')
   if (pool) {
     check('open 的池不會洩漏 server_seed', pool.serverSeed === null)
@@ -456,12 +457,12 @@ async function run() {
         // 狀態過濾走 API 參數，不是撈回來再自己濾 —— 順便把後端的過濾一起驗了
         const have = await allPrizes(buyer, 'stashed')
         if (have.length >= want) return have
-        const snap = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+        const snap = await json(await fetch(`${base}/v1/pools/${genId('p-seed-1')}`))
         const taken = new Set<number>(snap.pool?.takenSeats ?? [])
         const seats = Array.from({ length: 100 }, (_, i) => i + 1)
           .filter(n => !taken.has(n)).slice(0, want - have.length)
         if (!seats.length) return have
-        await call(buyer, '/v1/pools/p-seed-1/draw',
+        await call(buyer, `/v1/pools/${genId('p-seed-1')}/draw`,
           { seats, idempotencyKey: 'smoke-ship-' + round + '-' + Date.now() })
       }
       return allPrizes(buyer, 'stashed')
@@ -610,7 +611,7 @@ async function run() {
   /* 保底回饋率與每一項的買回價，都要在**抽卡之前**看得到 ——
      那是判斷一個池值不值得抽最直接的依據，而且抽完才知道能買回多少就是釣魚。 */
   {
-    const snap = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+    const snap = await json(await fetch(`${base}/v1/pools/${genId('p-seed-1')}`))
     check('池快照帶出保底回饋率', typeof snap.pool?.floorRatio === 'number',
       `floorRatio=${snap.pool?.floorRatio}`)
     check('種子池的保底回饋率落在護欄之內',
@@ -627,7 +628,7 @@ async function run() {
       Math.abs(snap.pool.floorRatio - expect) < 0.02, `${snap.pool.floorRatio} vs ${expect.toFixed(2)}`)
 
     /* 舊池照實顯示「沒有宣告買回價」，不拿參考價湊一個數字出來 */
-    const old = await json(await fetch(`${base}/v1/pools/p-official-3`))
+    const old = await json(await fetch(`${base}/v1/pools/${genId('p-official-3')}`))
     check('舊池的保底回饋率是 null（它從來沒有宣告過買回價）',
       old.pool?.floorRatio === null, `floorRatio=${old.pool?.floorRatio}`)
     check('舊池的獎項買回價也是 null，不是 0',
@@ -646,7 +647,7 @@ async function run() {
      這一段就是釘住「加了欄位之後舊池沒有集體變成被竄改」。
      p-official-3 是刻意留在 v2 的種子池，p-official-4 是 v3 的。 */
   console.log('\n公平性驗算（v2 / v3 / v4）：')
-  for (const [poolId, want] of [['p-official-3', 2], ['p-official-4', 3], ['p-official-5', 4]] as const) {
+  for (const [poolId, want] of [[genId('p-official-3'), 2], [genId('p-official-4'), 3], [genId('p-official-5'), 4]] as const) {
     const r = await fetch(`${base}/v1/pools/${poolId}/reveal`)
     if (!r.ok) { check(`${poolId} 取得 reveal`, false, String(r.status)); continue }
     const rv = await json(r) as Reveal & { manifestVersion?: number }
@@ -933,11 +934,11 @@ async function run() {
        看起來是 ok 其實什麼都沒驗到（第一版就是這樣）。 */
     let free = (await allPrizes(buyer, 'stashed'))[0]
     if (!free) {
-      const snap = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+      const snap = await json(await fetch(`${base}/v1/pools/${genId('p-seed-1')}`))
       const taken = new Set<number>(snap.pool?.takenSeats ?? [])
       const seat = Array.from({ length: 100 }, (_, i) => i + 1).find(n => !taken.has(n))
       if (seat) {
-        await call(buyer, '/v1/pools/p-seed-1/draw',
+        await call(buyer, `/v1/pools/${genId('p-seed-1')}/draw`,
           { seats: [seat], idempotencyKey: 'smoke-delist-' + Date.now() })
         free = (await allPrizes(buyer, 'stashed'))[0]
       }
@@ -1172,11 +1173,11 @@ async function run() {
        前面的段落會把買家的卡用掉，不能靠殘留狀態。 */
     for (let round = 0; round < 3; round++) {
       if ((await allPrizes(buyer)).length >= 6) break
-      const snap = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+      const snap = await json(await fetch(`${base}/v1/pools/${genId('p-seed-1')}`))
       const taken = new Set<number>(snap.pool?.takenSeats ?? [])
       const seats = Array.from({ length: 100 }, (_, i) => i + 1).filter(n => !taken.has(n)).slice(0, 6)
       if (!seats.length) break
-      await call(buyer, '/v1/pools/p-seed-1/draw',
+      await call(buyer, `/v1/pools/${genId('p-seed-1')}/draw`,
         { seats, idempotencyKey: `smoke-page-${round}-${Date.now()}` })
     }
 
@@ -1361,7 +1362,7 @@ async function run() {
 
     /* 規則 1：抽卡時貸記賣家的「保留額」—— 看得到、動不了 */
     const before = await walletOf(seller)
-    const got = await drawOne(buyer, 'p-seed-1')
+    const got = await drawOne(buyer, genId('p-seed-1'))
     check('抽得到卡（結算測試的前提）', !!got, JSON.stringify(got))
     if (got) {
       const after = await walletOf(seller)
@@ -1400,7 +1401,7 @@ async function run() {
     /* 規則 2 的另一半：買家確認收貨，立刻釋放，不用等 7 天 */
     {
       const b0 = await walletOf(seller)
-      const g = await drawOne(buyer, 'p-seed-1')
+      const g = await drawOne(buyer, genId('p-seed-1'))
       if (g) {
         await call(buyer, '/v1/prizes/ship', { prizeIds: [g.stashId], address: ADDR })
         const st = await settlementOf(seller, g.stashId)
@@ -1420,7 +1421,7 @@ async function run() {
     for (let i = 0; i < 3; i++) {
       const bBefore = await walletOf(buyer)
       const sBefore = await walletOf(shop)
-      const g = await drawOne(buyer, 'p-shop-1')
+      const g = await drawOne(buyer, genId('p-shop-1'))
       if (!g) { check(`（跳過逾期未出貨第 ${i + 1} 次：抽不到卡）`, false); continue }
       await call(buyer, '/v1/prizes/ship', { prizeIds: [g.stashId], address: ADDR })
       // 出貨期限 72 小時。撥回 4 天
@@ -1454,13 +1455,13 @@ async function run() {
 
     /* 規則 4：池到期就關池、停止販售；但已售出的仍照走出貨與鑑賞期 */
     {
-      const g = await drawOne(buyer, 'p-shop-4')
+      const g = await drawOne(buyer, genId('p-shop-4'))
       await fetch(`${base}/v1/dev/expire-pool`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ poolId: 'p-shop-4' })
+        body: JSON.stringify({ poolId: genId('p-shop-4') })
       })
-      const seat = await freeSeat('p-shop-4')
-      const late = await call(buyer, '/v1/pools/p-shop-4/draw',
+      const seat = await freeSeat(genId('p-shop-4'))
+      const late = await call(buyer, `/v1/pools/${genId('p-shop-4')}/draw`,
         { seats: [seat], idempotencyKey: 'smoke-expired-' + Date.now() })
       const lj = await json(late)
       check('池到期後不能再抽', late.status === 409 && lj.error === 'POOL_EXPIRED',
@@ -1488,7 +1489,7 @@ async function run() {
       const total0 = (await json(await call(platform, '/v1/admin/reconcile'))).total
       const sBefore = await walletOf(seller)
       const bBefore = await walletOf(buyer)
-      const g = await drawOne(buyer, 'p-seed-1')
+      const g = await drawOne(buyer, genId('p-seed-1'))
       if (g) {
         /* 期望值從卡冊那一列帶出來的 buyback 拿 —— 那是伺服器告訴使用者
            「你按下去會拿到多少」的同一個數字。用 refPrice 反推的話，
@@ -1525,7 +1526,7 @@ async function run() {
        refPrice 從 /v1/dev/set-ref-price 改（只有 DEV_LOGIN=1 才開）——
        改的是 prizes.card 那份快照，不動 pool_prizes，所以公平性承諾不受影響。 */
     {
-      const g = await drawOne(buyer, 'p-seed-1')
+      const g = await drawOne(buyer, genId('p-seed-1'))
       if (g) {
         const mine = await allPrizes(buyer, 'stashed')
         const row = mine.find((x: Any) => x.id === g.stashId)
@@ -1550,7 +1551,7 @@ async function run() {
     /* 規則 5c：舊制的池（沒有宣告過買回價）不能回收。
        系統不能替賣家簽一個他從來沒同意過的約 —— 見 migration 018。 */
     {
-      const g = await drawOne(buyer, 'p-promo-1')
+      const g = await drawOne(buyer, genId('p-promo-1'))
       if (g) {
         const mine = await allPrizes(buyer, 'stashed')
         const row = mine.find((x: Any) => x.id === g.stashId)
@@ -1565,20 +1566,20 @@ async function run() {
 
     /* 規則 8：賣家自抽自池不禁止（錢從自己流到自己），但不計入公開的進度顯示 */
     {
-      const b4 = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+      const b4 = await json(await fetch(`${base}/v1/pools/${genId('p-seed-1')}`))
       const remain0 = b4.pool.remainingTickets
       const taken0 = b4.pool.takenSeats.length
-      const g = await drawOne(seller, 'p-seed-1')
+      const g = await drawOne(seller, genId('p-seed-1'))
       check('賣家抽得了自己的池', !!g, JSON.stringify(g))
-      const a4 = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+      const a4 = await json(await fetch(`${base}/v1/pools/${genId('p-seed-1')}`))
       check('自抽不會推動公開的剩餘籤數',
         a4.pool.remainingTickets === remain0, `${remain0} → ${a4.pool.remainingTickets}`)
       check('但籤位本身確實被佔走（前端才畫得對）',
         a4.pool.takenSeats.length === taken0 + 1, `${taken0} → ${a4.pool.takenSeats.length}`)
       /* 反面：買家抽同一個池會推動進度。少了這一條，把 remainingTickets
          寫死成常數也會全綠 */
-      const g2 = await drawOne(buyer, 'p-seed-1')
-      const a5 = await json(await fetch(`${base}/v1/pools/p-seed-1`))
+      const g2 = await drawOne(buyer, genId('p-seed-1'))
+      const a5 = await json(await fetch(`${base}/v1/pools/${genId('p-seed-1')}`))
       check('真人抽卡照常推動公開的剩餘籤數',
         !!g2 && a5.pool.remainingTickets === remain0 - 1,
         `${remain0} → ${a5.pool.remainingTickets}`)
