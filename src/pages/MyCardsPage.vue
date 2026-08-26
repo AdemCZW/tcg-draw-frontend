@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, type PrizeSummary } from '@/lib/api'
 import type { Tier, UserPrize } from '@/types/models'
@@ -9,6 +9,7 @@ import TierBadge from '@/components/TierBadge.vue'
 import CertTag from '@/components/CertTag.vue'
 import ValueCurve from '@/components/ValueCurve.vue'
 import ListSentinel from '@/components/ListSentinel.vue'
+import BottomActionBar from '@/components/BottomActionBar.vue'
 import { useInfiniteList } from '@/composables/useInfiniteList'
 import { useWalletStore } from '@/stores/wallet'
 import { recycleQuote } from '@/lib/recycle'
@@ -18,6 +19,7 @@ import { ApiError, http } from '@/lib/http'
 import { MOCK } from '@/lib/config'
 import { useAuthStore } from '@/stores/auth'
 import { refPriceText, refPriceNum } from '@/lib/refprice'
+import { mergeByCard, certTailOf, type MergeGroup } from '@/lib/card-merge'
 
 const wallet = useWalletStore()
 const auth = useAuthStore()
@@ -327,6 +329,47 @@ function goSell() {
   router.push({ name: 'sell-cards', query: { ids: sellPick.value.join(',') } })
 }
 
+/* ---- 已選清單 ----
+   底下那條列只回答「幾張、值多少」，回答不了「是哪幾張」——
+   而使用者唯一能查的方法是回頭在整片卡牆裡找哪幾張有外框。
+   挑到十幾張時那件事根本做不到（卡牆本身還是分批載入的，
+   先選後捲的那幾張可能已經捲出畫面很遠）。所以列點得開，
+   面板裡就是已選的卡本身。
+
+   為什麼不常駐：選卡的當下要看的是**還沒選的卡**。常駐的縮圖格會
+   一直橫在卡牆與下緣之間，把卡牆能看的面積再切掉一塊。 */
+const chosenOpen = ref(false)
+function closeChosen() { chosenOpen.value = false }
+
+/* 合併規則跟建池的挑卡器共用同一份（src/lib/card-merge.ts）。
+   這裡選的是使用者自己的**實體卡**，所以合併更要小心：
+   有鑑定編號的卡永遠各自一格 —— PSA #82345671 與 #82345672 是兩張
+   可以各自查證的卡，併成 ×2 之後「取消的是哪一張」就講不清楚了。 */
+type PickGroup = MergeGroup<UserPrize>
+const sellGroups = computed<PickGroup[]>(() => mergeByCard(sellPicked.value, p => p.card))
+
+/** 這一格代表幾張卡就顯示 ×N；沒有鑑定編號的同款卡才會併到一起 */
+const certTail = (p: UserPrize) => certTailOf(p.card)
+
+/* 移除這一組裡**最後選進來的那一張**。手誤多點一下時，要撤銷的就是剛剛那一下。
+   移除走的是 toggleSell（跟卡牆上點卡片同一條路），所以卡牆上那張的
+   選取外框會跟著消失 —— 選取狀態只有 sellPicked 一份來源。 */
+function removeOne(g: PickGroup) {
+  toggleSell(g.members[g.members.length - 1])
+}
+
+/* 移到剩零張時面板自己收掉：空的「已選的卡」沒有東西可看，
+   而它也不該在離開選取模式之後還留在畫面上 */
+watch(() => sellPicked.value.length, n => { if (!n) chosenOpen.value = false })
+
+/* Esc 關面板。面板是 Teleport 到 body 的，焦點不一定落在裡面，
+   所以監聽掛在 window 上而不是面板節點上 */
+function onChosenKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && chosenOpen.value) closeChosen()
+}
+onMounted(() => window.addEventListener('keydown', onChosenKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onChosenKey))
+
 const confirming = ref<string | null>(null)
 const justRecycled = ref<{ id: string; points: number } | null>(null)
 
@@ -453,7 +496,7 @@ async function copyLink() {
 </script>
 
 <template>
-  <div class="container page" :class="{ picking: selecting }">
+  <div class="container page">
     <h1>我的卡冊</h1>
 
     <!-- 收藏總覽：這一頁最想被回答的問題就是「我收了多少、值多少」。
@@ -716,20 +759,95 @@ async function copyLink() {
          一進選取模式就在（N=0 時上架鍵是 disabled），所以「還要選幾張才動得了」
          這件事不必自己猜。
 
-         Teleport 到 body 是必要的，不是整潔問題：換頁轉場會在 .page 上加
-         transform，而祖先只要有 transform，position: fixed 的定位基準就會
-         變成那個祖先而不是視窗（見下面出貨面板的說明）。
-         用 @keyframes 不用 transition：class 沒被移除也不會殘留位移。 -->
-    <Teleport to="body">
-      <div v-if="selecting" class="pickBar">
-        <div class="pickInfo" role="status">
-          <strong>已選 <span class="mono">{{ sellPick.length }}</span> 張</strong>
-          <span class="mono">市值合計 {{ sellPickValue.toLocaleString() }} 點</span>
-        </div>
+         列本身改用 BottomActionBar：Teleport（換頁轉場會在 .page 上加
+         transform，祖先有 transform 就會變成 position:fixed 的定位基準）、
+         進出各一組 keyframes、以及讓位的 spacer，三個坑都已經在那支裡面了。
+         這一頁原本自己寫了一份一模一樣的，跟建池挑卡器那條列是同一件事的
+         兩份實作 —— 全站的貼底列只留一套。
+
+         spacer 給 124px：實測列高 109px、離視窗底 10px（底部導覽那一份
+         讓位是全域頁尾在算的，見 HANDOFF 2.3，不能重複加）。 -->
+    <BottomActionBar
+      :open="selecting"
+      label="上架選取"
+      :spacer="124"
+      :max-width="560"
+    >
+      <div class="pickBar">
+        <!-- 資訊區整塊就是「查看已選」的按鈕，不另外多一顆 ——
+             多一顆就要多一列，這條列的高度是量過的（見下面 .pickBar 的註解）。
+             一張都沒選時它沒有東西可展開，所以 disabled，而不是開一個空面板。 -->
+        <button
+          type="button" class="pickInfo" :disabled="!sellPick.length"
+          :aria-label="`查看已選的 ${sellPick.length} 張卡`"
+          @click="chosenOpen = true"
+        >
+          <!-- role="status"：張數會因為在面板裡移除而改變，而那個動作
+               發生在別的地方，讀螢幕的人需要被告知這裡的數字動了 -->
+          <span class="pickLines" role="status">
+            <strong>已選 <span class="mono">{{ sellPick.length }}</span> 張</strong>
+            <span class="mono pickSub">市值合計 {{ sellPickValue.toLocaleString() }} 點</span>
+          </span>
+          <span v-if="sellPick.length" class="pickPeek">查看</span>
+        </button>
         <button type="button" class="btn sm" @click="endSell">取消</button>
         <button type="button" class="btn primary sm" :disabled="!sellPick.length" @click="goSell">
           一鍵上架
         </button>
+      </div>
+    </BottomActionBar>
+
+    <!-- 已選清單面板。跟出貨面板共用同一組 .sheetWrap / .sheet 視覺，
+         一樣要 Teleport 到 body（祖先的 transform 會變成 position:fixed 的
+         定位基準）。關法三種：點遮罩、右上角關閉鍵、Esc。 -->
+    <Teleport to="body">
+      <div v-if="chosenOpen" class="sheetWrap" @click.self="closeChosen">
+        <div class="sheet card chosenSheet" role="dialog" aria-modal="true" aria-label="已選的卡">
+          <button type="button" class="sheetClose" aria-label="關閉" @click="closeChosen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+
+          <h2>已選的卡</h2>
+          <p class="muted fine">
+            點一張卡＝取消選取那一張。同一款卡合併成 ×N；
+            <strong>有鑑定編號的卡各自獨立，不合併</strong> —— 那是兩張可以分別查證的實體卡。
+          </p>
+
+          <!-- 縮圖格狀而不是一張一列：這裡選的是自己的卡，用卡圖認得最快，
+               而一列一張時十幾張就要捲很久（挑卡器那邊同樣的理由）。 -->
+          <ul class="picks">
+            <li v-for="g in sellGroups" :key="g.key" class="pickCell">
+              <!-- 整格就是取消選取鍵：叉叉只是角標，真正可按的是整格
+                   （最窄也有 56×78），遠超過 44px 的觸控下限 -->
+              <button
+                type="button" class="pickTile"
+                :aria-label="g.members.length > 1
+                  ? `取消選取一張 ${g.head.card.name}，目前 ${g.members.length} 張`
+                  : `取消選取 ${g.head.card.name}`"
+                :data-prize="g.members[g.members.length - 1].id"
+                @click="removeOne(g)"
+              >
+                <span class="pickArt">
+                  <CardArt
+                    :image="g.head.card.image" :alt="g.head.card.name"
+                    :cert-no="g.head.card.certNo" :art-id="g.head.card.artId"
+                  />
+                  <span class="pickX" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                  </span>
+                  <!-- 鑑定編號尾碼。有編號的卡不會被合併，兩張同款卡並排時
+                       沒有這個標就真的看不出差別 -->
+                  <span v-if="certTail(g.head)" class="pickCert mono">{{ certTail(g.head) }}</span>
+                  <span v-if="g.members.length > 1" class="pickQty">×{{ g.members.length }}</span>
+                </span>
+              </button>
+            </li>
+          </ul>
+
+          <div class="acts">
+            <button type="button" class="btn primary sm" @click="closeChosen">完成</button>
+          </div>
+        </div>
       </div>
     </Teleport>
 
@@ -844,29 +962,109 @@ async function copyLink() {
 }
 
 /* ---- 上架選取列 ---- */
+/* 定位、進出場動畫、讓位都交給 BottomActionBar（見那支的註解：Teleport、
+   讓位補在文件最末端、進出各一組 keyframes，三個坑都在裡面）。
+   這裡只剩「列裡面長什麼樣」。原本這一頁自己寫了一份 fixed + keyframes，
+   跟挑卡器那條列是同一件事的兩份實作 —— 全站的貼底列只留一套。
+
+   量測沿用舊版的基準：離視窗底 10px（BottomActionBar 的 gap 預設值）、
+   最大寬 560px、列高在 393px 上維持 109px。 */
 .pickBar {
-  position: fixed; z-index: 78;
-  /* 貼在底部導覽上緣，並避開手機的安全區 —— 兩者取大值，
-     桌機沒有底部導覽（--nav-total 是 0）時就只剩安全區 */
-  bottom: calc(10px + max(var(--nav-total, 0px), var(--safe-b, 0px)));
-  /* 左右都給值再配 margin: auto，over-constrained 時兩邊的 auto 會平分 ——
-     桌機上不讓兩顆按鈕各自拉到 500px 寬，那不是按鈕該有的樣子 */
-  left: 10px; right: 10px; max-width: 560px; margin: 0 auto;
+  min-width: 0;
   /* 資訊自己一行、兩顆按鈕平分下一行。
      原本是三個並排，資訊區靠 flex: 1 撐 —— 那要求按鈕會自己收斂，
      但只要有任何規則把按鈕撐寬（這裡就是 .btn.sm 的 width: 100%），
      資訊區就會被壓到 0。分兩行之後不管按鈕多寬都不會吃到資訊。 */
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
-  padding: 10px 12px; border-radius: 14px;
-  background: var(--surface-3); box-shadow: 0 -8px 30px rgba(0,0,0,.5);
-  animation: pickRise .22s cubic-bezier(.2,.8,.3,1);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
 }
 .pickBar .btn { flex: 1 1 0; min-width: 0; white-space: nowrap; min-height: 42px; }
 .pickBar .btn:disabled { opacity: .45; cursor: not-allowed; }
-@keyframes pickRise { from { opacity: 0; transform: translateY(16px) } to { opacity: 1; transform: none } }
-.pickInfo { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.pickInfo strong { font-size: 14px; }
-.pickInfo span { font-size: 11.5px; color: var(--muted); }
+/* 資訊區是一顆按鈕（點開已選清單），但看起來不能像按鈕 ——
+   它同時是「已選 N 張」這個狀態的唯一顯示位置，畫成第三顆實心鈕會
+   跟旁邊那兩個真正的動作搶。所以留裸底、只在右邊掛一個「查看」的字。 */
+.pickInfo {
+  flex: 1 1 100%; min-width: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0; border: 0; background: transparent; color: inherit;
+  text-align: left; font: inherit;
+}
+.pickInfo:disabled { cursor: default; }
+/* 它不是 .btn，所以吃不到 base.css 那條焦點框 —— 不補的話鍵盤走到這裡
+   會出現瀏覽器預設的藍色外框，跟全站的焦點樣式不同掛 */
+.pickInfo:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 10px; }
+/* 兩行的行高收緊到剛好包住字：這條列的高度是量過的（393px 上 109px，
+   讓位的 spacer 就是照這個數字給的）。BottomActionBar 的內距比舊版那條
+   自己寫的 fixed 列多 2px，行高不收就會多長出 6px，最後一列卡片的
+   讓位跟著不夠。 */
+.pickLines { min-width: 0; display: flex; flex-direction: column; }
+.pickInfo strong { font-size: 14px; line-height: 1.35; }
+.pickSub { font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+/* 「查看」永遠靠右，不隨張數變成三位數而左右跳 */
+.pickPeek {
+  margin-left: auto; flex: none;
+  padding: 5px 10px; border-radius: var(--pill);
+  background: var(--surface-2); color: var(--ink);
+  font-size: 11.5px; font-weight: 600;
+}
+
+/* ---- 已選清單面板 ---- */
+/* 關閉鍵是絕對定位的，定位基準必須是這張面板本身。少了這一行它會退到
+   .sheetWrap（fixed inset:0），跑到整個視窗的右上角去 —— 實測就是這樣。
+   只加在這一張上，不動出貨面板（那張沒有關閉鍵，多一個定位脈絡沒有意義）。 */
+.chosenSheet { position: relative; }
+.sheetClose {
+  position: absolute; right: 10px; top: 10px;
+  width: 34px; height: 34px; display: grid; place-items: center;
+  border: 0; background: var(--surface-2); color: var(--muted); border-radius: 50%;
+}
+.sheetClose svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+/* 標題要讓出右上角那顆關閉鍵的位置（它是絕對定位的） */
+.chosenSheet h2 { padding-right: 42px; }
+/* 縮圖格狀。auto-fill + minmax(0, 1fr) 讓一列塞得下幾張就塞幾張。
+   欄寬給 minmax(0, …) 是這個 repo 的老規矩（預設 min-width: auto
+   會讓內容把格線撐破，見 HANDOFF 2.1） */
+.picks {
+  min-width: 0; list-style: none; margin: 12px 0; padding: 2px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(54px, 1fr));
+  gap: 8px;
+}
+/* 這一格不自己設高度上限與捲動：清單住在 .sheet 裡，而 .sheet 本身就是
+   max-height + overflow:auto。再套一層內捲會變成兩個巢狀捲動區 ——
+   手指落在哪就捲哪一個，實測會讓人以為「捲不動」。 */
+.pickCell { min-width: 0; }
+.pickTile {
+  min-width: 0; width: 100%;
+  display: block; padding: 0; border: 0; background: transparent;
+  transition: transform .12s;
+}
+.pickTile:active { transform: scale(.94); }
+.pickArt {
+  position: relative; min-width: 0;
+  display: block; aspect-ratio: 63 / 88;
+  border-radius: 7px; overflow: hidden; background: var(--surface-3);
+}
+/* CardArt 自己的圓角是給大版位用的 14px，在 54px 的縮圖上會啃掉卡角 */
+.pickArt :deep(.art), .pickArt :deep(.art-img) { border-radius: 0; height: 100%; object-fit: cover; }
+/* 叉叉只是「按了會取消選取」的提示，不是它自己要被瞄準 —— 可按範圍是整格 */
+.pickX {
+  position: absolute; right: 2px; top: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: rgba(0, 0, 0, .62); color: #fff;
+}
+.pickX svg { width: 9px; height: 9px; fill: none; stroke: currentColor; stroke-width: 3.2; stroke-linecap: round; }
+.pickQty {
+  position: absolute; right: 2px; bottom: 2px;
+  min-width: 20px; padding: 1px 4px; border-radius: var(--pill);
+  background: var(--accent); color: var(--on-accent);
+  font-size: 10px; font-weight: 700; line-height: 1.5; text-align: center;
+}
+.pickCert {
+  position: absolute; left: 2px; bottom: 2px;
+  padding: 1px 3px; border-radius: 4px;
+  background: rgba(0, 0, 0, .62); color: #fff;
+  font-size: 8.5px; line-height: 1.5;
+}
 
 /* ---- 出貨面板 ----
    貼底而不是置中：手機上置中的對話框，鍵盤一彈出來就會把送出鍵推出畫面 */
@@ -1069,10 +1267,11 @@ async function copyLink() {
 }
 
 .page { padding-top: 36px; padding-bottom: 72px; }
-/* 選取列是 fixed，不佔版面 —— 不多留這段，最後一列的卡片會被它蓋住，
-   而那正是使用者最後才捲到、最可能想選的幾張。
-   實測那條列在 393px 上高 109px，加上離底部的 10px 與底部導覽的 40px。 */
-.page.picking { padding-bottom: 140px; }
+/* 讓位不在這裡補。選取列改用 BottomActionBar 之後，讓位是它 Teleport 到
+   文件最末端的一段 spacer（列高 109px + 離底 10px，給 124px）——
+   底部導覽那一份全域頁尾已經算過（見 HANDOFF 2.3，讓位只能有一個來源）。
+   補在頁面容器裡對「捲到最底時最後一列被蓋住」其實沒有用：被蓋住的是
+   文件的最末端，在中間插一段只是把整頁往下推。 */
 h1 { font-size: 22px; margin: 0 0 6px; }
 .note { font-size: 13px; margin: 0 0 22px; }
 .empty { padding: 40px; text-align: center; display: grid; gap: 12px; justify-items: center; }
@@ -1204,9 +1403,6 @@ strong { font-size: 14px; }
 
 @media (max-width: 720px) {
   .page { padding-top: 22px; padding-bottom: 40px; }
-  /* 選取列在 393px 上量到高 109px，離視窗底 10px，底部導覽再 40px ——
-     加起來 159px，這裡取 160px 讓最後一列卡片剛好落在列的上緣之外 */
-  .page.picking { padding-bottom: 160px; }
   .sellBar { margin: -4px 0 14px; }
   .sellHint { font-size: 11.5px; }
   h1 { font-size: 19px; }

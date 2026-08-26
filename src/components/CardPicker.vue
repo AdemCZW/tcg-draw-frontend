@@ -26,6 +26,7 @@ import {
   type CatalogCard, type CatalogHit, type CatalogVariant
 } from '@/lib/tcgdex-catalog'
 import { pickFromCatalog, pickFromPrize, type PickedCard } from '@/lib/card-pick'
+import { mergeByCard, certTailOf, type MergeGroup } from '@/lib/card-merge'
 
 const props = withDefaults(defineProps<{
   /** 已選的卡。v-model */
@@ -201,43 +202,12 @@ const eur = (n: number | null) => (n === null ? '—' : `€${n < 10 ? n.toFixed
  * 但合併只能是**畫面上的事** —— 底下的 PickedCard[] 一張都不能少，
  * 移除也必須真的移除其中某一張實體卡。
  *
- * 合併的鍵怎麼選：
- *   有鑑定編號的卡 → 鍵裡帶上 certNo，等於**永遠不合併**。
- *     PSA 10 #82345671 跟 PSA 10 #82345672 是兩張可以各自查證的卡，
- *     買家看到的也是兩個不同的獎品；把它們併成「×2」會讓賣家以為
- *     自己挑的是同一張，也讓「哪一張出了問題」變得說不清。
- *   沒有鑑定編號（RAW / 目錄卡）→ 用「這是哪一張卡」本身：
- *     artId（沒有就退回 setCode/cardNo）＋ 變體＋ 鑑定機構/分數＋ 語言。
- *     變體一定要進鍵：同卡號的大師球鏡面與普卡實測差約 18,000 倍，
- *     併在一起等於把兩種商品講成同一種。
+ * 規則本身住在 lib/card-merge.ts（卡冊的上架選取用的是同一份）：
+ * 「有鑑定編號的卡永遠不合併」與「變體要進鍵」這兩條，兩個畫面必須一致，
+ * 抄成兩份遲早會各自漂移。
  */
-function mergeKeyOf(p: PickedCard): string {
-  const c = p.card
-  const who = c.artId || `${c.setCode}/${c.cardNo}`
-  if (c.certNo) return `one:${who}:${c.grader}:${c.certNo}`
-  return `same:${who}|${c.variantId ?? ''}|${c.grader}|${c.grade ?? ''}|${c.language}`
-}
-
-interface PickGroup {
-  key: string
-  /** 這一組底下的每一張實體卡，順序＝挑選順序 */
-  members: PickedCard[]
-  /** 代表卡，拿來顯示卡圖與卡名 */
-  head: PickedCard
-}
-
-/* 順序用「第一次出現」的順序，不重排：賣家是照自己的順序挑的，
-   數量變化時整排卡跳位比多佔幾列還難用 */
-const groups = computed<PickGroup[]>(() => {
-  const byKey = new Map<string, PickGroup>()
-  for (const p of picked.value) {
-    const k = mergeKeyOf(p)
-    const g = byKey.get(k)
-    if (g) g.members.push(p)
-    else byKey.set(k, { key: k, members: [p], head: p })
-  }
-  return [...byKey.values()]
-})
+type PickGroup = MergeGroup<PickedCard>
+const groups = computed<PickGroup[]>(() => mergeByCard(picked.value, p => p.card))
 
 /** 移除這一組裡**最後挑進來的那一張**。手誤多按一下時，撤銷的就該是剛剛那一下 */
 function removeOne(g: PickGroup) {
@@ -274,7 +244,7 @@ onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 /** 鑑定編號的尾碼。合併不掉的兩張同款卡靠這個分辨，不然畫面上看起來一樣就像出錯 */
-const certTail = (p: PickedCard) => (p.card.certNo ? `#${p.card.certNo.slice(-4)}` : '')
+const certTail = (p: PickedCard) => certTailOf(p.card)
 
 const prizeArt = (p: UserPrize) => pickFromPrize(p).artUrl
 const isPrizePicked = (p: UserPrize) => pickedKeys.value.has(`prize:${p.id}`)
