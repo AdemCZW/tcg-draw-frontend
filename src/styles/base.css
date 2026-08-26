@@ -54,10 +54,25 @@ a, button, [role="button"], [role="tab"], [role="switch"], .ticket, .chip, .pool
   touch-action: manipulation;
 }
 
-/* 純裝飾的圖層不該吃到任何觸控 —— 疊在按鈕上會讓按鈕點不到 */
+/* 純裝飾的圖層不該吃到任何觸控 —— 疊在按鈕上會讓按鈕點不到。
+   每一個選擇器都必須帶 [aria-hidden="true"]：這些名字太通用，
+   沒有守衛就會掃到剛好同名的真實內容。
+   實際發生過：開池表單用 <label class="field"> 包每個欄位，被這條規則
+   關掉觸控，整張表單的標題與價格點不進去也打不了字（使用者回報
+   「為什麼我沒辦法點擊修改標題跟價格」）。裝飾用的那個 .field 在
+   LobbyPage 且本來就有 aria-hidden —— 守衛加上去兩邊就各自安好。 */
 [aria-hidden="true"].scrim,
 [aria-hidden="true"].glare,
-.field, .sky, .stars, .meteors, .motes, .bokehs, .curtains, .rays, .floor, .lines {
+[aria-hidden="true"].field,
+[aria-hidden="true"].sky,
+[aria-hidden="true"].stars,
+[aria-hidden="true"].meteors,
+[aria-hidden="true"].motes,
+[aria-hidden="true"].bokehs,
+[aria-hidden="true"].curtains,
+[aria-hidden="true"].rays,
+[aria-hidden="true"].floor,
+[aria-hidden="true"].lines {
   pointer-events: none;
 }
 
