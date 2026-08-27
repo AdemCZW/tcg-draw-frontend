@@ -1,14 +1,34 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useWalletStore } from '@/stores/wallet'
 import { useAuthStore } from '@/stores/auth'
+import { useSellerStore } from '@/stores/sellers'
 import NotifyBell from '@/components/NotifyBell.vue'
 import RollingNumber from '@/components/RollingNumber.vue'
 
 const wallet = useWalletStore()
 const auth = useAuthStore()
+const sellers = useSellerStore()
 const route = useRoute()
+
+/**
+ * 賣家身分：決定「出貨與結算」這個入口要不要出現。
+ *
+ * 判斷完全交給 sellers store 的 isSeller（MOCK 讀假資料、API 讀 /v1/seller/me，
+ * 跟開池頁同一份規則），這裡不自己再判一次 —— 頁首跟落地頁對身分的認定要是
+ * 有一點出入，使用者看到的就是「頁首有入口、點進去說你不是賣家」。
+ *
+ * 為什麼只有賣家看得到：一般玩家永遠沒有東西要出貨，那一格對他只是雜訊，
+ * 而頁首的每一格都在跟真正該點的東西搶注意力。開池不同 —— 那一頁本身就是
+ * 「申請成為賣家」的入口，所以維持所有會員都看得到。
+ */
+watch(() => auth.user?.id, id => {
+  /* 帳號換人（含登出再登入）就重問一次。不重置的話，同一個分頁裡
+     換一個帳號登入會沿用上一個人的賣家身分。 */
+  sellers.resetStatus()
+  if (id) sellers.ensureStatus()
+}, { immediate: true })
 
 /**
  * 登入／註冊都指向形象頁（那一頁本來就同時擺了兩者，沒有獨立的註冊路由），
@@ -75,6 +95,13 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
           <!-- 只有管理員看得到。這是便利性入口，不是權限控制——擋在路由守衛與後端 -->
           <RouterLink v-if="auth.isAdmin" :to="{ name: 'admin' }" class="pill admin">後台</RouterLink>
           <RouterLink :to="{ name: 'seller-new' }" class="pill sell">＋ 我要開池</RouterLink>
+          <!-- 出貨與結算：只有賣家看得到，就排在開池右邊（開池是進貨、出貨是履約，
+               同一個身分的前後兩步）。名字跟頁面標題一字不差，換個說法會讓人以為是兩頁。
+               這是賣家回訪頻率最高的一頁（要看保留額、看哪幾張該寄了），
+               之前桌機版只能先進「我的」再點一層，而寄送是有時限的 —— 逾期要退款加違約。 -->
+          <RouterLink
+            v-if="sellers.isSeller" :to="{ name: 'seller-shipping' }" class="pill ship"
+          >出貨與結算</RouterLink>
           <RouterLink :to="{ name: 'topup' }" class="pill wallet mono" aria-label="點數餘額，前往儲值">
             <span class="dot" aria-hidden="true"></span><RollingNumber :value="wallet.shown" /> 點
           </RouterLink>
@@ -175,6 +202,12 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 .sell { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 38%, transparent); }
 @media (hover: hover) { .sell:hover { background: var(--accent-wash); } }
 
+/* 出貨與結算：賣家限定。用中性外框而不是跟開池一樣的強調色外框 ——
+   一條列上兩個橘紅外框會互相抵銷，而且開池是「招募」（要吸引人點），
+   出貨是「例行公事」（知道它在哪就夠了，賣家自己會回來找）。 */
+.ship { color: var(--ink); border-color: var(--line); }
+@media (hover: hover) { .ship:hover { background: var(--surface-2); } }
+
 /* 後台入口：管理員限定，用中性色不搶主導覽的注意力 */
 .admin { background: var(--surface-3); color: var(--muted); font-size: 13px; padding: 0 14px; }
 @media (hover: hover) { .admin:hover { color: var(--ink); } }
@@ -216,6 +249,14 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
   .pill { padding: 0 13px; }
   .me { padding: 0 11px 0 5px; }
   .nav > a { padding: 8px 11px; }
+}
+/* 出貨與結算是這條列上最後加進來的一格，也是第一個被收掉的 ——
+   實測（1440→720 每 20px 掃一次）：1000px 還排得下，980px 起導覽的「我的卡冊」
+   就會越過動作區的左緣 6px，880px 時是 20px，整條列開始疊字。
+   收掉之後這個入口仍在「我的」頁（手機的底部導覽與這裡的帳號膠囊都到得了），
+   跟開池在 860px 收掉是同一個道理：桌機才有的便利，位置不夠就還給主導覽。 */
+@media (max-width: 1000px) {
+  .ship { display: none; }
 }
 @media (max-width: 960px) {
   .who { display: none; }
