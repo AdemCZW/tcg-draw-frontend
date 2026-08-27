@@ -25,6 +25,7 @@ import { sweep } from './orders-service.js'
 import { sweepPools } from './pools-service.js'
 import { sweepSettlementsAll } from './pool-settlement.js'
 import { sweepAttempts } from './rate-limit.js'
+import { certUniquenessPreflight } from './preflight.js'
 
 const app = new Hono()
 app.use('*', logger())
@@ -160,4 +161,12 @@ setInterval(() => {
 
 serve({ fetch: app.fetch, port: env.PORT }, info => {
   console.log(`vaultdraw-server listening on :${info.port}`)
+
+  /* 鑑定編號唯一性的預檢。
+     刻意放在開始聽之後、而且刻意不 await：它是一道檢查，不是啟動的前提。
+     放在前面會讓每次冷啟動都多等幾個查詢，而 Railway 的健康檢查等不了；
+     而且萬一資料庫慢或掛了，await 它等於讓整個服務陪葬 ——
+     一個「順便看看資料乾不乾淨」的功能不該有那種權力。
+     它自己保證不 reject，所以 void 是安全的。 */
+  void certUniquenessPreflight()
 })
