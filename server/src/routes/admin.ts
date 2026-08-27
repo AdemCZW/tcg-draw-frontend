@@ -249,7 +249,16 @@ admin.post('/shipments/:id/status', async c => {
        那個狀態上架不行（只收 stashed / shipped）、回收不行（只收 stashed）、
        私下交易也不行，等於使用者的卡被鎖死而且沒有任何端點救得回來。 */
     if (status === 'shipped' || status === 'delivered') {
-      await tx`update prizes set status = 'shipped' where id = any(${sh.prize_ids})`
+      /* **只動還在申請出貨中的卡**（F-4）。
+         原本這行沒有狀態守衛：賣家逾期未出貨、系統已經退款把卡標成
+         'refunded' 之後，出貨佇列那張單還停在 'requested'。後台人員
+         照著佇列按一下「已出貨」，那張退過款的卡就復活成 'shipped' ——
+         買家退款照領，卡也回來了，還能再上架賣一次。那是免費印卡。
+         'recycled'（買家已賣回給賣家）同理，卡已經不是他的了。 */
+      await tx`
+        update prizes set status = 'shipped'
+         where id = any(${sh.prize_ids}) and status = 'ship_requested'
+      `
       /* 抽卡池的結算也要跟著走。後台標出貨與賣家自己標出貨是同一件事實，
          只是誰按的不同 —— 少了這一行，走後台那條路的卡會出貨了卻永遠
          停在 awaiting_ship，鑑賞期不會開始，賣家的保留額永遠釋放不掉，

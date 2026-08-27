@@ -36,7 +36,7 @@ import { notify } from './notify.js'
 import { PLATFORM_ID } from './orders-service.js'
 import {
   POOL_SHIP_DEADLINE_MS, RESERVED_STATUSES, applySettlementDeadline,
-  splitTicket, type SettlementStatus, type Settlement
+  physicalShipOverdue, splitTicket, type SettlementStatus, type Settlement
 } from './shared/pool-settlement.js'
 
 type Row = Record<string, unknown>
@@ -45,7 +45,22 @@ export interface SettlementRow {
   id: string
   poolId: string
   sellerId: string
+  /**
+   * 抽中這一籤的人。**這是歷史事實，不會變，也不是收款人。**
+   *
+   * 卡的擁有權會透過市場成交、接受出價、贈送而移轉，而這一欄不跟著動 ——
+   * 拿它當收款人就是 F-1／F-2：買了二手卡按回收，點數匯給前一個主人。
+   * 要付錢、要通知、要判斷「這是不是我的卡」一律用 ownerId。
+   */
   buyerId: string
+  /**
+   * 卡**現在**的擁有者，來自 `prizes.user_id` 的當下值。
+   *
+   * 為什麼是 join 出來的、不是一個同步維護的欄位：同步要在每一條移轉路徑上
+   * 都記得寫一次，漏掉任何一條 bug 就回來了 —— F-1 正是這樣發生的。
+   * join 出來的話，未來新增任何移轉路徑都自動正確。
+   */
+  ownerId: string
   drawId: string
   seat: number
   prizeId: string
@@ -60,12 +75,28 @@ export interface SettlementRow {
   closedBy: string | null
 }
 
+/**
+ * 把資料列轉成 SettlementRow。
+ *
+ * **一定要帶著 `join prizes pz on pz.id = st.prize_id` 查**，
+ * 直接 `select * from pool_settlements` 會在這裡當場炸掉。那是刻意的：
+ * 少一個 join 的後果是把錢付給前一個主人，而那種錯誤在測試裡看起來
+ * 一切正常（金額對、狀態對，只有收款人是錯的）。寧可大聲壞掉。
+ */
 export function toSettlement(r: Row): SettlementRow {
+  if (r.owner_id == null) {
+    throw new Error(
+      'toSettlement: 這一列沒有 owner_id。結算的收款人必須是卡片**當下**的擁有者，' +
+      '查詢要寫成 `select st.*, pz.user_id as owner_id from pool_settlements st ' +
+      'join prizes pz on pz.id = st.prize_id`。詳見 SettlementRow.ownerId 的說明。'
+    )
+  }
   return {
     id: r.id as string,
     poolId: r.pool_id as string,
     sellerId: r.seller_id as string,
     buyerId: r.buyer_id as string,
+    ownerId: r.owner_id as string,
     drawId: r.draw_id as string,
     seat: Number(r.seat),
     prizeId: r.prize_id as string,
@@ -126,20 +157,78 @@ export async function creditDraw(
 
 /* ---------------- 狀態轉換 ---------------- */
 
-/** 買家申請出貨：held → awaiting_ship，賣家的出貨時鐘開始跑 */
+/**
+ * 買家申請出貨：held → awaiting_ship，賣家的出貨時鐘開始跑。
+ *
+ * ── 第二個 UPDATE 是什麼（F-5）────────────────────────────────────
+ * 寄存確認期滿之後結算已經 released（票金放給賣家）。買家這時候才申請出貨，
+ * 第一個 UPDATE 完全不會命中 —— 於是出貨單進了佇列卻沒有任何時鐘：
+ * 賣家標不了出貨、逾期不記違約、也不會退款。卡就這樣卡住。
+ *
+ * 這裡**不把狀態改回 awaiting_ship**：那個狀態算在保留額裡，改回去等於
+ * 把已經釋放、賣家可能已經花掉的錢重新凍起來（見 migration 022）。
+ * 只掛一個 ship_due_at，狀態留在 released。逾期的手段只有違約紀錄。
+ */
 export async function markShipRequested(tx: Tx, prizeIds: string[], now: number) {
+  const due = now + POOL_SHIP_DEADLINE_MS
   await tx`
     update pool_settlements
-       set status = 'awaiting_ship', ship_due_at = ${now + POOL_SHIP_DEADLINE_MS}
+       set status = 'awaiting_ship', ship_due_at = ${due}
      where prize_id = any(${prizeIds}) and status = 'held'
+  `
+  /* `ship_due_at is null` 讓重複申請不會把期限一直往後推 ——
+     不然買家只要反覆按申請出貨，賣家就永遠不會逾期。 */
+  await tx`
+    update pool_settlements set ship_due_at = ${due}
+     where prize_id = any(${prizeIds}) and status = 'released'
+       and ship_due_at is null and shipped_at is null
   `
 }
 
-/** 賣家出貨：awaiting_ship → shipped，鑑賞期開始跑 */
+/**
+ * 賣家出貨：awaiting_ship → shipped，鑑賞期開始跑。
+ *
+ * ── 為什麼這裡要一起動 prizes 與 shipments（F-3）──────────────────
+ * 原本這支只改 pool_settlements。走賣家自助出貨那條路的卡因此停在
+ * `ship_requested`，而那個狀態上架不行（只收 stashed / shipped）、
+ * 回收不行（只收 stashed）、連確認收貨都會被 `status !== 'shipped'` 擋掉
+ * 並回一句假話「賣家還沒出貨」—— 他明明寄了。
+ * 買家只要沒手動按確認，鑑賞期滿錢照樣放給賣家，而卡永遠鎖死。
+ *
+ * 後台那條路（routes/admin.ts）本來就有做這兩件事，所以這裡的兩個 UPDATE
+ * 都加了狀態守衛：兩條路先後跑到同一筆時，第二次是乾淨的 no-op。
+ */
 export async function markShipped(tx: Tx, prizeIds: string[], now: number) {
   await tx`
     update pool_settlements set status = 'shipped', shipped_at = ${now}
      where prize_id = any(${prizeIds}) and status = 'awaiting_ship'
+  `
+  /* 票金已結算的那些（F-5）：只記下實際出貨時間，**狀態不動**。
+     改成 'shipped' 會讓它重新算進保留額，而那筆錢早就放出去了。
+     記了 shipped_at 之後 physicalShipOverdue() 就是 false，義務結清。 */
+  await tx`
+    update pool_settlements set shipped_at = ${now}
+     where prize_id = any(${prizeIds}) and status = 'released'
+       and ship_due_at is not null and shipped_at is null
+  `
+  /* 只動「申請出貨中」的卡。已經 refunded / recycled 的不能被出貨動作
+     救活 —— 那是 F-4 的路（後台標出貨把退過款的卡復活成 shipped，
+     買家退款照領、卡再賣一次）。 */
+  await tx`
+    update prizes set status = 'shipped'
+     where id = any(${prizeIds}) and status = 'ship_requested'
+  `
+  /* 出貨單要等**單上每一張卡都寄出**才算寄出。
+     不能用「有交集就標」—— 一張出貨單可以混多個賣家的卡（F-9），
+     其中一個賣家寄了不代表整單寄了，那會讓買家看到「已出貨」卻只收到一半。 */
+  await tx`
+    update shipments sh set status = 'shipped', shipped_at = ${now}
+     where sh.status = 'requested'
+       and sh.prize_ids && ${prizeIds}
+       and not exists (
+         select 1 from prizes p
+          where p.id = any(sh.prize_ids) and p.status <> 'shipped'
+       )
   `
 }
 
@@ -174,16 +263,50 @@ export async function refund(tx: Tx, s: SettlementRow, now: number) {
 
   await credit(tx, s.sellerId, -s.amount, 'pool-ticket-refund', s.id)
   if (s.fee > 0) await credit(tx, PLATFORM_ID, -s.fee, 'pool-fee-refund', s.id)
-  await credit(tx, s.buyerId, s.amount + s.fee, 'pool-refund', s.id)
+  /* 退給**卡現在的主人**，不是抽中的人（F-2）。
+     卡如果在市場上轉手過，抽中的人早就把卡賣掉、收過一次錢了；
+     再退他一次票金等於他收兩次，而真正拿不到卡的新主人一毛都沒有。 */
+  await credit(tx, s.ownerId, s.amount + s.fee, 'pool-refund', s.id)
 
   await tx`update prizes set status = 'refunded' where id = ${s.prizeId}`
   await tx`update sellers set default_count = default_count + 1 where id = ${s.sellerId}`
 
   await notify({
-    userId: s.buyerId, kind: 'system',
+    userId: s.ownerId, kind: 'system',
     title: '賣家逾期未出貨，已退還票金',
     body: `${s.amount + s.fee} 點已經退回你的帳戶。`,
     link: '/wallet', refId: 'pool-refund:' + s.id
+  }, tx)
+  return true
+}
+
+/**
+ * 票金已結算，賣家卻逾期沒有交出實體卡 —— 記一次違約，**不退款**（F-5）。
+ *
+ * 為什麼不退款：那筆錢是寄存確認期滿之後依規則釋放的，賣家可能已經花掉。
+ * 事後追回等於平台單方面推翻自己的規則，而且帳本的「釋放不寫分錄」模型
+ * 也沒有一條路可以把它倒回去。剩下的唯一手段是違約紀錄 ——
+ * 累積到門檻就不能再開池（shared 的 SELLER_DEFAULT_LIMIT）。
+ *
+ * ship_default_at 是冪等鎖：這支會被每一個讀清單的請求觸發，
+ * 沒有它同一筆逾期會在賣家每次上線時再記一次。
+ */
+export async function markShipDefault(tx: Tx, s: SettlementRow, now: number): Promise<boolean> {
+  const done = await tx`
+    update pool_settlements set ship_default_at = ${now}
+     where id = ${s.id} and status = 'released'
+       and ship_due_at is not null and shipped_at is null and ship_default_at is null
+     returning id
+  `
+  if (!done.length) return false
+
+  await tx`update sellers set default_count = default_count + 1 where id = ${s.sellerId}`
+  await notify({
+    userId: s.ownerId, kind: 'system',
+    title: '賣家逾期未出貨',
+    body: '這張卡的票金在寄存確認期滿時已經結算，所以不會退款。'
+        + '我們已經記錄賣家一次違約，請透過客服協助後續。',
+    link: '/me/cards', refId: 'pool-ship-default:' + s.id
   }, tx)
   return true
 }
@@ -221,7 +344,10 @@ export async function acceptRecycle(
   if (w.available < points) return { ok: false, error: 'SELLER_UNFUNDED' }
 
   await credit(tx, s.sellerId, -points, 'pool-recycle-out', s.id)
-  await credit(tx, s.buyerId, points, 'pool-recycle-in', s.id)
+  /* 付給**卡現在的主人**，不是抽中的人（F-1）。
+     呼叫端已經確認過發起回收的就是 prizes.user_id（`and user_id = me`），
+     所以 ownerId 就是按下按鈕的那個人。 */
+  await credit(tx, s.ownerId, points, 'pool-recycle-in', s.id)
   await tx`update prizes set status = 'recycled' where id = ${s.prizeId}`
   return { ok: true }
 }
@@ -236,23 +362,81 @@ export async function acceptRecycle(
  *
  * userId 有值時只掃跟這個人有關的 —— 讀取自己的清單時順手補算，
  * 使用者看到的永遠是算到當下的狀態，不是上一輪排程的殘影。
+ *
+ * 「跟這個人有關」的買方那一側是 **prizes.user_id**，不是 settlement.buyer_id
+ * （F-6）：卡轉手之後 buyer_id 還是前一個主人，新主人讀自己的卡冊會**永遠
+ * 掃不到**那一筆，狀態只在前一個主人或賣家碰巧上線時才補算。
+ */
+/**
+ * 全站的鎖序（V-1）：**先鎖 prizes 那一列，再鎖結算列。**
+ *
+ * 為什麼要有這條紀律：回收、申請出貨、確認收貨天生都是「從一張卡出發」，
+ * 先鎖卡再找結算；而這支掃描原本反過來 —— 先鎖一批結算列、才去動 prizes。
+ * 兩個方向同時發生就是教科書的死鎖（Postgres 會挑一邊 abort，資料不會壞，
+ * 但被 abort 的那個請求變 500）。所以掃描改成兩段式：
+ *
+ *   第一段**不鎖**，只把「看起來到期了」的候選撈出來；
+ *   第二段逐筆照全站鎖序重新上鎖（prizes → 結算列），**拿到鎖之後重讀重判**——
+ *   候選名單是舊的，這一筆可能已經被別人處理掉了，重判讓輸的那邊乾淨退出
+ *   （refund/markShipDefault 本來就有 returning 守衛，這裡是第二層）。
+ *
+ * 順帶的好處：原本第一段就把使用者名下**所有**保留中的結算全部上鎖，
+ * 每一次讀卡冊都要跟別人搶那批鎖；現在只有真的到期的那幾筆才上鎖。
+ *
+ * 已知的殘餘（記錄，不處理）：後台出貨那條路先鎖 shipments 再動 prizes，
+ * 跟賣家自助出貨（prizes → … → shipments）之間理論上仍有一個極窄的環。
+ * 那條是平台自己按的、頻率極低，等它真的咬人再說。
  */
 export async function sweepSettlements(tx: Tx, userId?: string): Promise<number> {
-  const rows = userId
+  /* 第一段：無鎖撈候選。條件跟原本兩個查詢一致 —— 保留中的（等時限），
+     加上 released 但還欠實體卡的（F-5，條件同 022 的部分索引）。 */
+  const candidates = userId
     ? await tx`
-        select * from pool_settlements
-         where status = any(${RESERVED_STATUSES as unknown as string[]})
-           and (seller_id = ${userId} or buyer_id = ${userId})
-         for update`
+        select st.id, st.prize_id, st.status, st.created_at, st.ship_due_at, st.shipped_at,
+               st.ship_default_at
+          from pool_settlements st join prizes pz on pz.id = st.prize_id
+         where (st.status = any(${RESERVED_STATUSES as unknown as string[]})
+                or (st.status = 'released' and st.ship_due_at is not null
+                    and st.shipped_at is null and st.ship_default_at is null))
+           and (st.seller_id = ${userId} or pz.user_id = ${userId})`
     : await tx`
-        select * from pool_settlements
-         where status = any(${RESERVED_STATUSES as unknown as string[]})
-         for update`
+        select st.id, st.prize_id, st.status, st.created_at, st.ship_due_at, st.shipped_at,
+               st.ship_default_at
+          from pool_settlements st
+         where st.status = any(${RESERVED_STATUSES as unknown as string[]})
+            or (st.status = 'released' and st.ship_due_at is not null
+                and st.shipped_at is null and st.ship_default_at is null)`
 
   const now = Date.now()
   let changed = 0
-  for (const r of rows) {
-    const s = toSettlement(r as Row)
+  for (const cand of candidates) {
+    /* 先用無鎖快照判斷「值不值得上鎖」——絕大多數保留中的結算離時限還遠，
+       替它們上鎖是純浪費。 */
+    const peek: Settlement = {
+      id: cand.id as string, status: cand.status as SettlementStatus,
+      createdAt: Number(cand.created_at),
+      shipDueAt: cand.ship_due_at == null ? null : Number(cand.ship_due_at),
+      shippedAt: cand.shipped_at == null ? null : Number(cand.shipped_at)
+    }
+    const worthIt = applySettlementDeadline(peek, now) != null ||
+      (cand.ship_default_at == null && physicalShipOverdue(peek, now))
+    if (!worthIt) continue
+
+    /* 第二段：照全站鎖序上鎖 —— prizes 先、結算列後 —— 然後重讀重判。 */
+    await tx`select id from prizes where id = ${cand.prize_id as string} for update`
+    const [fresh] = await tx`
+      select st.*, pz.user_id as owner_id
+        from pool_settlements st join prizes pz on pz.id = st.prize_id
+       where st.id = ${cand.id as string} for update of st`
+    if (!fresh) continue
+    const s = toSettlement(fresh as Row)
+
+    if (s.status === 'released') {
+      if ((fresh as Row).ship_default_at == null && physicalShipOverdue(asDeadlineInput(s), now)) {
+        if (await markShipDefault(tx, s, now)) changed++
+      }
+      continue
+    }
     const next = applySettlementDeadline(asDeadlineInput(s), now)
     if (!next) continue
     if (next.status === 'refunded') {

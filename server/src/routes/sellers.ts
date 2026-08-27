@@ -115,14 +115,22 @@ sellers.get('/settlements', async c => {
   await sql.begin(tx => sweepSettlements(tx, me)).catch(() => {})
   const rows = await sql`
     select st.*, p.card, p.status as prize_status, pl.title as pool_title,
-           b.name as buyer_name, b.member_no as buyer_member_no
+           b.name as buyer_name, b.member_no as buyer_member_no,
+           /* 「票金入帳了，但這張卡你還沒寄」（F-5）。
+              少了這個旗標，賣家在清單上只會看到「已入帳」，
+              而那正是他最不會再點開的一列 —— 但它其實還欠著一張卡。 */
+           (st.status = 'released' and st.ship_due_at is not null
+            and st.shipped_at is null) as owes_card
       from pool_settlements st
       join prizes p on p.id = st.prize_id
       join pools  pl on pl.id = st.pool_id
       /* 買家的名字要一起帶出來：這條清單的用途是「我現在要寄哪幾張、寄給誰」，
          只給 buyer_id 的話賣家看到的是一串內部鍵，對不上任何一張出貨單。
          只取 name 與會員編號 —— 收件地址在 shipments 那張表，不屬於結算列。 */
-      join users  b on b.id = st.buyer_id
+      /* 接在 prizes 那一列的**當下擁有者**上，不是 st.buyer_id。
+         卡在市場轉手之後 buyer_id 是前一個主人 —— 賣家照著它寄，
+         包裹會寄錯人。要寄給誰是「這張卡現在是誰的」，不是「誰抽中的」。 */
+      join users  b on b.id = p.user_id
      where st.seller_id = ${me}
      order by st.created_at desc limit 200
   `
@@ -158,17 +166,41 @@ sellers.post('/settlements/:id/ship', async c => {
   }
 
   const r = await sql.begin(async tx => {
+    /* 帶 owner_id 出來：出貨通知要發給**卡現在的主人**。
+       發給 buyer_id 的話，卡在市場轉手之後，通知會寄給早就把卡賣掉的人，
+       而真正在等包裹的新主人什麼都收不到。
+
+       鎖序照全站紀律：**先鎖 prizes、再鎖結算列**（V-1）。
+       這支的 markShipped 會 update prizes，而掃描與確認收貨都是卡先鎖 ——
+       這裡反向的話兩邊就可能互相等。先無鎖讀出 prize_id，照序上鎖，
+       再帶條件重讀：無鎖讀到的那一列可能已經被別人改掉，鎖後那次才算數。 */
+    const peekRows = await tx`
+      select prize_id from pool_settlements
+       where id = ${c.req.param('id') ?? ''} and seller_id = ${me}
+    `
+    if (!peekRows.length) return { error: 'NOT_FOUND', message: '找不到這筆結算', status: 404 }
+    await tx`select id from prizes where id = ${peekRows[0]!.prize_id as string} for update`
     const [row] = await tx`
-      select * from pool_settlements where id = ${c.req.param('id') ?? ''} and seller_id = ${me} for update
+      select st.*, pz.user_id as owner_id
+        from pool_settlements st join prizes pz on pz.id = st.prize_id
+       where st.id = ${c.req.param('id') ?? ''} and st.seller_id = ${me} for update of st
     `
     if (!row) return { error: 'NOT_FOUND', message: '找不到這筆結算', status: 404 }
     const s = toSettlement(row as Record<string, unknown>)
-    if (s.status !== 'awaiting_ship') {
+    /* 兩種都可以出貨：
+       - awaiting_ship：正常路徑，票金還在保留額裡等鑑賞期
+       - released 且還掛著 ship_due_at：寄存確認期滿之後買家才申請出貨（F-5）。
+         票金已經結算了，但實體卡還沒交 —— 義務還在，只是逾期的手段
+         從退款變成違約紀錄。
+       原本這裡只收前者，於是後者的賣家**想寄也寄不了**（一律 409），
+       買家的卡就永遠停在 ship_requested。那是一條死路，不是保護。 */
+    const owesCard = s.status === 'released' && s.shipDueAt != null && s.shippedAt == null
+    if (s.status !== 'awaiting_ship' && !owesCard) {
       return { error: 'WRONG_STATE', message: '這筆目前不是等待出貨的狀態', status: 409 }
     }
     await markShipped(tx, [s.prizeId], Date.now())
     await notify({
-      userId: s.buyerId, kind: 'shipment',
+      userId: s.ownerId, kind: 'shipment',
       title: '賣家已出貨',
       body: tracking ? `單號 ${tracking}。收到卡片後請確認收貨，或 7 天後自動結案。` : '收到卡片後請確認收貨，或 7 天後自動結案。',
       link: '/cards', refId: 'pool-ship:' + s.id

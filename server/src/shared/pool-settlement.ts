@@ -178,9 +178,36 @@ export function settlementDeadline(s: Settlement): SettlementDeadline | null {
         label: '鑑賞期',
         then: '期滿票金釋放給賣家'
       }
+    case 'released':
+      /* 票金已經結算，但實體卡還沒交（F-5）。
+         寄存確認期滿之後才申請出貨的卡會落在這裡：錢放了，貨還在賣家手上。
+         這種情況**不能退款** —— 那筆錢已經依規則釋放給賣家，追回會讓
+         帳本的「釋放不寫分錄」模型破掉。剩下的手段只有違約紀錄。 */
+      if (s.shipDueAt != null && s.shippedAt == null) {
+        return {
+          at: s.shipDueAt,
+          label: '賣家出貨期限',
+          then: '逾期記賣家一次違約。票金已經結算，不會退款'
+        }
+      }
+      return null
     default:
       return null
   }
+}
+
+/**
+ * 「票金已結算，但賣家逾期還沒交出實體卡」。
+ *
+ * 為什麼獨立成一個函式而不是塞進 applySettlementDeadline：那支回傳的是
+ * **狀態轉換**，而這件事不轉換任何狀態 —— 結算已經是 released 了，
+ * 它要的是一個副作用（記違約）。硬塞進去會逼那支的回傳型別長出
+ * 一個「其實沒有要轉換」的分支，兩邊的呼叫端都得學會忽略它。
+ */
+export function physicalShipOverdue(s: Settlement, now: number): boolean {
+  return s.status === 'released' &&
+         s.shipDueAt != null && s.shippedAt == null &&
+         now >= s.shipDueAt
 }
 
 /**

@@ -59,7 +59,15 @@ prizes.get('/', async c => {
      沒有直接指向 pool_prizes 的欄位。籤位對應到哪個獎項本來就是 pool_seats
      的職責（那是籤序本身），從它接過去才是唯一正確的來源。 */
   const rows = await sql<{ id: string; acquired_at: string }[]>`
-    select p.*, pp.buyback, st.status as settle_status,
+    select p.*,
+           /* 買回價只有在**這一筆結算還付得出來**的時候才回（F-7）。
+              結算一旦 released / refunded / recycled，那筆保留額已經不在了，
+              回收端點會回 409。原本這裡照樣回買回價，卡冊就長出一個
+              標了價、按下去卻說「結算狀態已經改變」的按鈕 ——
+              對買家來說那是一個看得到、按不動的承諾。
+              擋在資料來源這一層，前端不需要知道結算的狀態機。 */
+           case when st.status in ('held', 'awaiting_ship') then pp.buyback end as buyback,
+           st.status as settle_status,
            st.ship_due_at as settle_ship_due_at, st.shipped_at as settle_shipped_at
       from prizes p
       left join pool_seats ps on ps.pool_id = p.pool_id and ps.seat = p.seat
@@ -159,8 +167,13 @@ prizes.post('/:id/recycle', async c => {
     if (!p) return { error: 'NOT_FOUND', message: '找不到這張卡', status: 404 }
     if (p.status !== 'stashed') return { error: 'WRONG_STATE', message: '只有保管中的卡可以回收', status: 409 }
 
+    /* join prizes 取當下的擁有者 —— 收款人必須是按下按鈕的這個人，
+       不是抽中這一籤的人（F-1）。上面已經用 `and user_id = ${me}` 確認過
+       這張卡現在是他的，所以 owner_id 就是 me。 */
     const [row] = await tx`
-      select * from pool_settlements where prize_id = ${p.id} for update
+      select st.*, pz.user_id as owner_id
+        from pool_settlements st join prizes pz on pz.id = st.prize_id
+       where st.prize_id = ${p.id} for update of st
     `
     if (!row) {
       /* 舊制抽到的卡沒有結算列。它們的票金當初是被銷毀的，沒有保留額可以付，
@@ -194,7 +207,16 @@ prizes.post('/:id/recycle', async c => {
     if (!out.ok) {
       return out.error === 'SELLER_UNFUNDED'
         ? { error: 'SELLER_UNFUNDED', message: '賣家目前的保留額不足以支付這筆回收，請稍後再試或改為申請出貨', status: 409 }
-        : { error: 'WRONG_STATE', message: '這張卡的結算狀態已經改變，不能回收', status: 409 }
+        /* 講清楚是哪一種「改變」。原本只說「結算狀態已經改變」，
+           使用者不知道發生了什麼，也不知道還能不能補救。
+           絕大多數情況是寄存確認期（14 天）已經過了、票金已經放給賣家。 */
+        : {
+            error: 'WRONG_STATE',
+            message: s.status === 'released'
+              ? '這張卡的寄存確認期已經過了，票金已經結算給賣家，不能再回收。你可以申請出貨把卡寄給你'
+              : '這張卡的結算狀態已經改變，不能回收',
+            status: 409
+          }
     }
     return { points, buyback }
   })
@@ -211,8 +233,21 @@ prizes.post('/:id/recycle', async c => {
 prizes.post('/:id/confirm', async c => {
   const me = c.get('userId')
   const r = await sql.begin(async tx => {
+    /* 比對的是**卡現在的擁有者**，不是 buyer_id。
+       用 buyer_id 的話，在市場上買了二手卡的新主人會拿到 404 ——
+       他手上有卡、賣家寄給他、他卻沒有辦法確認收貨。
+
+       鎖序照全站紀律：**先鎖 prizes 那一列，再鎖結算列**（V-1，
+       見 pool-settlement.ts 的 sweepSettlements 檔頭說明）。
+       這支後面會 update prizes，先鎖卡再鎖結算才不會跟掃描互為反向。 */
+    const [pz] = await tx`
+      select id from prizes where id = ${c.req.param('id') ?? ''} and user_id = ${me} for update
+    `
+    if (!pz) return { error: 'NOT_FOUND', message: '找不到這筆結算', status: 404 }
     const [row] = await tx`
-      select * from pool_settlements where prize_id = ${c.req.param('id') ?? ''} and buyer_id = ${me} for update
+      select st.*, pz.user_id as owner_id
+        from pool_settlements st join prizes pz on pz.id = st.prize_id
+       where st.prize_id = ${pz.id} for update of st
     `
     if (!row) return { error: 'NOT_FOUND', message: '找不到這筆結算', status: 404 }
     const s = toSettlement(row as Record<string, unknown>)
