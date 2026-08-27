@@ -37,15 +37,23 @@ auth.post('/register', async c => {
   if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '請確認 Email、密碼（至少 8 碼）與暱稱' }, 400)
   const { email, password, name } = parsed.data
 
-  // 註冊只用 IP 當 key —— 防的是大量灌帳號，不是猜某個帳號的密碼
-  const regKeys = [`ip:${clientIp(c)}`]
+  /* 註冊只用 IP 當 key —— 防的是大量灌帳號，不是猜某個帳號的密碼。
+     用**獨立的 reg-ip: 桶**（一天 5 次，見 rate-limit.ts），不共用登入的
+     ip: 桶：門檻量級不同（40 次/15 分鐘擋不了灌帳號），而且分開之後
+     登入打錯幾十次不會連帶把同網路的註冊鎖住。 */
+  const regKeys = [`reg-ip:${clientIp(c)}`]
   const regLimit = await checkLimit(regKeys)
   if (regLimit.blocked) {
     return c.json(
-      { error: 'TOO_MANY_ATTEMPTS', message: '操作過於頻繁，請稍後再試' },
+      { error: 'TOO_MANY_ATTEMPTS', message: '註冊過於頻繁，請明天再試' },
       429, { 'retry-after': String(regLimit.retryAfter) }
     )
   }
+  /* 每一次通過檢查的註冊嘗試都計數，**成功也算**（M-1 的破口本體）：
+     原本只在 EMAIL_TAKEN 才 bump，「換一個沒用過的 email」的那條路
+     完全不計數，於是灌帳號的人永遠觸發不了限制 —— 這個桶計的是
+     「這個 IP 註冊了幾次」，不是「失敗了幾次」，所以在動手之前先記。 */
+  await bumpFail(regKeys)
 
   const id = 'u-' + randomBytes(6).toString('hex')
   /* 會員編號由序列產生（見 008_member_no.sql），handle 沿用它。
@@ -61,8 +69,7 @@ auth.post('/register', async c => {
     await sql`insert into users (id, handle, member_no, name, email, password_hash)
               values (${id}, ${memberNo}, ${memberNo}, ${name}, ${email.toLowerCase()}, ${await hash(password)})`
   } catch {
-    // 唯一索引衝突：這個 email 已經註冊過。不透露更多
-    await bumpFail(regKeys)
+    // 唯一索引衝突：這個 email 已經註冊過。不透露更多（計數已在前面記過）
     return c.json({ error: 'EMAIL_TAKEN', message: '這個 Email 已經註冊過' }, 409)
   }
   return c.json({ token: await issueToken(id), userId: id, handle: memberNo, memberNo })
