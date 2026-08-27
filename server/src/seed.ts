@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto'
 import { sql } from './db.js'
 import { GEN, genId } from './seed-gen.js'
 import { PLATFORM_ID } from './orders-service.js'
+import { assertSeedEntropy } from './pools-service.js'
 import { BUYBACK_MIN } from './shared/pool-settlement.js'
 import { commitV2, manifestHashOf, seatSequence, type ManifestVersion } from './shared/fairness.js'
 import { floorAllowed, floorRatio } from './shared/economics.js'
@@ -454,6 +455,10 @@ async function seedPool(d: PoolDef) {
      開獎前的盲盒就被看穿了。改用 32 bytes 隨機值，這條路整個封死。
      （安全稽核 C-1：docs/security-audit.md） */
   const serverSeed = randomBytes(32).toString('hex')
+  /* 種子池的 server_seed 也要過同一道低熵閘（security-audit C-1）。
+     這條路正是當年 'b1'.repeat(32) 寫進正式資料庫的入口 ——
+     產生端改對了還不夠，得讓錯的值從此寫不進去。 */
+  assertSeedEntropy(serverSeed)
   const prizeDefs = d.prizes.map((p, i) => ({ ...p, id: `${id}-pr${i}` }))
   const total = prizeDefs.reduce((a, p) => a + p.total, 0)
   const openedAt = new Date(Date.now() - d.openedDaysAgo * 86_400_000)

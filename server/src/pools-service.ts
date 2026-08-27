@@ -22,6 +22,41 @@ export const STASH_DAYS = 90
 const DAY = 86_400_000
 
 /**
+ * 拒絕低熵 server_seed（security-audit C-1 建議的第 3 點）。
+ *
+ * 歷史教訓：示範池的 server_seed 曾經寫死成 'b1'.repeat(32) 這種 fixture 值。
+ * commit_hash、client_seed、整份獎品清單都由公開 API 吐出，server_seed 一旦
+ * 可預測（重複單一位元組的全空間只有 256 種），任何人都能離線暴力比對 commit、
+ * 在開獎前還原出「哪個籤位是好卡」。產生端已經改用 randomBytes(32)，但那只保證
+ * 「現在的程式碼是對的」；這道閘保證的是「錯的種子寫不進資料庫」——
+ * 防的是未來哪次重構又把寫死的 fixture 值接回種子路徑。
+ *
+ * 為什麼門檻是「相異位元組數 < 8」：security-audit 的建議值。
+ * 32 個真隨機位元組的相異數期望約 28，低於 8 的機率在 10^-30 以下 ——
+ * 也就是永遠不會誤殺 randomBytes 產生的正常種子；而會被攔下的是
+ * 'b1'.repeat(32)（相異數 1）、少數幾個值輪流拼出來的 fixture 這類
+ * 「人手寫得出來」的低熵模式。這不是精確的熵量測，是一道成本為零、
+ * 只攔明顯錯誤的哨線。
+ */
+export function assertSeedEntropy(seedHex: string): void {
+  // 種子的既定格式是 32 bytes 的 hex（64 字元）。格式錯的直接擋，
+  // 不然「相異位元組」的計算對象就不明確。
+  if (!/^[0-9a-fA-F]{64}$/.test(seedHex)) {
+    throw new Error('server_seed must be 32 bytes of lowercase/uppercase hex (64 chars)')
+  }
+  const distinct = new Set<string>()
+  for (let i = 0; i < seedHex.length; i += 2) {
+    distinct.add(seedHex.slice(i, i + 2).toLowerCase())
+  }
+  if (distinct.size < 8) {
+    throw new Error(
+      `server_seed entropy too low: ${distinct.size} distinct bytes (< 8). ` +
+      'refusing to commit a predictable seed (security-audit C-1)'
+    )
+  }
+}
+
+/**
  * 新池一律用這個 manifest 版本。
  *
  * 改這個常數只影響**之後**建的池 —— 既有的池把自己的版本存在
@@ -119,6 +154,9 @@ export async function commitPool(tx: Tx, poolId: string) {
   })
 
   const serverSeed = bytesToHex(randomBytes(32))
+  /* 寫進 pools 之前的最後一道閘：randomBytes 本身不會產生低熵值，
+     這裡防的是未來把上面那行改壞（見 assertSeedEntropy 的註解）。 */
+  assertSeedEntropy(serverSeed)
   const manifestHash = await manifestHashOf(manifest, COMMIT_VERSION)
   const commit = await commitV2(serverSeed, manifestHash)
   const source = await reserveClientSeedSource()
