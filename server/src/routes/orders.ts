@@ -180,7 +180,18 @@ export async function act(
 const ShipBody = z.object({
   carrier: z.enum(['post', 'tcat', 'seven', 'family', 'hilife', 'shopee', 'other']),
   tracking: z.string().min(6).max(24),
-  photoUrls: z.array(z.string().url()).min(1, '出貨照至少一張，且需含可辨識的鑑定編號')
+  /* 出貨照只收**平台自己的檔案 id**（走 /v1/files/presign 的 ship-photo 用途），
+     不再收任意外部 URL（security-audit L-3）。
+     收 URL 的問題有兩層：賣家可以塞一個他自己控制的連結當「證據」——
+     內容隨時可以換掉，爭議裁決時看到的未必是出貨當下的東西；而且那個網址
+     會被平台存起來再打開，等於替任何人保存並轉發任意外部連結。
+     平台的檔案 id 兩個問題都沒有：檔案在我們的桶裡不可替換，
+     而且 presign 時就綁了擁有者與用途。
+
+     **數量暫時不強制**（min 0）：前端還沒有出貨照的上傳介面（現況送的是
+     一個寫死的 placeholder 網址——「至少一張」這條規則到今天為止其實是假的）。
+     等上傳介面做出來，把這裡改成 .min(1) 才是真的把規則立起來。 */
+  photoFileIds: z.array(z.string().regex(/^f-[0-9a-f]{12}$/, '出貨照必須是站內上傳的檔案')).max(5).default([])
 })
 
 /** POST /orders/:id/ship —— 賣家出貨 */
@@ -188,7 +199,7 @@ orders.post('/:id/ship', async c => {
   const me = c.get('userId')
   const parsed = ShipBody.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return c.json(fail('BAD_REQUEST', parsed.error.issues[0]?.message ?? '參數不合法', 400), 400)
-  const { carrier, tracking, photoUrls } = parsed.data
+  const { carrier, tracking, photoFileIds } = parsed.data
 
   /* 依物流商驗證，中華郵政那種有公開檢查碼規格的會真的驗檢查碼。
      這是離線驗證 —— 擋得掉隨手編的號碼與打錯的字（實測單碼打錯抓到 98%），
@@ -198,6 +209,21 @@ orders.post('/:id/ship', async c => {
   const v = validateTracking(carrier, tracking)
   if (!v.ok) return c.json(fail('BAD_TRACKING', v.reason ?? '單號格式不正確'), 409)
 
+  /* 檔案 id 要驗「存在、是我的、用途是出貨照」——格式驗證擋不住
+     拿別人的 id 或拿頭像的 id 來充數（id 是回應裡看得到的東西）。
+     驗在交易外面是安全的：files 的列一旦寫入就不會換擁有者也不會換用途，
+     沒有可以搶的時窗；放在交易裡反而得用 throw 打斷 act()，
+     那會穿出去變成 500 —— 把使用者的輸入錯誤講成伺服器故障（L-4 的病）。 */
+  if (photoFileIds.length) {
+    const owned = await sql`
+      select id from files where id = any(${photoFileIds})
+         and owner_id = ${me} and purpose = 'ship-photo'
+    `
+    if (owned.length !== photoFileIds.length) {
+      return c.json(fail('BAD_SHIP_PHOTO', '出貨照必須是你自己在站內上傳的檔案'), 400)
+    }
+  }
+
   /* 憑證跟狀態轉換必須同生同死，所以走 act() 的第五個參數寫在同一筆交易裡。
      原本是等 act() 回來之後再下一句 UPDATE ——那一句失敗（連線斷、程序被砍）
      的話訂單已經是 shipped、賣家已經滿足 72 小時期限，但 carrier / ship_photos
@@ -206,7 +232,7 @@ orders.post('/:id/ship', async c => {
   const r = await act(me, c.req.param('id'), 'seller', 'ship',
     o => ({ ...o, status: 'shipped', shippedAt: Date.now(), tracking: tracking.trim().toUpperCase() }),
     async (tx, o) => {
-      await tx`update orders set carrier = ${carrier}, ship_photos = ${photoUrls as never}
+      await tx`update orders set carrier = ${carrier}, ship_photos = ${photoFileIds as never}
                where id = ${o.id}`
     })
   if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)

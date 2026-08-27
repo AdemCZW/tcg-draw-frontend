@@ -159,11 +159,13 @@ async function run() {
       JSON.stringify(replay).slice(0, 200))
   }
 
-  const photo =['https://example.com/a.jpg']
+  /* L-3 之後出貨照只收站內檔案 id（photoFileIds），外部 URL 整個欄位都不存在了。
+     這裡大多數測項的重點是單號驗證，照片給空陣列（數量暫不強制，見 orders.ts）。 */
+  const photo: string[] = []
 
   // 買家不能替賣家出貨
   const wrongRole = await call(buyer, `/v1/orders/${order.id}/ship`,
-    { carrier: 'other', tracking: 'ABC12345678', photoUrls: photo })
+    { carrier: 'other', tracking: 'ABC12345678', photoFileIds: photo })
   check('買家不能替賣家出貨', wrongRole.status === 403, String(wrongRole.status))
 
   /* ---- 單號驗證 ----
@@ -180,30 +182,37 @@ async function run() {
   }
 
   const noCarrier = await call(seller, `/v1/orders/${order.id}/ship`,
-    { tracking: 'RR123456785TW', photoUrls: photo })
+    { tracking: 'RR123456785TW', photoFileIds: photo })
   check('沒選物流商 → 被擋', noCarrier.status === 400, String(noCarrier.status))
 
   const badDigit = await call(seller, `/v1/orders/${order.id}/ship`,
-    { carrier: 'post', tracking: 'RR' + s10('12345678').slice(0, 8) + '9TW', photoUrls: photo })
+    { carrier: 'post', tracking: 'RR' + s10('12345678').slice(0, 8) + '9TW', photoFileIds: photo })
   check('中華郵政：檢查碼不對的單號被擋', badDigit.status === 409, String(badDigit.status))
 
   const wrongShape = await call(seller, `/v1/orders/${order.id}/ship`,
-    { carrier: 'tcat', tracking: 'ABCD1234', photoUrls: photo })
+    { carrier: 'tcat', tracking: 'ABCD1234', photoFileIds: photo })
   check('黑貓：非純數字被擋', wrongShape.status === 409)
 
   const tooShort = await call(seller, `/v1/orders/${order.id}/ship`,
-    { carrier: 'other', tracking: 'X', photoUrls: photo })
+    { carrier: 'other', tracking: 'X', photoFileIds: photo })
   check('「其他」仍然擋掉太短的單號', tooShort.status === 400 || tooShort.status === 409)
 
-  const noPhoto = await call(seller, `/v1/orders/${order.id}/ship`,
-    { carrier: 'other', tracking: 'ABC12345678', photoUrls: [] })
-  check('沒有出貨照被擋', !noPhoto.ok)
+  /* L-3 的核心測項：外部 URL 不能再當出貨憑證。
+     舊制收 z.string().url()，賣家可以塞自己控制的連結、事後換內容；
+     新制只收 f- 開頭的站內檔案 id，而且要驗持有人與用途。 */
+  const extUrl = await call(seller, `/v1/orders/${order.id}/ship`,
+    { carrier: 'other', tracking: 'ABC12345678', photoFileIds: ['https://example.com/a.jpg'] })
+  check('外部 URL 不能當出貨憑證', extUrl.status === 400, String(extUrl.status))
+
+  const fakeId = await call(seller, `/v1/orders/${order.id}/ship`,
+    { carrier: 'other', tracking: 'ABC12345678', photoFileIds: ['f-aaaaaaaaaaaa'] })
+  check('不存在／不是自己的檔案 id 也被擋', fakeId.status === 400, String(fakeId.status))
 
   // 用一組真的算得出來的 S10 出貨，順便驗證正向路徑
   const serial = String(Date.now() % 1e8).padStart(8, '0')
   const tracking = 'RR' + s10(serial) + 'TW'
   const shipped = await call(seller, `/v1/orders/${order.id}/ship`,
-    { carrier: 'post', tracking, photoUrls: photo })
+    { carrier: 'post', tracking, photoFileIds: photo })
   check('檢查碼正確的中華郵政單號可以出貨', shipped.ok, await shipped.clone().text())
 
   // 還沒送達，買家不能確認收貨
@@ -648,7 +657,7 @@ async function run() {
 
       const serial2 = String((Date.now() + 7) % 1e8).padStart(8, '0')
       const shipped2 = await call(buyer, `/v1/orders/${order2.id}/ship`,
-        { carrier: 'post', tracking: 'RR' + s10(serial2) + 'TW', photoUrls: photo })
+        { carrier: 'post', tracking: 'RR' + s10(serial2) + 'TW', photoFileIds: photo })
       check('原持有人出貨', shipped2.ok, await shipped2.clone().text())
       await call(platform, `/v1/orders/${order2.id}/delivered`, {})
       const done2 = await call(seller, `/v1/orders/${order2.id}/confirm`, {})

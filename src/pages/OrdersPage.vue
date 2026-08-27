@@ -74,8 +74,10 @@ async function doShip(o: Order) {
   err.value = ''
   busy.value = true
   try {
-    // API 模式後端要出貨照；R2 直傳是下一階段，先給一個佔位 URL 讓流程走得通
-    await store.ship(o.id, carrier.value, tracking.value.trim(), MOCK ? [] : ['https://placeholder.invalid/ship-photo'])
+    /* 出貨照送空陣列：後端已改成只收站內上傳的檔案 id（L-3），數量暫不強制。
+       原本這裡塞一個寫死的佔位 URL —— 那不是證據，是把「有存證」記錄成
+       發生過的假象。上傳介面做出來之前，誠實的空值好過假的憑證。 */
+    await store.ship(o.id, carrier.value, tracking.value.trim(), [])
     shipFor.value = null
     tracking.value = ''
   } catch (e) { err.value = e instanceof Error ? e.message : '出貨失敗' }

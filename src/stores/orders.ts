@@ -170,9 +170,9 @@ export const useOrdersStore = defineStore('orders', {
      * 都必須受同一套約束。第一版只擋在按鈕上，直接呼叫 ship(id,'BAD')
      * 就進得去，訂單會帶著一個假單號變成運送中。
      */
-    async ship(id: string, carrier: Carrier, tracking: string, photoUrls: string[] = []): Promise<boolean> {
+    async ship(id: string, carrier: Carrier, tracking: string, photoFileIds: string[] = []): Promise<boolean> {
       if (!MOCK) {
-        await http(ORDER_ROUTES.ship(id), { method: 'POST', json: { carrier, tracking, photoUrls } })
+        await http(ORDER_ROUTES.ship(id), { method: 'POST', json: { carrier, tracking, photoFileIds } })
         await this.sweep()
         return true
       }
