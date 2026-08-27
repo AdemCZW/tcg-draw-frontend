@@ -53,26 +53,24 @@
       現在只是讓這個選擇連樣式表本身也適用。
       noscript 是給關掉 JS 的情況，那時就退回阻擋式載入。
 
+      **切回 media="all" 的那一行搬到 src/main.ts 了。**
+      原本是寫在標籤上的 onload="this.media='all'" —— 那是 inline event
+      handler，而 CSP 的 script-src 會擋掉它（除非開 'unsafe-inline'，
+      那等於把 CSP 最重要的那一半關掉）。樣式表本身仍然是立刻開始下載的
+      （media="print" 不阻擋渲染但照樣下載），搬走的只有「什麼時候套用」。
+
       拿掉了 Noto Sans TC 的 300 字重：全站沒有任何地方用它，
       而中日韓字體每個字重都不便宜。
     -->
     <link
+      id="webfonts"
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       media="print"
-      onload="this.media='all'"
     />
     <noscript>
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
     </noscript>
-    <!-- GA4: replace G-XXXXXXX with the production measurement ID -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXX"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-      gtag('config', 'G-XXXXXXX');
-    </script>
   </head>
   <body>
     <div id="app"></div>

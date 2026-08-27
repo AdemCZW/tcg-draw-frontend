@@ -16,6 +16,22 @@ import { api } from './lib/api'
 installTouchGuard()
 installTapGuard()
 
+/* 網頁字體改成「載完才套用」。
+   index.html 那個 <link> 掛的是 media="print" —— 瀏覽器視為非必要、
+   不擋首次繪製，但照樣立刻開始下載。切回 all 的動作原本寫成標籤上的
+   onload="this.media='all'"，而那是 inline event handler，CSP 的
+   script-src 會擋掉它（除非開 'unsafe-inline'，那等於把 CSP 最重要的
+   那一半關掉）。搬到這裡只改「什麼時候套用」，下載時機沒有變。
+   已經載完（快取命中）的情況 onload 不會再觸發，所以要先看 sheet 在不在。 */
+{
+  const link = document.getElementById('webfonts') as HTMLLinkElement | null
+  if (link) {
+    const apply = () => { link.media = 'all' }
+    if (link.sheet) apply()
+    else link.addEventListener('load', apply, { once: true })
+  }
+}
+
 const pinia = createPinia()
 const app = createApp(App).use(pinia).use(router)
 
