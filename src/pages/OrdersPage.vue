@@ -12,6 +12,7 @@ import { useWalletStore } from '@/stores/wallet'
 import { actionsFor, deadlineOf, DAY, HOUR, isOpen, validateTracking, CARRIERS, remainText, STATUS_TEXT, type Carrier } from '@/shared/escrow'
 import type { Order } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
+import ShipPhotoUpload from '@/components/ShipPhotoUpload.vue'
 import { MOCK } from '@/lib/config'
 
 const store = useOrdersStore()
@@ -69,16 +70,39 @@ const trackErr = computed(() => {
 
 const busy = ref(false)
 
+/* 出貨照。fileIds 只有在 photosReady 為真時才是完整的一組 ——
+   還在上傳或有失敗的時候它是「已經傳完的那幾張」，拿去送出等於少送憑證。
+   所以送出鍵看的是 photosReady，不是 photoIds.length。 */
+const photoIds = ref<string[]>([])
+const photosReady = ref(false)
+
+/** 打開出貨表單。上一次選的照片一定要清掉 —— 表單是頁面層級的狀態，
+    不清的話 A 訂單選的照片會跟著出現在 B 訂單的出貨表單裡，
+    而那會把一張卡的憑證掛到另一張卡的訂單上。 */
+function openShip(o: Order) {
+  shipFor.value = o.id
+  tracking.value = ''
+  photoIds.value = []
+  photosReady.value = false
+  err.value = ''
+}
+function closeShip() {
+  shipFor.value = null
+  photoIds.value = []
+  photosReady.value = false
+}
+
 async function doShip(o: Order) {
-  if (!canShip.value || busy.value) return
+  if (!canShip.value || !photosReady.value || busy.value) return
   err.value = ''
   busy.value = true
   try {
-    /* 出貨照送空陣列：後端已改成只收站內上傳的檔案 id（L-3），數量暫不強制。
-       原本這裡塞一個寫死的佔位 URL —— 那不是證據，是把「有存證」記錄成
-       發生過的假象。上傳介面做出來之前，誠實的空值好過假的憑證。 */
-    await store.ship(o.id, carrier.value, tracking.value.trim(), [])
-    shipFor.value = null
+    /* 送真的檔案 id。這裡曾經送一個寫死的佔位 URL，後來改送空陣列 ——
+       兩種都不是憑證：前者是假的存證，後者是誠實但空的。
+       現在送的是賣家真的傳上去、後端會驗擁有者與用途的 ship-photo 檔案 id，
+       「出貨照至少一張」這條規則到這一刻才第一次成立。 */
+    await store.ship(o.id, carrier.value, tracking.value.trim(), photoIds.value)
+    closeShip()
     tracking.value = ''
   } catch (e) { err.value = e instanceof Error ? e.message : '出貨失敗' }
   finally { busy.value = false }
@@ -154,7 +178,7 @@ async function doDispute(o: Order) {
       <!-- 可做的動作完全由狀態機決定，UI 不自己判斷 -->
       <div class="acts">
         <template v-for="a in actionsFor(o, roleOf(o))" :key="a">
-          <button v-if="a === 'ship'" type="button" class="btn primary sm" @click="shipFor = o.id; tracking = ''">
+          <button v-if="a === 'ship'" type="button" class="btn primary sm" @click="openShip(o)">
             上傳單號出貨
           </button>
           <button v-if="a === 'confirm'" type="button" class="btn primary sm" @click="store.confirm(o.id)">
@@ -198,9 +222,16 @@ async function doDispute(o: Order) {
           中華郵政的單號會驗檢查碼（打錯字當場就知道）。其他物流商只驗長度與字元，
           選「其他」則完全不驗。目前還沒有向物流商查詢單號是否真的存在。
         </p>
+
+        <!-- 出貨照。全部傳完才拿得到完整的 fileId 陣列，也才按得下確認出貨 -->
+        <ShipPhotoUpload v-model:file-ids="photoIds" v-model:ready="photosReady" />
+
         <div class="frow">
-          <button type="button" class="btn sm" @click="shipFor = null">取消</button>
-          <button type="button" class="btn primary sm" :disabled="!canShip || busy" @click="doShip(o)">{{ busy ? '處理中…' : '確認出貨' }}</button>
+          <button type="button" class="btn sm" @click="closeShip()">取消</button>
+          <button
+            type="button" class="btn primary sm" data-testid="ship-submit"
+            :disabled="!canShip || !photosReady || busy" @click="doShip(o)"
+          >{{ busy ? '處理中…' : '確認出貨' }}</button>
         </div>
       </div>
 
