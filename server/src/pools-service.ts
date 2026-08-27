@@ -275,13 +275,38 @@ export async function draw(
     return { seat, prizeId: c.prize_id, stashId: `pz-${drawId}-${seat}`, tier: pr.tier as string, card: pr.card }
   })
 
-  // 發到使用者名下的保管庫
-  const prizeIns = items.map(it => ({
-    id: it.stashId, user_id: userId, pool_id: poolId, seat: it.seat,
-    draw_id: drawId, card: it.card, tier: it.tier, status: 'stashed',
-    /* 抽到的當下兩個時間一樣；分開記是為了轉手 —— 見 migrations/014 */
-    won_at: now, acquired_at: now, stash_expires_at: now + STASH_DAYS * DAY
-  }))
+  /* 發到使用者名下的保管庫。
+     ── 為什麼要寫 grader / cert_no / custodian_id / origin ──────────
+     021 加了這四個欄位並回填了當時已存在的列，但**沒有任何程式碼在新增時
+     寫它們** —— 於是每一張新抽出來的卡這四欄都是 null，而
+     `prizes_cert_alive`（unique(grader, cert_no) where cert_no is not null）
+     對 null 完全不生效。索引因此只保護得到 021 之前的舊卡，新卡一張都沒蓋到：
+     一個鑑定編號可以被抽出兩次而資料庫一聲都不吭。
+
+     正規化要跟 021 的回填**用同一套規則**（upper(btrim) / nullif(btrim, '')），
+     不然 'PSA' 與 'psa '、' 12345678' 與 '12345678' 會被索引當成不同的卡，
+     同一張實體卡換個大小寫或空白就能再登記一次。
+     card jsonb 裡的原值不動 —— 顯示照賣家填的，索引照正規化的。 */
+  const norm = (v: unknown) => {
+    const t = typeof v === 'string' ? v.trim() : ''
+    return t === '' ? null : t
+  }
+  const prizeIns = items.map(it => {
+    const cd = it.card as { grader?: unknown; certNo?: unknown }
+    const g = norm(cd.grader)
+    return {
+      id: it.stashId, user_id: userId, pool_id: poolId, seat: it.seat,
+      draw_id: drawId, card: it.card, tier: it.tier, status: 'stashed',
+      grader: g === null ? null : g.toUpperCase(),
+      cert_no: norm(cd.certNo),
+      /* 實體卡還在賣家抽屜裡 —— 玩家拿到的是擁有權，不是卡。
+         這兩件事分開記的理由見 021 與 SettlementRow.ownerId。 */
+      custodian_id: p.seller_id as string,
+      origin: 'draw',
+      /* 抽到的當下兩個時間一樣；分開記是為了轉手 —— 見 migrations/014 */
+      won_at: now, acquired_at: now, stash_expires_at: now + STASH_DAYS * DAY
+    }
+  })
   await tx`insert into prizes ${tx(prizeIns as never)}`
 
   /* 票金的貸方。這一段以前整個不存在 —— 買家被扣了 cost，但沒有任何分錄

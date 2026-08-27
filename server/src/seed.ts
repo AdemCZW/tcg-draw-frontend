@@ -645,10 +645,23 @@ async function retireStalePools() {
     if (!pool) throw new Error(`vault 掛單 ${id} 的賣家 ${sellerId} 沒有任何池，無法建立對應的卡`)
     const prizeId = 'pz-' + id
     const wonAt = Date.now() - 3 * 86_400_000
+    /* grader / cert_no 要跟抽卡那條路寫同一套正規化（upper(btrim) / nullif）——
+       它們是 prizes_cert_alive 這條唯一索引的鍵，空著的話索引蓋不到這一列，
+       示範資料就變成「唯一性防線的破口」而不是示範。
+       custodian_id 是賣家：這張卡的實體本來就在他手上（origin='seed'）。 */
+    const cardAny = c as unknown as { grader?: unknown; certNo?: unknown }
+    const trimmed = (v: unknown) => {
+      const t = typeof v === 'string' ? v.trim() : ''
+      return t === '' ? null : t
+    }
+    const gr = trimmed(cardAny.grader)
     await sql`
-      insert into prizes (id, user_id, pool_id, card, tier, status, won_at, acquired_at, stash_expires_at)
+      insert into prizes (id, user_id, pool_id, card, tier, status, won_at, acquired_at, stash_expires_at,
+                          grader, cert_no, custodian_id, origin)
       values (${prizeId}, ${sellerId}, ${pool.id}, ${c as never}, 'B', 'listed',
-              ${wonAt}, ${wonAt}, ${wonAt + 90 * 86_400_000})
+              ${wonAt}, ${wonAt}, ${wonAt + 90 * 86_400_000},
+              ${gr === null ? null : gr.toUpperCase()}, ${trimmed(cardAny.certNo)},
+              ${sellerId}, 'seed')
       on conflict (id) do nothing
     `
     await sql`update listings set prize_id = ${prizeId} where id = ${id} and prize_id is null`
