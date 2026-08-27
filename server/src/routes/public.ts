@@ -8,6 +8,8 @@ import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { PageQuery, decodeCursor, encodeCursor, slicePage } from '../pagination.js'
+import { POINTS_INPUT_MAX, pointsInputMaxText } from '../limits.js'
+import { publicCard } from '../card-public.js'
 
 export const pub = new Hono()
 
@@ -151,8 +153,15 @@ type Row = {
   deal_ratio: string
 }
 
+/* card 一定要過 publicCard() 白名單再出去（L-2）。
+   listings.card 是上架時從 prizes.card 原封搬來的 jsonb，裡面有 certNo ——
+   市場列表不用登入、全站可見，整包直出等於把每張在售卡的鑑定編號
+   免費送給任何人拿去搶註（一卡多賣防線正是綁在這個編號上）。
+   防線本身不受影響：資料庫層的 cert_no 獨立欄位與 listings_cert_live
+   唯一索引都還在，拿掉的只是**回應 JSON**裡的編號。
+   買家成交後在自己的訂單裡看到編號是另一回事 —— 那是他買到的卡。 */
 const toListing = (r: Row) => ({
-  id: r.id, card: r.card, price: Number(r.price),
+  id: r.id, card: publicCard(r.card), price: Number(r.price),
   sellerId: r.seller_id, sellerName: r.seller_name,
   delivery: r.delivery, status: r.status, listedAt: r.listed_at, prizeId: r.prize_id
 })
@@ -232,7 +241,13 @@ pub.get('/listings/:id', async c => {
 })
 
 /* ---- 上架：把名下的卡掛到市場 ---- */
-const ListBody = z.object({ prizeId: z.string().min(1), price: z.number().int().positive() })
+/* price 上界是荒謬值防線（L-1）：沒有它，1e308 這種值會一路通過
+   int().positive()（JS 眼裡它是整數）撞進 bigint 欄位變成 22P02 → 500，
+   把使用者的打字錯誤講成伺服器故障。取值理由見 limits.ts。 */
+const ListBody = z.object({
+  prizeId: z.string().min(1),
+  price: z.number().int().positive().max(POINTS_INPUT_MAX, `價格不能超過 ${pointsInputMaxText()} 點`)
+})
 /**
  * 下架自己的掛單。
  *
@@ -267,7 +282,11 @@ pub.post('/listings/:id/delist', requireAuth, async c => {
 pub.post('/listings', requireAuth, async c => {
   const me = c.get('userId')
   const parsed = ListBody.safeParse(await c.req.json().catch(() => null))
-  if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '參數不合法' }, 400)
+  if (!parsed.success) {
+    // 超出上界要把中文訊息帶出去，使用者才知道是自己多打了零，不是系統壞了
+    const msg = parsed.error.issues.find(i => i.code === 'too_big')?.message ?? '參數不合法'
+    return c.json({ error: 'BAD_REQUEST', message: msg }, 400)
+  }
   const { prizeId, price } = parsed.data
   const r = await sql.begin(async tx => {
     const [pz] = await tx`select * from prizes where id = ${prizeId} and user_id = ${me} for update`
@@ -322,8 +341,10 @@ pub.post('/listings', requireAuth, async c => {
   })
   if ('error' in r) return c.json(r, r.status as 404 | 409)
   const l = r.listing!
+  /* 這裡的回應只給賣家本人，但形狀跟公開列表同一份 —— 統一過白名單，
+     省得前端拿到兩種 card、也省得之後有人把這個物件轉存到公開的地方。 */
   return c.json({ listing: {
-    id: l.id, card: l.card, price: Number(l.price), sellerId: l.seller_id, sellerName: l.seller_name,
+    id: l.id, card: publicCard(l.card), price: Number(l.price), sellerId: l.seller_id, sellerName: l.seller_name,
     delivery: l.delivery, status: l.status, listedAt: l.listed_at, prizeId: l.prize_id
   } })
 })

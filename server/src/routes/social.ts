@@ -12,6 +12,7 @@ import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
+import { publicCard } from '../card-public.js'
 import { lockSpender, walletOf } from '../money.js'
 import { notify } from '../notify.js'
 import { subscribe } from '../notify-stream.js'
@@ -28,6 +29,10 @@ export const socialPublic = new Hono()
  * 只回傳卡片本身與持有人的顯示名稱 —— 不含 email、電話、地址、餘額、
  * 也不含 user_id。分享連結會被轉貼到群組裡，任何從這裡漏出去的欄位
  * 等於公開，所以這裡是白名單而不是「把 user 撈出來刪幾個欄位」。
+ *
+ * **card 這一包原本逃掉了那個規矩**：user 挑欄位挑得很小心，
+ * `prizes.card` 卻是整包 jsonb 直出，於是鑑定編號跟著出去了。
+ * 現在它也走白名單（`publicCard()`，見 src/card-public.ts）。
  */
 /* 賞別的展示順序。寫成 SQL 片段而不是字串，才能同時給 order by 與游標比較用 ——
    兩邊只要有一邊漏改，分頁就會在賞別交界處漏卡或重複。 */
@@ -79,7 +84,11 @@ socialPublic.get('/cardbook/:slug', async c => {
     owner: { name: u.name, handle: u.handle },
     // 提出交易要登入，但「有幾張、長什麼樣」不用 —— 不然分享出去沒人看得到
     items: page.items.map(p => ({
-      id: p.id, card: (p as unknown as { card: unknown }).card, tier: p.tier,
+      /* card 走白名單。留下卡名、卡圖、系列、卡號、鑑定公司、分數 ——
+         公開卡冊的意義就是給人看收藏；拿掉的是鑑定編號那種「身分憑據」。
+         為什麼是白名單不是黑名單：card 是 jsonb 而且建池端是 passthrough，
+         黑名單漏得掉新欄位，白名單漏不掉（見 src/card-public.ts）。 */
+      id: p.id, card: publicCard((p as unknown as { card: unknown }).card), tier: p.tier,
       // 已上架的卡不能私下出價，要走市場，前端得看得出來
       tradable: p.status === 'stashed'
     })),
@@ -204,6 +213,18 @@ social.post('/trade-offers', async c => {
 /** 收到的與送出的，一次給 —— 分兩個端點的話前端要打兩次才畫得出一個列表 */
 social.get('/trade-offers', async c => {
   const me = c.get('userId')
+
+  /* card 一樣走白名單。這支要登入，但**登入不等於這些卡是你的**：
+     outgoing 是「我對別人的卡出的價」，那一包 card 從頭到尾都是別人的卡。
+     整包 jsonb 直出等於「只要對某張卡出一次價，就拿得到它的鑑定編號」——
+     那比公開卡冊還好用，因為出價不需要對方同意，而且卡冊沒公開也擋不住
+     （出價端點會擋，這支列表不會）。
+     incoming 的卡是自己的，但仍然走同一條路：一個端點兩套規則，
+     下一個改這裡的人會挑錯邊。真的要看自己的編號在 /me/cards，
+     這份列表從頭到尾只畫得出卡名（src/pages/OffersPage.vue）。 */
+  const strip = (rows: readonly Record<string, unknown>[]) =>
+    rows.map(o => ({ ...o, card: publicCard(o.card) }))
+
   const [incoming, outgoing] = await Promise.all([
     sql`select o.*, p.card, coalesce(u.display_name, u.name) as from_name
         from trade_offers o join prizes p on p.id = o.prize_id
@@ -214,7 +235,7 @@ social.get('/trade-offers', async c => {
         join users u on u.id = o.to_user
         where o.from_user = ${me} order by o.created_at desc limit 100`
   ])
-  return c.json({ incoming, outgoing })
+  return c.json({ incoming: strip(incoming), outgoing: strip(outgoing) })
 })
 
 /**
@@ -410,14 +431,41 @@ social.get('/notifications/stream', c => {
   })
 })
 
+/* 通知 id 的荒謬值防線。**不是數量政策，是防 500。**
+
+   `notifications.id` 是 bigint。`z.number().int()` 收得下 `1e308`
+   （JS 眼裡它是整數），那個值進到 `id = any($1)` 就是 Postgres 的
+   22P02 / pg_strtoint64_safe，回給呼叫端一句 `Internal Server Error` ——
+   實測 `{"ids":[1e308]}` 修前確實 500。
+
+   取 Number.MAX_SAFE_INTEGER 作上界：超過它的整數在 JS 裡本來就已經
+   失去精度，一個「精確值不明」的 id 拿去比對沒有任何意義，所以它同時是
+   技術上的極限與語意上的極限，不需要另外編一個數字。
+   真實的 id 從 1 開始長，離這個界還有九千兆的餘裕。
+
+   陣列長度上界 1000：列表端點一次只回 50 筆（見上面的 limit 50），
+   而「全部已讀」本來就有不帶 ids 的走法，不需要靠一個超長陣列達成。
+   擋的是把幾百萬個元素塞進一個 IN 清單。 */
+const NOTIFY_ID_MAX = Number.MAX_SAFE_INTEGER
+const NOTIFY_IDS_MAX = 1000
+
 const ReadBody = z.object({
   /** 不給 ids 就是全部已讀 —— 鈴鐺打開就清紅點是最常見的操作 */
-  ids: z.array(z.number().int()).optional()
+  ids: z.array(z.number().int().positive().max(NOTIFY_ID_MAX)).max(NOTIFY_IDS_MAX).optional()
 })
 social.post('/notifications/read', async c => {
   const me = c.get('userId')
   const parsed = ReadBody.safeParse(await c.req.json().catch(() => ({})))
-  const ids = parsed.success ? parsed.data.ids : undefined
+  /* 解析失敗要回 400，不能沿用「當作沒帶 ids」。
+     沒帶 ids 的語意是**把全部標成已讀** —— 那是這支唯一不可逆的動作。
+     把一個看不懂的 ids 靜靜地當成「全部」，等於使用者送錯一次就清掉整個紅點，
+     而且回 200 讓他以為只清了他指定的那幾筆。
+     （空 body / 非 JSON 仍然是合法的「全部已讀」：上面的 catch 給了 `{}`，
+     而 ids 是 optional，那條路根本不會走到這裡。） */
+  if (!parsed.success) {
+    return c.json({ error: 'BAD_REQUEST', message: `ids 不合法：最多 ${NOTIFY_IDS_MAX} 筆，每一筆都要是正整數` }, 400)
+  }
+  const ids = parsed.data.ids
   if (ids?.length) {
     await sql`update notifications set read_at = now()
               where user_id = ${me} and read_at is null and id = any(${ids})`

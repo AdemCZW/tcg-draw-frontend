@@ -13,6 +13,7 @@ import { requireAuth } from '../auth.js'
 import { walletOf } from '../money.js'
 import { commitPool, draw, tryOpenPool, revealPool } from '../pools-service.js'
 import { verifyCert, enforceVerification } from '../psa.js'
+import { POINTS_INPUT_MAX, pointsInputMaxText } from '../limits.js'
 import {
   BUYBACK_MAX, BUYBACK_MIN,
   FIRST_POOL_TICKET_CAP, FIRST_POOL_VALUE_CAP, PLATFORM_FEE_RATE,
@@ -274,7 +275,18 @@ const CreatePool = z.object({
      資料庫的 check 是最後一道（016）。補上模式邏輯時再把該玩法加回三個地方。 */
   mode: z.enum(['muteki']),
   title: z.string().min(1).max(60),
-  ticketPrice: z.number().int().positive(),
+  /* 票價的上界是**荒謬值防線，不是票價上限**（見 src/limits.ts）。
+     票價會進 bigint 欄位、也會乘上籤數去算票收，沒有上界的話一個
+     `1e308` 就讓 numeric 溢位成 500 —— 使用者打錯字被講成伺服器故障。
+
+     今天這條路多半走不到：下面的保底回饋率閘（floorAllowed）會先擋下
+     天文票價，因為單張買回價封頂一千萬，票收一大保底比率就趨近 0。
+     但那是**經濟規則順手擋到的**，不是驗證。經濟規則本來就會被調整
+     （買回價上限改一次、加一種新玩法，這道側門就開了），
+     而「金額欄位不准是天文數字」跟經濟規則怎麼調沒有關係，
+     所以它要有自己的一道閘，寫在自己該在的地方。 */
+  ticketPrice: z.number().int().positive()
+    .max(POINTS_INPUT_MAX, `票價不能超過 ${pointsInputMaxText()} 點`),
   totalTickets: z.number().int().positive().max(5000),
   prizes: z.array(PrizeIn).min(1),
   shiteiTier: z.enum(['A', 'B', 'C', 'D', 'LAST']).optional(),
@@ -491,7 +503,15 @@ pools.post('/', requireAuth, async c => {
     })
     return c.json({ poolId: id, ...result })
   } catch (e) {
-    return c.json({ error: 'COMMIT_FAILED', message: e instanceof Error ? e.message : '建池失敗' }, 502)
+    /* 上游的錯誤訊息不往外送，只進 log。
+       這條路上會 throw 的東西是 drand 的 HTTP 狀態（`drand round 6398588 425`）、
+       fetch 的逾時、以及 pools-service 的內部狀態檢查（`pool is draft, not committed`）——
+       全部是英文的內部字串。原樣回給呼叫端有兩個問題：
+       它洩漏我們依賴誰、內部狀態怎麼命名；而且它把**別人的故障**
+       講得像使用者做錯了什麼，使用者照著那句話做不了任何事。
+       對外固定一句「這不是你的錯，等一下再試」，細節留給我們自己看。 */
+    console.error('[pools] 建池失敗:', e)
+    return c.json({ error: 'COMMIT_FAILED', message: '建池失敗，這是我們這邊的問題，請稍後再試一次' }, 502)
   }
 })
 
@@ -504,7 +524,9 @@ pools.post('/:id/open', requireAuth, async c => {
     const opened = await tryOpenPool(pid(c))
     return c.json({ opened, message: opened ? '已開賣' : '外部亂數還沒到，稍後再試' })
   } catch (e) {
-    return c.json({ error: 'WRONG_STATE', message: e instanceof Error ? e.message : '無法開池' }, 409)
+    // 同上：drand 的狀態碼與內部狀態名不對外，見建池那一段的說明
+    console.error('[pools] 開池失敗:', e)
+    return c.json({ error: 'WRONG_STATE', message: '目前無法開賣，請稍後再試' }, 409)
   }
 })
 
@@ -601,6 +623,8 @@ pools.post('/:id/reveal', requireAuth, async c => {
     await sql.begin(tx => revealPool(tx, pid(c)))
     return c.json({ ok: true })
   } catch (e) {
-    return c.json({ error: 'WRONG_STATE', message: e instanceof Error ? e.message : '無法公布' }, 409)
+    // 同上。這裡的 throw 幾乎都是 `pool is open`（還沒收攤就按公布）這種內部狀態字串
+    console.error('[pools] 公布失敗:', e)
+    return c.json({ error: 'WRONG_STATE', message: '目前無法公布，請確認這個池已經收攤' }, 409)
   }
 })
