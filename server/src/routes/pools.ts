@@ -11,7 +11,7 @@ import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { walletOf } from '../money.js'
-import { commitPool, draw, tryOpenPool, revealPool } from '../pools-service.js'
+import { commitPool, draw, tryOpenPool, revealPool, STASH_DAYS } from '../pools-service.js'
 import { verifyCert, enforceVerification } from '../psa.js'
 import { POINTS_INPUT_MAX, pointsInputMaxText } from '../limits.js'
 import {
@@ -499,6 +499,39 @@ pools.post('/', requireAuth, async c => {
         buyback: resolved[i]!
       }))
       await tx`insert into pool_prizes ${tx(rows as never)}`
+
+      /* ── 帶鑑定編號的獎品要押進卡冊（023）──────────────────────────
+         替每一張帶編號的獎品在 prizes 開一列：賣家名下、狀態 in_pool。
+         唯一性因此由既有的 prizes_cert_alive（unique(grader, cert_no)）
+         保證 —— 同一個編號放進第二個池會在這裡撞上索引，而不是等到
+         有人發現同一張卡被賣了兩次。
+
+         沒有編號的獎品維持舊路徑（抽中時才 insert）：唯一索引的述詞是
+         `where cert_no is not null`，替它們開列一點保護都沒有多，
+         而它們可以 total > 1，開下去是幾百列永遠不會被抽走的資料。
+         範圍的完整理由見 migration 023 的檔頭。
+
+         won_at / acquired_at 在押記當下還沒有「贏得」這件事發生，
+         填現在只是為了滿足 NOT NULL；抽中時會被覆寫成真正的時間。 */
+      const now = Date.now()
+      for (let i = 0; i < rows.length; i++) {
+        const card = rows[i]!.card as { grader?: unknown; certNo?: unknown }
+        const certRaw = typeof card.certNo === 'string' ? card.certNo.trim() : ''
+        if (!certRaw) continue
+        const graderRaw = typeof card.grader === 'string' ? card.grader.trim() : ''
+        const cardId = `pz-${id}-c${i}`
+        await tx`
+          insert into prizes (id, user_id, pool_id, card, tier, status,
+                              won_at, acquired_at, stash_expires_at,
+                              grader, cert_no, custodian_id, origin)
+          values (${cardId}, ${me}, ${id}, ${rows[i]!.card as never}, ${rows[i]!.tier}, 'in_pool',
+                  ${now}, ${now}, ${now + STASH_DAYS * 86_400_000},
+                  ${graderRaw ? graderRaw.toUpperCase() : null}, ${certRaw},
+                  ${me}, 'upload')
+        `
+        await tx`update pool_prizes set card_id = ${cardId} where id = ${rows[i]!.id}`
+      }
+
       return commitPool(tx, id)
     })
     return c.json({ poolId: id, ...result })
@@ -510,6 +543,19 @@ pools.post('/', requireAuth, async c => {
        它洩漏我們依賴誰、內部狀態怎麼命名；而且它把**別人的故障**
        講得像使用者做錯了什麼，使用者照著那句話做不了任何事。
        對外固定一句「這不是你的錯，等一下再試」，細節留給我們自己看。 */
+    /* 但**唯一索引撞到不是我們的問題**，是使用者真的送了一個已經登記過的
+       鑑定編號（023 的押記會在 prizes 上撞到 prizes_cert_alive）。
+       把它一起講成 502「我們這邊的問題」有兩個後果：使用者會一直重試
+       同一份表單，而真正該做的是換一張卡；而且它把平台唯一一道
+       「一卡多賣」的防線講成隨機故障，等於把防線的存在藏起來。 */
+    const pg = e as { code?: string; constraint_name?: string }
+    if (pg.code === '23505' && pg.constraint_name === 'prizes_cert_alive') {
+      return c.json({
+        error: 'CERT_ALREADY_LISTED',
+        message: '這個鑑定編號已經登記在系統裡了 —— 同一張實體卡不能同時放進兩個池，也不能一邊在池裡一邊掛在市場上。'
+          + '如果這張卡是你的而且已經不在別處，請聯絡客服。'
+      }, 409)
+    }
     console.error('[pools] 建池失敗:', e)
     return c.json({ error: 'COMMIT_FAILED', message: '建池失敗，這是我們這邊的問題，請稍後再試一次' }, 502)
   }

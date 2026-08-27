@@ -91,6 +91,11 @@ if (process.env.DEV_LOGIN === '1') {
     `
     return c.json({ moved: rows.length, rows })
   })
+  /* 手動推一次池的生命週期掃描。
+     正式環境靠上面那個五分鐘的 setInterval，測試等不了五分鐘 ——
+     而「到期關池 → 揭曉 → 解押把卡還給賣家」這條鏈只有掃描會推。
+     不改任何規則，只是把排程要做的事現在做一次。 */
+  app.post('/v1/dev/sweep-pools', async c => c.json(await sweepPools()))
   /* 池的到期日同理：測「到期就不能再抽、但已售出的仍走完出貨流程」
      不可能真的等到期。 */
   const ExpireBody = z.object({ poolId: z.string() })
@@ -121,7 +126,7 @@ if (process.env.DEV_LOGIN === '1') {
     return c.json({ changed: rows.length })
   })
   console.warn('[auth] DEV_LOGIN 已開啟：/v1/auth/dev-login 給 handle 就發 token，正式環境不要開')
-  console.warn('[dev] /v1/dev/rewind-settlement、/v1/dev/rewind-order、/v1/dev/expire-pool、/v1/dev/set-ref-price 也開著，正式環境不要開')
+  console.warn('[dev] /v1/dev/rewind-settlement、/v1/dev/rewind-order、/v1/dev/expire-pool、/v1/dev/sweep-pools、/v1/dev/set-ref-price 也開著，正式環境不要開')
 }
 
 /* 市場掛單的讀取端點搬進 routes/public.ts —— 上架、下架都在那裡，

@@ -263,7 +263,7 @@ export async function draw(
   `
 
   const prizeRows = await tx`
-    select id, tier, card from pool_prizes where id = any(${claimed.map(c => c.prize_id)})
+    select id, tier, card, card_id from pool_prizes where id = any(${claimed.map(c => c.prize_id)})
   `
   const byId = new Map(prizeRows.map(r => [r.id as string, r]))
   const items = claimed.map(c => {
@@ -271,8 +271,18 @@ export async function draw(
     const seat = Number(c.seat)
     /* stashId 是這張卡在使用者卡冊裡那一列的 id（prizeId 是池裡的獎項定義，是兩回事）。
        回給前端是為了讓開卡結果導到卡冊時能指名「剛剛拿到的是這幾張」——
-       少了它，前端只能自己拼 `pz-<drawId>-<seat>`，等於把主鍵的組法變成契約。 */
-    return { seat, prizeId: c.prize_id, stashId: `pz-${drawId}-${seat}`, tier: pr.tier as string, card: pr.card }
+       少了它，前端只能自己拼 `pz-<drawId>-<seat>`，等於把主鍵的組法變成契約。
+
+       **card_id 有值時 stashId 就是它**（023）：那張卡在建池時就已經
+       在卡冊裡了（賣家名下、狀態 in_pool），抽中是把那一列過戶給買家，
+       不是開一列新的。開新的會撞上 prizes_cert_alive —— 同一個編號兩列。 */
+    const pledgedId = (pr.card_id as string | null) ?? null
+    return {
+      seat, prizeId: c.prize_id,
+      stashId: pledgedId ?? `pz-${drawId}-${seat}`,
+      pledgedId,
+      tier: pr.tier as string, card: pr.card
+    }
   })
 
   /* 發到使用者名下的保管庫。
@@ -291,7 +301,31 @@ export async function draw(
     const t = typeof v === 'string' ? v.trim() : ''
     return t === '' ? null : t
   }
-  const prizeIns = items.map(it => {
+  /* 已經押在卡冊裡的那些（建池時開的列）：**過戶，不是新增**。
+     用 `status = 'in_pool'` 當守衛 —— 兩個人同時抽到同一個籤位時
+     只有一個 UPDATE 會命中（另一個看到的狀態已經不是 in_pool），
+     跟 pool_seats 那條「UPDATE ... WHERE taken_by IS NULL」是同一個模式。
+     籤位本身其實已經先搶過一輪了，這一層是第二道。 */
+  for (const it of items) {
+    if (!it.pledgedId) continue
+    const moved = await tx`
+      update prizes
+         set user_id = ${userId}, status = 'stashed', origin = 'draw',
+             seat = ${it.seat}, draw_id = ${drawId},
+             won_at = ${now}, acquired_at = ${now},
+             stash_expires_at = ${now + STASH_DAYS * DAY}
+       where id = ${it.pledgedId} and status = 'in_pool'
+       returning id
+    `
+    if (!moved.length) {
+      /* 押記的那一列不在預期的狀態 —— 資料被別的路徑動過了。
+         這裡**一定要 throw 讓整筆交易回滾**：繼續下去的話買家的點數
+         已經扣了（credit 在前面），而他不會拿到任何卡。 */
+      throw new Error(`pledged card ${it.pledgedId} is not in_pool`)
+    }
+  }
+
+  const prizeIns = items.filter(it => !it.pledgedId).map(it => {
     const cd = it.card as { grader?: unknown; certNo?: unknown }
     const g = norm(cd.grader)
     return {
@@ -307,7 +341,8 @@ export async function draw(
       won_at: now, acquired_at: now, stash_expires_at: now + STASH_DAYS * DAY
     }
   })
-  await tx`insert into prizes ${tx(prizeIns as never)}`
+  // 全部都是押記過戶時 prizeIns 會是空的 —— 空陣列不能餵給 tx()
+  if (prizeIns.length) await tx`insert into prizes ${tx(prizeIns as never)}`
 
   /* 票金的貸方。這一段以前整個不存在 —— 買家被扣了 cost，但沒有任何分錄
      把那筆錢給誰，於是賣家收不到錢、全站的點數總量每抽一次就少一次
@@ -394,9 +429,16 @@ export async function sweepPools(): Promise<{ opened: number; revealed: number; 
      沿用 'cancelled' 而不是新增一個狀態：提前收攤已經是這個語意，
      而 revealPool 本來就接受 cancelled —— 到期的池一樣要揭曉種子，
      否則已經抽過的人永遠驗不了自己那一抽。 */
+  /* `status in ('open','committed')` —— committed 也要收。
+     池建立時是 committed，要等 drand 的未來輪次到期才開賣。如果那一輪
+     一直取不到（drand 掛掉、網路長時間不通），池會停在 committed；
+     而到期掃描原本只看 open，於是那個池**永遠不會結束** ——
+     它的押記卡（023）也就永遠停在 in_pool，賣家再也拿不回那張實體卡。
+     從來沒開賣過的池沒有人抽得到，收掉它是無損的。 */
   const expiredRows = await sqlRoot<{ id: string }[]>`
     update pools set status = 'cancelled'
-     where status = 'open' and expires_at is not null and expires_at <= ${Date.now()}
+     where status in ('open', 'committed')
+       and expires_at is not null and expires_at <= ${Date.now()}
      returning id
   `
   const expired = expiredRows.length
@@ -431,10 +473,36 @@ export async function sweepPools(): Promise<{ opened: number; revealed: number; 
   return { opened, revealed, expired }
 }
 
+/**
+ * 沒被抽走的押記卡回到賣家卡冊（023）。
+ *
+ * 建池時帶鑑定編號的獎品會在 prizes 開一列（賣家名下、狀態 in_pool），
+ * 池結束時那些還沒被抽走的要解押回 in_book —— 不然那張實體卡會**永遠
+ * 卡在一個已經結束的池上**，賣家再也不能拿它開新池、也不能上架，
+ * 而且那個編號會一直佔著 prizes_cert_alive 的位置。
+ *
+ * 只動 `status = 'in_pool'` 且**還在自己名下**的列：抽走的那些早就
+ * 過戶給買家、狀態是 stashed，一個都不該被碰到。
+ *
+ * 回的是 in_book 不是 stashed：stashed 的語意是「抽到的獎品寄存在平台」，
+ * 而這些卡從來沒有被抽出去過。混用會讓賣家的卡冊看起來像中過獎。
+ */
+export async function releasePledgedCards(tx: Tx, poolId: string): Promise<number> {
+  const rows = await tx`
+    update prizes set status = 'in_book'
+     where pool_id = ${poolId} and status = 'in_pool'
+     returning id
+  `
+  return rows.length
+}
+
 /** sold_out → revealed。從此 server_seed 可以公開 */
 export async function revealPool(tx: Tx, poolId: string) {
   const [p] = await tx`select status from pools where id = ${poolId} for update`
   if (!p) throw new Error('pool not found')
   if (p.status !== 'sold_out' && p.status !== 'cancelled') throw new Error(`pool is ${p.status}`)
   await tx`update pools set status = 'revealed', revealed_at = now() where id = ${poolId}`
+  /* 揭曉是所有結束路徑（抽完、到期、提前關）的共同終點，所以解押掛在這裡
+     只會發生一次。掛在「到期」那條的話，抽完售罄的池就漏掉了。 */
+  await releasePledgedCards(tx, poolId)
 }
