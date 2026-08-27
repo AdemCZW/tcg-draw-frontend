@@ -215,15 +215,18 @@ async function run() {
     { carrier: 'post', tracking, photoFileIds: photo })
   check('檢查碼正確的中華郵政單號可以出貨', shipped.ok, await shipped.clone().text())
 
-  // 還沒送達，買家不能確認收貨
-  const early = await call(buyer, `/v1/orders/${order.id}/confirm`, {})
-  check('未送達不能確認收貨', !early.ok)
+  /* 賣家不能替買家確認收貨 —— 錯的是角色，不是狀態。 */
+  const sellerConfirm = await call(seller, `/v1/orders/${order.id}/confirm`, {})
+  check('賣家不能替買家確認收貨', !sellerConfirm.ok, String(sellerConfirm.status))
 
-  const delivered = await call(platform, `/v1/orders/${order.id}/delivered`, {})
-  check('物流回報簽收', delivered.ok, await delivered.clone().text())
-
+  /* 買家在 shipped 就確認得了，**不必等物流回報簽收**。
+     原本這裡斷言的是相反的（「未送達不能確認收貨」），而那條規則在真實
+     環境裡是一條死路：delivered 只有平台帳號標得動（未來的物流 webhook
+     落點，而那個 webhook 還沒接），所以買家永遠按不到確認收貨，
+     賣家寄了卡只能等時限把訂單判掉。 */
   const confirmed = await call(buyer, `/v1/orders/${order.id}/confirm`, {})
-  check('買家確認收貨', confirmed.ok, await confirmed.clone().text())
+  check('買家在運送中就確認得了收貨（不必等簽收回報）',
+    confirmed.ok, await confirmed.clone().text())
 
   const w2 = await json(await call(buyer, '/v1/orders'))
   check('放款後凍結歸還', w2.wallet.locked === w0.wallet.locked,
@@ -234,6 +237,58 @@ async function run() {
   // 已結案的訂單不能再動
   const again = await call(buyer, `/v1/orders/${order.id}/confirm`, {})
   check('已完成的訂單不能重複確認', !again.ok)
+
+  /* ---- 沉默的買家不能白拿卡 ----
+     這次改動的核心。舊規則是「出貨後 14 天沒有簽收回報 → 視同未送達、
+     自動退款買家」，那讓任何買家都可以收到卡之後什麼都不按、等 14 天，
+     結果卡跟錢都留在他手上。新規則是視同送達，接著跑 7 天驗收期，
+     期滿放款給賣家。真的沒收到的買家會去開爭議，那本來就是他會做的動作。 */
+  {
+    const l2 = (await allListings()).find(x => x.delivery === 'ship' && x.status === 'live')
+    if (!l2) check('沉默測試：找得到需寄送的掛單', false, '種子掛單不足')
+    else {
+      const buyer2 = await login('silentbuyer', '沉默買家')
+      await call(platform, '/v1/admin/grant',
+        { userId: 'u-silentbuyer', points: l2.price * 3, note: 'smoke 沉默買家測試' })
+      const o2r = await json(await call(buyer2, '/v1/orders',
+        { listingId: l2.id, idempotencyKey: 'smoke-silent-' + Date.now() }))
+      const o2 = o2r.order
+      check('沉默測試：下單成功', !!o2?.id, JSON.stringify(o2r).slice(0, 160))
+
+      const sellerTok = await login(String(l2.sellerId).replace(/^u-/, ''), '賣家')
+      const serial2 = String((Date.now() + 7777) % 1e8).padStart(8, '0')
+      const shipRes = await call(sellerTok, `/v1/orders/${o2.id}/ship`,
+        { carrier: 'post', tracking: 'RR' + s10(serial2) + 'TW', photoFileIds: [] })
+      check('沉默測試：賣家出貨', shipRes.ok, await shipRes.clone().text())
+
+      const sellerBefore = await json(await call(sellerTok, '/v1/wallet'))
+
+      // 撥過 15 天：買家從頭到尾沒有按任何東西
+      await fetch(`${base}/v1/dev/rewind-order`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ orderId: o2.id, ms: 15 * 86_400_000 })
+      })
+      const mid = (await json(await call(buyer2, '/v1/orders'))).orders?.find((x: Any) => x.id === o2.id)
+      check('沉默 15 天 → 視同送達，不是退款',
+        mid?.status === 'delivered', `status=${mid?.status}`)
+
+      // 再撥 8 天：驗收期滿
+      await fetch(`${base}/v1/dev/rewind-order`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ orderId: o2.id, ms: 8 * 86_400_000 })
+      })
+      const done = (await json(await call(buyer2, '/v1/orders'))).orders?.find((x: Any) => x.id === o2.id)
+      check('再過驗收期 → 放款給賣家（completed）',
+        done?.status === 'completed', `status=${done?.status}`)
+      check('結案理由是自動放款，不是退款',
+        done?.closedBy === 'auto-release', `closedBy=${done?.closedBy}`)
+
+      const sellerAfter = await json(await call(sellerTok, '/v1/wallet'))
+      check('賣家真的收到貨款（沉默不再等於白拿卡）',
+        sellerAfter.wallet.points > sellerBefore.wallet.points,
+        `${sellerBefore.wallet.points} → ${sellerAfter.wallet.points}`)
+    }
+  }
 
   // 庫內轉移：沒有訂單，直接過戶
   if (vault) {

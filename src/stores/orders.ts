@@ -201,7 +201,10 @@ export const useOrdersStore = defineStore('orders', {
     async confirm(id: string) {
       if (!MOCK) { await http(ORDER_ROUTES.confirm(id), { method: 'POST' }); await this.sweep(); return }
       const o = this.orders.find(x => x.id === id)
-      if (!o || o.status !== 'delivered') return
+      /* shipped 也收 —— 判準跟 shared/escrow.ts 的 actionsFor 一致。
+         只認 delivered 的話，mock 模式會出現「按鈕按得下去但什麼都沒發生」，
+         而那是最難查的一種 bug。 */
+      if (!o || (o.status !== 'shipped' && o.status !== 'delivered')) return
       const next: Order = { ...o, status: 'completed', settledAt: Date.now() + this.offset, closedBy: 'buyer-confirm' }
       this.orders = this.orders.map(x => (x.id === id ? next : x))
       if (o.buyerId === 'me') this.releaseFor(next)
@@ -216,7 +219,7 @@ export const useOrdersStore = defineStore('orders', {
         return
       }
       const o = this.orders.find(x => x.id === id)
-      if (!o || o.status !== 'delivered' || !hasVideo) return
+      if (!o || (o.status !== 'shipped' && o.status !== 'delivered') || !hasVideo) return
       this.patch(id, {
         status: 'disputed', disputedAt: Date.now() + this.offset,
         disputeReason: reason, hasUnboxingVideo: hasVideo

@@ -26,8 +26,21 @@ check('72h 未出貨 → cancelled',
   applyDeadlines(base, 73 * HOUR).status === 'cancelled')
 check('71h 還沒到期，維持 escrowed',
   applyDeadlines(base, 71 * HOUR).status === 'escrowed')
-check('出貨後 15 天查無送達 → refunded',
-  applyDeadlines({ ...base, status: 'shipped', shippedAt: 0 }, 15 * DAY).status === 'refunded')
+/* 出貨後買家一直沒有回應 → **視同送達**，不是視同未送達。
+   反過來的話，任何買家都可以收到卡之後什麼都不按、等 14 天拿回全額退款，
+   卡跟錢都在他手上 —— 沉默不該是白拿一張卡的手段。 */
+check('出貨後 15 天買家沒回應 → 視同送達（delivered），不是退款',
+  applyDeadlines({ ...base, status: 'shipped', shippedAt: 0 }, 15 * DAY).status === 'delivered')
+check('出貨後 13 天還在等送達',
+  applyDeadlines({ ...base, status: 'shipped', shippedAt: 0 }, 13 * DAY).status === 'shipped')
+/* 視同送達之後驗收期才開始算，而且起點是**時限那一刻**不是掃描跑到的那一刻 ——
+   時限用時間戳推導，補算跟即時算必須得到同一個答案。
+   所以沉默的買家最終走完 14 + 7 = 21 天到 completed。 */
+check('視同送達之後接著跑完驗收期 → completed（總長 21 天）', (() => {
+  const deemed = applyDeadlines({ ...base, status: 'shipped', shippedAt: 0 }, 15 * DAY)
+  return deemed.deliveredAt === 14 * DAY &&
+    applyDeadlines(deemed, 22 * DAY).status === 'completed'
+})())
 check('送達後 8 天 → 自動放款 completed',
   applyDeadlines({ ...base, status: 'delivered', deliveredAt: 0 }, 8 * DAY).status === 'completed')
 check('送達後 6 天仍在驗收期',
@@ -38,6 +51,13 @@ check('escrowed 時只有賣家能出貨',
   actionsFor(base, 'seller').includes('ship') && actionsFor(base, 'buyer').length === 0)
 check('delivered 時買家可確認或申訴',
   actionsFor({ ...base, status: 'delivered' }, 'buyer').length === 2)
+/* 買家在 shipped 就要按得到。delivered 只有平台標得動（未來的物流 webhook
+   落點，那個 webhook 還沒接）—— 只認 delivered 的話真實流程裡買家永遠
+   按不到確認收貨，賣家寄了卡卻只能等時限把訂單判掉。 */
+check('shipped 時買家就能確認或申訴（不必等 delivered）',
+  actionsFor({ ...base, status: 'shipped' }, 'buyer').length === 2)
+check('shipped 時賣家沒有可做的動作',
+  actionsFor({ ...base, status: 'shipped' }, 'seller').length === 0)
 check('新賣家保證金 10%', depositFor(1000, 0) === 100)
 check('老賣家保證金 2%', depositFor(1000, 100) === 20)
 check('保證金有絕對上限', depositFor(10_000_000, 0) === 5000)

@@ -70,6 +70,27 @@ if (process.env.DEV_LOGIN === '1') {
     `
     return c.json({ moved: rows.length, rows })
   })
+  /* 託管訂單的時鐘。沒有這支就驗不到這次改動最重要的那條規則：
+     「買家沉默 14 天 → 視同送達，不是自動退款」。
+     那條規則是防詐騙的核心（沉默不該是白拿一張卡的手段），
+     而它要等 14 天才會發生 —— 只能靠把時間戳往回撥來驗。
+     跟 rewind-settlement 一樣只改時間戳，不改金額也不改狀態：
+     撥完之後仍然由正常的 applyDeadlines 去判斷該發生什麼。 */
+  const RewindOrder = z.object({ orderId: z.string(), ms: z.number().int().positive() })
+  app.post('/v1/dev/rewind-order', async c => {
+    const parsed = RewindOrder.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '參數不合法' }, 400)
+    const { orderId, ms } = parsed.data
+    const rows = await sql`
+      update orders set
+        created_at   = created_at - ${ms},
+        shipped_at   = case when shipped_at   is null then null else shipped_at   - ${ms} end,
+        delivered_at = case when delivered_at is null then null else delivered_at - ${ms} end
+      where id = ${orderId}
+      returning id, status
+    `
+    return c.json({ moved: rows.length, rows })
+  })
   /* 池的到期日同理：測「到期就不能再抽、但已售出的仍走完出貨流程」
      不可能真的等到期。 */
   const ExpireBody = z.object({ poolId: z.string() })
@@ -100,7 +121,7 @@ if (process.env.DEV_LOGIN === '1') {
     return c.json({ changed: rows.length })
   })
   console.warn('[auth] DEV_LOGIN 已開啟：/v1/auth/dev-login 給 handle 就發 token，正式環境不要開')
-  console.warn('[dev] /v1/dev/rewind-settlement、/v1/dev/expire-pool、/v1/dev/set-ref-price 也開著，正式環境不要開')
+  console.warn('[dev] /v1/dev/rewind-settlement、/v1/dev/rewind-order、/v1/dev/expire-pool、/v1/dev/set-ref-price 也開著，正式環境不要開')
 }
 
 /* 市場掛單的讀取端點搬進 routes/public.ts —— 上架、下架都在那裡，

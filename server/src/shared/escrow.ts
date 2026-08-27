@@ -68,7 +68,14 @@ export function deadlineOf(o: Order): Deadline | null {
     case 'shipped':
       return {
         at: (o.shippedAt ?? o.createdAt) + DELIVER_DEADLINE,
-        label: '物流送達期限', then: '逾期視同未送達，自動退款', tone: 'warn'
+        /* 逾期**視同送達**，不是視同未送達。
+           原本這裡是「自動退款」，那個預設方向是反的：賣家手上有經過格式
+           驗證的物流單號，而「買家沉默」被一律推定成「沒送到」——等於任何
+           買家都可以收到卡之後什麼都不按、等 14 天，然後卡跟錢都留在他手上。
+           沉默不該是白拿一張卡的手段。
+           真的沒收到的買家會去開爭議，那本來就是他會做的動作；
+           開了爭議才輪到平台人工查單號（見 SHIP_DEADLINE 附近的說明）。 */
+        label: '物流送達期限', then: '期滿視同送達，接著進入 7 天驗收期', tone: 'ok'
       }
     case 'delivered':
       return {
@@ -103,7 +110,12 @@ export function applyDeadlines(o: Order, now: number): Order {
     case 'escrowed':
       return { ...o, status: 'cancelled', settledAt: d.at, closedBy: 'ship-timeout' }
     case 'shipped':
-      return { ...o, status: 'refunded', settledAt: d.at, closedBy: 'delivery-timeout' }
+      /* 視同送達，驗收期從這一刻起算（deliveredAt 用時限那一刻而不是 now，
+         這樣「補算」跟「當下就跑到」算出來的結果一樣 —— 時限是用時間戳
+         推導的，不能依賴誰什麼時候上線觸發掃描）。
+         注意它不是終局狀態：接著還有 7 天驗收期，買家在那期間仍然可以
+         開爭議。所以沉默的買家最終會走到 completed，總長 14 + 7 = 21 天。 */
+      return { ...o, status: 'delivered', deliveredAt: d.at }
     case 'delivered':
       return { ...o, status: 'completed', settledAt: d.at, closedBy: 'auto-release' }
     default:
@@ -123,7 +135,15 @@ export type Action =
 export function actionsFor(o: Order, role: 'buyer' | 'seller' | 'platform'): Action[] {
   if (!isOpen(o)) return []
   if (role === 'seller') return o.status === 'escrowed' ? ['ship'] : []
-  if (role === 'buyer') return o.status === 'delivered' ? ['confirm', 'dispute'] : []
+  /* 買家在 shipped 就能按，不必等到 delivered。
+     delivered 這個狀態現在只有平台帳號標得動（未來的物流 webhook 落點），
+     而那個 webhook 還沒接 —— 只認 delivered 的話，真實流程裡買家永遠
+     按不到確認收貨，賣家寄了卡卻要等到時限把訂單判掉。
+     讓買家自己按是安全的：按下去對他自己不利（啟動驗收期倒數、
+     或直接放款），所以不會有人濫按。 */
+  if (role === 'buyer') {
+    return o.status === 'shipped' || o.status === 'delivered' ? ['confirm', 'dispute'] : []
+  }
   return o.status === 'disputed' ? ['resolve-buyer', 'resolve-seller'] : []
 }
 
