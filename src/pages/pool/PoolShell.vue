@@ -109,6 +109,14 @@ const activeTab = computed(() => String(route.name))
     <div class="skel"><i class="a"></i><i class="b"></i><i class="c"></i></div>
   </div>
 
+  <!-- 錯誤要排在「找不到」前面：斷網時 pools 是空的，沒有這一層的話
+       網路錯誤會被說成「找不到這個池，可能已下架」——這句是會被截圖
+       傳出去的假話。錯誤態給重試，後端冷啟動 ~20 秒是常態。 -->
+  <div v-else-if="pools.error" class="container shell loadFail" role="alert">
+    <p class="muted">{{ pools.error }}</p>
+    <button type="button" class="btn" @click="pools.load()">重新載入</button>
+  </div>
+
   <div v-else class="container shell">
     <p class="muted">找不到這個池，可能已下架。<RouterLink :to="{ name: 'home' }">回抽選列表</RouterLink></p>
   </div>
@@ -117,6 +125,14 @@ const activeTab = computed(() => String(route.name))
 <style scoped>
 /* 底部導覽的讓位交給頁尾（見 App.vue），這裡只留自己的排版留白 */
 .shell { padding-top: 26px; padding-bottom: 60px; }
+
+/* 載入失敗：置中一句話加一顆重試鈕，min-width: 0 防長訊息撐破版面 */
+.loadFail {
+  min-width: 0;
+  display: grid; justify-items: center; gap: 12px;
+  padding: 60px 0; text-align: center;
+}
+.loadFail p { margin: 0; }
 /* 觸控高度給滿 44，但視覺上是一行小字 —— 返回不該跟這一頁的主要動作搶注意力 */
 .back {
   padding: 0; border: 0; background: none; cursor: pointer;

@@ -23,6 +23,10 @@ export const usePoolStore = defineStore('pools', {
   state: () => ({
     pools: [] as Pool[],
     loading: false,
+    /* 載入失敗的訊息。沒有這個欄位的話例外一路 unhandled，頁面拿到
+       空陣列照畫空狀態 —— 斷網會被畫成「沒有池」「池已下架」，
+       使用者不會想到重新整理，等於死路。 */
+    error: '',
     lastResult: null as DrawResult | null
   }),
   getters: {
@@ -35,7 +39,12 @@ export const usePoolStore = defineStore('pools', {
   actions: {
     async load() {
       this.loading = true
+      this.error = ''
+      /* 失敗吞在這裡、記進 error，而不是往外丟：呼叫端都是 onMounted 裡
+         fire-and-forget 的 ensureLoaded()，往外丟只會變成 unhandled rejection。
+         頁面看 error 欄位畫「載入失敗＋重試」。 */
       try { this.pools = await api.listPools() }
+      catch (e) { this.error = e instanceof Error ? e.message : '載入失敗' }
       finally { this.loading = false }
     },
     async ensureLoaded() {

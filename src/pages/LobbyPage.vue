@@ -393,6 +393,13 @@ const bestDeal = computed(() => {
         <div v-else-if="list.length" class="poolGrid">
           <PoolCard v-for="p in list" :key="p.id" :pool="p" />
         </div>
+        <!-- 錯誤要排在空狀態前面：斷網時 pools 是空的，沒有這一層的話
+             會直接掉進「這個分類目前沒有池」——錯誤被畫成空，使用者
+             不會想到重試，等於死路（後端冷啟動 ~20 秒是常態）。 -->
+        <div v-else-if="pools.error" class="loadFail" role="alert">
+          <p class="muted">{{ pools.error }}</p>
+          <button type="button" class="btn" @click="pools.load()">重新載入</button>
+        </div>
         <p v-else class="muted none">這個分類目前沒有池。</p>
       </div>
     </section>
@@ -820,6 +827,15 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
 @media (prefers-reduced-motion: no-preference) { .sk { animation: pulse 1.4s ease-in-out infinite alternate; } }
 @keyframes pulse { to { opacity: .55; } }
 .none { text-align: center; padding: 46px 0; }
+
+/* 載入失敗：跟空狀態同一個位置，但多一顆重試鈕。
+   min-width: 0 是保險絲 —— 這一塊在 grid 祖先底下，長訊息不該撐破欄寬 */
+.loadFail {
+  min-width: 0;
+  display: grid; justify-items: center; gap: 12px;
+  padding: 46px 0; text-align: center;
+}
+.loadFail p { margin: 0; }
 
 @media (max-width: 960px) {
   .duo { grid-template-columns: minmax(180px, 250px) minmax(0, 1fr); gap: 26px; }

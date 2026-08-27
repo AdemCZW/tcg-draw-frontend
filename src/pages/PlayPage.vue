@@ -231,6 +231,13 @@ const pct = computed(() => {
       </aside>
     </div>
 
+    <!-- 錯誤排在空狀態前面：斷網時 list 是空的，沒有這一層會直接掉進
+         「目前沒有進行中的抽選池」——錯誤被畫成空，使用者不會想到重試。 -->
+    <div v-else-if="pools.error" class="container loadFail" role="alert">
+      <p class="muted">{{ pools.error }}</p>
+      <button type="button" class="btn" @click="pools.load()">重新載入</button>
+    </div>
+
     <p v-else class="container empty muted">目前沒有進行中的抽選池。</p>
   </div>
 </template>
@@ -351,6 +358,14 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 }
 
 .empty { padding: 60px 0; text-align: center; }
+
+/* 載入失敗：跟空狀態同一個位置，但多一顆重試鈕 */
+.loadFail {
+  min-width: 0;
+  display: grid; justify-items: center; gap: 12px;
+  padding: 60px 0; text-align: center;
+}
+.loadFail p { margin: 0; }
 
 /* 提示句預設是觸控版；有滑鼠才換成鍵盤／箭頭那句 */
 .onMouse { display: none; }

@@ -27,7 +27,19 @@ export async function http<T>(path: string, init: RequestInit & { json?: unknown
   let body = init.body
   if (init.json !== undefined) { headers['content-type'] = 'application/json'; body = JSON.stringify(init.json) }
 
-  const res = await fetch(`${API_URL}${path}`, { ...init, headers, body })
+  /* 網路層失敗（斷網、DNS 不通、後端冷啟動）時 fetch 丟的是英文的
+     TypeError: Failed to fetch —— 這句會一路穿到畫面上被當錯誤訊息顯示。
+     在這裡統一換成中文，三個列表頁（大廳／市場／池）就共用同一句。
+     文案刻意中性：Railway 後端冷啟動 ~20 秒是常態，這不是「系統壞了」。
+     AbortError 原樣往外丟 —— 那是呼叫端自己取消的（例如無限捲動切分頁），
+     不是網路壞了，包裝成錯誤訊息會把「正常取消」畫成「載入失敗」。 */
+  let res: Response
+  try {
+    res = await fetch(`${API_URL}${path}`, { ...init, headers, body })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e
+    throw new ApiError('NETWORK_ERROR', '連不上伺服器，請檢查網路後重試', 0, e)
+  }
   const text = await res.text()
   let data: unknown = null
   try { data = text ? JSON.parse(text) : null } catch { /* 非 JSON 回應 */ }

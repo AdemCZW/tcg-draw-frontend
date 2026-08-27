@@ -100,7 +100,10 @@ async function submit() {
 
     <p v-if="loading" class="muted">載入中…</p>
     <p v-else-if="!cards.length" class="muted">
-      沒有可以上架的卡。<RouterLink :to="{ name: 'cards' }">回卡冊</RouterLink>
+      <!-- 這裡的「沒有卡」幾乎都是「直接打網址進來、沒有從卡冊帶選取」，
+           不是使用者真的沒有卡 —— 說「沒有可以上架的卡」會讓有卡的人
+           以為卡不能上架。文案講清楚是「還沒選」。 -->
+      還沒選要上架的卡，回<RouterLink :to="{ name: 'cards' }">卡冊</RouterLink>挑幾張再過來。
     </p>
 
     <template v-else>
