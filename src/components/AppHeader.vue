@@ -176,7 +176,30 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 }
 .nav > a.router-link-active { color: var(--ink); font-weight: 600; background: var(--surface-2); }
 
-.actions { display: flex; align-items: center; gap: 8px; justify-self: end; }
+/* 靠右用 justify-content: flex-end（flex 內部），不要用 justify-self: end（grid 層）。
+   兩者畫出來一樣，但 justify-self: end 會讓這一格改用 max-content 寬度、只把右緣
+   釘在欄位右側 —— 欄位縮小時它不跟著縮，而是往「左邊」溢出去蓋住標誌
+   （實測 320px、餘額十五位數時，「VaultDraw」被餘額膠囊蓋掉後面三個字）。
+   維持預設的 stretch，這一格才會等於欄寬，裡面的膠囊也才真的會收縮。 */
+.actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; min-width: 0; }
+
+/* ---- 動作區的收縮責任分配 ----
+   餘額是這條列上唯一長度不固定的東西（位數隨儲值變動，mock 的測試帳號是
+   100,000,000，十一個字元），其餘每一格都是固定寬。所以明確指定「誰該縮」：
+   通知鈴、帳號、各種入口一律 flex: none 維持原尺寸，空間不夠時只有餘額會縮，
+   縮到底就由數字自己截斷 —— 而不是整個動作區把後面的通知鈴與帳號推出畫面外
+   （那正是 320px 溢出 28px 時發生的事：帳號膠囊整顆落在視窗外，點不到）。
+
+   min-width: 0 這幾行是必要的，不是保險：flex / grid 子元素預設 min-width: auto，
+   下限就是內容寬度，不補這行的話 overflow 與 text-overflow 都不會生效。
+   見 docs/HANDOFF.md 2.1。 */
+.actions > * { flex: none; }
+/* 寫 .actions > .wallet（0,2,0）而不是 .wallet（0,1,0）：跟上面那條同分的話，
+   誰贏就取決於誰排在後面，跟這個檔案底下踩過的那個坑是同一種。 */
+.actions > .wallet { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+/* RollingNumber 的根元素，用 :deep 才選得到子元件內部的 class */
+.wallet :deep(.roll) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
 .pill {
   display: inline-flex; align-items: center; gap: 8px;
   height: 38px; padding: 0 16px;
@@ -275,24 +298,54 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
 @media (max-width: 720px) {
   /* 手機導覽改用底部 tab bar（AppBottomNav），頁首只留標誌與餘額／登入 */
   .nav { display: none; }
-  .row { grid-template-columns: auto 1fr; height: 56px; gap: 12px; }
+  /* 第二欄寫 minmax(0, 1fr) 而不是 1fr。1fr 的下限是 auto，也就是
+     「動作區的內容寬度」—— 等於這一欄根本不會縮，餘額位數一多就把整條列推爆。
+     這是 docs/HANDOFF.md 2.1 那條規則，頁首自己也踩了一次。 */
+  .row { grid-template-columns: auto minmax(0, 1fr); height: 56px; gap: 12px; }
   .brand { font-size: 18px; }
   /* 後台在手機上不做事（後台頁本身是桌機介面），別佔掉這條列 */
   .admin { display: none; }
-  /* 餘額九位數在 375px 會折成兩行；不換行 + 收字距 */
-  .wallet { font-size: 12.5px; height: 32px; padding: 0 11px; letter-spacing: -.01em; }
-  .me { padding: 0; }
-  .avatar { width: 26px; height: 26px; font-size: 12px; }
+
+  /* 通用的 .pill 要排在下面那幾條 .pill.xxx 之前，而且那幾條一律連寫兩個 class。
+     原因：.pill 與 .wallet／.me 特異性同分（0,1,0），誰在後面誰贏。這條 .pill
+     是後來才補進這個區塊尾端的，一補上去就把上面 .wallet 的 font-size／height／
+     padding 和 .me 的 padding 全部無聲蓋掉 —— 320px 的溢出從註解裡記的 2px
+     惡化到 28px 就是這麼來的，而且 diff 上完全看不出有人改過餘額膠囊。
+     連寫 .pill.wallet（0,2,0）之後，順序就不再是正確性的一部分。 */
   .pill { height: 34px; font-size: 13px; padding: 0 12px; }
+  /* 餘額九位數在 375px 會折成兩行；不換行 + 收字距 */
+  .pill.wallet { font-size: 12.5px; height: 32px; padding: 0 11px; letter-spacing: -.01em; }
+  /* 帳號在手機上只剩頭像。左右各留 8px 不是留白而是觸控範圍：
+     26px 的頭像加上這 16px 正好讓可點區域到 44px 寬（Apple HIG 的下限）。
+     高度受限於整條列只有 56px，仍是 34px —— 那條要整列一起改，記在 docs/open-issues.md。 */
+  .pill.me { padding: 0 8px; }
+  .avatar { width: 26px; height: 26px; font-size: 12px; }
 }
 
-/* 320px（iPhone SE 這種）上動作區會溢出 2px，最右邊的頭像被切到一角。
-   量到的差距很小，所以只收間距與內距，不動字級 —— 為了 2px 把字改小
-   會讓所有比它寬的機器都跟著變醜。 */
+/* ---- 320px（iPhone SE 一代這種）----
+   這個區塊的註解原本寫「溢出 2px」。那個數字後來過期了：上面那條 .pill 補進
+   @media (max-width: 720px) 尾端之後，餘額與帳號的內距全部被蓋回通用值，
+   實測（320px 寬、已登入、mock 餘額 100,000,000）.row 的 scrollWidth 是 348，
+   也就是溢出 28px —— 帳號膠囊整顆在視窗外。修法見上面兩個區塊的註解。
+
+   這裡只做「把最後幾 px 擠出來」的事，動的都是不損失資訊的東西：
+   裝飾用的圓點、間距、標誌字級。
+
+   擠完之後（320px 實測）餘額有 74px 可用，12.5px 的等寬數字約 7.4px 一個字元，
+   也就是 **十個字元以內完整顯示**：99,999,999 剛好貼齊，再長就由 ellipsis 收尾
+   （mock 測試帳號種的 100,000,000 是十一個字元，在 320px 會顯示成 100,000,0…，
+   360px 以上完整）。這是刻意留的取捨，不是沒調乾淨：要讓十一位數也塞得下，
+   就得把帳號膠囊的左右內距從 8px 收回 0，可點寬度會從 44px 掉到 28px。
+   餘額看不全還能點進儲值頁看到完整數字；點不到的按鈕沒有第二條路。 */
 @media (max-width: 360px) {
-  .row { gap: 8px; }
-  .actions { gap: 6px; }
-  .wallet { padding: 0 9px; }
+  .row { gap: 6px; }
+  .actions { gap: 5px; }
+  .brand { font-size: 16px; }
   .pill { padding: 0 10px; }
+  .pill.wallet { padding: 0 9px; gap: 6px; }
+  /* 這顆圓點是純裝飾（aria-hidden），本身 7px 再加 8px 間距要價 15px，
+     是這條列上唯一可以整個拿掉而不損失任何資訊的東西。
+     餘額的意義由後面的「點」和 aria-label 撐著，不靠這顆點。 */
+  .pill.wallet .dot { display: none; }
 }
 </style>
