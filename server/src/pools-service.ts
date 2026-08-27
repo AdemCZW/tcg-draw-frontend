@@ -496,6 +496,75 @@ export async function releasePledgedCards(tx: Tx, poolId: string): Promise<numbe
   return rows.length
 }
 
+/**
+ * 寄存到期的提醒。
+ *
+ * ── 為什麼需要這個 ─────────────────────────────────────────────────
+ * prizes.stash_expires_at 從 002 就存在，抽卡時填 90 天後，然後**沒有
+ * 任何一行程式讀過它** —— 那個期限是寫著好看的。
+ *
+ * 而「寄存」這個詞本身是誤導的：卡不在平台的保險庫，在**賣家的抽屜裡**
+ * （平台不代管實體卡，見 docs/HANDOFF.md 4.2）。所以「卡就放在卡冊」的
+ * 真實意思是「要求一個陌生人無限期替你保管一張值錢的卡，而他已經收完
+ * 錢了」—— 票金在 14 天後就結清入袋，義務卻沒有終點。
+ *
+ * ── 這一支**只通知，不改任何規則** ──────────────────────────────────
+ * 到期不扣卡、不強制出貨、不影響任何功能。理由是卡不在平台手上，
+ * 平台沒有辦法強迫任何人寄任何東西；能做的只有讓雙方知道。
+ * 先看實際上有多少卡會放到期，再決定要不要做後面那些（自動出貨、
+ * 保管費、逾期凍結），那是政策問題不是技術問題。
+ *
+ * 冪等靠 notify() 的 refId（007 的唯一索引 (user_id, kind, ref_id)）——
+ * 這支掛在五分鐘一次的掃描上，沒有它每個人每五分鐘收一次同樣的提醒。
+ */
+const STASH_WARN_MS = 14 * DAY
+
+export async function sweepStashExpiry(): Promise<{ warned: number; expired: number }> {
+  const now = Date.now()
+
+  /* 只看 stashed。listed / ship_requested / shipped 的卡主人正在處理它，
+     再提醒一次只是雜訊；recycled / refunded 已經不是他的卡了。 */
+  const soon = await sqlRoot<{ id: string; user_id: string; name: string | null }[]>`
+    select id, user_id, card->>'name' as name from prizes
+     where status = 'stashed'
+       and stash_expires_at > ${now}
+       and stash_expires_at <= ${now + STASH_WARN_MS}
+     limit 200
+  `
+  for (const r of soon) {
+    await notify({
+      userId: r.user_id, kind: 'system',
+      title: '卡片的寄存期限快到了',
+      body: `${r.name ?? '你的卡'} 再過兩週就滿 ${STASH_DAYS} 天寄存期。`
+        + '卡目前還在賣家手上 —— 想拿到實體卡就申請出貨，不然也可以上架賣掉。'
+        + '期限到了不會沒收，只是提醒你這張卡放很久了。',
+      link: '/me/cards',
+      /* refId 帶 id 而不是帶日期：同一張卡的同一種提醒只發一次，
+         而卡的 id 是穩定的。帶日期的話跨過午夜就會再發一次。 */
+      refId: 'stash-warn:' + r.id
+    })
+  }
+
+  const over = await sqlRoot<{ id: string; user_id: string; name: string | null }[]>`
+    select id, user_id, card->>'name' as name from prizes
+     where status = 'stashed' and stash_expires_at <= ${now}
+     limit 200
+  `
+  for (const r of over) {
+    await notify({
+      userId: r.user_id, kind: 'system',
+      title: '卡片已超過寄存期限',
+      body: `${r.name ?? '你的卡'} 已經超過 ${STASH_DAYS} 天的寄存期。`
+        + '這張卡仍然是你的，功能也沒有任何限制 —— 但它一直放在賣家那裡，'
+        + '時間越久越難處理。建議申請出貨或上架。',
+      link: '/me/cards',
+      refId: 'stash-over:' + r.id
+    })
+  }
+
+  return { warned: soon.length, expired: over.length }
+}
+
 /** sold_out → revealed。從此 server_seed 可以公開 */
 export async function revealPool(tx: Tx, poolId: string) {
   const [p] = await tx`select status from pools where id = ${poolId} for update`

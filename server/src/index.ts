@@ -22,7 +22,7 @@ import { social, socialPublic } from './routes/social.js'
 import { sellers } from './routes/sellers.js'
 import { psa } from './routes/psa.js'
 import { sweep } from './orders-service.js'
-import { sweepPools } from './pools-service.js'
+import { sweepPools, sweepStashExpiry } from './pools-service.js'
 import { sweepSettlementsAll } from './pool-settlement.js'
 import { sweepAttempts } from './rate-limit.js'
 import { certUniquenessPreflight } from './preflight.js'
@@ -96,6 +96,8 @@ if (process.env.DEV_LOGIN === '1') {
      而「到期關池 → 揭曉 → 解押把卡還給賣家」這條鏈只有掃描會推。
      不改任何規則，只是把排程要做的事現在做一次。 */
   app.post('/v1/dev/sweep-pools', async c => c.json(await sweepPools()))
+  /* 寄存到期的提醒同理：正式環境靠五分鐘的排程，測試等不了。 */
+  app.post('/v1/dev/sweep-stash', async c => c.json(await sweepStashExpiry()))
   /* 池的到期日同理：測「到期就不能再抽、但已售出的仍走完出貨流程」
      不可能真的等到期。 */
   const ExpireBody = z.object({ poolId: z.string() })
@@ -167,6 +169,14 @@ setInterval(() => {
   /* 池的生命週期也要有人推。原本這條掃描只掃訂單，而開賣與揭曉
      只有 HTTP 端點、前端沒有任何地方呼叫 —— 池建好就停在 committed、
      售完就停在 sold_out，server_seed 永遠不公開，公平性驗證跑不到。 */
+  /* 寄存到期只發提醒，不改任何規則（見 pools-service.ts 的 sweepStashExpiry）。
+     失敗不能影響其他掃描 —— 這是三條裡最不重要的一條。 */
+  sweepStashExpiry()
+    .then(({ warned, expired }) => {
+      if (warned || expired) console.log(`[stash] 提醒 ${warned} 張快到期、${expired} 張已過期`)
+    })
+    .catch(e => console.error('[stash] 失敗', e))
+
   sweepPools()
     .then(({ opened, revealed, expired }) => {
       if (opened || revealed || expired) {
