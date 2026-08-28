@@ -9,6 +9,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { sql } from '../db.js'
+import { configured as r2configured, objectExists } from '../r2.js'
 import type { Tx } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { notify } from '../notify.js'
@@ -189,9 +190,9 @@ const ShipBody = z.object({
      平台的檔案 id 兩個問題都沒有：檔案在我們的桶裡不可替換，
      而且 presign 時就綁了擁有者與用途。
 
-     **數量暫時不強制**（min 0）：前端還沒有出貨照的上傳介面（現況送的是
-     一個寫死的 placeholder 網址——「至少一張」這條規則到今天為止其實是假的）。
-     等上傳介面做出來，把這裡改成 .min(1) 才是真的把規則立起來。 */
+     數量的強制不在 schema 而在 handler（見下面 NEED_SHIP_PHOTO）：
+     「至少一張」只在檔案服務有設定的環境成立 —— 本機測試沒有 R2，
+     presign 本來就 503，寫死 .min(1) 等於讓測試環境的賣家出不了貨。 */
   photoFileIds: z.array(z.string().regex(/^f-[0-9a-f]{12}$/, '出貨照必須是站內上傳的檔案')).max(5).default([])
 })
 
@@ -210,18 +211,40 @@ orders.post('/:id/ship', async c => {
   const v = validateTracking(carrier, tracking)
   if (!v.ok) return c.json(fail('BAD_TRACKING', v.reason ?? '單號格式不正確'), 409)
 
-  /* 檔案 id 要驗「存在、是我的、用途是出貨照」——格式驗證擋不住
-     拿別人的 id 或拿頭像的 id 來充數（id 是回應裡看得到的東西）。
-     驗在交易外面是安全的：files 的列一旦寫入就不會換擁有者也不會換用途，
-     沒有可以搶的時窗；放在交易裡反而得用 throw 打斷 act()，
-     那會穿出去變成 500 —— 把使用者的輸入錯誤講成伺服器故障（L-4 的病）。 */
+  /* 出貨照的三層驗證。驗在交易外面是安全的：files 的列一旦寫入就不會
+     換擁有者也不會換用途，沒有可以搶的時窗；放在交易裡反而得用 throw
+     打斷 act()，那會穿出去變成 500（L-4 的病）。
+
+     1. **數量：檔案服務有設定才強制。** 上傳介面已經上線、正式環境的
+        R2 已確認可用，所以「至少一張」從假規則變成真的了。但只在
+        configured() 的環境強制 —— 本機與測試沒有 R2，presign 本來就
+        回 503，硬要求等於讓賣家完全出不了貨而 72 小時期限還在跑。 */
+  if (r2configured() && photoFileIds.length === 0) {
+    return c.json(fail('NEED_SHIP_PHOTO',
+      '請至少上傳一張出貨照（拍到卡背鑑定編號與封裝外觀）。爭議時這是你唯一的證據。'), 400)
+  }
   if (photoFileIds.length) {
-    const owned = await sql`
-      select id from files where id = any(${photoFileIds})
+    /* 2. 存在、是我的、用途是出貨照 —— 格式驗證擋不住拿別人的 id
+          或拿頭像的 id 來充數（id 是回應裡看得到的東西）。 */
+    const owned = await sql<{ id: string; key: string }[]>`
+      select id, key from files where id = any(${photoFileIds})
          and owner_id = ${me} and purpose = 'ship-photo'
     `
     if (owned.length !== photoFileIds.length) {
       return c.json(fail('BAD_SHIP_PHOTO', '出貨照必須是你自己在站內上傳的檔案'), 400)
+    }
+    /* 3. **物件真的在雲端。** presign 成功只代表拿到了上傳網址；
+       PUT 失敗或根本沒送，資料庫照樣有一列 —— 送出去就是一張指向空氣
+       的憑證，爭議時打開來什麼都沒有。HEAD 一次一張，上限 5 張，
+       多花的是幾十毫秒，換的是「憑證真的存在」這件事。
+       沒設定 R2 的環境跳過（本機測試傳不了也查不了）。 */
+    if (r2configured()) {
+      for (const f of owned) {
+        if (!(await objectExists(f.key))) {
+          return c.json(fail('SHIP_PHOTO_MISSING',
+            '有一張出貨照沒有上傳成功，請重新上傳那一張再送出'), 400)
+        }
+      }
     }
   }
 
