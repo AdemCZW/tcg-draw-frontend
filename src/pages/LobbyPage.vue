@@ -35,8 +35,9 @@
  *
  * 兩個被拿掉 / 搬動的東西：
  *  - 「官方池」整區刪掉。它跟第 3 區的「官方池」膠囊是同一個篩選條件、
- *    同樣兩張卡、同一個元件，是純粹的重複。官方背書這件事本身還是要講，
- *    但那是一句保障文案 + 一顆捷徑（見 .assureBtn），不是再列一次卡片。
+ *    同樣兩張卡、同一個元件，是純粹的重複。後來連那句保障文案與
+ *    「只看官方池」捷徑也一併移除 —— 文案在每個官方池的來源徽章上都有
+ *    （PoolOriginBadge），捷徑跟正下方的分類膠囊是同一顆按鈕做兩次。
  *  - 「市場低於市值」從中間搬到最後。它根本不是抽池，是二手現貨交易；
  *    夾在挑池動線中間會把「挑池 → 抽」的心流切斷。放最後才是正確的角色：
  *    「上面都不想抽的話，這裡可以直接買」。
@@ -198,16 +199,10 @@ const urgencyHue = (p: Pool) => {
 const halfGone = computed(() => closing.value.filter(p => leftPct(p) <= 50).length)
 
 /* ---- 第 3 區：全部抽選池 ----
-   舊版另外開一整區列官方池，跟這裡的「官方池」膠囊是同一個篩選條件，
-   卡片也一模一樣。刪掉那一區之後，官方背書改由這顆捷徑 + 一句保障文案承擔：
-   一行字講完保障，一個按鈕直接把格線切到官方池。 */
+   這一區曾經有一個標頭（標題 + 計數 + 保障文案 +「只看官方池」捷徑），
+   三樣都是重複的（理由寫在模板那邊），整塊移除。
+   catalog 這個 ref 留著 —— 它還是格線的錨點。 */
 const catalog = ref<HTMLElement | null>(null)
-function onlyOfficial() {
-  cat.value = 'official'
-  /* 捲到格線而不是整區頂端：按鈕本身就在標頭附近，捲到標頭等於沒動。
-     使用者按下之後要看到的是「換過的結果」。 */
-  catalog.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-}
 
 /* ---- 第 4 區：現貨市場 ----
    低於市值最多的幾張。這一區跟上面三區的性質完全不同 ——
@@ -361,19 +356,17 @@ const bestDeal = computed(() => {
          這一頁的主體。它是唯一有篩選控制項的區塊，也是唯一用密集直式格線的區塊，
          這兩件事一起說明它的角色是「目錄」而不是「精選」。 -->
     <section class="all container">
-      <LobbySection
-        tone="catalog"
-        title="全部抽選池"
-        :count="String(list.length)"
-        note="依來源、價位、玩法篩選。官方池由平台自營並直接出貨，交易糾紛平台全責。"
-      >
-        <template #action>
-          <button
-            v-if="cat !== 'official'" type="button" class="assureBtn"
-            @click="onlyOfficial"
-          >只看官方池</button>
-        </template>
-      </LobbySection>
+      <!-- 目錄的標頭整塊拿掉了。三個元素各自都是重複的：
+             標題「全部抽選池」—— 下面就是一排分類膠囊加滿版格線，
+               這是這一頁最後一區，不講也知道
+             「只看官方池」捷徑 —— 正下方的分類膠囊就有「官方池」那一顆，
+               同一個篩選條件在相隔 14px 的地方做了兩顆按鈕
+             保障文案 —— 同一句話在每一個官方池的來源徽章上都有
+               （PoolOriginBadge），寫在這裡等於對還沒看到任何官方池的人
+               先講一次，而真正需要它的時機是他正在看某一池的時候
+           標題只留給讀屏：視覺上不需要，但文件結構需要一個標記
+           「這一段是什麼」，不然鍵盤與讀屏使用者在這一頁會少一個地標。 -->
+      <h2 class="sr-only">全部抽選池</h2>
 
       <!-- 中獎廣播貼在分類膠囊正上方。
            原本它夾在「今日推薦」與「快沒了」中間 —— 那裡前後都是大塊的
@@ -778,29 +771,6 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
 /* 市場區沒有資料時，目錄就是最後一區，底部讓位改由它負責 */
 .all:last-child { padding-bottom: calc(40px + var(--nav-total)); }
 
-/* 「只看官方池」：舊版整整一區、兩張跟下面格線一模一樣的官方池卡，
-   換成標頭右側這一顆按鈕 + 標頭底下那句保障文案。
-   同樣講完「平台自營、糾紛全責、想只看官方池按這裡」，
-   省掉 312px 的重複捲動，也解掉兩張卡的 view-transition-name 撞號。
-   樣式刻意不做成 chip：它跟底下那排分類膠囊是不同性質的東西
-   （一個是捷徑，一排是狀態），長得一樣會被誤認成第十顆分類。 */
-.assureBtn {
-  flex: none;
-  min-height: 34px;
-  padding: 6px 13px;
-  border-radius: var(--pill);
-  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
-  background: var(--accent-wash);
-  /* 淺色主題下，橘紅原色配 --accent-wash 只有 2.9:1，12.5px 的粗體讀起來會糊。
-     混 38% 的 ink 之後兩套主題都過 4.5:1，而且混的方向各自正確
-     （淺色往深走、深色往亮走），紅還是紅。 */
-  color: color-mix(in srgb, var(--accent) 62%, var(--ink));
-  font-size: 12.5px; font-weight: 600; cursor: pointer;
-  transition: background .15s, border-color .15s;
-}
-@media (hover: hover) { .assureBtn:hover { border-color: var(--accent); } }
-.assureBtn:active { transform: scale(.96); }
-.assureBtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 捲動目標：按下「只看官方池」後要停在格線頂端而不是標頭，
    scroll-margin 把固定頁首的高度讓出來，不然第一列會被蓋住。 */
 .catalogAnchor { scroll-margin-top: 76px; }
