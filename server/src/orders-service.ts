@@ -34,7 +34,22 @@ export function toOrder(r: Row): Order {
     disputedAt: r.disputed_at == null ? undefined : Number(r.disputed_at),
     disputeReason: (r.dispute_reason as string) ?? undefined,
     hasUnboxingVideo: (r.has_unboxing_video as boolean) ?? undefined,
-    closedBy: (r.closed_by as Order['closedBy']) ?? undefined
+    closedBy: (r.closed_by as Order['closedBy']) ?? undefined,
+    /* 收件資訊：只有賣家視角、訂單還開著時才會有值（見 routes/orders.ts
+       的 canShip）。這裡不做任何權限判斷 —— 判斷在 SQL 那一層做完了，
+       在這裡再判一次等於讓同一條規則有兩個來源。
+       五個欄位全空就不給整個物件，前端才好用「有沒有 ship」判斷。 */
+    ...(r.ship_name || r.ship_phone || r.ship_line1 || r.ship_city || r.ship_zip
+      ? {
+          ship: {
+            name: (r.ship_name as string) ?? undefined,
+            phone: (r.ship_phone as string) ?? undefined,
+            zip: (r.ship_zip as string) ?? undefined,
+            city: (r.ship_city as string) ?? undefined,
+            line1: (r.ship_line1 as string) ?? undefined
+          }
+        }
+      : {})
   }
 }
 

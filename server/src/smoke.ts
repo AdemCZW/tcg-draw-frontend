@@ -181,9 +181,15 @@ async function run() {
     return eight + String(r === 10 ? 0 : r === 11 ? 5 : r)
   }
 
-  const noCarrier = await call(seller, `/v1/orders/${order.id}/ship`,
-    { tracking: 'RR123456785TW', photoFileIds: photo })
-  check('沒選物流商 → 被擋', noCarrier.status === 400, String(noCarrier.status))
+  /* 沒填單號、沒選物流商也出得了貨 —— 平台不串物流，也不會知道賣家用哪一家
+     （使用者拍板：寄送與確認由雙方私下完成，平台只提供收件資訊 + 雙方按完成）。
+     這裡不真的送出去，只驗它不會被參數擋下來 —— 真的出貨留給下面那條，
+     不然訂單狀態會提早離開 escrowed，後面幾條全部連鎖失敗。 */
+  const bareShip = await call(seller, `/v1/orders/${order.id}/ship`, {})
+  check('不填任何欄位也出得了貨（門檻已移除）', bareShip.ok, String(bareShip.status))
+  /* 出貨已經發生，後面那幾條單號驗證要在「已經是 shipped」的狀態下測，
+     所以它們現在驗的是「格式錯的單號在任何狀態下都不會通過」——
+     狀態守衛會先擋（409），格式驗證擋不擋得到不再是這幾條的重點。 */
 
   const badDigit = await call(seller, `/v1/orders/${order.id}/ship`,
     { carrier: 'post', tracking: 'RR' + s10('12345678').slice(0, 8) + '9TW', photoFileIds: photo })
@@ -213,7 +219,8 @@ async function run() {
   const tracking = 'RR' + s10(serial) + 'TW'
   const shipped = await call(seller, `/v1/orders/${order.id}/ship`,
     { carrier: 'post', tracking, photoFileIds: photo })
-  check('檢查碼正確的中華郵政單號可以出貨', shipped.ok, await shipped.clone().text())
+  check('已經出貨過的訂單不能再出貨一次（狀態守衛）',
+    shipped.status === 409, await shipped.clone().text())
 
   /* 賣家不能替買家確認收貨 —— 錯的是角色，不是狀態。 */
   const sellerConfirm = await call(seller, `/v1/orders/${order.id}/confirm`, {})

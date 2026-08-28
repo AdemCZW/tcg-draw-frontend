@@ -10,6 +10,9 @@
  *      所以這裡對外只送 fileIds 與 pending（還在傳），不送 ready。
  *   2. 收 PDF。PDF 瀏覽器畫不出縮圖，所以畫不出來的檔改畫一個檔案圖示 +
  *      副檔名，而不是留一張破圖 —— 使用者要認得出「我加的那份 PDF 在不在」。
+ *   3. 影像會先進裁切框（ImageCropper）再上傳，PDF 直接跳過那一段 ——
+ *      PDF 根本畫不進 canvas，硬要裁只會得到一張白圖。這個分流在
+ *      lib/image-edit.ts 的 planFor() 裡，這邊只負責把框掛出來。
  *
  * 送出鍵的判準因此是 `pending`（還在傳就先別送），不是「有沒有檔案」。
  * 傳到一半送出去的話，fileIds 是不完整的一組，附件會憑空少一個。
@@ -17,6 +20,8 @@
 import { computed, ref, watch } from 'vue'
 import { MOCK } from '@/lib/config'
 import { acceptOf, maxMbOf, useUploads, type UploadEntry } from '@/lib/uploads'
+import { fmtBytes } from '@/lib/image-edit'
+import ImageCropper from '@/components/ImageCropper.vue'
 /* 'ticket-doc' 的規則已收進 src/lib/uploads.ts（migration 026 放行的用途），
    原本的執行期補登（./ticket-uploads.ts）已移除。
    上限 5 個附件跟後端 routes/tickets.ts 的驗證一致。 */
@@ -36,8 +41,10 @@ const emit = defineEmits<{
 }>()
 
 /* 解構是為了讓模板自動解 ref（巢狀在物件裡的 ref 模板不會自動解包） */
-const { entries, add, remove, retry, fileIds, pending, failed, full, count } =
-  useUploads(TICKET_DOC, { max: props.max })
+const {
+  entries, add, remove, retry, fileIds, pending, failed, full, count,
+  editTarget, applyEdit, cancelEdit
+} = useUploads(TICKET_DOC, { max: props.max })
 
 const accept = acceptOf(TICKET_DOC)
 const maxMb = maxMbOf(TICKET_DOC)
@@ -61,12 +68,24 @@ const extOf = (e: UploadEntry) => {
   return m ? m[1]!.toUpperCase() : '檔案'
 }
 
+/** 壓縮省了多少。只算真的走過壓縮的那幾個 —— PDF 與本來就夠小的截圖沒省，不要謊報 */
+const saved = computed(() => {
+  const done = entries.value.filter(e => e.status === 'done' && e.edited)
+  if (!done.length) return ''
+  const before = done.reduce((n, e) => n + e.originalBytes, 0)
+  const after = done.reduce((n, e) => n + e.bytes, 0)
+  if (after >= before) return ''
+  return `，壓縮後 ${fmtBytes(before)} → ${fmtBytes(after)}`
+})
+
 /** 一句話講現在卡在哪。附件是選填的，所以「沒有附件」不是問題，不要說成問題 */
 const statusLine = computed(() => {
-  if (pending.value) return `上傳中… 已完成 ${doneCount.value} / ${count.value}，全部完成才能送出`
+  // 停在裁切框的那一張要單獨講：它不是「在傳」，是在等使用者按確認
+  if (editTarget.value) return '請先調整照片範圍，確認後才會開始上傳'
+  if (pending.value) return `處理中… 已完成 ${doneCount.value} / ${count.value}，全部完成才能送出`
   if (failed.value.length) return `有 ${failed.value.length} 個檔案沒有成功，請重試或移除`
-  if (!count.value) return `附件可以不加。最多 ${props.max} 個，單檔 ${maxMb}MB`
-  return `${doneCount.value} 個附件已就緒`
+  if (!count.value) return `附件可以不加。最多 ${props.max} 個，單檔 ${maxMb}MB。照片會在上傳前讓你先裁切`
+  return `${doneCount.value} 個附件已就緒${saved.value}`
 })
 const statusTone = computed(() =>
   failed.value.length ? 'bad' : pending.value ? 'wait' : count.value ? 'good' : '')
@@ -105,7 +124,12 @@ watch(
           <b class="tfExt mono">{{ extOf(e) }}</b>
         </span>
 
-        <div v-if="e.status === 'uploading'" class="tfVeil">
+        <!-- 還在判斷要不要裁 / 正在排隊等裁切：不講的話這張磚會靜靜地停在那裡，
+             看起來跟當掉一模一樣 -->
+        <div v-if="e.status === 'preparing' || e.status === 'editing'" class="tfVeil">
+          <span class="tfWait">{{ e.status === 'editing' ? '待裁切' : '讀取中' }}</span>
+        </div>
+        <div v-else-if="e.status === 'uploading'" class="tfVeil">
           <span class="mono tfPct">{{ e.progress }}%</span>
         </div>
         <div v-if="e.status === 'uploading'" class="tfBar" aria-hidden="true">
@@ -113,14 +137,14 @@ watch(
         </div>
 
         <!-- 完成：一個勾。手機介面不放 emoji，圖示一律 inline SVG -->
-        <span v-else-if="e.status === 'done'" class="tfOk" aria-hidden="true">
+        <span v-if="e.status === 'done'" class="tfOk" aria-hidden="true">
           <svg viewBox="0 0 16 16" width="12" height="12" fill="none"
                stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 8.6 6.3 12 13 4.6" />
           </svg>
         </span>
 
-        <div v-else-if="e.status === 'error'" class="tfVeil bad">
+        <div v-if="e.status === 'error'" class="tfVeil bad">
           <svg viewBox="0 0 20 20" width="20" height="20" fill="none"
                stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
             <path d="M10 3.2 18 17H2z" stroke-linejoin="round" />
@@ -167,6 +191,16 @@ watch(
       {{ statusLine }}
     </p>
 
+    <!-- 裁切框。一次只處理一張（editTarget 是佇列的第一個），
+         :key 讓它換張時整個重建 —— 不重建的話 canvas 還留著上一張的狀態 -->
+    <ImageCropper
+      v-if="editTarget" :key="editTarget.uid"
+      :file="editTarget.file" :policy="editTarget.policy" :max-bytes="editTarget.maxBytes"
+      :index="editTarget.index" :total="editTarget.total"
+      @done="r => applyEdit(editTarget!.uid, r)"
+      @cancel="cancelEdit(editTarget!.uid)"
+    />
+
     <p v-if="MOCK" class="tfMock">
       MOCK 模式：沒有後端，這裡只把上傳流程與各種狀態演一遍，檔案不會真的送出去。
     </p>
@@ -211,6 +245,7 @@ watch(
 }
 .tfVeil.bad { background: var(--danger-wash); color: var(--danger); opacity: .92; }
 .tfPct { font-size: 13px; font-weight: 700; }
+.tfWait { font-size: 11.5px; font-weight: 700; color: var(--ink); text-align: center; padding: 0 4px; }
 
 .tfBar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--surface-2); }
 .tfBar i { display: block; height: 100%; background: var(--accent); transition: width .18s linear; }
@@ -237,7 +272,10 @@ watch(
 }
 
 .tfAdd {
-  position: relative; min-width: 0;
+  /* overflow: hidden 是為了那個蓋在上面的 <input type="file">：
+     檔案輸入框有瀏覽器給的固定內建寬度（實測 222px），比這一格還寬，
+     不裁掉的話這一格量起來就是「內容超出容器」 */
+  position: relative; min-width: 0; overflow: hidden;
   aspect-ratio: 1 / 1; min-height: 44px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
   border: 1px dashed var(--line); border-radius: var(--radius);

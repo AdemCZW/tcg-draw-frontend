@@ -24,14 +24,40 @@ orders.use('*', requireAuth)
 
 const fail = (code: string, msg: string, status = 409) => ({ error: code, message: msg, status })
 
-/** GET /orders —— 我的訂單 + 錢包 + 伺服器時間 */
+/**
+ * GET /orders —— 我的訂單 + 錢包 + 伺服器時間。
+ *
+ * ── 賣家會拿到買家的收件資訊 ────────────────────────────────────────
+ * 平台不經手實體卡，卡是賣家直接寄給買家的 —— 所以賣家**必須**看得到
+ * 寄去哪裡，不然這條路走不通（在這之前他只看得到買家的暱稱）。
+ *
+ * 範圍嚴格限定，因為這是個資：
+ *   只有**這筆訂單的賣家**拿得到
+ *   只在訂單**還開著**（escrowed / shipped / delivered / disputed）時給 ——
+ *     結案之後寄送義務已經結束，沒有理由繼續持有對方的住址
+ *   只給寄件必要的幾項，不給 email
+ *
+ * 資料來源是 users 的預設收件欄位（006_profile.sql）。買家沒填的話會是
+ * 空的 —— 那時前端要引導賣家去問，而不是讓他對著空白發呆。
+ */
 orders.get('/', async c => {
   const me = c.get('userId')
   const body = await sql.begin(async tx => {
     await sweep(tx, me)
+    /* 收件資訊只在「我是賣家 + 這筆還開著」時才給。條件寫在 SQL 裡而不是
+       撈回來再過濾 —— 過濾寫在應用層的話，任何一個忘了濾的新欄位都會
+       把個資送出去。 */
+    const canShip = sql`o.seller_id = ${me} and o.status in ('escrowed','shipped','delivered','disputed')`
     const rows = await tx`
-      select * from orders where buyer_id = ${me} or seller_id = ${me}
-      order by created_at desc
+      select o.*,
+             case when ${canShip} then b.real_name     end as ship_name,
+             case when ${canShip} then b.phone         end as ship_phone,
+             case when ${canShip} then b.address_zip   end as ship_zip,
+             case when ${canShip} then b.address_city  end as ship_city,
+             case when ${canShip} then b.address_line1 end as ship_line1
+        from orders o join users b on b.id = o.buyer_id
+       where o.buyer_id = ${me} or o.seller_id = ${me}
+       order by o.created_at desc
     `
     return rows.map(r => toOrder(r as Record<string, unknown>))
   })
@@ -180,22 +206,24 @@ export async function act(
 }
 
 const ShipBody = z.object({
-  carrier: z.enum(['post', 'tcat', 'seven', 'family', 'hilife', 'shopee', 'other']),
-  tracking: z.string().min(6).max(24),
-  /* 出貨照只收**平台自己的檔案 id**（走 /v1/files/presign 的 ship-photo 用途），
-     不再收任意外部 URL（security-audit L-3）。
-     收 URL 的問題有兩層：賣家可以塞一個他自己控制的連結當「證據」——
-     內容隨時可以換掉，爭議裁決時看到的未必是出貨當下的東西；而且那個網址
-     會被平台存起來再打開，等於替任何人保存並轉發任意外部連結。
-     平台的檔案 id 兩個問題都沒有：檔案在我們的桶裡不可替換，
-     而且 presign 時就綁了擁有者與用途。
+  /* ── 出貨的門檻全部拿掉了（使用者拍板）────────────────────────────
+     原本要求：物流商 + 單號 + 至少一張出貨照。那套是「平台留存證據」
+     的設計，但平台從來不經手實體卡 —— 卡是賣家直接寄給買家的。
+     使用者的決定是：寄送與確認由雙方私下用通訊軟體完成，
+     平台只提供收件資訊 + 一個雙方按下完成的機制。
 
-     數量的強制不在 schema 而在 handler（見下面 NEED_SHIP_PHOTO）：
-     「至少一張」只在檔案服務有設定的環境成立 —— 本機測試沒有 R2，
-     presign 本來就 503，寫死 .min(1) 等於讓測試環境的賣家出不了貨。 */
+     所以這三個欄位現在全是選填：
+       carrier / tracking —— 暫時不串物流，也不會知道賣家用哪一家。
+         願意填的人填了，爭議時客服多一個查得到的東西；不填也照樣出得了貨。
+       photoFileIds —— 整條移除中（前端已經不送），保留欄位只是為了
+         讓還沒更新的客戶端不會壞。收到也不會擋，但不再是必要條件。
+
+     代價要講明白：爭議時平台手上沒有任何客觀證據，只能聽雙方各說各話。
+     這是刻意的取捨 —— 判斷改由客服工單那條路承擔。 */
+  carrier: z.enum(['post', 'tcat', 'seven', 'family', 'hilife', 'shopee', 'other']).optional(),
+  tracking: z.string().min(6).max(24).optional(),
   photoFileIds: z.array(z.string().regex(/^f-[0-9a-f]{12}$/, '出貨照必須是站內上傳的檔案')).max(5).default([])
 })
-
 /** POST /orders/:id/ship —— 賣家出貨 */
 orders.post('/:id/ship', async c => {
   const me = c.get('userId')
@@ -203,29 +231,19 @@ orders.post('/:id/ship', async c => {
   if (!parsed.success) return c.json(fail('BAD_REQUEST', parsed.error.issues[0]?.message ?? '參數不合法', 400), 400)
   const { carrier, tracking, photoFileIds } = parsed.data
 
-  /* 依物流商驗證，中華郵政那種有公開檢查碼規格的會真的驗檢查碼。
-     這是離線驗證 —— 擋得掉隨手編的號碼與打錯的字（實測單碼打錯抓到 98%），
-     但擋不掉「填一組別人的真單號」。要確認單號真的存在、交寄時間晚於訂單成立，
-     只能打物流商的 API，那需要跟各家申請帳號。
-     單號被別的訂單用過會被 orders_tracking_uniq 唯一索引擋下，那是最後一道。 */
-  const v = validateTracking(carrier, tracking)
-  if (!v.ok) return c.json(fail('BAD_TRACKING', v.reason ?? '單號格式不正確'), 409)
-
-  /* 出貨照的三層驗證。驗在交易外面是安全的：files 的列一旦寫入就不會
-     換擁有者也不會換用途，沒有可以搶的時窗；放在交易裡反而得用 throw
-     打斷 act()，那會穿出去變成 500（L-4 的病）。
-
-     1. **數量：檔案服務有設定才強制。** 上傳介面已經上線、正式環境的
-        R2 已確認可用，所以「至少一張」從假規則變成真的了。但只在
-        configured() 的環境強制 —— 本機與測試沒有 R2，presign 本來就
-        回 503，硬要求等於讓賣家完全出不了貨而 72 小時期限還在跑。 */
-  if (r2configured() && photoFileIds.length === 0) {
-    return c.json(fail('NEED_SHIP_PHOTO',
-      '請至少上傳一張出貨照（拍到卡背鑑定編號與封裝外觀）。爭議時這是你唯一的證據。'), 400)
+  /* 單號有填才驗。中華郵政那種有公開檢查碼規格的會真的驗檢查碼 ——
+     離線驗證擋得掉隨手編的號碼與打錯的字（實測單碼打錯抓到 98%），
+     但擋不掉「填一組別人的真單號」。
+     沒填就跳過：不串物流之後單號是賣家自願提供的線索，不是放款條件。
+     單號被別的訂單用過會被 orders_tracking_uniq 唯一索引擋下。 */
+  if (tracking) {
+    const v = validateTracking(carrier ?? 'other', tracking)
+    if (!v.ok) return c.json(fail('BAD_TRACKING', v.reason ?? '單號格式不正確'), 409)
   }
+
+  /* 出貨照不再強制（見 ShipBody 的說明）。還是有送上來的話照樣驗
+     持有人與用途 —— 收一個不屬於他的檔案 id 比不收更糟。 */
   if (photoFileIds.length) {
-    /* 2. 存在、是我的、用途是出貨照 —— 格式驗證擋不住拿別人的 id
-          或拿頭像的 id 來充數（id 是回應裡看得到的東西）。 */
     const owned = await sql<{ id: string; key: string }[]>`
       select id, key from files where id = any(${photoFileIds})
          and owner_id = ${me} and purpose = 'ship-photo'
@@ -233,30 +251,20 @@ orders.post('/:id/ship', async c => {
     if (owned.length !== photoFileIds.length) {
       return c.json(fail('BAD_SHIP_PHOTO', '出貨照必須是你自己在站內上傳的檔案'), 400)
     }
-    /* 3. **物件真的在雲端。** presign 成功只代表拿到了上傳網址；
-       PUT 失敗或根本沒送，資料庫照樣有一列 —— 送出去就是一張指向空氣
-       的憑證，爭議時打開來什麼都沒有。HEAD 一次一張，上限 5 張，
-       多花的是幾十毫秒，換的是「憑證真的存在」這件事。
-       沒設定 R2 的環境跳過（本機測試傳不了也查不了）。 */
-    if (r2configured()) {
-      for (const f of owned) {
-        if (!(await objectExists(f.key))) {
-          return c.json(fail('SHIP_PHOTO_MISSING',
-            '有一張出貨照沒有上傳成功，請重新上傳那一張再送出'), 400)
-        }
-      }
-    }
   }
 
-  /* 憑證跟狀態轉換必須同生同死，所以走 act() 的第五個參數寫在同一筆交易裡。
-     原本是等 act() 回來之後再下一句 UPDATE ——那一句失敗（連線斷、程序被砍）
-     的話訂單已經是 shipped、賣家已經滿足 72 小時期限，但 carrier / ship_photos
-     是 null：平台要求賣家拍照存證，然後把存證弄丟了。而且沒有補救路徑，
-     因為賣家重打 /ship 會得到 WRONG_STATE（訂單已經不在 escrowed）。 */
   const r = await act(me, c.req.param('id'), 'seller', 'ship',
-    o => ({ ...o, status: 'shipped', shippedAt: Date.now(), tracking: tracking.trim().toUpperCase() }),
+    /* 沒填單號就不寫 tracking —— 寫成空字串會撞 orders_tracking_uniq
+       （唯一索引的條件是 tracking is not null，空字串不是 null，
+       於是第二筆沒填單號的訂單會被擋下來，錯得毫無道理）。 */
+    o => ({
+      ...o, status: 'shipped', shippedAt: Date.now(),
+      ...(tracking ? { tracking: tracking.trim().toUpperCase() } : {})
+    }),
     async (tx, o) => {
-      await tx`update orders set carrier = ${carrier}, ship_photos = ${photoFileIds as never}
+      /* carrier 可能是 undefined（現在是選填）—— postgres.js 不收 undefined，
+         要明確轉成 null。少了這一步會在賣家不選物流商時整筆 throw。 */
+      await tx`update orders set carrier = ${carrier ?? null}, ship_photos = ${photoFileIds as never}
                where id = ${o.id}`
     })
   if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)

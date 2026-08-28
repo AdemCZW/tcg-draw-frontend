@@ -22,6 +22,7 @@ import {
   fmtWait, isTicketClosed
 } from '@/stores/tickets'
 import { acceptOf, maxMbOf, useUploads, UPLOAD_RULES, type UploadPurpose } from '@/lib/uploads'
+import ImageCropper from '@/components/ImageCropper.vue'
 import { fmtTime } from './shared'
 import './console.css'
 
@@ -47,7 +48,8 @@ const TICKET_PURPOSE = 'ticket-doc' as const
    （ShipPhotoUpload 同一個理由） */
 const {
   entries: upEntries, add: upAdd, remove: upRemove, retry: upRetry, clear: upClear,
-  fileIds: upFileIds, pending: upPending, full: upFull, count: upCount, max: upMax
+  fileIds: upFileIds, pending: upPending, full: upFull, count: upCount, max: upMax,
+  editTarget: upEdit, applyEdit: upApplyEdit, cancelEdit: upCancelEdit
 } = useUploads(TICKET_PURPOSE, { max: 5 })
 const accept = acceptOf(TICKET_PURPOSE)
 const maxMb = maxMbOf(TICKET_PURPOSE)
@@ -254,7 +256,10 @@ const refs = computed(() => {
           <ul v-if="upEntries.length" class="ups">
             <li v-for="e in upEntries" :key="e.uid" class="upi" :class="e.status">
               <span class="uname">{{ e.name }}</span>
-              <span v-if="e.status === 'uploading'" class="c-m">{{ e.progress }}%</span>
+              <!-- 裁切中的那一張要說清楚它在等人，不然它會靜靜停著像當掉 -->
+              <span v-if="e.status === 'preparing'" class="c-m">讀取中…</span>
+              <span v-else-if="e.status === 'editing'" class="c-m">待裁切</span>
+              <span v-else-if="e.status === 'uploading'" class="c-m">{{ e.progress }}%</span>
               <span v-else-if="e.status === 'done'" class="c-m ok">已就緒</span>
               <span v-else-if="e.status === 'error'" class="c-m bad">{{ e.error }}</span>
               <button
@@ -269,10 +274,21 @@ const refs = computed(() => {
             <button class="c-btn pri" type="button" :disabled="!canReply" @click="send">
               {{ tickets.adminActing ? '送出中…' : '送出回覆' }}
             </button>
-            <span v-if="upPending" class="c-warn">附件還在上傳，全部完成才能送出</span>
+            <span v-if="upEdit" class="c-warn">請先調整照片範圍，確認後才會開始上傳</span>
+            <span v-else-if="upPending" class="c-warn">附件還在上傳，全部完成才能送出</span>
           </div>
         </template>
       </section>
+
+      <!-- 附件的裁切框。影像才會進來，PDF 走不到這裡（見 lib/image-edit.ts 的 planFor）。
+           一次一張，:key 讓它換張時整個重建 -->
+      <ImageCropper
+        v-if="upEdit" :key="upEdit.uid"
+        :file="upEdit.file" :policy="upEdit.policy" :max-bytes="upEdit.maxBytes"
+        :index="upEdit.index" :total="upEdit.total"
+        @done="r => upApplyEdit(upEdit!.uid, r)"
+        @cancel="upCancelEdit(upEdit!.uid)"
+      />
 
       <!-- 結案對話框。刻意不是行內展開：訂單爭議這一條會動到錢，
            需要一個把其他東西擋掉、逼人讀完後果的畫面 -->
