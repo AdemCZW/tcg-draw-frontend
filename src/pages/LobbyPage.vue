@@ -320,8 +320,6 @@ const bestDeal = computed(() => {
       </div>
     </section>
 
-    <div class="strip container"><WinnerTicker /></div>
-
     <!-- ===== 第 2 區：快沒了 =====
          整區壓在紅調的底帶上，跟下面純底色的目錄區立刻分開。
          卡片是這一頁獨有的形狀：左邊小卡圖、右邊一個超大的剩餘籤數。
@@ -376,6 +374,13 @@ const bestDeal = computed(() => {
           >只看官方池</button>
         </template>
       </LobbySection>
+
+      <!-- 中獎廣播貼在分類膠囊正上方。
+           原本它夾在「今日推薦」與「快沒了」中間 —— 那裡前後都是大塊的
+           精選區，一條細長的膠囊插在中間像是被遺落的東西，而且離目錄很遠，
+           看到「誰抽中什麼」的當下沒有任何可以馬上動作的地方。
+           移到目錄的入口：看到有人中獎，往下一格就是所有池。 -->
+      <WinnerTicker class="tickerTop" />
 
       <div class="cats" role="tablist" aria-label="分類">
         <button
@@ -629,7 +634,10 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
   50%      { box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent) 0%, transparent); }
 }
 
-.strip { padding: 20px 0 4px; }
+/* 中獎廣播貼在分類膠囊上方。上緣的間距留給 LobbySection 的標頭，
+   下緣只留 10px —— 它跟分類是同一組東西（都是進目錄前的那一層），
+   離太開會變成兩個不相干的區塊。 */
+.tickerTop { margin: 2px 0 10px; }
 
 /* ---- 分區共用 ----
    舊版四區的標頭是同一個模板（小圓點 + 17px 標題 + 灰註解），
@@ -867,7 +875,7 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
   .ctas { justify-content: space-between; width: 100%; gap: 10px; flex-wrap: nowrap; }
   .go { flex: 1 1 auto; max-width: none; padding: 13px 16px; font-size: 15px; }
   .ctas .btn.ghost { flex: none; padding: 13px 4px; font-size: 13.5px; }
-  .strip { padding: 10px 0 0; }
+  .tickerTop { margin: 0 0 8px; }
   .field { height: 560px; }
   .poolGrid { grid-template-columns: repeat(2, 1fr); gap: 11px; }
   .sk { height: 250px; }
