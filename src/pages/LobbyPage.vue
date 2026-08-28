@@ -97,6 +97,16 @@ const featured = computed<Pool | undefined>(() => {
 const featuredTier = computed(() => (featured.value ? topLiveTier(featured.value) : 'D'))
 const featuredPrize = computed(() =>
   featured.value?.prizes.find(p => p.tier === featuredTier.value && p.remaining > 0))
+/** 賞別的顯示名。卡片下方那條籤與讀屏標籤是同一句話，字串只寫一次 */
+const tierLabel = computed(() => (featuredTier.value === 'LAST' ? '最後賞' : `${featuredTier.value} 賞`))
+/* 讀屏標籤跟畫面上那條籤講同一件事：哪一個賞、是哪張卡、還在不在池裡。
+   「未出」不是另外補的形容詞 —— featuredPrize 的定義就是「這一階還有剩的那一張」，
+   它存在本身即代表未出，所以有它就一定要把這三件事一起唸完。 */
+const prizeAria = computed(() => {
+  if (!featured.value) return ''
+  if (!featuredPrize.value) return `${featured.value.title}，前往池詳情`
+  return `${featured.value.title}，${tierLabel.value} ${featuredPrize.value.card.name} 未出，前往池詳情`
+})
 const seller = computed(() => (featured.value ? sellers.byId(featured.value.sellerId) : undefined))
 const pct = computed(() => (featured.value ? Math.round(leftPct(featured.value)) : 0))
 
@@ -256,7 +266,7 @@ const bestDeal = computed(() => {
         <RouterLink
           :to="{ name: 'pool', params: { id: featured.id } }"
           class="prizeStage"
-          :aria-label="`${featured.title}，最高賞 ${featuredPrize?.card.name ?? ''}，前往池詳情`"
+          :aria-label="prizeAria"
         >
           <div class="prizeCard">
             <CardArt
@@ -281,31 +291,47 @@ const bestDeal = computed(() => {
             />
           </div>
 
+          <!-- 賞別 · 卡名 · 未出 是一句話，不是三件事。
+               「未出」原本是資訊欄裡另一顆膠囊（.live「最高賞未出」），跟這張卡
+               隔著整個版面的寬度，讀者得自己把同一個事實的兩半接起來。
+               而 featuredPrize 的定義就是「這一階還有剩的那一張」——
+               它印得出來就代表未出，拆成兩處等於同一件事講了兩次。
+               寫法跟選池台的 PoolCard 對齊（那裡也是「A 賞 · 卡名 · 未出」一行）。 -->
           <span v-if="featuredPrize" class="prizeTag">
-            <span class="ptTier">{{ featuredTier === 'LAST' ? '最後賞' : featuredTier + ' 賞' }}</span>
+            <span class="ptTier">{{ tierLabel }}</span>
             <span class="ptName">{{ featuredPrize.card.name }}</span>
+            <span class="ptState">未出</span>
           </span>
         </RouterLink>
 
         <div class="info">
-          <div class="badges">
-            <PoolModeBadge :mode="featured.mode" />
-            <span v-if="featuredPrize" class="live mono">最高賞未出</span>
-          </div>
           <h1>{{ featured.title }}</h1>
-          <!-- 量表加上文字標籤：一條沒有標示的進度條只是裝飾，讀者要自己猜
-               紅色那段是「已抽走」還是「還剩下」。推薦區是整頁最該把話講白的地方。 -->
-          <div class="meterRow">
+          <!-- 玩法徽章與賣家併成一列。
+               玩法講的是「這一池照什麼規則跑」，賣家講的是「誰開的」——
+               同一個問句的兩半（這池是誰、按什麼玩），而且兩者都是膠囊形狀、
+               都不是數字，並排讀起來是一句話。
+               這一列本來只有玩法一顆膠囊（旁邊那顆「最高賞未出」已經合進卡片
+               下方的籤了），一整列扛一顆小膠囊太貴；賣家搬上來之後，
+               原本「價格 + 賣家」那一列就整列消失，資訊欄從五列降到四列。 -->
+          <div class="meta">
+            <PoolModeBadge :mode="featured.mode" />
+            <SellerChip v-if="seller" :seller="seller" :link="false" />
+          </div>
+          <!-- 價格、剩餘籤數、量表壓成一組。
+               量表原本自己一列、價格另一列，但「剩 11 / 20 籤」本來就是這條
+               量表的刻度 —— 中間隔一整列，關聯要讀者自己建立。
+               改成數字在上、量表貼在正下方當底線：關聯用位置講完，
+               也不必再靠並排把量表擠成半條。
+               量表仍然帶文字標籤 —— 一條沒有標示的進度條只是裝飾，
+               讀者會猜不出紅色那段是「已抽走」還是「還剩下」。 -->
+          <div class="gauge">
+            <div class="gaugeHead">
+              <strong class="price">{{ featured.ticketPrice.toLocaleString() }} 點<span class="per muted"> / 抽</span></strong>
+              <span class="mono meterLbl">剩 {{ featured.remainingTickets }} / {{ featured.totalTickets }} 籤</span>
+            </div>
             <div class="meter" role="progressbar" :aria-valuenow="pct" aria-valuemin="0" aria-valuemax="100" :aria-label="`剩餘 ${pct}%`">
               <div class="fill" :style="{ width: pct + '%' }"></div>
             </div>
-            <span class="mono meterLbl">剩 {{ featured.remainingTickets }} / {{ featured.totalTickets }} 籤</span>
-          </div>
-          <!-- 價格跟賣家併成一列：兩者都是「這一池的條件」，
-               各自佔一整列會把主 CTA 推到摺線以下，第一屏就少一個按鈕。 -->
-          <div class="nums">
-            <strong class="price">{{ featured.ticketPrice.toLocaleString() }} 點<span class="per muted"> / 抽</span></strong>
-            <SellerChip v-if="seller" :seller="seller" :link="false" />
           </div>
           <div class="ctas">
             <RouterLink :to="{ name: 'pool', params: { id: featured.id } }" class="btn primary go">開這一池</RouterLink>
@@ -587,9 +613,14 @@ const bestDeal = computed(() => {
   transform-origin: top center;
 }
 
-/* 賞別 + 卡名：壓在卡片下緣，主視覺自己把話講完 */
+/* 賞別 · 卡名 · 未出：壓在卡片下緣，主視覺自己把話講完。
+   三段擠在同一顆膠囊裡是刻意的 —— 它們是一句話的三個詞，
+   拆成兩個視覺物件（一個貼在卡上、一個在資訊欄）就是原本的問題。
+   flex-wrap + max-width 是給極端卡名的保險絲：名字很長時整條會往下長，
+   而不是超出卡片寬度或被切掉半個字（資訊不可以消失，寧可多一行）。 */
 .prizeTag {
-  display: inline-flex; align-items: center; gap: 9px;
+  display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 9px;
+  max-width: 100%;
   margin-top: -58px;
   padding: 7px 15px;
   border-radius: var(--pill);
@@ -599,22 +630,50 @@ const bestDeal = computed(() => {
   position: relative; z-index: 2;
 }
 .ptTier {
+  flex: none;
   font-size: 11.5px; font-weight: 800; letter-spacing: .06em;
   color: var(--hue);
 }
-.ptName { font-size: 14px; font-weight: 650; color: #fff; }
+/* overflow-wrap: anywhere —— 卡名可能是一長串沒有空白的英數（鑑定編號式的名字），
+   不允許斷字的話那一串會直接頂破膠囊。 */
+.ptName { min-width: 0; font-size: 14px; font-weight: 650; color: #fff; overflow-wrap: anywhere; }
+/* 「未出」接在卡名後面，用綠點 + 綠字講「這張還在池裡」。
+   點是 CSS 畫的，不是 emoji —— 手機 UI 一律不放 emoji。
+   膠囊底是固定的深色（見 .prizeTag），所以這裡兩套主題共用 --ok 就夠亮。 */
+.ptState {
+  flex: none;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 700; letter-spacing: .04em;
+  padding: 2px 8px;
+  border-radius: var(--pill);
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+}
+.ptState::before {
+  content: '';
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--ok); box-shadow: 0 0 6px var(--ok);
+}
 
-.info { display: grid; gap: 12px; justify-items: start; }
-.badges { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.live { font-size: 11.5px; letter-spacing: .12em; font-weight: 600; padding: 4px 11px; border-radius: var(--pill); color: var(--ok); background: var(--ok-wash); }
-h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.02em; margin: 0; font-weight: 700; text-wrap: balance; }
-/* 量表跟它的文字標籤綁成一列 —— 標籤如果自己另起一行，
-   讀者要在兩個視覺物件之間建立關聯；並排就不用。 */
-.meterRow { display: flex; align-items: center; gap: 12px; width: 100%; max-width: 420px; }
-.meter { flex: 1 1 auto; height: 7px; border-radius: var(--pill); background: var(--surface-2); overflow: hidden; }
+/* 明寫 minmax(0, 1fr)：隱含的欄是 auto，上界是 max-content ——
+   標題很長時整個軌道會被撐寬，資訊欄就頂出 .duo 的右欄。 */
+.info { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; justify-items: start; }
+/* 玩法 + 賣家：兩顆膠囊一列。理由寫在模板那邊。
+   flex-wrap 是保險絲 —— 賣家名稱很長時整顆換到第二行，
+   而不是把玩法徽章擠扁或讓名字被省略號吃掉。 */
+.meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; min-width: 0; max-width: 100%; }
+/* overflow-wrap: anywhere 同 .ptName：標題可能含一長串不換行的型號 */
+h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.02em; margin: 0; font-weight: 700; text-wrap: balance; overflow-wrap: anywhere; }
+/* 量表當成上面那行數字的底線：數字在上、條在下，中間只留 6px。
+   兩者貼在一起就不需要「哪條對應哪個數字」的推理，
+   量表也拿得到整條欄寬（並排時它只分得到扣掉標籤之後的一半）。 */
+.gauge { display: grid; gap: 6px; width: 100%; max-width: 420px; }
+/* flex-wrap：四位數以上的價格 + 「剩 nnn / nnnn 籤」在窄螢幕上塞不下時，
+   讓後者自己掉到第二行 —— 兩個都 nowrap 的東西擺同一條 flex 上會直接溢出。 */
+.gaugeHead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; }
+.meter { height: 7px; border-radius: var(--pill); background: var(--surface-2); overflow: hidden; }
 .fill { height: 100%; border-radius: var(--pill); background: linear-gradient(90deg, var(--accent), var(--accent-soft)); }
 .meterLbl { flex: none; font-size: 12.5px; color: var(--muted); }
-.nums { display: flex; align-items: baseline; gap: 16px; }
 .price { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
 .per { font-size: 13px; font-weight: 400; }
 .ctas { display: flex; gap: 12px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
@@ -821,11 +880,22 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
 @media (max-width: 720px) {
   .stage { padding-top: 12px; }
   .duo { grid-template-columns: 1fr; gap: 14px; justify-items: center; text-align: center; }
-  /* 手機上主視覺再收一階（215→200、倒影 70→40）。
-     少掉的 50px 不是為了「更緊湊」，是為了讓底下那條紅色底帶的
+  /* 手機上主視覺再收一階（倒影 70→40）。
+     收掉的高度不是為了「更緊湊」，是為了讓底下那條紅色底帶的
      標題剛好露在底部導覽上方 —— 使用者才知道再滑會換到另一種東西。
-     推薦區佔滿整個第一屏的話，看起來就像整頁只有這一池。 */
-  .prizeCard, .reflection { width: min(100%, 55vw, 200px); }
+     推薦區佔滿整個第一屏的話，看起來就像整頁只有這一池。
+
+     .prizeStage 的寬度一定要寫死。720px 以下 .duo 是 justify-items: center，
+     格線項目變成 max-content 尺寸，而 .prizeCard 的 min(100%, …) 裡那個
+     100% 在 max-content 軌道下解不出來 —— 實測把卡片下方那條籤用
+     display:none 藏起來，整張主視覺就變成 0×0。也就是說手機上主視覺的
+     大小一直是「那條籤的文字有多長」決定的：這次把「未出」併進籤裡，
+     卡片就從 134px 被撐到 193px（高度 +82px），一個文案改動偷偷改了版面。
+     寬度寫在 .prizeStage 上之後，籤再長也只會自己換行，主視覺不動。
+     134px 是原本實際算出來的寬度，這裡沿用，不趁機改主視覺大小。
+     .prizeStage 比卡片寬一截，是留給那條籤的橫向空間（它可以比卡片寬）。 */
+  .prizeStage { width: min(100%, 264px); }
+  .prizeCard, .reflection { width: min(100%, 134px); }
   .reflection { height: 40px; }
   .prizeTag { margin-top: -44px; }
 
@@ -835,12 +905,12 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
      卡片維持置中（它是主視覺），底下的資訊列靠左，是常見的
      「主視覺置中、細節左對齊」寫法，不會顯得不協調。 */
   .info { justify-items: stretch; text-align: left; gap: 9px; width: 100%; }
-  .badges { justify-content: flex-start; }
   h1 { font-size: 21px; }
-  .meterRow { max-width: none; }
+  /* 玩法靠左、賣家靠右，把整條寬度用掉。
+     換行時第二行的那顆自己靠左，不會被 space-between 推到奇怪的位置。 */
+  .meta { justify-content: space-between; width: 100%; }
+  .gauge { max-width: none; }
   .price { font-size: 21px; }
-  /* 價格靠左、賣家靠右，把整條寬度用掉 */
-  .nums { justify-content: space-between; gap: 10px; width: 100%; }
   /* 主鈕吃掉剩餘寬度，次要連結靠右 */
   .ctas { justify-content: space-between; width: 100%; gap: 10px; flex-wrap: nowrap; }
   .go { flex: 1 1 auto; max-width: none; padding: 13px 16px; font-size: 15px; }
