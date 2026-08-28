@@ -130,9 +130,11 @@ const pct = computed(() => {
         <h1>挑一池來開</h1>
         <!-- 兩句提示用 CSS 切換而不是 matchMedia：這是純樣式的差異，
              拿 JS 判斷會在 SSR／初次繪製時先閃錯的那一句 -->
+        <!-- 提示要把「跳位」講出來：32 池以上時一格一格滑是走不完的，
+             但滑桿可以拖這件事光看是猜不到的 -->
         <p class="muted sub">
-          <span class="onTouch">左右滑動選擇</span>
-          <span class="onMouse">方向鍵或兩側箭頭切換</span>
+          <span class="onTouch">左右滑動，或拖下方滑桿跳位</span>
+          <span class="onMouse">方向鍵切換，拖下方滑桿跳位</span>
         </p>
       </div>
       <RouterLink :to="{ name: 'home' }" class="toggle">
@@ -319,7 +321,10 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 
 .toggle {
   flex: none;
-  display: inline-flex; align-items: center; gap: 7px;
+  /* 這是這一頁唯一的模式切換，觸控下限要吃滿。字級不動，靠 min-height
+     把可按範圍撐到 44 —— 加大字級會讓它跟旁邊的 h1 打架 */
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: 44px;
   font-size: 13.5px; font-weight: 500;
   padding: 8px 15px;
   border-radius: var(--pill);
@@ -335,15 +340,29 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 @media (hover: hover) { .toggle:hover { background: var(--surface-3); } }
 .toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
-/* 骨架：跟 SnapRail 的節奏對齊，載入完不會有明顯的版面跳動 */
+/* 骨架：跟 SnapRail 的節奏對齊，載入完不會有明顯的版面跳動。
+
+   --sk-w 是「軌道現在用多寬的卡」，一步一步跟著 SnapRail 的容器查詢走；
+   --sk-cap 是卡圖底下那段說明的高度，1120 以上沒有說明區所以是 0。
+   兩個都抽成變數，是因為原本骨架一律用 min(72vw, 320px) 當卡寬：
+   1280 下實測骨架 448、真卡 518，差 70px —— 資料一到整頁往下跳一格，
+   而骨架存在的唯一理由就是不要跳。 */
 .skeleton {
+  --sk-w: min(72vw, 320px);
+  --sk-cap: 129px;
   display: flex; gap: 12px;
-  padding-inline: max(var(--pad), calc((100% - min(72vw, 320px)) / 2));
+  padding-inline: max(var(--pad), calc((100% - var(--sk-w)) / 2));
   overflow: hidden;
 }
+/* 下面四階對應 SnapRail 裡 .rail 的 --card-w：1120 以下軌道就是整個視窗寬，
+   所以視窗斷點等於容器斷點；1120 以上軌道要讓一段寬度給面板，
+   1280 下軌道 792（→370）、1600 下 968（→390）。 */
+@media (min-width: 480px) { .skeleton { --sk-w: min(70vw, 400px); } }
+@media (min-width: 700px) { .skeleton { --sk-w: 370px; } }
+@media (min-width: 900px) { .skeleton { --sk-w: 390px; } }
 .sk {
-  flex: 0 0 min(72vw, 320px);
-  height: 420px;
+  flex: 0 0 var(--sk-w);
+  height: calc(var(--sk-w) * 1.4 + var(--sk-cap));
   border-radius: var(--radius-lg);
   background: linear-gradient(100deg,
     var(--surface) 30%, var(--surface-2) 48%, var(--surface) 66%);
@@ -381,8 +400,13 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 
    斷點壓在 1120：再窄一點的話兩欄各自都不夠寬（軌道 <700 會退回較大的卡寬，
    面板也塞不下賞別分佈），不如維持單欄。 */
-.stage { min-width: 0; }
+/* 滑桿的滑塊接到當前這一池的球階色，跟背景、卡片光暈同一套語言 ——
+   指示器不只是「你在第幾個」，它跟著你看的東西一起變色。
+   SnapRail 自己的預設是 --accent，別的頁面用它不受影響。 */
+.stage { min-width: 0; --rail-accent: var(--hue); }
 @media (min-width: 1120px) {
+  /* 有面板 ⇒ 卡片沒有說明區 ⇒ 骨架回到純 5:7 */
+  .skeleton { --sk-w: 370px; --sk-cap: 0px; }
   .stage {
     max-width: var(--maxw); margin-inline: auto; padding-inline: var(--pad);
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
@@ -394,6 +418,7 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
    讀下去」的頁；選池台是舞台，1600 上照 1180 收邊會在左右各留 210px 的黑，
    而那正是這次要處理的問題。放寬之後軌道拿到多的寬度，兩側鄰居露得更完整。 */
 @media (min-width: 1440px) {
+  .skeleton { --sk-w: 390px; }
   .stage {
     max-width: 1400px;
     grid-template-columns: minmax(0, 1fr) minmax(0, 360px);
@@ -494,8 +519,9 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   .page { padding-top: 12px; padding-bottom: 20px; }
   h1 { font-size: 20px; }
   .sub { font-size: 12.5px; }
-  .toggle { font-size: 12.5px; padding: 7px 13px; }
-  .sk { height: 360px; }
+  .toggle { font-size: 12.5px; padding: 7px 13px; min-height: 44px; }
+  /* 手機的說明區字級與內距都小一階，矮 8px */
+  .skeleton { --sk-cap: 121px; }
   .head { margin-bottom: 10px; }
   .sub { margin-top: 3px; }
 }

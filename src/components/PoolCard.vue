@@ -231,14 +231,52 @@ h3 {
 .pool.wide .price { font-size: 16px; text-shadow: none; }
 .pool.wide .per, .pool.wide .rest { color: var(--muted); opacity: 1; }
 
-/* ---- stage：選池台的大卡，同一套版面放大 ---- */
-.pool.stage { border-radius: var(--radius-lg); }
-.pool.stage .body { padding: 16px 16px 17px; gap: 8px; }
-.pool.stage h3 { font-size: 24px; }
-.pool.stage .top { font-size: 13.5px; }
-.pool.stage .price { font-size: 22px; }
-.pool.stage .per, .pool.stage .rest { font-size: 13px; }
-.pool.stage .meter { height: 5px; }
+/* ---- stage：選池台的大卡 ----
+
+   跟 grid／wide 最大的不同：**文字不壓在卡圖上**。
+
+   grid 那一格只有 150px 寬，圖本來就是縮圖、看的是「哪一池」，資訊疊上去
+   划算。選池台不是 —— 這一頁的整個賣點就是「一次專心看一張卡」，
+   結果那張卡是畫面上最看不清的東西：原本的雙層遮罩（左到右 .95 起跳、
+   由下往上 .96 起跳）加上 24px 兩行標題的資訊區，實測 283×396 的卡面上
+   有 85.8% 的像素被壓暗超過 60 階，跟「沒有遮罩」的版本相比平均差 121 階。
+   奇樹 SAR 只看得到輪廓。
+
+   所以 stage 把卡圖跟資訊拆成上下兩塊：圖是完整的圖，字在圖下面的實底上。
+   代價是卡片變高（5:7 之外多一段說明），換到的是卡圖 100% 可見，
+   而且字放在實底上不必再靠 text-shadow 去對抗底圖，反而更好讀。
+   整塊仍然是同一個 RouterLink，點哪裡都會進池，觸控目標比以前更大。 */
+.pool.stage {
+  border-radius: var(--radius-lg);
+  /* 高度改由「圖的 5:7 + 說明區」決定，不再是整張卡 5:7 */
+  aspect-ratio: auto;
+  background: var(--surface);
+  /* 明寫 minmax(0, 1fr)：隱含的 auto 欄上界是 max-content，
+     而 .body 裡的標題不換行時很長，會把整張卡撐寬 */
+  display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto;
+}
+/* 圖從絕對定位改回文件流，自己撐出 5:7 —— 跟 .wide 同一招 */
+.pool.stage .art-tilt { position: relative; inset: auto; aspect-ratio: 5 / 7; }
+/* 遮罩只剩上緣一小段，作用單純是讓兩顆角落徽章讀得到；
+   卡圖的主體（構圖、招式框、閃箔）完全不碰 */
+.pool.stage .scrim {
+  inset: 0 0 auto; height: 84px;
+  background: linear-gradient(180deg, rgba(8, 6, 14, .58), rgba(8, 6, 14, 0));
+}
+.pool.stage .body {
+  position: relative; inset: auto;
+  padding: 13px 15px 15px; gap: 7px;
+  color: var(--ink);
+}
+/* 實底上不需要陰影撐可讀性，拿掉之後字反而乾淨 */
+.pool.stage h3 { font-size: 18px; line-height: 1.3; text-shadow: none; }
+.pool.stage .top { font-size: 12.5px; }
+.pool.stage .prize { color: var(--muted); opacity: 1; }
+.pool.stage .state.live { color: var(--ok); }
+.pool.stage .state.gone { color: var(--faint); opacity: 1; }
+.pool.stage .meter { height: 5px; background: var(--surface-3); }
+.pool.stage .price { font-size: 20px; text-shadow: none; }
+.pool.stage .per, .pool.stage .rest { font-size: 12px; color: var(--muted); opacity: 1; }
 
 @media (max-width: 720px) {
   .body { padding: 9px 9px 10px; gap: 5px; }
@@ -255,8 +293,22 @@ h3 {
   .mode-tag { top: 7px; left: 7px; transform: scale(.86); transform-origin: top left; }
   .origin-tag { top: 7px; right: 7px; transform: scale(.86); transform-origin: top right; }
   .doneTag { top: 38px; right: 7px; font-size: 10px; padding: 3px 8px; }
-  .pool.stage .body { padding: 14px; }
-  .pool.stage h3 { font-size: 20px; }
-  .pool.stage .price { font-size: 19px; }
+  .pool.stage .body { padding: 12px 13px 13px; }
+  .pool.stage h3 { font-size: 16.5px; }
+  .pool.stage .price { font-size: 18px; }
+}
+
+/* 1120px 起，選池台旁邊會出現資訊面板（見 PlayPage 的 .panel），
+   標題、最高賞、剩餘抽數、單價在那裡全部講過一次 —— 卡片下面再講一遍
+   等於同一頁上有兩份同樣的字，還把卡片多推高 130px（1280×800 下會擠到
+   要捲頁才看得完）。有面板的時候就讓卡片回到「純粹是一張卡」。
+
+   這裡用視窗斷點而不是容器查詢，是因為條件真的是視窗寬度：
+   面板存不存在由 PlayPage 的 @media (min-width: 1120px) 決定，
+   跟軌道自己有多寬無關。stage 這個變體也只有選池台在用。 */
+@media (min-width: 1120px) {
+  .pool.stage { aspect-ratio: 5 / 7; display: block; }
+  .pool.stage .art-tilt { position: absolute; inset: 0; aspect-ratio: auto; }
+  .pool.stage .body { display: none; }
 }
 </style>
