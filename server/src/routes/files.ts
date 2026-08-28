@@ -26,7 +26,7 @@ import { configured, presignPut, presignGet, publicUrlOf } from '../r2.js'
 
 export const files = new Hono()
 
-type Purpose = 'pool-cover' | 'ship-photo' | 'unbox-video' | 'seller-doc' | 'avatar'
+type Purpose = 'pool-cover' | 'ship-photo' | 'unbox-video' | 'seller-doc' | 'avatar' | 'ticket-doc'
 
 const MB = 1024 * 1024
 const PURPOSES: Record<Purpose, { mimes: string[]; maxBytes: number; public: boolean }> = {
@@ -34,7 +34,15 @@ const PURPOSES: Record<Purpose, { mimes: string[]; maxBytes: number; public: boo
   avatar: { mimes: ['image/jpeg', 'image/png', 'image/webp'], maxBytes: 4 * MB, public: true },
   'ship-photo': { mimes: ['image/jpeg', 'image/png', 'image/webp'], maxBytes: 15 * MB, public: false },
   'unbox-video': { mimes: ['video/mp4', 'video/quicktime', 'video/webm'], maxBytes: 300 * MB, public: false },
-  'seller-doc': { mimes: ['image/jpeg', 'image/png', 'application/pdf'], maxBytes: 15 * MB, public: false }
+  'seller-doc': { mimes: ['image/jpeg', 'image/png', 'application/pdf'], maxBytes: 15 * MB, public: false },
+  /* 工單附件。public: false —— 只有上傳者本人或管理員讀得到（下面 files.get 那段）。
+     已知限制：爭議雙方互相看不到對方的附件，只有管理員看得到。那是既有行為
+     （見檔頭 ship-photo / unbox-video 那一段的說明），不在這次範圍。
+
+     ⚠️ files.purpose 在 002_core.sql 有 CHECK 白名單，而 024 沒有放寬它。
+     放寬那條約束的補丁在 src/tickets.ts 的 ticketDocPurposePatch()（開機時跑一次）——
+     那本來應該是一支遷移，見那裡的說明。 */
+  'ticket-doc': { mimes: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'], maxBytes: 15 * MB, public: false }
 }
 
 const EXT: Record<string, string> = {
@@ -47,7 +55,7 @@ const notReady = (c: import('hono').Context) =>
   c.json({ error: 'NOT_CONFIGURED', message: '檔案上傳尚未設定' }, 503)
 
 const PresignBody = z.object({
-  purpose: z.enum(['pool-cover', 'ship-photo', 'unbox-video', 'seller-doc', 'avatar']),
+  purpose: z.enum(['pool-cover', 'ship-photo', 'unbox-video', 'seller-doc', 'avatar', 'ticket-doc']),
   mime: z.string().min(1),
   bytes: z.number().int().positive()
 })

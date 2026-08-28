@@ -15,6 +15,11 @@ import { credit, walletOf } from '../money.js'
 import { notify } from '../notify.js'
 import { act } from './orders.js'
 import { PLATFORM_ID } from '../orders-service.js'
+import { PageQuery, decodeCursor, encodeCursor, isNumeric, slicePage } from '../pagination.js'
+import {
+  LIVE_STATUSES, TICKET_KINDS, applyTakeover, certHolderOf, loadMessages, loadTicket,
+  notifyOpener, ownsFiles, summaryCols, summaryJoin, toSummary
+} from '../tickets.js'
 
 export const admin = new Hono()
 admin.use('*', requireAuth)
@@ -402,4 +407,307 @@ admin.get('/reconcile', async c => {
     reserved: Number(held?.sum ?? 0),
     byReason: byReason.map(x => ({ reason: x.reason, count: Number(x.n), sum: Number(x.sum) }))
   })
+})
+
+/* ==================================================================
+   客服工單
+   ------------------------------------------------------------------
+   商業邏輯在 src/tickets.ts，使用者端在 routes/tickets.ts。
+
+   **結案要順帶做的事一律呼叫既有的那套**，不在這裡重寫：
+     order-dispute → 上面那個 act(PLATFORM_ID, …) 的呼叫（同一個檔案，
+                     兩段互相看得見，改一邊時另一邊在同一個畫面上）
+     seller-doc    → seller_verifications 那一句 UPDATE
+   工單自己的 status 只記「處理完了沒有」，不是任何裁決結果的權威狀態。
+   把 tickets 兩張表 drop 掉，錢跟權限都還是對的。
+
+   既有的 /disputes 與 /verifications 兩條端點刻意保留不動：它們是驗過的，
+   而且工單這一層萬一有問題還有退路（合約第五節）。
+   ================================================================== */
+
+const TicketQuery = PageQuery.extend({
+  status: z.enum(['open', 'pending-user', 'resolved', 'rejected']).optional(),
+  kind: z.enum(TICKET_KINDS).optional()
+})
+
+/**
+ * 佇列。預設回待處理的（open + pending-user），**舊的排前面**。
+ *
+ * 先進先出不是美觀問題：照 updated_at 或新的排前面的話，一張沒有人想碰的
+ * 難單會被每一張新單擠下去，永遠等不到人 —— 而那正是最需要人處理的那一張。
+ * （024 的 tickets_queue 索引就是照 (status, created_at) 建的。）
+ */
+admin.get('/tickets', async c => {
+  const parsed = TicketQuery.safeParse(c.req.query())
+  if (!parsed.success) {
+    return c.json({ error: 'BAD_REQUEST', message: '查詢參數不合法（limit 介於 1 到 100）' }, 400)
+  }
+  const { limit, cursor, status, kind } = parsed.data
+
+  let after: [string, string] | null = null
+  if (cursor) {
+    const p = decodeCursor(cursor, 2)
+    if (!p || !isNumeric(p[0]!)) return c.json({ error: 'BAD_CURSOR', message: '分頁游標不合法' }, 400)
+    after = [p[0]!, p[1]!]
+  }
+
+  const rows = await sql`
+    select t.*, coalesce(u.name, u.handle) as user_name, u.member_no as user_member_no,
+           coalesce(a.name, a.handle) as assignee_name,
+           ${summaryCols(sql)}
+      from tickets t
+      join users u on u.id = t.user_id
+      left join users a on a.id = t.assignee_id
+      ${summaryJoin(sql)}
+     where ${status ? sql`t.status = ${status}` : sql`t.status = any(${[...LIVE_STATUSES]})`}
+       ${kind ? sql`and t.kind = ${kind}` : sql``}
+       ${after ? sql`and (t.created_at, t.id) > (${after[0]}::bigint, ${after[1]}::text)` : sql``}
+     order by t.created_at asc, t.id asc
+     limit ${limit + 1}
+  `
+  const page = slicePage(rows, limit, r => encodeCursor([String(r.created_at), String(r.id)]))
+  return c.json({
+    items: page.items.map(r => ({
+      ...toSummary(r as Record<string, unknown>, 'staff'),
+      userName: String(r.user_name ?? ''),
+      /* 會員編號可能是空的（種子帳號沒發過），照樣回一個字串而不是 null ——
+         前端拿到 null 會印出 'null'，而客服要的是「這格空著」。 */
+      userMemberNo: String(r.user_member_no ?? ''),
+      assigneeId: r.assignee_id == null ? null : String(r.assignee_id),
+      assigneeName: r.assignee_name == null ? null : String(r.assignee_name)
+    })),
+    nextCursor: page.nextCursor
+  })
+})
+
+/** 一張單。**含 certHolder** —— 接管單要看得到那個編號目前登記在誰名下。
+    使用者端那條刻意不回這一塊（那是別人的身分）。 */
+admin.get('/tickets/:id', async c => {
+  const t = await loadTicket(c.req.param('id') ?? '', 'staff')
+  if (!t) return c.json({ error: 'NOT_FOUND', message: '找不到這張工單' }, 404)
+  const certHolder = t.row.kind === 'takeover'
+    ? await certHolderOf(t.row.grader as string | null, t.row.cert_no as string | null)
+    : null
+  return c.json({ ticket: { ...t.detail, certHolder } })
+})
+
+/** 認領。不做指派流程，只是讓兩個客服不會同時處理同一張單 */
+admin.post('/tickets/:id/claim', async c => {
+  const me = c.get('userId')
+  const id = c.req.param('id') ?? ''
+  /* 用「assignee_id is null」當守衛而不是先讀再寫：兩個客服同時按的話
+     只有一個 UPDATE 會命中，另一個看到的已經不是 null（同一個手法見
+     pools-service.ts 抽籤那段的 status = 'in_pool' 守衛）。 */
+  const done = await sql`
+    update tickets set assignee_id = ${me}, updated_at = ${Date.now()}
+     where id = ${id} and assignee_id is null
+     returning id
+  `
+  if (!done.length) {
+    const [t] = await sql`select assignee_id from tickets where id = ${id}`
+    if (!t) return c.json({ error: 'NOT_FOUND', message: '找不到這張工單' }, 404)
+    // 自己認領過就不是錯誤，重按一次不該噴紅
+    if (String(t.assignee_id) === me) return c.json({ ok: true, assigneeId: me })
+    const [u] = await sql`select coalesce(name, handle) as name from users where id = ${t.assignee_id}`
+    return c.json({
+      error: 'ALREADY_CLAIMED',
+      message: `這張單已經由 ${String(u?.name ?? '其他客服')} 認領了。`
+    }, 409)
+  }
+  await audit(me, 'ticket-claim', id, {}, '')
+  return c.json({ ok: true, assigneeId: me })
+})
+
+const StaffReply = z.object({
+  body: z.string().trim().min(1, '請輸入內容').max(2000, '每則訊息最多 2000 個字'),
+  fileIds: z.array(z.string().regex(/^f-[0-9a-f]{12}$/, '附件必須是站內上傳的檔案')).max(5).default([])
+})
+
+/** 客服回覆。is_staff = true，而且把狀態推成 pending-user（球在使用者那邊） */
+admin.post('/tickets/:id/messages', async c => {
+  const me = c.get('userId')
+  const id = c.req.param('id') ?? ''
+  const parsed = StaffReply.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) {
+    return c.json({ error: 'BAD_REQUEST', message: parsed.error.issues[0]?.message ?? '參數不合法' }, 400)
+  }
+  const { body, fileIds } = parsed.data
+
+  // 附件驗持有人與用途，跟使用者端同一條規則（客服自己的 ticket-doc 檔案）
+  if (!(await ownsFiles(fileIds, me))) {
+    return c.json({ error: 'BAD_ATTACHMENT', message: '附件必須是你自己在站內上傳的工單附件' }, 400)
+  }
+
+  const r = await sql.begin(async tx => {
+    const [t] = await tx`select * from tickets where id = ${id} for update`
+    if (!t) return { error: 'NOT_FOUND', message: '找不到這張工單', status: 404 }
+    if (t.status === 'resolved' || t.status === 'rejected') {
+      return { error: 'TICKET_CLOSED', message: '這張工單已經結案，不能再回覆', status: 409 }
+    }
+    const now = Date.now()
+    const [m] = await tx`
+      insert into ticket_messages (ticket_id, author_id, body, file_ids, is_staff, created_at)
+      values (${id}, ${me}, ${body}, ${fileIds as never}, true, ${now})
+      returning id
+    `
+    await tx`update tickets set status = 'pending-user', updated_at = ${now} where id = ${id}`
+    return { messageId: Number(m?.id ?? 0), userId: String(t.user_id) }
+  })
+  if ('error' in r) return c.json(r, r.status as 404 | 409)
+
+  await notifyOpener(r.userId, id, 'msg:' + r.messageId,
+    '客服回覆了你的工單', body.slice(0, 80))
+  const messages = await loadMessages(id)
+  return c.json({ message: messages[messages.length - 1] })
+})
+
+const TicketResolve = z.object({
+  outcome: z.enum(['resolved', 'rejected']),
+  /* 理由必填。024 的欄位註解寫得很直接：沒有理由的裁決事後無法覆核，
+     而這張表裡的每一筆都是有人被拒絕或被通過的紀錄。 */
+  resolution: z.string().trim().min(1, '結案一定要填理由').max(500, '結案理由最多 500 個字'),
+  /** order-dispute 專用：點數要判給誰。其餘 kind 忽略 */
+  disputeTo: z.enum(['buyer', 'seller']).optional()
+})
+
+/**
+ * 結案。**這裡是整個設計的關鍵。**
+ *
+ * outcome = 'resolved' 時依 kind 順帶呼叫既有的邏輯；'rejected' 一律只結案。
+ * 順序刻意是「先做既有的那套、再結案」：工單不是權威狀態，
+ * 既有那套失敗時整張單要留在佇列上讓人再按一次，
+ * 反過來（先結案再動錢）失敗的話錢沒動而單子看起來處理完了 —— 那沒有人會發現。
+ */
+admin.post('/tickets/:id/resolve', async c => {
+  const me = c.get('userId')
+  const id = c.req.param('id') ?? ''
+  const parsed = TicketResolve.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) {
+    return c.json({ error: 'BAD_REQUEST', message: parsed.error.issues[0]?.message ?? '參數不合法' }, 400)
+  }
+  const { outcome, resolution, disputeTo } = parsed.data
+
+  const t = await loadTicket(id, 'staff')
+  if (!t) return c.json({ error: 'NOT_FOUND', message: '找不到這張工單' }, 404)
+  const row = t.row
+  if (row.status === 'resolved' || row.status === 'rejected') {
+    return c.json({ error: 'TICKET_CLOSED', message: '這張工單已經結案過了' }, 409)
+  }
+  const kind = String(row.kind)
+  // 稽核要看得出「除了結案還做了什麼」，所以副作用的結果一起寫進 payload
+  const effect: Record<string, unknown> = {}
+
+  if (outcome === 'resolved') {
+    if (kind === 'takeover') {
+      const certNo = row.cert_no == null ? null : String(row.cert_no)
+      if (!certNo) {
+        return c.json({ error: 'BAD_REQUEST', message: '這張接管單沒有鑑定編號，無法過戶' }, 400)
+      }
+      const r = await sql.begin(tx =>
+        applyTakeover(tx, row.grader == null ? null : String(row.grader), certNo, String(row.user_id)))
+      if ('error' in r) return c.json(r, r.status as 400 | 409)
+      effect.takeover = r
+      // prize_id 補記下來：事後覆核時要看得出當時動的是哪一列，不用再靠編號反查
+      await sql`update tickets set prize_id = ${r.prizeId} where id = ${id}`
+
+    } else if (kind === 'order-dispute') {
+      if (!disputeTo) {
+        return c.json({
+          error: 'BAD_REQUEST',
+          message: '訂單爭議結案要指定 disputeTo（判給 buyer 或 seller）'
+        }, 400)
+      }
+      const orderId = String(row.order_id ?? '')
+      const [o] = await sql`select status from orders where id = ${orderId}`
+      if (!o) return c.json({ error: 'NOT_FOUND', message: '找不到這張單對應的訂單' }, 404)
+
+      if (o.status === 'disputed') {
+        /* **呼叫既有的那套**：跟上面 /disputes/:id/resolve 走同一個 act()、
+           同一個 escrow.ts 的狀態機、同一組帳本分錄。工單這一層一毛錢都沒碰。 */
+        const r = await act(PLATFORM_ID, orderId, 'platform',
+          disputeTo === 'buyer' ? 'resolve-buyer' : 'resolve-seller',
+          o2 => ({
+            ...o2,
+            status: disputeTo === 'buyer' ? 'refunded' as const : 'completed' as const,
+            settledAt: Date.now(),
+            closedBy: disputeTo === 'buyer' ? 'dispute-buyer' as const : 'dispute-seller' as const
+          }))
+        if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
+        effect.dispute = { to: disputeTo, orderStatus: r.order.status }
+      } else {
+        /* 訂單已經不在 disputed：有人先用既有的 /v1/admin/disputes/:id/resolve
+           裁決過了（那條刻意保留著當退路），或是這一支上次跑到一半掛了。
+           兩種情況都**不能再動一次錢** —— 這裡只把工單關掉，把「錢是誰的」
+           留給 orders 那邊已經寫下的事實。 */
+        effect.dispute = { to: disputeTo, skipped: true, orderStatus: String(o.status) }
+      }
+
+    } else if (kind === 'seller-doc') {
+      /* 呼叫既有的審核邏輯：跟 /verifications/:id/review 同一句 UPDATE。
+         沒有待審的列時**不擋下來** —— 客服可能已經從既有的審核頁按過了，
+         那時再回 409 會讓這張單永遠關不掉（一條死路，不是保護）。 */
+      const done = await sql`
+        update seller_verifications set status = 'approved', note = ${resolution.slice(0, 200)},
+          reviewed_by = ${me}, reviewed_at = now()
+        where id = (select id from seller_verifications
+                     where seller_id = ${String(row.seller_id ?? '')} and status = 'pending'
+                     order by created_at asc limit 1)
+        returning id
+      `
+      effect.verification = { updated: done.length > 0 }
+    }
+    /* 其餘 kind（card-issue / account / other）只結案，不做別的 ——
+       它們本來就沒有對應的既有邏輯可以呼叫。 */
+  } else if (kind === 'seller-doc') {
+    /* **駁回一張賣家審核單 = 駁回那份審核。**
+       合約原本寫「rejected 一律只結案」，但對 seller-doc 那是語意錯誤：
+       客服按下駁回的意思就是「這份證件不行」，只關工單不動審核的話，
+       seller_verifications 那一列永遠停在 pending —— 賣家看到的是
+       「還在審」，實際上已經被拒絕了，而且沒有人會再看它。
+       跟通過那條一樣呼叫既有的 UPDATE、一樣不擋「沒有待審的列」。
+       其他 kind 的 rejected 仍然只結案：接管駁回不該動卡、
+       爭議駁回不該動錢（要判就得走 resolved + disputeTo）。 */
+    const done = await sql`
+      update seller_verifications set status = 'rejected', note = ${resolution.slice(0, 200)},
+        reviewed_by = ${me}, reviewed_at = now()
+      where id = (select id from seller_verifications
+                   where seller_id = ${String(row.seller_id ?? '')} and status = 'pending'
+                   order by created_at asc limit 1)
+      returning id
+    `
+    effect.verification = { updated: done.length > 0, rejected: true }
+  }
+
+  const now = Date.now()
+  const closed = await sql.begin(async tx => {
+    /* 條件帶上「還沒結案」：兩個客服同時按的話只有一個會命中，
+       另一個拿到 0 列 —— 而副作用那一段已經各自擋過一次（爭議會撞
+       WRONG_STATE、接管會看到卡已經在申請人名下）。 */
+    const r = await tx`
+      update tickets set status = ${outcome}, resolution = ${resolution},
+             closed_at = ${now}, closed_by = ${me}, updated_at = ${now}
+       where id = ${id} and status = any(${[...LIVE_STATUSES]})
+       returning id
+    `
+    if (!r.length) return false
+    /* 結案理由同時寫成一則客服訊息：只寫進 tickets.resolution 的話，
+       使用者在訊息串上看到的最後一句還是他自己問的問題，
+       整段對話讀起來像沒有下文。 */
+    await tx`
+      insert into ticket_messages (ticket_id, author_id, body, file_ids, is_staff, created_at)
+      values (${id}, ${me},
+              ${(outcome === 'resolved' ? '【已處理】' : '【未受理】') + resolution},
+              ${[] as never}, true, ${now})
+    `
+    return true
+  })
+  if (!closed) return c.json({ error: 'TICKET_CLOSED', message: '這張工單剛剛已經被結案了' }, 409)
+
+  await audit(me, 'ticket-resolve', id, { kind, outcome, ...effect }, resolution)
+  await notifyOpener(String(row.user_id), id, 'closed',
+    outcome === 'resolved' ? '你的工單已經處理完成' : '你的工單沒有受理',
+    resolution.slice(0, 80))
+
+  const after = await loadTicket(id, 'staff')
+  return c.json({ ticket: after?.detail, effect })
 })

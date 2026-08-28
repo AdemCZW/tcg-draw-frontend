@@ -202,6 +202,26 @@ export const router = createRouter({
       component: () => import('@/pages/ProfilePage.vue'),
       meta: { requiresAuth: true, depth: 2, title: '會員資料' }
     },
+    /* 客服工單（使用者端）。放在頂層 /support 而不是 /me/support ——
+       它是使用者被擋住時的出口，而擋住他的地方（建池、訂單、卡冊）散在整個站上，
+       那些地方要指過來的是一個好記、好貼、跟身分無關的網址。
+
+       /support/new 必須排在 /support/:id 前面，否則 'new' 會被當成單號。 */
+    {
+      path: '/support', name: 'support',
+      component: () => import('@/pages/support/SupportListPage.vue'),
+      meta: { requiresAuth: true, depth: 1, title: '我的問題' }
+    },
+    {
+      path: '/support/new', name: 'support-new',
+      component: () => import('@/pages/support/SupportNewPage.vue'),
+      meta: { requiresAuth: true, depth: 2, title: '開新問題' }
+    },
+    {
+      path: '/support/:id', name: 'support-ticket',
+      component: () => import('@/pages/support/SupportTicketPage.vue'),
+      meta: { requiresAuth: true, depth: 2, title: '問題詳情' }
+    },
     /* 後台：自己的外殼與子路由，不套前台的 header／底部導覽（chrome: 'none'）。
        改成子路由而不是分頁狀態，是為了讓每一區有自己的網址 —— 客服要把
        某個會員的檔案轉給別人接手時，能直接貼連結。 */
@@ -245,6 +265,18 @@ export const router = createRouter({
           path: 'disputes', name: 'console-disputes',
           component: () => import('@/pages/console/ConsoleDisputes.vue'),
           meta: { title: '爭議' }
+        },
+        {
+          /* 客服工單。跟會員一樣是「列表 + 詳情各有自己的網址」——
+             一張單常常要轉給別人接手，貼得出連結才轉得動。 */
+          path: 'tickets', name: 'console-tickets',
+          component: () => import('@/pages/console/ConsoleTickets.vue'),
+          meta: { title: '客服工單' }
+        },
+        {
+          path: 'tickets/:id', name: 'console-ticket',
+          component: () => import('@/pages/console/ConsoleTicketDetail.vue'),
+          meta: { title: '工單' }
         },
         {
           path: 'audit', name: 'console-audit',

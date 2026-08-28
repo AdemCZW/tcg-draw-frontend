@@ -10,9 +10,14 @@ import type {
 } from '@/types/models'
 import { deliveryOf } from '@/shared/domain'
 import * as mock from '@/mocks/data'
+/* 客服端工單的假資料。它有自己的狀態機（認領／回覆／結案會真的改資料），
+   而且是客服視角（不同開單人、認領人、certHolder），跟使用者視角的
+   mocks/tickets.ts 是兩份不同的東西，見那兩支檔頭的說明 */
+import * as mockTickets from '@/mocks/tickets-admin'
 import { MOCK } from './config'
 import { ApiError, http, idem } from './http'
 import { useWalletStore } from '@/stores/wallet'
+import { useAuthStore } from '@/stores/auth'
 import { refDiscount, refPriceNum } from './refprice'
 import type { SettlementStatus } from '@/shared/pool-settlement'
 import { RESERVED_STATUSES } from '@/shared/pool-settlement'
@@ -273,7 +278,24 @@ export const api = {
   },
 
   async createPool(input: mock.NewPoolInput): Promise<Pool> {
-    if (MOCK) { await delay(500); return mock.createPool(input) }
+    if (MOCK) {
+      await delay(500)
+      /* 「這個鑑定編號已經登記在系統裡」在正式環境是資料庫唯一索引擋下來的
+         （prizes_cert_alive → 409 CERT_ALREADY_LISTED，見 server/src/routes/pools.ts）。
+         mock 也要擋，理由不是求真：那個 409 旁邊掛著整個站唯一的「申請接管」入口，
+         而入口只在錯誤發生的當下存在。mock 不擋的話，這條動線在沒有後端時
+         永遠沒有人看得到，也就沒有人驗得了它。 */
+      const hit = (await import('@/mocks/tickets')).listedCertHit(input.prizes)
+      if (hit) {
+        throw new ApiError(
+          'CERT_ALREADY_LISTED',
+          '這個鑑定編號已經登記在系統裡了 —— 同一張實體卡不能同時放進兩個池，也不能一邊在池裡一邊掛在市場上。'
+          + '如果這張卡是你的而且已經不在別處，請聯絡客服。',
+          409, hit
+        )
+      }
+      return mock.createPool(input)
+    }
     /* 開池表單送出來的每一項都已經帶著**挑出來的完整卡片身分**
        （卡號、系列、卡圖、變體、鑑定編號），所以這裡不再現編任何欄位。
        原本這裡會拿卡名湊一個 `setCode: ''`、`cardNo: ''` 的空殼送上去 ——
@@ -644,5 +666,323 @@ export const api = {
     const r = await http<{ wallet: { points: number; locked: number } }>('/v1/wallet')
     applyWallet(r)
     return r.wallet
+  },
+
+  // ---- 客服工單（客服端）----
+  // 端點與形狀見 docs/tickets-contract.md 第四節。使用者端那條動線（/v1/tickets）
+  // 由另一支負責，不寫在這裡，免得兩邊互相蓋掉。
+
+  /**
+   * 佇列。預設只要待處理的 —— 客服打開這頁要看的是「現在有什麼要我處理」，
+   * 已結案的單混在裡面只會把真正在等的人往下推。
+   *
+   * 後端預設就是回 open + pending-user（契約第四節），所以「待處理」不帶 status，
+   * 「全部」才明確要 status=all；反過來在前端列舉兩個狀態送上去的話，
+   * 之後後端多一種待處理狀態，這裡會靜默漏掉它。
+   */
+  async adminTickets(scope: 'pending' | 'all' = 'pending'): Promise<AdminTicketRow[]> {
+    if (MOCK) { await delay(180); return mockTickets.adminList(scope) }
+    const r = await http<{ items: AdminTicketRow[] }>(`/v1/admin/tickets${scope === 'all' ? '?status=all' : ''}`)
+    return r.items
+  },
+
+  async adminTicket(id: string): Promise<AdminTicketDetail> {
+    if (MOCK) {
+      await delay(160)
+      const t = mockTickets.adminGet(id)
+      if (!t) throw new Error('找不到這張工單')
+      return t
+    }
+    const r = await http<{ ticket: AdminTicketDetail }>(`/v1/admin/tickets/${id}`)
+    return r.ticket
+  },
+
+  /** 認領。已被別人認領時後端回 409，錯誤訊息照原樣給人看（那句話本來就是寫給客服的） */
+  async claimTicket(id: string): Promise<AdminTicketDetail> {
+    if (MOCK) {
+      await delay(220)
+      const me = useAuthStore()
+      return mockTickets.adminClaim(id, me.user?.id ?? mockTickets.MOCK_ADMIN.id,
+        me.user?.name || mockTickets.MOCK_ADMIN.name)
+    }
+    await http(`/v1/admin/tickets/${id}/claim`, { method: 'POST' })
+    return this.adminTicket(id)
+  },
+
+  /** 客服回覆。後端會把狀態推成 pending-user 並通知開單人 */
+  async replyTicket(id: string, body: string, fileIds: string[] = []): Promise<AdminTicketDetail> {
+    if (MOCK) { await delay(260); return mockTickets.adminReply(id, body, fileIds) }
+    await http(`/v1/admin/tickets/${id}/messages`, {
+      method: 'POST',
+      // 沒有附件就整個欄位不送：空陣列跟「沒有附件」對後端是同一件事，但少送一欄比較不容易踩到驗證
+      json: fileIds.length ? { body, fileIds } : { body }
+    })
+    return this.adminTicket(id)
+  },
+
+  /**
+   * 結案。
+   *
+   * `disputeTo` 只在 `kind === 'order-dispute'` 且 `outcome === 'resolved'` 時要帶
+   * —— 那一條會讓後端去呼叫既有的爭議裁決邏輯，**點數會真的移動**。
+   * 其餘情況一律不送這個欄位：多送一個沒人讀的欄位，日後很難查出它是什麼時候
+   * 開始被讀的。
+   */
+  async resolveTicket(
+    id: string,
+    input: { outcome: 'resolved' | 'rejected'; resolution: string; disputeTo?: 'buyer' | 'seller' }
+  ): Promise<AdminTicketDetail> {
+    const { outcome, resolution, disputeTo } = input
+    if (MOCK) { await delay(320); return mockTickets.adminResolve(id, outcome, resolution, disputeTo) }
+    await http(`/v1/admin/tickets/${id}/resolve`, {
+      method: 'POST',
+      json: disputeTo ? { outcome, resolution, disputeTo } : { outcome, resolution }
+    })
+    return this.adminTicket(id)
+  }
+}
+
+/* ------------------------------------------------------------------
+   客服工單：**客服端視角**才有的兩個形狀。
+
+   TicketKind / TicketStatus / TicketSummary / TicketMessage / TicketDetail
+   五個共用型別宣告在下面「使用者端」那一段（同一個檔案，同一份契約第二節），
+   這裡刻意不重覆宣告一份 —— 兩份會分岔，而分岔的那一天沒有人會發現，
+   因為 TypeScript 只會說「重複宣告」，不會說「哪一份才對」。
+
+   這裡只加客服端多出來的部分，用繼承接上去，不去改使用者端那一段。
+------------------------------------------------------------------ */
+
+/**
+ * 客服看到的單一張工單。比使用者端多一個 `certHolder`。
+ *
+ * 為什麼是獨立的型別而不是把欄位加進 TicketDetail：契約第三節寫得很清楚，
+ * `GET /v1/tickets/:id`（使用者端）**一律不回** certHolder —— 那是別人的身分。
+ * 讓它只存在於客服端的型別上，「誰讀得到目前登記人」這件事就變成型別問題，
+ * 而不是要靠每個人記得的約定。
+ */
+export interface AdminTicketDetail extends TicketDetail {
+  /** 接管單專用：那個編號目前登記在誰名下 */
+  certHolder?: { userId: string; userName: string; memberNo: string } | null
+}
+
+/**
+ * 佇列的一列。
+ *
+ * 契約第四節寫的是「TicketSummary 額外帶 userName、userMemberNo」，
+ * 但第七節要求佇列上要有「認領人」那一欄，而 TicketSummary 沒有 assignee。
+ * 後兩個欄位在這裡標成**選填**：後端若照第四節的字面只回 userName／userMemberNo，
+ * 畫面會顯示「未認領」而不是壞掉 —— 少一欄資訊是可以接受的降級，整頁噴錯不是。
+ * （契約需要補這兩欄，已回報。）
+ */
+export interface AdminTicketRow extends TicketSummary {
+  userName: string
+  userMemberNo?: string
+  assigneeId?: string | null
+  assigneeName?: string | null
+}
+
+/* ==================================================================
+   客服工單（使用者端）
+
+   契約：docs/tickets-contract.md 第二、三節。後端由另一支平行實作，
+   所以這一段只照契約寫，不等它上線 —— MOCK 模式走 mocks/tickets.ts 的
+   有狀態假資料，接上後端只是把 MOCK 分支關掉。
+
+   刻意獨立成一個物件而不是塞進上面的 `api`：工單跟池／市場／錢包不是
+   同一組領域，而且這個檔案同時有兩支 agent 在動，附加一整塊比插進去安全。
+================================================================== */
+
+export type TicketKind =
+  | 'takeover'       // 站外轉手接管：想把已登記的鑑定編號轉到自己名下
+  | 'order-dispute'  // 訂單爭議（系統自動開單）
+  | 'seller-doc'     // 賣家審核（系統自動開單）
+  | 'card-issue'
+  | 'account'
+  | 'other'
+
+export type TicketStatus =
+  | 'open'          // 等客服處理
+  | 'pending-user'  // 客服問了問題，等使用者回覆
+  | 'resolved'      // 結案，問題解決／申請通過
+  | 'rejected'      // 結案，申請駁回
+
+export interface TicketSummary {
+  id: string
+  kind: TicketKind
+  status: TicketStatus
+  subject: string
+  /** 毫秒。後端的 bigint 經過 JSON 可能是 number 也可能是字串，轉換在這一層做完 */
+  createdAt: number
+  updatedAt: number
+  /** 最後一則訊息的前 80 字。列表上直接看得到進度，不必逐張點進去 */
+  lastMessage: string | null
+  unread: boolean
+  messageCount: number
+}
+
+export interface TicketMessage {
+  id: number
+  authorId: string
+  authorName: string
+  isStaff: boolean
+  body: string
+  /** 檔案 id。私有用途，取檔要走 GET /v1/files/:id（只有當事人與管理員讀得到） */
+  fileIds: string[]
+  createdAt: number
+}
+
+export interface TicketDetail extends TicketSummary {
+  userId: string
+  userName: string
+  /** 依 kind 而定，其餘為 null */
+  orderId: string | null
+  prizeId: string | null
+  sellerId: string | null
+  grader: string | null
+  certNo: string | null
+  assigneeId: string | null
+  assigneeName: string | null
+  closedAt: number | null
+  resolution: string | null
+  messages: TicketMessage[]
+}
+
+export interface NewTicketInput {
+  /* 型別就把 order-dispute / seller-doc 排除掉。那兩種只能由系統自動開
+     （契約第五節），讓它們在型別上就送不出去，比在畫面上藏起來可靠 */
+  kind: Exclude<TicketKind, 'order-dispute' | 'seller-doc'>
+  subject: string
+  body: string
+  fileIds?: string[]
+  /** takeover 必填 */
+  certNo?: string
+  grader?: string
+  /** card-issue 選填 */
+  prizeId?: string
+  orderId?: string
+}
+
+/** 後端的時間可能是 number 或字串，一律轉成毫秒數。轉不動就給 0 而不是 NaN。
+    （名字不叫 ms —— 這個檔案上面已經有一支給結算用的 ms，那支回 number | null） */
+const tms = (v: unknown): number => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : (Date.parse(String(v)) || 0)
+}
+
+function toTicketSummary(t: Any): TicketSummary {
+  return {
+    id: String(t.id),
+    kind: t.kind as TicketKind,
+    status: t.status as TicketStatus,
+    subject: String(t.subject ?? ''),
+    createdAt: tms(t.createdAt ?? t.created_at),
+    updatedAt: tms(t.updatedAt ?? t.updated_at),
+    lastMessage: (t.lastMessage ?? t.last_message ?? null) as string | null,
+    unread: !!t.unread,
+    messageCount: Number(t.messageCount ?? t.message_count ?? 0)
+  }
+}
+
+function toTicketMessage(m: Any): TicketMessage {
+  return {
+    id: Number(m.id),
+    authorId: String(m.authorId ?? m.author_id ?? ''),
+    authorName: String(m.authorName ?? m.author_name ?? ''),
+    isStaff: !!(m.isStaff ?? m.is_staff),
+    body: String(m.body ?? ''),
+    fileIds: ((m.fileIds ?? m.file_ids ?? []) as string[]).map(String),
+    createdAt: tms(m.createdAt ?? m.created_at)
+  }
+}
+
+function toTicketDetail(t: Any): TicketDetail {
+  const closed = t.closedAt ?? t.closed_at ?? null
+  return {
+    ...toTicketSummary(t),
+    userId: String(t.userId ?? t.user_id ?? ''),
+    userName: String(t.userName ?? t.user_name ?? ''),
+    orderId: (t.orderId ?? t.order_id ?? null) as string | null,
+    prizeId: (t.prizeId ?? t.prize_id ?? null) as string | null,
+    sellerId: (t.sellerId ?? t.seller_id ?? null) as string | null,
+    grader: (t.grader ?? null) as string | null,
+    certNo: (t.certNo ?? t.cert_no ?? null) as string | null,
+    assigneeId: (t.assigneeId ?? t.assignee_id ?? null) as string | null,
+    assigneeName: (t.assigneeName ?? t.assignee_name ?? null) as string | null,
+    closedAt: closed == null ? null : tms(closed),
+    resolution: (t.resolution ?? null) as string | null,
+    messages: ((t.messages ?? []) as Any[]).map(toTicketMessage)
+  }
+}
+
+export const ticketsApi = {
+  /** 我的單。游標分頁，跟其他列表同一個 Page<T> 形狀 */
+  async list(opts: PageOpts & { status?: TicketStatus } = {}): Promise<Page<TicketSummary>> {
+    if (MOCK) {
+      await delay(180)
+      const m = await import('@/mocks/tickets')
+      return { items: m.listTickets(opts.status), nextCursor: null }
+    }
+    const q = new URLSearchParams()
+    if (opts.status) q.set('status', opts.status)
+    if (opts.limit) q.set('limit', String(opts.limit))
+    if (opts.cursor) q.set('cursor', opts.cursor)
+    const qs = q.toString()
+    const r = await http<{ items: Any[]; nextCursor: string | null }>(
+      `/v1/tickets${qs ? `?${qs}` : ''}`, { signal: opts.signal })
+    return { items: r.items.map(toTicketSummary), nextCursor: r.nextCursor ?? null }
+  },
+
+  /** 單一張（含訊息串）。只有開單人自己讀得到，後端會擋 */
+  async get(id: string): Promise<TicketDetail> {
+    if (MOCK) {
+      await delay(160)
+      const m = await import('@/mocks/tickets')
+      const t = m.getTicket(id)
+      if (!t) throw new ApiError('NOT_FOUND', '找不到這張單，或它不屬於你', 404)
+      return t
+    }
+    const r = await http<{ ticket: Any }>(`/v1/tickets/${encodeURIComponent(id)}`)
+    return toTicketDetail(r.ticket)
+  },
+
+  /** 開單。回的是完整明細，呼叫端可以直接跳進詳情頁 */
+  async create(input: NewTicketInput): Promise<TicketDetail> {
+    if (MOCK) {
+      await delay(420)
+      const m = await import('@/mocks/tickets')
+      return m.createTicket(input)
+    }
+    const r = await http<{ ticket: Any }>('/v1/tickets', {
+      method: 'POST',
+      /* 開單是會成立一筆新資料的動作，重送必須不重複成立 ——
+         手機上送出後網路一卡，使用者的第一個反應就是再按一次。 */
+      headers: { 'idempotency-key': idem() },
+      json: {
+        kind: input.kind,
+        subject: input.subject,
+        body: input.body,
+        fileIds: input.fileIds?.length ? input.fileIds : undefined,
+        certNo: input.certNo || undefined,
+        grader: input.grader || undefined,
+        prizeId: input.prizeId || undefined,
+        orderId: input.orderId || undefined
+      }
+    })
+    return toTicketDetail(r.ticket)
+  },
+
+  /** 回一則。已結案的單後端回 409，訊息會建議開新單 */
+  async reply(id: string, body: string, fileIds: string[] = []): Promise<TicketMessage> {
+    if (MOCK) {
+      await delay(320)
+      const m = await import('@/mocks/tickets')
+      return m.addMessage(id, body, fileIds)
+    }
+    const r = await http<{ message: Any }>(`/v1/tickets/${encodeURIComponent(id)}/messages`, {
+      method: 'POST',
+      json: { body, fileIds: fileIds.length ? fileIds : undefined }
+    })
+    return toTicketMessage(r.message)
   }
 }

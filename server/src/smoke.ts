@@ -1765,6 +1765,263 @@ async function run() {
         `${remain0} → ${a5.pool.remainingTickets}`)
     }
 
+    /* ---------------- 客服工單 ----------------
+       整段最重要的兩條，其餘都是護欄：
+         1 接管單結案**真的把卡過到申請人名下** —— user_id 與 custodian_id
+           一起改。只改一邊的話，卡在申請人的卡冊裡但系統認為實體還在前一手，
+           他上架時會被判成「需寄送」而由前一手負責寄一張不在他那的卡。
+         2 爭議單結案走的是**既有的**裁決邏輯 —— 下面那條對帳的 drift
+           仍然必須是 0。工單這一層一毛錢都不該碰得到。
+       工單是前門，不是新的金流：tickets 兩張表 drop 掉，錢跟權限都還是對的。 */
+    console.log('\n客服工單：')
+    {
+      const anon = await fetch(`${base}/v1/tickets`)
+      check('工單清單沒登入讀不到', anon.status === 401, `${anon.status}`)
+      check('一般會員進不了客服佇列', (await call(buyer, '/v1/admin/tickets')).status === 403)
+
+      /* presign 認不認得 ticket-doc 這個用途。
+         用「不在白名單的 mime」測是刻意的：格式驗證跑在 configured() 之前，
+         所以這一條在沒有設定 R2 的本機也驗得到（見 files.ts 那段順序的說明）。
+         回 BAD_MIME 就代表 purpose 本身被收下了；purpose 不合法會先回 BAD_REQUEST。 */
+      const tdMime = await call(buyer, '/v1/files/presign',
+        { purpose: 'ticket-doc', mime: 'application/zip', bytes: 1000 })
+      check('ticket-doc 是合法的檔案用途，而且擋得住白名單外的 mime',
+        tdMime.status === 400 && (await json(tdMime)).error === 'BAD_MIME', `${tdMime.status}`)
+
+      const selfOpen = await call(buyer, '/v1/tickets',
+        { kind: 'order-dispute', subject: '我要自己開爭議單', body: 'x' })
+      check('order-dispute / seller-doc 不能由使用者自己開',
+        selfOpen.status === 400 && String((await json(selfOpen)).message).includes('自動開單'),
+        `${selfOpen.status}`)
+
+      const badFile = await call(buyer, '/v1/tickets',
+        { kind: 'other', subject: '塞別人的附件', body: 'x', fileIds: ['f-000000000000'] })
+      check('附件不是自己站內上傳的檔案被 400 擋下（格式對也不行）',
+        badFile.status === 400 && (await json(badFile)).error === 'BAD_ATTACHMENT', `${badFile.status}`)
+
+      /* ---- 接管單：開單 → 認領 → 來回訊息 → 結案 → 過戶 ----
+         找一張**別人名下、帶鑑定編號**的卡當標的。公開的掛單端點刻意不吐
+         certNo（見 public.ts 的說明），所以從後台的會員檔案拿。 */
+      const sellerCards = ((await json(await call(platform, '/v1/admin/users/u-seller'))).prizes ?? []) as Any[]
+      const withCert = sellerCards.filter((p: Any) => p.card?.certNo)
+      const listedCard = withCert.find((p: Any) => p.status === 'listed')
+      const freeCard = withCert.find((p: Any) => ['in_book', 'stashed', 'shipped'].includes(p.status))
+      const cand = listedCard ?? freeCard
+
+      if (!cand) {
+        check('（跳過接管單：賣家名下沒有帶鑑定編號的卡）', false)
+      } else {
+        const certNo = String(cand.card.certNo)
+        const grader = String(cand.card.grader ?? 'PSA')
+
+        const noCert = await call(buyer, '/v1/tickets',
+          { kind: 'takeover', subject: '接管申請', body: '沒填編號' })
+        check('接管單沒填鑑定公司／編號被擋', noCert.status === 400, `${noCert.status}`)
+
+        const notReg = await call(buyer, '/v1/tickets',
+          { kind: 'takeover', subject: '接管申請', body: 'x', grader: 'PSA', certNo: '00000001' })
+        check('沒登記過的編號開不了接管單，而且叫他直接上傳（開單只會讓他多等一天）',
+          notReg.status === 400 && String((await json(notReg)).message).includes('上傳'), `${notReg.status}`)
+
+        const selfOwned = await call(seller, '/v1/tickets',
+          { kind: 'takeover', subject: '接管自己的卡', body: 'x', grader, certNo })
+        check('登記在自己名下的編號開不了接管單',
+          selfOwned.status === 400 && (await json(selfOwned)).error === 'CERT_ALREADY_YOURS',
+          `${selfOwned.status}`)
+
+        /* 大小寫與前後空白要被正規化成跟 prizes 同一套（upper(btrim)）。
+           不正規化的話，同一張實體卡可以被兩個人各開一張接管單而互相看不見。 */
+        const openR = await call(buyer, '/v1/tickets', {
+          kind: 'takeover', subject: `接管 ${grader} #${certNo}`,
+          body: '我在站外買到這張卡，附上交易紀錄。',
+          grader: grader.toLowerCase(), certNo: ' ' + certNo + ' '
+        })
+        const opened = await json(openR)
+        check('開接管單成功（201）', openR.status === 201, `${openR.status} ${JSON.stringify(opened).slice(0, 200)}`)
+        const tid = opened.ticket?.id as string
+        check('編號被正規化（大小寫、前後空白都吃掉）',
+          opened.ticket?.grader === grader.toUpperCase() && opened.ticket?.certNo === certNo,
+          JSON.stringify({ g: opened.ticket?.grader, c: opened.ticket?.certNo }))
+        check('使用者端不回 certHolder —— 那是別人的身分', opened.ticket?.certHolder == null)
+
+        const dupe = await call(buyer, '/v1/tickets',
+          { kind: 'takeover', subject: '再開一次', body: 'x', grader, certNo })
+        check('同一個編號重複開單回 409',
+          dupe.status === 409 && (await json(dupe)).error === 'TICKET_EXISTS', `${dupe.status}`)
+
+        check('別人的單讀不到（404，不是 403 —— 403 等於承認它存在）',
+          (await call(seller, `/v1/tickets/${tid}`)).status === 404)
+        check('別人的單也回覆不了', (await call(seller, `/v1/tickets/${tid}/messages`, { body: 'x' })).status === 404)
+
+        const queue = await json(await call(platform, '/v1/admin/tickets'))
+        const qrow = (queue.items ?? []).find((x: Any) => x.id === tid)
+        check('客服佇列看得到這張單', !!qrow, JSON.stringify(queue).slice(0, 200))
+        /* 會員編號在種子帳號上是空的（seed 沒發過號），所以驗的是「這一欄有帶出來
+           而且是字串」，不是「非空」—— 驗非空的話這條會在乾淨的 seed 上一直紅，
+           而它要守的其實是「客服佇列拿得到查人用的欄位、且不會是 null」。 */
+        check('佇列帶得出開單人與會員編號（客服要查人）',
+          !!qrow?.userName && typeof qrow?.userMemberNo === 'string', JSON.stringify(qrow))
+        check('客服視角看得到未讀（最後一則是使用者講的）', qrow?.unread === true)
+
+        const detail = await json(await call(platform, `/v1/admin/tickets/${tid}`))
+        check('客服端看得到那個編號目前登記在誰名下',
+          detail.ticket?.certHolder?.userId === 'u-seller', JSON.stringify(detail.ticket?.certHolder))
+
+        check('認領成功', (await call(platform, `/v1/admin/tickets/${tid}/claim`, {})).ok)
+        check('自己重複認領不噴錯', (await call(platform, `/v1/admin/tickets/${tid}/claim`, {})).ok)
+
+        check('客服回覆成功',
+          (await call(platform, `/v1/admin/tickets/${tid}/messages`, { body: '請補上交易紀錄截圖' })).ok)
+        const afterStaff = await json(await call(buyer, `/v1/tickets/${tid}`))
+        check('客服回覆把狀態推成 pending-user（球在使用者那邊）',
+          afterStaff.ticket?.status === 'pending-user', afterStaff.ticket?.status)
+        check('使用者這一側看得到未讀', afterStaff.ticket?.unread === true)
+
+        check('使用者回覆成功', (await call(buyer, `/v1/tickets/${tid}/messages`, { body: '截圖如附件' })).ok)
+        const afterUser = await json(await call(buyer, `/v1/tickets/${tid}`))
+        check('使用者回覆把 pending-user 推回 open（球回到客服手上）',
+          afterUser.ticket?.status === 'open', afterUser.ticket?.status)
+        check('訊息串照順序長出來', afterUser.ticket?.messages?.length === 3,
+          `${afterUser.ticket?.messages?.length}`)
+
+        const noReason = await call(platform, `/v1/admin/tickets/${tid}/resolve`,
+          { outcome: 'resolved', resolution: '' })
+        check('結案理由必填（沒有理由的裁決事後無法覆核）', noReason.status === 400, `${noReason.status}`)
+
+        if (cand.status === 'listed') {
+          /* 撞到還掛在市場上的卡：**擋下來，不是搶走**。
+             過戶到一半成交會變成一卡兩賣，而下架是有出路的 —— 直接拒絕
+             等於逼一個什麼都沒做錯的人重開一張單。 */
+          const busy = await call(platform, `/v1/admin/tickets/${tid}/resolve`,
+            { outcome: 'resolved', resolution: '查證屬實' })
+          const bj = await json(busy)
+          check('卡片還掛在市場上時，接管被擋下而不是直接搶走',
+            busy.status === 409 && bj.error === 'CARD_BUSY', `${busy.status} ${JSON.stringify(bj)}`)
+          check('而且講得出客服該先處理哪一邊', String(bj.message).includes('下架'), bj.message)
+
+          const mine = (await allListings()).find((l: Any) => l.prizeId === cand.id)
+          if (mine) check('把那張卡下架', (await call(seller, `/v1/listings/${mine.id}/delist`, {})).ok)
+          else check('（找不到對應的掛單，下架這一步跳過）', false)
+        }
+
+        const doneR = await call(platform, `/v1/admin/tickets/${tid}/resolve`,
+          { outcome: 'resolved', resolution: '交易紀錄與卡況相符，過戶給申請人' })
+        const done = await json(doneR)
+        check('接管單結案成功', doneR.ok, `${doneR.status} ${JSON.stringify(done).slice(0, 250)}`)
+        check('稽核看得出動到的是哪一列卡', done.effect?.takeover?.prizeId === cand.id,
+          JSON.stringify(done.effect))
+
+        const got = (await allPrizes(buyer)).find((p: Any) => p.id === cand.id)
+        check('卡真的過到申請人名下（user_id）', got?.user_id === 'u-buyer', String(got?.user_id))
+        check('實體保管人也一起改了（custodian_id）—— 站外轉手是唯一兩者同時易主的路徑',
+          got?.custodian_id === 'u-buyer', String(got?.custodian_id))
+        check('狀態設成 in_book（可以上架、可以進池）', got?.status === 'in_book', String(got?.status))
+
+        const closed = await call(buyer, `/v1/tickets/${tid}/messages`, { body: '再問一句' })
+        const cj = await json(closed)
+        check('已結案的單不能再回覆（409）',
+          closed.status === 409 && cj.error === 'TICKET_CLOSED', `${closed.status}`)
+        check('而且建議他開一張新的', String(cj.message).includes('新的工單'), cj.message)
+
+        check('結案寫進 admin_actions',
+          ((await json(await call(platform, '/v1/admin/actions'))).actions ?? [])
+            .some((a: Any) => a.action === 'ticket-resolve' && a.target === tid))
+      }
+
+      /* ---- 訂單爭議：自動開單，而且結案走既有的裁決邏輯 ---- */
+      {
+        const shipL = (await allListings()).find((l: Any) => l.delivery === 'ship' && l.status === 'live')
+        if (!shipL) {
+          check('（跳過訂單爭議：沒有可買的需寄送掛單）', false)
+        } else {
+          const sellerTok = await login(String(shipL.sellerId).replace(/^u-/, ''), '掛單賣家')
+          const bought = await json(await call(buyer, '/v1/orders',
+            { listingId: shipL.id, idempotencyKey: 'smoke-tk-' + Date.now() }))
+          const oid = bought.order?.id as string | undefined
+          check('買下一張需寄送的卡（爭議只發生在託管訂單上）', !!oid, JSON.stringify(bought).slice(0, 200))
+
+          if (oid) {
+            const trk = 'SMK' + Date.now().toString(36).toUpperCase()
+            check('賣家出貨',
+              (await call(sellerTok, `/v1/orders/${oid}/ship`, { carrier: 'other', tracking: trk })).ok)
+
+            const wBefore = (await json(await call(buyer, '/v1/orders'))).wallet
+            const dis = await call(buyer, `/v1/orders/${oid}/dispute`,
+              { reason: '卡片有摺痕，與描述不符', videoUrl: 'https://example.com/unbox.mp4' })
+            check('買家開爭議', dis.ok, `${dis.status} ${(await dis.clone().text()).slice(0, 150)}`)
+
+            const dq = await json(await call(platform, '/v1/admin/tickets?kind=order-dispute'))
+            const dtk = (dq.items ?? []).find((x: Any) => String(x.subject).startsWith('訂單爭議'))
+            check('爭議成立後自動長出一張 order-dispute 單', !!dtk, JSON.stringify(dq).slice(0, 250))
+
+            /* 既有的端點**保留不動**：工單那層萬一有問題還有退路。
+               這一條就是在守那個承諾 —— 自動開單不能把舊佇列弄不見。 */
+            const legacy = await json(await call(platform, '/v1/admin/disputes'))
+            check('既有的 /v1/admin/disputes 還是看得到那筆',
+              (legacy.disputes ?? []).some((d: Any) => d.id === oid),
+              JSON.stringify((legacy.disputes ?? []).map((d: Any) => d.id)))
+
+            if (dtk) {
+              const dd = await json(await call(platform, `/v1/admin/tickets/${dtk.id}`))
+              check('自動開的單掛在買家名下、帶著 orderId',
+                dd.ticket?.userId === 'u-buyer' && dd.ticket?.orderId === oid,
+                JSON.stringify({ u: dd.ticket?.userId, o: dd.ticket?.orderId }))
+              check('第一則訊息就是買家填的爭議理由',
+                dd.ticket?.messages?.[0]?.body === '卡片有摺痕，與描述不符',
+                dd.ticket?.messages?.[0]?.body)
+
+              const noTo = await call(platform, `/v1/admin/tickets/${dtk.id}/resolve`,
+                { outcome: 'resolved', resolution: '判給買家' })
+              check('爭議單結案沒指定判給誰會被擋（那是會實際移動點數的動作）',
+                noTo.status === 400 && String((await json(noTo)).message).includes('disputeTo'),
+                `${noTo.status}`)
+
+              const rr = await json(await call(platform, `/v1/admin/tickets/${dtk.id}/resolve`,
+                { outcome: 'resolved', resolution: '影片可見摺痕，判給買家', disputeTo: 'buyer' }))
+              check('爭議單結案走的是既有的裁決（訂單變 refunded）',
+                rr.effect?.dispute?.orderStatus === 'refunded', JSON.stringify(rr.effect))
+
+              const wAfter = (await json(await call(buyer, '/v1/orders'))).wallet
+              check('買家的貨款真的照既有邏輯解凍了',
+                wAfter.locked === wBefore.locked - bought.order.price,
+                `locked ${wBefore.locked} → ${wAfter.locked}，貨款 ${bought.order.price}`)
+
+              const legacy2 = await json(await call(platform, '/v1/admin/disputes'))
+              check('裁決之後既有端點的爭議清單也跟著清掉（同一個事實，不是兩份）',
+                !(legacy2.disputes ?? []).some((d: Any) => d.id === oid))
+            }
+          }
+        }
+      }
+
+      /* ---- 賣家送審自動開單 ----
+         需要一個真的 seller-doc 檔案，而那要 R2 才產得出來 ——
+         沒設定就明確跳過，不要假裝驗過（比照上面檔案上傳那一段的作法）。 */
+      {
+        const docPre = await call(buyer, '/v1/files/presign',
+          { purpose: 'seller-doc', mime: 'image/png', bytes: 100 })
+        if (docPre.status === 503) {
+          check('（跳過賣家送審自動開單：R2 未設定，產不出 seller-doc 檔案）', true)
+        } else {
+          const { fileId: docId } = await json(docPre)
+          const ap = await call(buyer, '/v1/seller/apply',
+            { name: '煙霧測試小舖', origin: 'personal', docFileId: docId })
+          check('賣家補件成功', ap.ok, `${ap.status}`)
+          const sq = await json(await call(platform, '/v1/admin/tickets?kind=seller-doc'))
+          const stk = (sq.items ?? [])[0]
+          check('送審成功後自動長出一張 seller-doc 單', !!stk, JSON.stringify(sq).slice(0, 200))
+          if (stk) {
+            const sr = await json(await call(platform, `/v1/admin/tickets/${stk.id}/resolve`,
+              { outcome: 'resolved', resolution: '證件清晰，通過' }))
+            check('seller-doc 結案呼叫到既有的審核邏輯',
+              sr.effect?.verification?.updated === true, JSON.stringify(sr.effect))
+            check('既有的 /v1/admin/verifications 仍然讀得到',
+              (await call(platform, '/v1/admin/verifications')).ok)
+          }
+        }
+      }
+    }
+
     /* 對帳：全站的點數總量必須等於實際發行量。
        這條是整套設計唯一的驗收標準 —— 對不上就代表有一筆分錄只有單邊。 */
     {

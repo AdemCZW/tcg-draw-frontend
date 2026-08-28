@@ -15,6 +15,7 @@ import { notify } from '../notify.js'
 import { lockSpender, walletOf } from '../money.js'
 import { PLATFORM_ID, depositFor, save, settle, sweep, toOrder } from '../orders-service.js'
 import { actionsFor, validateTracking } from '../shared/escrow.js'
+import { openDisputeTicket } from '../tickets.js'
 import type { Order } from '../shared/domain.js'
 
 export const orders = new Hono()
@@ -263,6 +264,18 @@ orders.post('/:id/dispute', async c => {
   const r = await act(me, c.req.param('id'), 'buyer', 'dispute',
     o => ({ ...o, status: 'disputed', disputedAt: Date.now(), disputeReason: reason, hasUnboxingVideo: true }))
   if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
+
+  /* 爭議成立之後補開一張客服工單（合約第五節）。**這個端點的行為一點都沒變**：
+     上面那段 act() 才是爭議本身，工單只是把它送進統一的佇列讓客服看得到、
+     而且讓買賣雙方有地方講話。既有的 /v1/admin/disputes 也還照樣看得到這一筆。
+
+     開單失敗**不會讓這個端點失敗** —— openDisputeTicket 自己吞掉例外只記 log
+     （比照 notifyMany）。爭議本身已經成立了、點數已經凍結了，
+     工單開不出來是我們的問題，不該讓使用者的申訴消失。
+
+     await 而不是 void：工單在回應送出前就寫好，前端跳到 /support 時看得到它。
+     它不會 reject，所以不需要 catch。 */
+  await openDisputeTicket(r.order.id)
   return c.json({ ...r, wallet: await walletOf(me) })
 })
 

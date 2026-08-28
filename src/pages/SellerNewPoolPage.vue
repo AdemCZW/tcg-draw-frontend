@@ -217,6 +217,9 @@ const worstBuyback = computed(() => {
 
 const busy = ref(false)
 const error = ref('')
+/* 撞到 CERT_ALREADY_LISTED 時，可以拿去申請接管的編號。
+   平常是空的 —— 這個出口只在被擋住的那一刻存在，不是常駐的一顆按鈕。 */
+const takeoverCerts = ref<{ certNo: string; grader: string }[]>([])
 
 /* 即時試算。computeEconomics 內部走 shared/economics.ts，跟後端建池時
    用的是同一份門檻 —— 這一頁看到的綠燈跟伺服器的判斷不會分岔。 */
@@ -396,6 +399,7 @@ async function submit() {
   if (!valid.value) { goTo(problems.value[0]!.anchor); return }
   if (!me.value) return
   error.value = ''
+  takeoverCerts.value = []
   busy.value = true
   try {
     const pool = await pools.createPool({
@@ -430,6 +434,28 @@ async function submit() {
         if (row) row.certMismatch = { psaCardNumber: m.psaCardNumber, psaSubject: m.psaSubject }
       }
       error.value = e.message
+    } else if (e instanceof ApiError && e.code === 'CERT_ALREADY_LISTED') {
+      /* 「這個編號已經登記在系統裡了」是整條路上唯一一個**使用者做對了事
+         卻走不下去**的錯誤：卡在他手上，但編號還掛在上一手名下。
+         後端那句話的結尾是「請聯絡客服」—— 而平台上找客服的路他不見得知道。
+
+         所以出口要接在被擋住的當下，不是叫他自己去翻客服頁：
+         這裡把可以申請接管的編號列出來，一鍵帶著編號跳到開單頁並預填。
+         這一步是整個工單功能的意義所在。 */
+      error.value = e.message
+      /* 後端只回 { error, message }，沒有講是哪一個編號撞到
+         （mock 會多帶一組，見 lib/api.ts）。所以退回表單上**所有**有編號的卡，
+         讓賣家自己指認是哪一張 —— 猜一張填進去比讓他選更糟：
+         填錯的接管單要整張作廢重開。 */
+      const hit = e.data as { certNo?: string; grader?: string } | null
+      if (hit?.certNo) {
+        takeoverCerts.value = [{ certNo: hit.certNo, grader: hit.grader || 'PSA' }]
+      } else {
+        const seen = new Set<string>()
+        takeoverCerts.value = form.prizes
+          .map(p => ({ certNo: p.pick.card.certNo ?? '', grader: p.pick.card.grader || 'PSA' }))
+          .filter(c => c.certNo && !seen.has(c.certNo) && seen.add(c.certNo))
+      }
     } else {
       error.value = e instanceof ApiError ? e.message : '開池失敗，請稍後再試'
     }
@@ -792,6 +818,25 @@ async function submit() {
         </div>
 
         <p v-if="error" class="err">{{ error }}</p>
+
+        <!-- 編號已被登記：把出路接在錯誤訊息旁邊。
+             使用者被擋住的當下就看得到下一步，而不是自己去找客服頁。 -->
+        <div v-if="takeoverCerts.length" class="takeover" data-testid="takeover-box">
+          <p class="takeoverT">這張卡真的在你手上嗎？</p>
+          <p class="takeoverP">
+            如果你是在站外買到這張實體卡，可以申請把編號接管到你名下。
+            通過之後這張卡就是你的，開池與上架都不會再被擋。
+          </p>
+          <div class="takeoverBtns">
+            <RouterLink
+              v-for="c in takeoverCerts" :key="c.certNo"
+              class="btn takeoverGo"
+              data-testid="takeover-go"
+              :to="{ name: 'support-new',
+                     query: { kind: 'takeover', certNo: c.certNo, grader: c.grader, from: 'pool' } }"
+            >申請接管 {{ c.grader }} #{{ c.certNo }}</RouterLink>
+          </div>
+        </div>
         <!-- **刻意不禁用**：禁用的按鈕沒有辦法解釋自己，而這一頁的欄位多半
              捲在畫面外。按得下去、按下去把第一個問題捲到眼前並聚焦。 -->
         <button type="submit" class="btn primary go" :class="{ notyet: !valid }" :disabled="busy">
@@ -1004,6 +1049,22 @@ dd { margin: 0; font-weight: 600; }
    按下去會告訴你還差什麼 */
 .go.notyet { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
 .err { color: var(--danger); font-size: 12.5px; font-weight: 600; margin: 0; }
+
+/* 編號已被登記時的出口。用強調色的 wash 而不是紅底：
+   它不是又一則錯誤，它是**解法**，要讀起來像一條路而不是第二個壞消息。 */
+.takeover {
+  margin: 10px 0 0; padding: 13px 15px; min-width: 0;
+  background: var(--accent-wash); border-radius: var(--radius);
+}
+.takeoverT { margin: 0; font-size: 13px; font-weight: 700; color: var(--ink); }
+.takeoverP { margin: 6px 0 0; font-size: 12px; line-height: 1.85; color: var(--muted); }
+.takeoverBtns { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 11px; }
+.takeoverGo {
+  min-height: 44px; padding: 0 16px; min-width: 0;
+  font-size: 13px; text-decoration: none;
+  /* 編號不截斷 —— 賣家要靠它認出是哪一張卡 */
+  white-space: normal; overflow-wrap: anywhere;
+}
 
 /* ---- 還差什麼 ---- */
 .todo {

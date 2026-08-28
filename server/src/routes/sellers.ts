@@ -17,6 +17,7 @@ import { notify } from '../notify.js'
 import { walletOf } from '../money.js'
 import { markShipped, sweepSettlements, toSettlement } from '../pool-settlement.js'
 import { validateTracking } from '../shared/escrow.js'
+import { openSellerDocTicket } from '../tickets.js'
 
 export const sellers = new Hono()
 sellers.use('*', requireAuth)
@@ -96,6 +97,15 @@ sellers.post('/apply', async c => {
     return { seller: { id: me, tier: 'pending' }, already: false }
   })
   if ('error' in r) return c.json(r, r.status as 400 | 404)
+
+  /* 送審文件成功之後補開一張客服工單（合約第五節）。**這個端點的行為沒有變**：
+     seller_verifications 那一列才是審核的權威狀態，既有的
+     /v1/admin/verifications 也還照樣看得到它。工單只是讓這件事跟其他
+     需要人介入的事排在同一個佇列裡，並且讓賣家有地方補件與問進度。
+
+     只有真的有送件（docFileId）才開單 —— 沒送件的申請沒有東西可以審。
+     開單失敗不會讓申請失敗（openSellerDocTicket 自己吞掉例外只記 log）。 */
+  if (docFileId) await openSellerDocTicket(me, docFileId)
   return c.json(r)
 })
 

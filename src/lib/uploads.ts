@@ -20,7 +20,7 @@ import { ApiError, http } from './http'
 
 const MB = 1024 * 1024
 
-export type UploadPurpose = 'pool-cover' | 'ship-photo' | 'unbox-video' | 'seller-doc' | 'avatar'
+export type UploadPurpose = 'pool-cover' | 'ship-photo' | 'unbox-video' | 'seller-doc' | 'avatar' | 'ticket-doc'
 
 /**
  * 前端這份規則是 server/src/routes/files.ts 的鏡像，唯一的目的是
@@ -32,7 +32,11 @@ export const UPLOAD_RULES: Record<UploadPurpose, { mimes: string[]; maxBytes: nu
   avatar: { mimes: ['image/jpeg', 'image/png', 'image/webp'], maxBytes: 4 * MB, kinds: 'JPG／PNG／WebP' },
   'ship-photo': { mimes: ['image/jpeg', 'image/png', 'image/webp'], maxBytes: 15 * MB, kinds: 'JPG／PNG／WebP' },
   'unbox-video': { mimes: ['video/mp4', 'video/quicktime', 'video/webm'], maxBytes: 300 * MB, kinds: 'MP4／MOV／WebM' },
-  'seller-doc': { mimes: ['image/jpeg', 'image/png', 'application/pdf'], maxBytes: 15 * MB, kinds: 'JPG／PNG／PDF' }
+  'seller-doc': { mimes: ['image/jpeg', 'image/png', 'application/pdf'], maxBytes: 15 * MB, kinds: 'JPG／PNG／PDF' },
+  /* 客服工單的附件（migration 026 放行的用途）。
+     這一條曾經被兩支前端各自用「執行期補登」塞進來 —— 使用者端一份、
+     後台端一份，規則抄兩處要人工同步。規則表只能有一份、住在這裡。 */
+  'ticket-doc': { mimes: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'], maxBytes: 15 * MB, kinds: 'JPG／PNG／WebP／PDF' }
 }
 
 /** <input accept="…">。這只是檔案選擇器的過濾，擋不住拖進來的檔案，所以下面還是要驗 */

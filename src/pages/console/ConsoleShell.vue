@@ -13,11 +13,13 @@
 import { computed, onMounted, provide, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useTicketsStore } from '@/stores/tickets'
 import { http, useAsync, type Overview } from './shared'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const tickets = useTicketsStore()
 const { err, run } = useAsync()
 
 const overview = ref<Overview | null>(null)
@@ -26,9 +28,16 @@ async function loadOverview() {
   if (r) overview.value = r.overview
 }
 onMounted(loadOverview)
+/* 工單的待辦數字跟 overview 分開拿：/v1/admin/overview 沒有工單欄位，
+   而側欄的重點是「現在有什麼要我處理」—— 少了工單那一項就不完整。
+   失敗時 store 自己吞掉（側欄的數字不值得為它跳一句紅字）。 */
+onMounted(() => tickets.adminRefreshCount())
 /* 子頁處理完事情後要能讓側欄的數字跟著減 —— 出貨標記完成了，
    側欄還掛著「3」會讓人以為沒存到 */
-provide('console:refresh', loadOverview)
+provide('console:refresh', async () => {
+  await loadOverview()
+  await tickets.adminRefreshCount()
+})
 provide('console:overview', overview)
 
 type Nav = { name: string; label: string; icon: string; badge?: () => number }
@@ -39,13 +48,22 @@ const NAV: Nav[] = [
   { name: 'console-pools', label: '池', icon: 'M4 6h16v12H4zM4 10h16M9 6v12' },
   { name: 'console-sellers', label: '賣家審核', icon: 'M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z', badge: () => overview.value?.sellers_pending ?? 0 },
   { name: 'console-disputes', label: '爭議', icon: 'M12 4l9 16H3zM12 10v4M12 17v.5', badge: () => overview.value?.orders_disputed ?? 0 },
+  /* 客服工單排在爭議之後、稽核之前：它是「使用者在等我」那一群的最後一項，
+     而稽核紀錄是事後查帳，不是待辦。待辦數字不走 overview（那支端點沒有工單欄位），
+     直接讀工單 store 自己的計數。 */
+  { name: 'console-tickets', label: '客服工單', icon: 'M4 5h16v11H8l-4 3zM8 9h8M8 12.5h5', badge: () => tickets.adminPendingCount },
   { name: 'console-audit', label: '稽核紀錄', icon: 'M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5' }
 ]
 
-/* 會員詳情是 console-user 但屬於「會員」區，要讓側欄保持高亮 */
+/* 詳情頁的路由名跟它所屬的區不同名，要對回去側欄才會保持高亮：
+   會員詳情是 console-user、工單詳情是 console-ticket（都少一個 s）。 */
+const SECTION_OF: Record<string, string> = {
+  'console-user': 'console-users',
+  'console-ticket': 'console-tickets'
+}
 const activeName = computed(() => {
   const n = String(route.name ?? '')
-  return n === 'console-user' ? 'console-users' : n
+  return SECTION_OF[n] ?? n
 })
 
 const menuOpen = ref(false)
