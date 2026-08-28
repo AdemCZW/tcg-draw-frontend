@@ -8,8 +8,23 @@
  *
  *   DATABASE_URL=... JWT_SECRET=... npx tsx src/regress-monitor.ts
  *
- * ⚠️ 要自己一個乾淨的庫（migrate + seed）。它會故意寫壞資料。
+ * ⚠️ **這支會故意把資料庫寫壞**（單邊分錄、負餘額、狀態不一致…）——
+ * 那是它的工作：驗證每一種壞法都被檢測抓得到。所以它**必須跑在一個
+ * 用完就丟的庫上**，而且第一段「乾淨的庫要全綠」只有在真的乾淨時才成立。
+ *
+ * 一度想把 fixture 的 id 都帶隨機字尾讓它能重複跑，但那是治標：
+ * 上一輪弄壞的資料還留著，第二輪的「乾淨的庫要全綠」必然失敗，
+ * 而那個失敗完全沒有意義。**id 仍然帶 runId**（避開同一輪內的碰撞與
+ * 手動重跑時難懂的主鍵錯誤），但正確的用法一律是先開一個新庫。
+ *
+ * fixture 的 ref_id 帶隨機字尾：`ledger_once` 是 (ref_id, user_id, reason)
+ * 的唯一索引，用固定字串的話同一個庫跑第二次會撞 23505 —— 而那正是那道
+ * 防線該做的事，不是缺陷。帶隨機字尾讓這支可以重複跑。
+ * 所有 fixture 的 id 一律帶同一個 runId 字尾 —— 之前只改了帳本那兩筆，
+ * 結果 settlements / prizes / shipments 照樣在第二次跑撞主鍵。
+ * 同一個 runId 讓同一輪的 fixture 互相對得起來，跨輪則不衝突。
  */
+import { randomBytes } from 'node:crypto'
 import { sql } from './db.js'
 import { runMonitor, alertFindings } from './monitor.js'
 
@@ -32,18 +47,24 @@ head('乾淨的庫要全綠')
   void r1
 }
 
+/* 這一輪所有 fixture 共用的字尾，讓這支可以重複跑（見檔頭） */
+const runId = randomBytes(4).toString('hex')
+
 head('每一種弄壞的不變式都要被抓到')
 const now = Date.now()
 let report2!: Awaited<ReturnType<typeof runMonitor>>
 {
   // 1. 單邊分錄 → drift 變了
   await sql`insert into points_ledger (user_id, delta, reason, ref_id)
-            values ('u-buyer', 12345, 'draw', 'monitor-test-oneside')`
+            values ('u-buyer', 12345, 'draw', ${'monitor-test-oneside-' + runId})`
   // 2. 負餘額
-  await sql`insert into users (id, handle, member_no, name) values ('u-neg', 'negtest', 'VD-NEG1', '負餘額')
+  /* handle 與 member_no 也各有唯一索引，一起帶 runId ——
+     只改 id 的話第二次跑會撞 users_handle_key。 */
+  await sql`insert into users (id, handle, member_no, name)
+            values (${'u-neg-' + runId}, ${'negtest-' + runId}, ${'VD-N' + runId}, '負餘額')
             on conflict (id) do nothing`
   await sql`insert into points_ledger (user_id, delta, reason, ref_id)
-            values ('u-neg', -500, 'draw', 'monitor-test-neg')`
+            values (${'u-neg-' + runId}, -500, 'draw', ${'monitor-test-neg-' + runId})`
   // 3. 結算與卡片各說各話
   const [anyPrize] = await sql<{ id: string; pool_id: string; user_id: string }[]>`
     select id, pool_id, user_id from prizes limit 1`
@@ -53,12 +74,12 @@ let report2!: Awaited<ReturnType<typeof runMonitor>>
      第一版用 insert...select from draws limit 1，靜默插了 0 列，
      兩個結算 fixture 根本不存在，測試「抓不到」其實是「沒東西可抓」。 */
   await sql`insert into draws (id, pool_id, user_id, seats, cost, source, created_at)
-            values ('d-mon-test', ${anyPrize.pool_id}, ${anyPrize.user_id}, ${[9901]}, 0, 'draw', ${now})
+            values (${'d-mon-test-' + runId}, ${anyPrize.pool_id}, ${anyPrize.user_id}, ${[9000 + (parseInt(runId, 16) % 900)]}, 0, 'draw', ${now})
             on conflict (id) do nothing`
   await sql`insert into pool_settlements
               (id, pool_id, seller_id, buyer_id, draw_id, seat, prize_id, amount, fee, status, created_at)
-            values ('st-mon-test', ${anyPrize.pool_id}, 'u-seller', ${anyPrize.user_id},
-                   'd-mon-test', 9901, ${anyPrize.id}, 100, 0, 'refunded', ${now})`
+            values (${'st-mon-test-' + runId}, ${anyPrize.pool_id}, 'u-seller', ${anyPrize.user_id},
+                   ${'d-mon-test-' + runId}, ${9000 + (parseInt(runId, 16) % 900)}, ${anyPrize.id}, 100, 0, 'refunded', ${now})`
   // 卡片留在原狀態（不是 refunded）→ desync
   // 4. 掛單指著不在上架狀態的卡
   await sql`update prizes set status = 'stashed' where id in
@@ -67,26 +88,26 @@ let report2!: Awaited<ReturnType<typeof runMonitor>>
   const [pool] = await sql<{ id: string }[]>`select id from pools limit 1`
   if (!pool) throw new Error('種子資料不完整：沒有池可用')
   await sql`insert into prizes (id, user_id, pool_id, card, tier, status, won_at, acquired_at, stash_expires_at)
-            values ('pz-mon-inpool', 'u-seller', ${pool.id}, ${sql.json({ name: '檢測用' })}, 'A', 'in_pool',
+            values (${'pz-mon-inpool-' + runId}, 'u-seller', ${pool.id}, ${sql.json({ name: '檢測用' })}, 'A', 'in_pool',
                     ${now}, ${now}, ${now})`
   await sql`update pools set status = 'revealed' where id = ${pool.id}`
   // 6. 過期一天以上的結算
   await sql`insert into pool_settlements
               (id, pool_id, seller_id, buyer_id, draw_id, seat, prize_id, amount, fee, status, created_at, ship_due_at)
-            values ('st-mon-stall', ${anyPrize.pool_id}, 'u-seller', ${anyPrize.user_id},
-                   'd-mon-test', 9902, ${anyPrize.id}, 100, 0, 'awaiting_ship', ${now}, ${now - 3 * 86_400_000})`
+            values (${'st-mon-stall-' + runId}, ${anyPrize.pool_id}, 'u-seller', ${anyPrize.user_id},
+                   ${'d-mon-test-' + runId}, ${9000 + (parseInt(runId, 16) % 900) + 1}, ${anyPrize.id}, 100, 0, 'awaiting_ship', ${now}, ${now - 3 * 86_400_000})`
   // 7. 殭屍出貨單
-  await sql`update prizes set status = 'refunded' where id = 'pz-mon-inpool'`
+  await sql`update prizes set status = 'refunded' where id = ${'pz-mon-inpool-' + runId}`
   await sql`insert into shipments (id, user_id, prize_ids, address, created_at)
-            values ('sh-mon-test', 'u-seller', ${['pz-mon-inpool']},
+            values (${'sh-mon-test-' + runId}, 'u-seller', ${['pz-mon-inpool-' + runId]},
                     ${sql.json({ name: 'x', phone: '0900000000', line1: 'x', city: 'x' })}, ${now})`
   // 7 蓋掉了 5 的 in_pool —— 再補一張真的 in_pool
   await sql`insert into prizes (id, user_id, pool_id, card, tier, status, won_at, acquired_at, stash_expires_at)
-            values ('pz-mon-inpool2', 'u-seller', ${pool.id}, ${sql.json({ name: '檢測用2' })}, 'A', 'in_pool',
+            values (${'pz-mon-inpool2-' + runId}, 'u-seller', ${pool.id}, ${sql.json({ name: '檢測用2' })}, 'A', 'in_pool',
                     ${now}, ${now}, ${now})`
   // 8. 有編號沒 grader
   await sql`insert into prizes (id, user_id, pool_id, card, tier, status, won_at, acquired_at, stash_expires_at, cert_no)
-            values ('pz-mon-nograder', 'u-seller', ${pool.id}, ${sql.json({ name: '檢測用3' })}, 'B', 'stashed',
+            values (${'pz-mon-nograder-' + runId}, 'u-seller', ${pool.id}, ${sql.json({ name: '檢測用3' })}, 'B', 'stashed',
                     ${now}, ${now}, ${now}, '55555555')`
 
   const r = await runMonitor()
