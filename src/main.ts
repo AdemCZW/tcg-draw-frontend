@@ -11,7 +11,6 @@ import { installTapGuard } from './lib/tap-guard'
 
 import { MOCK } from './lib/config'
 import { useAuthStore } from './stores/auth'
-import { api } from './lib/api'
 
 installTouchGuard()
 installTapGuard()
@@ -39,7 +38,9 @@ const app = createApp(App).use(pinia).use(router)
    不阻塞掛載 —— 先畫出上次存的使用者，回來再校正。 */
 if (!MOCK) {
   const auth = useAuthStore()
-  auth.refresh().then(() => { if (auth.isLoggedIn) api.wallet().catch(() => {}) })
+  /* refresh() 自己會在拿到身分之後順手同步錢包（見 stores/auth.ts），
+     所以這裡不必再問一次 —— 兩次呼叫只是多打一趟同樣的請求。 */
+  auth.refresh()
 }
 
 app.mount('#app')

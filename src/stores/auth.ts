@@ -52,6 +52,21 @@ export const useAuthStore = defineStore('auth', {
         if (!token.get()) { this.user = null; save(null) }
         else console.warn('[auth] /me 暫時連不上，保留登入狀態', e instanceof Error ? e.message : e)
       }
+      /* 拿到身分之後**順手把餘額也問一次**。
+         錢包只有兩條更新路徑：main.ts 啟動時拉一次，以及某些 API 回應
+         順帶夾帶的 wallet 欄位。而三種登入（Email、註冊、LINE）都是在
+         啟動之後才發生的 —— 少了這一步，登入完成後餘額會一直停在初始值 0，
+         要等到使用者剛好做了某個會夾帶 wallet 的動作（抽卡、買東西）
+         才會跳成正確的數字，或是自己重新整理一次。
+         實際踩到過：LINE 登入送的一百萬點在畫面上是 0，看起來像被清空。
+
+         修在這裡而不是三個呼叫點各補一行：登入方式之後還會再增加，
+         補在呼叫點的話下一種一定會漏。refresh() 是三條路的交會點。
+         失敗不擋登入也不清狀態 —— 餘額晚點補上，比把人擋在登入流程外好。
+         動態 import 避開循環相依（api.ts 會 import 這個 store）。 */
+      if (this.user) {
+        import('@/lib/api').then(m => m.api.wallet()).catch(() => {})
+      }
       return this.user
     },
 
