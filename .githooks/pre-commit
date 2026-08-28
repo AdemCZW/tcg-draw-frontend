@@ -1,0 +1,62 @@
+#!/bin/sh
+# 提交前的守門。
+#
+# ── 為什麼需要 ──────────────────────────────────────────────────────
+# 2026-08-28 出過一次事：後端改完要提交時用了 `git add -A`，而當下有一支
+# 背景 agent 正在同一個工作樹寫前端檔案。結果它**還沒完工的 1,038 行**被
+# 掃進那個 commit 推上正式環境，而 commit 訊息完全沒提到它們。
+# 那次沒炸掉是運氣 —— agent 的程式碼碰巧是完整可編譯的。早三十秒提交，
+# 推上線的就會是一個寫到一半的檔案，前端建置失敗、網站掛掉。
+#
+# 這支 hook 是那件事的機械式防線。它擋不住「我不小心多加了檔案」，
+# 但擋得住那件事真正的後果：**把一份建不起來的程式碼推出去**。
+#
+# ── 為什麼用 stash 而不是直接建置工作樹 ─────────────────────────────
+# 直接建置工作樹驗的是「工作樹能不能建」，那**不是**我們要問的問題 ——
+# 要問的是「**這個 commit 本身**能不能建」。兩者在有未暫存變更時會分岔：
+# 未暫存的檔案可能剛好補上了暫存區缺的東西，於是工作樹建得起來、
+# 推出去的 commit 卻建不起來。所以要先把未暫存的部分藏起來再建。
+#
+# `--keep-index` 保留暫存區、只藏起未暫存的變更；`-u` 連未追蹤檔案一起藏
+# （不然 agent 新寫的檔案還留在原地，等於沒藏）。
+# trap 確保任何離開路徑都會還原 —— 建置失敗、Ctrl+C、hook 自己出錯，
+# 都不能把使用者的工作留在 stash 裡。
+
+set -e
+
+# 沒有暫存任何東西就不用驗（例如 git commit --amend --no-edit 之類）
+git diff --cached --quiet && exit 0
+
+# 只有動到前端原始碼才需要建置。改的全是後端或文件時，
+# 跑一次 40 秒的前端建置只是懲罰。
+if ! git diff --cached --name-only | grep -qE '^(src/|index\.html|vite\.config\.ts|package(-lock)?\.json)'; then
+  exit 0
+fi
+
+echo "[pre-commit] 前端有改動，驗證這個 commit 本身建得起來…"
+
+STASHED=0
+restore() {
+  if [ "$STASHED" = "1" ]; then
+    git stash pop --quiet 2>/dev/null || echo "[pre-commit] ⚠ stash pop 失敗，你的未暫存變更還在 git stash list 裡"
+  fi
+}
+trap restore EXIT INT TERM
+
+if git stash push --keep-index -u --quiet -m "pre-commit: 暫離未暫存變更" 2>/dev/null; then
+  STASHED=1
+fi
+
+if npm run build >/tmp/precommit-build.log 2>&1; then
+  echo "[pre-commit] 建置通過"
+else
+  echo ""
+  echo "[pre-commit] ✗ 這個 commit 建不起來，提交已中止。"
+  echo "  最後 20 行："
+  tail -20 /tmp/precommit-build.log | sed 's/^/    /'
+  echo ""
+  echo "  完整記錄：/tmp/precommit-build.log"
+  echo "  常見原因：暫存了 agent 寫到一半的檔案，或漏暫存了某個相依的檔案。"
+  echo "  真的要跳過（很少該這樣）：git commit --no-verify"
+  exit 1
+fi

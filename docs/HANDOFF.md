@@ -334,6 +334,37 @@ SSE 端點 `GET /v1/social/notifications/stream` 把訊號推給該使用者的�
 
 使用者對「說做好了但其實沒驗」非常敏感。**先有證據再下結論。**
 
+### 提交前的守門（2026-08-28 加）
+
+`.githooks/pre-commit` 會在**動到前端原始碼**時，驗證「這個 commit 本身」
+建不建得起來。第一次 clone 之後要跑一次讓它生效：
+
+```bash
+git config core.hooksPath .githooks
+```
+
+**為什麼會有這支**：出過一次事 —— 後端改完要提交時用了 `git add -A`，
+而當下有一支背景 agent 正在同一個工作樹寫前端檔案，結果它**還沒完工的
+1,038 行**被掃進那個 commit 推上正式環境，commit 訊息也完全沒提到它們。
+那次沒炸是運氣（agent 的程式碼碰巧完整可編譯），早三十秒提交推出去的
+就是一個寫到一半的檔案。
+
+它用 `git stash --keep-index -u` 把未暫存的部分先藏起來再建 —— 直接建
+工作樹驗的是「工作樹能不能建」，而我們要問的是「**這個 commit** 能不能
+建」，兩者在有未暫存變更時會分岔。
+
+**但 hook 只是最後一道，不是解法。** 真正的規則是：
+
+> **有 agent 在跑的時候，永遠不要 `git add -A`。逐檔指定。**
+
+`git status` 要問的不是「有沒有敏感檔案」，是「**這些是不是我的改動**」。
+分不清楚就先 `git diff` 看過再決定。
+另一個更徹底的做法是讓寫程式的 agent 跑在獨立的 git worktree
+（Agent 工具的 `isolation: "worktree"`），從結構上就撞不到 —— 代價是那個
+worktree 沒有 node_modules，agent 要自己 npm install。
+
+---
+
 ### 建置
 
 ```bash
