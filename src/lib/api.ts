@@ -6,7 +6,7 @@
 // ------------------------------------------------------------------
 import type {
   Pool, DrawResult, UserPrize, LedgerEntry, WinnerEvent,
-  Seller, Listing, CardItem, PoolStatus, Tier
+  Seller, Listing, CardItem, PoolStatus, Tier, Grader
 } from '@/types/models'
 import { deliveryOf } from '@/shared/domain'
 import * as mock from '@/mocks/data'
@@ -77,7 +77,9 @@ function toPool(p: Any): Pool {
 
 function toPrize(r: Any): UserPrize {
   return {
-    id: String(r.id), card: r.card as CardItem, tier: r.tier as Tier,
+    /* tier 可以是 null：使用者自己登記進卡冊的卡沒有進過池，沒有賞別。
+       這裡不做任何退回值 —— 退回 'D' 會把「沒有賞別」講成「最低賞」。 */
+    id: String(r.id), card: r.card as CardItem, tier: (r.tier ?? null) as Tier | null,
     status: r.status as UserPrize['status'],
     wonAt: ts(r.won_at),
     /* 舊資料（或還沒跑 014 的後端）沒有 acquired_at，退回 won_at ——
@@ -185,8 +187,11 @@ export interface PrizeSummary {
   counts: Record<UserPrize['status'], number>
   owned: number
   totalValue: number
-  best: { name: string; tier: Tier; refPrice: number } | null
-  tierMix: { tier: Tier; n: number }[]
+  /* tier 為 null＝那張卡是自己登記進來的，沒有賞別。
+     分佈另立一類（「未分級」）而不是把它們藏掉 —— 藏掉的話
+     分佈的張數加總會對不上「持有 N 張」，看起來像統計壞了。 */
+  best: { name: string; tier: Tier | null; refPrice: number } | null
+  tierMix: { tier: Tier | null; n: number }[]
   /** 成長曲線只需要「時間 + 金額」，所以不帶整包 card */
   curve: { wonAt: number; name: string; refPrice: number }[]
 }
@@ -381,11 +386,15 @@ export const api = {
     if (MOCK) {
       await delay(120)
       const counts = {} as PrizeSummary['counts']
-      for (const s of ['stashed', 'listed', 'ship_requested', 'shipped', 'recycled'] as const) {
+      /* 全部的狀態都要數，不能只列常見的那幾種：漏掉的狀態在分頁列上
+         永遠是 0，那個分頁就永遠不會出現 —— 自己登記進來的卡（in_book）
+         之前就是這樣消失的。 */
+      for (const s of ['stashed', 'listed', 'ship_requested', 'shipped', 'recycled', 'refunded', 'in_book', 'in_pool'] as const) {
         counts[s] = mock.userPrizes.filter(p => p.status === s).length
       }
       const owned = mock.userPrizes.filter(p => p.status !== 'recycled')
-      const mix = new Map<string, number>()
+      // 鍵可以是 null（未分級），跟 PrizeSummary.tierMix 的型別一致
+      const mix = new Map<Tier | null, number>()
       for (const p of owned) mix.set(p.tier, (mix.get(p.tier) ?? 0) + 1)
       const best = owned.reduce<UserPrize | null>(
         (b, p) => (!b || refPriceNum(p.card.refPrice) > refPriceNum(b.card.refPrice) ? p : b), null)
@@ -395,7 +404,7 @@ export const api = {
            不是「它值多少」。那個問題這個平台答不出來，也不該假裝答得出來。 */
         totalValue: owned.reduce((a, p) => a + refPriceNum(p.card.refPrice), 0),
         best: best ? { name: best.card.name, tier: best.tier, refPrice: refPriceNum(best.card.refPrice) } : null,
-        tierMix: [...mix].map(([tier, n]) => ({ tier: tier as Tier, n })),
+        tierMix: [...mix].map(([tier, n]) => ({ tier, n })),
         curve: owned.map(p => ({ wonAt: Date.parse(p.wonAt) || Date.now(), name: p.card.name, refPrice: refPriceNum(p.card.refPrice) }))
       }
     }
@@ -984,5 +993,140 @@ export const ticketsApi = {
       json: { body, fileIds: fileIds.length ? fileIds : undefined }
     })
     return toTicketMessage(r.message)
+  }
+}
+
+/* ==================================================================
+   卡片上傳入庫（卡冊登記）
+
+   使用者把手上的實體卡登記進自己的卡冊：POST /v1/cardbook/upload。
+   後端由另一支平行實作，這一段照契約寫，不等它上線 —— MOCK 模式
+   直接把一張 in_book 的卡塞進 mocks/data.ts 的 userPrizes，
+   整條動線（登記 → 卡冊看得到）沒有後端也走得完。
+
+   刻意獨立成一個物件而不是塞進上面的 `api`：跟工單那一段同一個理由 ——
+   這個檔案同時有多支 agent 在動，附加一整塊比插進既有物件安全。
+================================================================== */
+
+export interface UploadCardInput {
+  name: string
+  setCode: string
+  cardNo: string
+  artId?: string | null
+  language?: 'JP' | 'EN'
+  grader?: Grader
+  /** RAW 的卡是 null */
+  grade?: number | null
+  /** 裸卡（RAW）沒有編號，null／不送都可以 */
+  certNo?: string | null
+  variantId?: string | null
+  /** 自己標的參考價。選填、只顯示，不參與任何計算 */
+  refPrice?: number | null
+}
+
+/* mock 專用：一個「登記在別人名下」的示範編號。
+   卡冊 mock 裡帶編號的卡全都在自己名下（登記它們會撞 CERT_ALREADY_YOURS，
+   那是另一條分支），所以 CERT_ALREADY_LISTED 這條需要一個不在自己
+   卡冊裡的編號才走得到 —— 沒有它，「申請接管」的入口在 mock 模式下
+   永遠沒有人看得到。 */
+const MOCK_OTHERS_CERT = '82345699'
+
+export const cardbookApi = {
+  /**
+   * 登記一張實體卡。成功回 201 { prize }：新列 status 是 in_book、
+   * tier 是 **null**（沒進過池就沒有賞別，見 types/models.ts）、
+   * 保管人是自己（卡還在使用者手上，所以沒有寄存期限）。
+   *
+   * 失敗的四種都要分開呈現（呼叫端看 ApiError.code）：
+   *   400 CERT_NOT_FOUND / CERT_INVALID  編號查不到／格式不對
+   *   409 CERT_ALREADY_LISTED            登記在**別人**名下 → 引導申請接管
+   *   409 CERT_ALREADY_YOURS             已經在自己卡冊裡 → 說明現在的狀態
+   */
+  async upload(input: UploadCardInput): Promise<{ prize: UserPrize }> {
+    if (MOCK) {
+      await delay(420)
+      const cert = input.certNo?.trim() || null
+      if (cert) {
+        /* 順序講究：格式不對的編號不可能登記在任何人名下，先擋格式；
+           再來是「查不到」；然後才輪得到唯一性的兩種 409。 */
+        if (!/^[0-9A-Za-z-]{6,20}$/.test(cert)) {
+          throw new ApiError('CERT_INVALID', '這個鑑定編號的格式不對，請對照卡殼上的號碼再輸入一次。', 400)
+        }
+        /* mock 的「查不到」：9999 開頭當成 PSA 資料庫裡不存在的編號。
+           真後端是真的去查（server/src/psa.ts），這裡只是讓分支走得到。 */
+        if (cert.startsWith('9999')) {
+          throw new ApiError('CERT_NOT_FOUND', '鑑定機構查不到這個編號。請確認號碼沒有抄錯；查證持續失敗的話，這張卡可能有問題。', 400)
+        }
+        const mine = mock.userPrizes.find(p =>
+          p.card.certNo === cert && p.status !== 'recycled' && p.status !== 'refunded')
+        if (mine) {
+          const statusText: Record<UserPrize['status'], string> = {
+            stashed: '寄存中', in_book: '在卡冊', in_pool: '押在池裡當獎品',
+            listed: '在市場上販售中', ship_requested: '等待出貨', shipped: '已出貨',
+            recycled: '已回收', refunded: '已退還'
+          }
+          throw new ApiError(
+            'CERT_ALREADY_YOURS',
+            `這張卡已經在你的卡冊裡了（目前狀態：${statusText[mine.status]}），不用再登記一次。`,
+            409, { prizeId: mine.id, status: mine.status }
+          )
+        }
+        const listed = (await import('@/mocks/tickets')).MOCK_LISTED_CERTS
+        if (listed.has(cert) || cert === MOCK_OTHERS_CERT) {
+          throw new ApiError(
+            'CERT_ALREADY_LISTED',
+            '這個鑑定編號目前登記在別人名下 —— 同一張實體卡在系統裡只能有一個持有人。'
+            + '如果這張卡確實在你手上（例如站外買來的），可以申請接管。',
+            409, { certNo: cert, grader: input.grader || 'PSA' }
+          )
+        }
+      }
+      const now = new Date()
+      const prize: UserPrize = {
+        id: `up-upl-${now.getTime().toString(36)}`,
+        card: {
+          id: input.artId || `upl-${now.getTime().toString(36)}`,
+          name: input.name,
+          setCode: input.setCode,
+          cardNo: input.cardNo,
+          language: input.language ?? 'JP',
+          grader: input.grader ?? 'RAW',
+          grade: input.grader && input.grader !== 'RAW' ? (input.grade ?? null) : null,
+          certNo: cert,
+          image: '',
+          refPrice: input.refPrice ?? null,
+          artId: input.artId ?? undefined,
+          variantId: input.variantId ?? null
+        },
+        /* 沒進過池的卡沒有賞別 —— null 是語意正確的值，不能退回 'D' */
+        tier: null,
+        status: 'in_book',
+        wonAt: now.toISOString().slice(0, 16).replace('T', ' '),
+        acquiredAt: now.toISOString(),
+        /* 卡在自己手上（保管人是自己），沒有平台寄存的 90 天期限可言 */
+        stashExpiresAt: '—',
+        buyback: null
+      }
+      mock.userPrizes.unshift(prize)
+      /* 回副本：mock 的原始物件之後還會被改（上架、進池），
+         呼叫端拿到的那一份不該跟著變。 */
+      return { prize: { ...prize, card: { ...prize.card } } }
+    }
+    const r = await http<{ prize: Any }>('/v1/cardbook/upload', {
+      method: 'POST',
+      json: { card: {
+        name: input.name,
+        setCode: input.setCode,
+        cardNo: input.cardNo,
+        artId: input.artId || undefined,
+        language: input.language || undefined,
+        grader: input.grader || undefined,
+        grade: input.grade ?? undefined,
+        certNo: input.certNo || undefined,
+        variantId: input.variantId || undefined,
+        refPrice: input.refPrice ?? undefined
+      } }
+    })
+    return { prize: toPrize(r.prize) }
   }
 }

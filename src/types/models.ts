@@ -190,7 +190,16 @@ export interface DrawResult {
 export interface UserPrize {
   id: string
   card: CardItem
-  tier: Tier
+  /**
+   * 這張卡是以什麼賞別被抽出來的。
+   *
+   * **null 是語意正確的值，不是缺資料**：使用者自己登記進卡冊的實體卡
+   * （POST /v1/cardbook/upload）從來沒有進過任何池，賞別這個概念對它
+   * 根本不成立。讀這個欄位的畫面必須自己決定 null 要怎麼呈現
+   * （徽章顯示「未分級」、統計另立一類、排序排最後）——
+   * 一律退回 'D' 會把「沒有賞別」講成「最低賞」，那是兩件不同的事。
+   */
+  tier: Tier | null
   status: PrizeStatus
   /** 這張卡被抽出來的時間。轉手不會改它 —— 那是既成事實，也是公開動態的依據 */
   wonAt: string

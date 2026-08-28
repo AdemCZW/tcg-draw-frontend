@@ -154,6 +154,14 @@ export const router = createRouter({
       meta: { requiresAuth: true, depth: 1, title: '我的卡冊' }
     },
     {
+      /* 卡片上傳入庫：把手上的實體卡登記進自己的卡冊。
+         獨立一頁（不是卡冊裡的面板）—— 它有挑卡器 + 鑑定表單兩大塊，
+         塞進覆蓋層會跟挑卡器自己的詳情面板疊在一起。 */
+      path: '/me/cards/upload', name: 'upload-card',
+      component: () => import('@/pages/CardUploadPage.vue'),
+      meta: { requiresAuth: true, depth: 2, title: '登記卡片' }
+    },
+    {
       /* 上架到市場。定價獨立一頁而不是卡冊裡的行內表單 ——
          輸入框塞進格線的一格會把那一格撐開、隔壁擠扁（見 SellListingPage 的說明） */
       path: '/me/cards/sell', name: 'sell-cards',

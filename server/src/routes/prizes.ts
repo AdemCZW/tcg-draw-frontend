@@ -103,9 +103,14 @@ prizes.get('/summary', async c => {
     /* 已回收與已退還的卡都不在這個人手上了 —— 總值、賞別分佈、最高價都要排除。
        refunded 是賣家逾期未出貨、票金已經退回買家的那些：卡從來沒有離開賣家，
        留在統計裡會讓卡冊總值長期高估。 */
+    /* tier is not null：上傳進卡冊、還沒進過池的卡沒有賞別（migration 027）。
+       賞別分佈講的是「抽到過什麼賞」，一張沒進過池的卡不屬於任何一格 ——
+       讓 null 混進來會在圖上長出一條沒有名字的 bar。
+       它們仍然算在 total / owned / totalValue 裡（卡是真的持有）。 */
     sql<{ tier: string; n: string }[]>`
       select tier, count(*)::text as n from prizes
-      where user_id = ${me} and status not in ('recycled', 'refunded') group by tier
+      where user_id = ${me} and status not in ('recycled', 'refunded')
+        and tier is not null group by tier
     `,
     sql<{ card: { name?: string; refPrice?: number }; tier: string }[]>`
       select card, tier from prizes

@@ -14,6 +14,7 @@ import { auth as authRoutes } from './routes/auth.js'
 import { wallet } from './routes/wallet.js'
 import { pools } from './routes/pools.js'
 import { prizes } from './routes/prizes.js'
+import { cardbook } from './routes/cardbook.js'
 import { line } from './routes/line.js'
 import { admin } from './routes/admin.js'
 import { pub } from './routes/public.js'
@@ -142,6 +143,10 @@ app.route('/v1/auth', authRoutes)
 app.route('/v1/wallet', wallet)
 app.route('/v1/pools', pools)
 app.route('/v1/prizes', prizes)
+/* 卡片上傳入庫（登記手上的實體卡進卡冊）。自己一個前綴：
+   這支整組要登入（use('*', requireAuth)），不能掛在 /v1 底下
+   把公開端點一起變成要登入（同 /v1/seller 那條的理由）。 */
+app.route('/v1/cardbook', cardbook)
 app.route('/v1/auth/line', line)
 app.route('/v1/admin', admin)
 /* 自我檢測（獨立檔案的理由見 routes/monitor.ts 檔頭） */

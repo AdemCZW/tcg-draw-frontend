@@ -34,6 +34,9 @@ type GaEvent =
   | 'signup_start'
   | 'signup_success'
   | 'login_success'
+  /* 卡片上傳入庫（登記實體卡進卡冊） */
+  | 'cardbook_upload_submit'
+  | 'cardbook_upload_success'
 
 declare global {
   interface Window { gtag?: (...args: unknown[]) => void }

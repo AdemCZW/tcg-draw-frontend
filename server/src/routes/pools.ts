@@ -13,6 +13,7 @@ import { requireAuth } from '../auth.js'
 import { walletOf } from '../money.js'
 import { commitPool, draw, tryOpenPool, revealPool, STASH_DAYS } from '../pools-service.js'
 import { verifyCert, enforceVerification } from '../psa.js'
+import { cardNumbersAgree, REF_PRICE_MAX } from '../card-cert.js'
 import { POINTS_INPUT_MAX, pointsInputMaxText } from '../limits.js'
 import {
   BUYBACK_MAX, BUYBACK_MIN,
@@ -26,28 +27,8 @@ type Row = Record<string, unknown>
 // Hono 的 param() 型別是 string | undefined；路由有 :id 就一定有值
 const pid = (c: { req: { param: (k: 'id') => string | undefined } }) => c.req.param('id') ?? ''
 
-/**
- * PSA 回的卡號跟賣家挑的卡號對不對得上。
- *
- * 為什麼不是字串相等：PSA 是英文、我們的目錄是日文，**卡名**不可能字串相等，
- * 所以對照只能靠卡號。而卡號兩邊的寫法也不一致（PSA 常是純數字 "025"，
- * 我們可能帶前導零或系列前綴），所以比的是「數字部分」：抽出所有數字、
- * 去掉前導零再比。任一邊比不出數字時退回整串英數字比對。
- *
- * **比不出來就回 true（不擋）**：這個函式只負責抓「明顯是另一張卡」，
- * 拿不準的一律放行、交給賣家自己看 PSA 的卡片資訊確認 —— 寧可多問一次，
- * 也不要把一張其實對得上的卡誤擋成假卡。
- */
-function cardNumbersAgree(psa: string | null, seller: string | null): boolean {
-  if (!psa || !seller) return true
-  const digits = (s: string) => (s.match(/\d+/g)?.join('') ?? '').replace(/^0+/, '')
-  const a = digits(psa), b = digits(seller)
-  if (!a || !b) {
-    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
-    return norm(psa) === norm(seller)
-  }
-  return a === b
-}
+/* cardNumbersAgree 搬到 src/card-cert.ts —— 卡冊上傳（routes/cardbook.ts）
+   要用同一套對照，兩邊各寫一份規則會分岔。 */
 
 /** 對外的池資料。這裡決定什麼能出去 —— server_seed 只在 revealed 之後 */
 function toPublic(p: Row, prizes: Row[], taken: number[], publicTaken: number) {
@@ -209,13 +190,7 @@ pools.get('/:id/reveal', async c => {
 
 /* ---- 以下需要登入 ---- */
 
-/* refPrice 的絕對上限。
-   這個欄位現在**只是顯示**（賣家標示的參考價，不構成承諾，不參與任何金額計算），
-   而且**可以完全不填** —— 它已經沒有任何計算上的用途，強迫賣家填一個
-   沒有外部依據的數字只會製造一個看起來像官方行情的假資料。
-   有填的話上限還是要有：它進得了 JSON、會出現在卡冊總值與排行榜上，
-   也讓 numeric 運算有機會溢位成 500。 */
-const REF_PRICE_MAX = 10_000_000
+/* refPrice 的絕對上限 —— 定義與理由搬到 src/card-cert.ts（卡冊上傳共用）。 */
 
 const TIERS = ['A', 'B', 'C', 'D', 'LAST', 'BUST'] as const
 type TierName = (typeof TIERS)[number]

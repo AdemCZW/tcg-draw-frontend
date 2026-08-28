@@ -16,7 +16,8 @@ import { useNearViewport } from '@/lib/near-viewport'
 const props = defineProps<{
   image: string
   alt?: string
-  tier?: Tier
+  /** null 與 undefined 同義：沒有賞別（例如使用者自己登記的卡），角標不畫 */
+  tier?: Tier | null
   caption?: string
   certNo?: string | null
   /** TCGdex 卡片編號。給了就直接用那一張的圖，不必靠卡名去猜 */

@@ -293,7 +293,9 @@ const hitPickedCount = (h: CatalogHit) =>
                 v-if="prizeArt(p)" :src="prizeArt(p)!" :alt="p.card.name"
                 loading="lazy" decoding="async">
               <span v-else class="ph" aria-hidden="true"></span>
-              <span class="tierTag" :class="`t-${p.tier.toLowerCase()}`">{{ p.tier }}</span>
+              <!-- 自己登記進卡冊的卡沒有賞別（tier 是 null）。那不是缺資料，
+                   是它沒進過池 —— 角標整顆不畫，不要畫一顆空的 -->
+              <span v-if="p.tier" class="tierTag" :class="`t-${p.tier.toLowerCase()}`">{{ p.tier }}</span>
               <span v-if="isPrizePicked(p)" class="tick" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg>
               </span>
@@ -523,6 +525,8 @@ const hitPickedCount = (h: CatalogHit) =>
 }
 .tab {
   min-width: 0;
+  /* 44px 是全站的觸控下限（touch.css 的門檻）。原本 padding 撐出來只有 40px */
+  min-height: 44px;
   border: 0; background: transparent; color: var(--muted);
   font-size: 13.5px; font-weight: 600;
   padding: 10px 8px; border-radius: var(--pill);
@@ -545,7 +549,7 @@ const hitPickedCount = (h: CatalogHit) =>
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .pickBarSum .muted { font-size: 12px; }
-.pickBarBtn { flex: none; padding: 10px 16px; font-size: 13.5px; }
+.pickBarBtn { flex: none; min-height: 44px; padding: 10px 16px; font-size: 13.5px; }
 
 /* ---- 已選：面板裡的清單 ---- */
 .chosenHead {

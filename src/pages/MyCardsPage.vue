@@ -84,10 +84,16 @@ const curvePrizes = computed(() =>
    狀態的分佈底下的分頁已經標了數字，再放一次只是重複。
    賞別則只散落在每張卡的膠囊上，要自己數才知道「我這冊是靠一張 A 賞撐起來的
    還是整體都不錯」。用一條堆疊條 + 一行圖例，佔不到 40px。 */
-const TIER_ORDER: Tier[] = ['A', 'B', 'C', 'D', 'LAST', 'BUST']
+/* null（未分級）排最後：它不是一個等級，是「沒有等級」，
+   排進賞別序列的任何位置都會讀起來像介於某兩賞之間 */
+const TIER_ORDER: (Tier | null)[] = ['A', 'B', 'C', 'D', 'LAST', 'BUST', null]
 const TIER_LABEL: Record<Tier, string> = {
   A: 'A 賞', B: 'B 賞', C: 'C 賞', D: 'D 賞', LAST: '最後賞', BUST: '爆賞'
 }
+/* tier 可以是 null（自己登記進卡冊的卡沒進過池）。分佈裡另立「未分級」一類
+   而不是排除 —— 排除的話分佈加總會對不上「持有 N 張」，看起來像統計壞了 */
+const tierLabel = (t: Tier | null) => (t ? TIER_LABEL[t] : '未分級')
+const tierKey = (t: Tier | null) => (t ? `t-${t.toLowerCase()}` : 't-none')
 const tierMix = computed(() => {
   const mix = new Map((summary.value?.tierMix ?? []).map(m => [m.tier, m.n]))
   // 後端不保證回傳順序，展示順序由前端這份 TIER_ORDER 決定
@@ -107,6 +113,9 @@ const tab = ref<Tab>('all')
 const TABS: { k: Tab; label: string }[] = [
   { k: 'all', label: '全部' },
   { k: 'stashed', label: '寄存中' },
+  /* 自己登記進來的卡與池結束解押回來的卡都在這一類。
+     沒有這個分頁的話，剛登記完的卡只在「全部」裡找得到 */
+  { k: 'in_book', label: '在卡冊' },
   { k: 'listed', label: '市場販售中' },
   { k: 'ship_requested', label: '待出貨' },
   { k: 'shipped', label: '已出貨' },
@@ -209,6 +218,11 @@ const shipList = useInfiniteList<UserPrize>((cursor, signal) =>
 const shipSentinelRef = shipList.sentinel
 const stashed = shipList.items
 const stashedCount = computed(() => summary.value?.counts.stashed ?? 0)
+/* 上架入口看的是「可上架的張數」：canSell 收 stashed 與 in_book 兩種，
+   只數 stashed 的話，卡冊裡全是自己登記的卡（in_book）時上架鍵不會出現，
+   但那些卡明明賣得了 */
+const sellableCount = computed(() =>
+  (summary.value?.counts.stashed ?? 0) + (summary.value?.counts.in_book ?? 0))
 
 const addr = ref({ name: '', phone: '', zip: '', city: '', line1: '' })
 const addrReady = computed(() =>
@@ -521,22 +535,22 @@ async function copyLink() {
            下面那行圖例已經把話講完了，所以直接不畫 -->
       <div v-if="tierMix.length > 1" class="mixBar" aria-hidden="true">
         <span
-          v-for="m in tierMix" :key="m.tier"
-          class="seg" :class="`t-${m.tier.toLowerCase()}`"
+          v-for="m in tierMix" :key="m.tier ?? 'none'"
+          class="seg" :class="tierKey(m.tier)"
           :style="{ flexGrow: m.n }"
         ></span>
       </div>
       <ul class="mixKey">
-        <li v-for="m in tierMix" :key="m.tier">
-          <span class="kd" :class="`t-${m.tier.toLowerCase()}`" aria-hidden="true"></span>
-          {{ TIER_LABEL[m.tier] }}<b class="mono">{{ m.n }}</b><span class="sr-only">張</span>
+        <li v-for="m in tierMix" :key="m.tier ?? 'none'">
+          <span class="kd" :class="tierKey(m.tier)" aria-hidden="true"></span>
+          {{ tierLabel(m.tier) }}<b class="mono">{{ m.n }}</b><span class="sr-only">張</span>
         </li>
       </ul>
 
       <!-- 只有一張卡時「最高價」就是總值本身，再列一次是廢話 -->
       <p class="ovBest" v-if="bestCard && ownedCount > 1">
         <span class="bLabel">最高價</span>
-        <span class="kd" :class="`t-${bestCard.tier.toLowerCase()}`" aria-hidden="true"></span>
+        <span class="kd" :class="tierKey(bestCard.tier)" aria-hidden="true"></span>
         <span class="bName">{{ bestCard.name }}</span>
         <span class="bVal mono">{{ bestCard.refPrice.toLocaleString() }}</span>
       </p>
@@ -593,6 +607,8 @@ async function copyLink() {
     <div v-if="list.ready.value && !total" class="empty card">
       <p>卡冊還是空的。</p>
       <RouterLink :to="{ name: 'home' }" class="btn primary">去抽第一張</RouterLink>
+      <!-- 手上已經有實體卡的人不必先抽 —— 登記進來就能上架、能進池 -->
+      <RouterLink :to="{ name: 'upload-card' }" class="btn">登記手上的卡</RouterLink>
     </div>
 
     <!-- 上架入口與狀態分頁同一列：兩者都是「要看／要動哪一批卡」的控制項，
@@ -600,11 +616,19 @@ async function copyLink() {
          上架在前、分頁在後 —— 分頁那條的右緣有漸隱遮罩表示還能往右捲，
          按鈕擺在它後面會看起來像按鈕自己在淡出。
          沒有寄存中的卡就不出現上架鍵：按了也沒有東西可選。 -->
-    <div v-if="stashedCount || tabs.length > 1" class="listHead">
+    <div v-if="total || stashedCount || tabs.length > 1" class="listHead">
       <button
-        v-if="stashedCount && !selecting"
+        v-if="sellableCount && !selecting"
         type="button" class="btn primary sellCta" @click="startSell"
       >上架出售</button>
+
+      <!-- 登記卡片：把手上的實體卡登記進卡冊。跟「上架出售」同一層級 ——
+           兩者都是「讓卡冊多／少一批卡」的入口，不是某一張卡的操作。
+           選取模式下藏起來：那時候整個畫面只該有「挑卡」這一件事。 -->
+      <RouterLink
+        v-if="!selecting"
+        :to="{ name: 'upload-card' }" class="btn sellCta"
+      >登記卡片</RouterLink>
 
       <!-- 狀態分頁：三種狀態的下一步動作完全不同，分開才不用每張卡重新判斷 -->
       <div v-if="tabs.length > 1" class="tabs" role="tablist">
@@ -618,8 +642,10 @@ async function copyLink() {
     </div>
 
     <!-- 選取模式的說明另起一行：塞進上面那列會把分頁擠到看不見 -->
+    <!-- canSell 收兩種狀態（stashed 與 in_book），文案要跟它一致：
+         自己登記進卡冊的卡就是 in_book，說「只有寄存中」會讓人以為登記的卡賣不了 -->
     <p v-if="selecting" class="sellHint">
-      點卡片挑要賣的，可以複選。只有<strong>寄存中</strong>的卡能上架。
+      點卡片挑要賣的，可以複選。<strong>寄存中</strong>與<strong>在卡冊</strong>的卡能上架。
     </p>
 
     <div ref="listRef" class="grid">
@@ -873,7 +899,9 @@ async function copyLink() {
             <label>
               <input type="checkbox" :checked="shipPick.includes(p.id)" @change="toggleShipPick(p.id)">
               <span class="pn">{{ p.card.name }}</span>
-              <span class="mono muted">{{ p.tier }}</span>
+              <!-- 自己登記的卡沒有賞別，顯示「—」而不是空白：
+                   空白讀起來像少載了資料 -->
+              <span class="mono muted">{{ p.tier ?? '—' }}</span>
             </label>
           </li>
         </ul>
@@ -1170,6 +1198,9 @@ async function copyLink() {
 .seg.t-d { background: var(--tier-d); }
 .seg.t-last { background: var(--tier-last); }
 .seg.t-bust { background: var(--ink); }
+/* 未分級（tier 是 null 的卡）。刻意比 D 賞的灰更淡 —— 它不是最低的等級，
+   是根本沒有等級，視覺上要退到「附註」的層級 */
+.seg.t-none { background: var(--faint); }
 
 /* 圖例才是識別的主要管道：C 賞的藍與 D 賞的灰在色覺檢測下分離度不足，
    只靠顏色會有人分不出來，所以每一段都配文字 */
@@ -1187,6 +1218,7 @@ async function copyLink() {
 .kd.t-d { background: var(--tier-d); }
 .kd.t-last { background: var(--tier-last); }
 .kd.t-bust { background: var(--ink); }
+.kd.t-none { background: var(--faint); }
 
 .ovBest {
   display: flex; align-items: center; gap: 7px; min-width: 0;

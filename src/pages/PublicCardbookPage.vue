@@ -87,9 +87,13 @@ function hueOf(seed: string) {
 }
 
 /* API 的 tier 是字串（後端之後可能加新賞別），TierBadge 與 CardArt 吃的是列舉。
-   不認得的一律當 D 賞畫出來 —— 一個沒見過的字串不該讓整頁掛掉。 */
+   不認得的一律當 D 賞畫出來 —— 一個沒見過的字串不該讓整頁掛掉。
+   空值（null／undefined／''）例外：自己登記進卡冊的卡沒有賞別，
+   那不是「沒見過的賞別」，要照實回 null（畫成「未分級」），
+   當成 D 賞會把「沒有等級」講成「最低等級」。 */
 const TIERS: Tier[] = ['A', 'B', 'C', 'D', 'LAST', 'BUST']
-const asTier = (t: string): Tier => (TIERS.includes(t as Tier) ? (t as Tier) : 'D')
+const asTier = (t: string | null | undefined): Tier | null =>
+  (t ? (TIERS.includes(t as Tier) ? (t as Tier) : 'D') : null)
 
 
 /* 公開卡冊沒有實拍圖欄位，CardArt 會依序拿 certNo（PSA 實拍）→ artId（官方卡圖），
