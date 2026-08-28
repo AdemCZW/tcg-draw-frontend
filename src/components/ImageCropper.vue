@@ -48,7 +48,10 @@ const working = ref(false)
 const err = ref('')
 
 let dec: Decoded | null = null
-const img = reactive({ w: 0, h: 0 })
+/* w/h＝解碼後的長寬，所有幾何都用它；sw/sh＝檔案裡真正的長寬，只拿來顯示。
+   超大圖在解碼當下就會被縮（見 image-edit 的 DECODE_CAP），
+   兩者不分開的話畫面上會把「縮過的尺寸」寫成「原圖」 */
+const img = reactive({ w: 0, h: 0, sw: 0, sh: 0 })
 const box = reactive({ w: 0, h: 0 })
 
 const aspect = ref<AspectId>(props.policy.initial)
@@ -103,10 +106,8 @@ const crop = computed(() => {
 })
 
 /** 輸出尺寸：只縮不放，所以放大裁切一小塊的時候輸出會比上限小，這要讓使用者看到 */
-const outSize = computed(() => {
-  if (!dec) return { w: 0, h: 0 }
-  return targetSize(dec, crop.value, props.policy.maxDim)
-})
+const outSize = computed(() =>
+  img.w ? targetSize(img.w, img.h, crop.value, props.policy.maxDim) : { w: 0, h: 0, scaled: false })
 
 /* ---------- 畫 ---------- */
 let raf = 0
@@ -293,6 +294,8 @@ onMounted(async () => {
     dec = await decodeOriented(props.file)
     img.w = dec.width
     img.h = dec.height
+    img.sw = dec.sourceWidth
+    img.sh = dec.sourceHeight
     view.cx = img.w / 2
     view.cy = img.h / 2
     loading.value = false
@@ -338,7 +341,7 @@ async function skip() {
   working.value = true
   err.value = ''
   try {
-    const t = targetSize(dec, FULL_FRAME, props.policy.maxDim)
+    const t = targetSize(dec.width, dec.height, FULL_FRAME, props.policy.maxDim)
     const r = await renderCrop(dec, FULL_FRAME, props.policy, props.maxBytes)
     const worthIt = t.scaled || r.bytes < props.file.size
     emit('done', worthIt || props.file.size > props.maxBytes ? r : null)
@@ -413,7 +416,7 @@ const canSkip = computed(() => props.policy.aspects.includes('source'))
       </div>
 
       <p class="icInfo mono">
-        原圖 {{ img.w }}×{{ img.h }} · {{ fmtBytes(props.file.size) }}
+        原圖 {{ img.sw }}×{{ img.sh }} · {{ fmtBytes(props.file.size) }}
         <span v-if="outSize.w">　輸出 {{ outSize.w }}×{{ outSize.h }}</span>
       </p>
       <p v-if="err" class="icErr" role="alert">{{ err }}</p>

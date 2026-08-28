@@ -258,8 +258,13 @@ const ORIENT: Record<number, (w: number, h: number) => [number, number, number, 
 export interface Decoded {
   /** 已經轉正、可以直接 drawImage 的來源 */
   source: CanvasImageSource
+  /** 解碼後的長寬（可能已經被 DECODE_CAP 縮過），所有幾何都用這一組 */
   width: number
   height: number
+  /** 檔案裡**真正**的長寬（轉正後）。只拿來顯示 —— 畫面上說「原圖 4096×3072」
+      而使用者手上那張其實是 8000×6000，是在騙人 */
+  sourceWidth: number
+  sourceHeight: number
   /** 檔頭裡的方向旗標 */
   orientation: number
   /** 瀏覽器有沒有自己轉正。null = 這張圖沒有方向旗標，無從驗起 */
@@ -320,6 +325,11 @@ export async function decodeOriented(file: Blob, cap = DECODE_CAP): Promise<Deco
     browserOriented = optsTaken
   }
 
+  /* 檔頭裡的真實長寬（轉正後）。讀不到檔頭就退回解碼後的長寬 */
+  const [srcW, srcH] = meta
+    ? (orientation >= 5 ? [meta.height, meta.width] : [meta.width, meta.height])
+    : [bmp.width, bmp.height]
+
   if (orientation > 1 && browserOriented === false) {
     const [ow, oh] = orientation >= 5 ? [bmp.height, bmp.width] : [bmp.width, bmp.height]
     const cv = makeCanvas(ow, oh)
@@ -329,14 +339,14 @@ export async function decodeOriented(file: Blob, cap = DECODE_CAP): Promise<Deco
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     bmp.close()
     return {
-      source: cv, width: ow, height: oh, orientation,
+      source: cv, width: ow, height: oh, sourceWidth: srcW, sourceHeight: srcH, orientation,
       browserOriented, manualFix: true,
       close: () => { cv.width = 0; cv.height = 0 }
     }
   }
 
   return {
-    source: bmp, width: bmp.width, height: bmp.height, orientation,
+    source: bmp, width: bmp.width, height: bmp.height, sourceWidth: srcW, sourceHeight: srcH, orientation,
     browserOriented, manualFix: false,
     close: () => bmp.close()
   }
@@ -412,10 +422,15 @@ function drawScaled(dec: Decoded, rect: FracRect, tw: number, th: number): HTMLC
   return out
 }
 
-/** 目標尺寸：只縮不放。放大只會讓檔案變大又不會多出細節 */
-export function targetSize(dec: Decoded, rect: FracRect, maxDim: number) {
-  const sw = Math.max(1, rect.w * dec.width)
-  const sh = Math.max(1, rect.h * dec.height)
+/**
+ * 目標尺寸：只縮不放。放大只會讓檔案變大又不會多出細節。
+ * 收「長寬」而不是收 Decoded，是因為裁切框要用它算「輸出會是多大」，
+ * 而那邊拿得到的只有響應式的長寬 —— Decoded 是個不響應的區域變數，
+ * 傳它進來的話畫面上那行輸出尺寸永遠停在 0（實際踩過）。
+ */
+export function targetSize(srcW: number, srcH: number, rect: FracRect, maxDim: number) {
+  const sw = Math.max(1, rect.w * srcW)
+  const sh = Math.max(1, rect.h * srcH)
   const s = Math.min(1, maxDim / Math.max(sw, sh))
   return { w: Math.max(1, Math.round(sw * s)), h: Math.max(1, Math.round(sh * s)), scaled: s < 1 }
 }
@@ -465,7 +480,7 @@ async function encodeWithin(
 export async function renderCrop(
   dec: Decoded, rect: FracRect, policy: EditPolicy, maxBytes: number
 ): Promise<EncodeResult> {
-  const t = targetSize(dec, rect, policy.maxDim)
+  const t = targetSize(dec.width, dec.height, rect, policy.maxDim)
   const cv = drawScaled(dec, rect, t.w, t.h)
   const out = await encodeWithin(cv, policy.outMime, policy.quality, policy.minQuality, maxBytes)
   cv.width = 0; cv.height = 0

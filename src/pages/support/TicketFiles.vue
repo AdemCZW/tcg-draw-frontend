@@ -283,7 +283,14 @@ watch(
   cursor: pointer; text-align: center; padding: 6px;
 }
 .tfAddT { font-size: 12px; line-height: 1.4; }
-.tfInput { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+/* font-size: 0 是為了那顆瀏覽器內建的「選擇檔案」按鈕：它的寬度是照字級算的，
+   預設字級下它比整格還寬（實測 222px vs 110px），量起來就是內容溢出容器。
+   按鈕本身是透明的、只當點擊區用，字級歸零不影響任何看得見的東西。 */
+.tfInput {
+  position: absolute; inset: 0; opacity: 0;
+  width: 100%; height: 100%; min-width: 0; font-size: 0;
+  cursor: pointer;
+}
 
 .tfDrop { font-size: 12px; line-height: 1.7; color: var(--warn); margin: 9px 0 0; }
 
