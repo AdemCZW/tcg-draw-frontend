@@ -8,7 +8,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { floorRatio, floorAllowed } from '../shared/economics.js'
 import { randomBytes } from 'node:crypto'
-import { sql } from '../db.js'
+import { sql, Rollback } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { walletOf } from '../money.js'
 import { commitPool, draw, tryOpenPool, revealPool, STASH_DAYS } from '../pools-service.js'
@@ -519,6 +519,46 @@ pools.post('/', requireAuth, async c => {
         const certRaw = typeof card.certNo === 'string' ? card.certNo.trim() : ''
         if (!certRaw) continue
         const graderRaw = typeof card.grader === 'string' ? card.grader.trim() : ''
+        const normGrader = graderRaw ? graderRaw.toUpperCase() : null
+
+        /* 這個編號如果已經是**自己名下、閒置在卡冊**的一列（接管來的、
+           或上一個池結束解押回來的 in_book），重用那一列押進新池 ——
+           開新列會撞 prizes_cert_alive 唯一索引，把「拿自己的卡再開一次池」
+           這個完全正當的動作擋成 CERT_ALREADY_LISTED（audit-3 的 A-3：
+           in_book 進得去出不來）。
+           鎖那一列再改：跟上架、接管搶同一把鎖才互斥得了。 */
+        const [mine] = await tx`
+          select id, user_id, status from prizes
+           where grader is not distinct from ${normGrader}::text and cert_no = ${certRaw}
+           for update
+        `
+        if (mine && String(mine.user_id) === me && mine.status === 'in_book') {
+          await tx`
+            update prizes set pool_id = ${id}, status = 'in_pool',
+                   card = ${rows[i]!.card as never}, tier = ${rows[i]!.tier},
+                   seat = null, draw_id = null
+             where id = ${mine.id}
+          `
+          await tx`update pool_prizes set card_id = ${mine.id as string} where id = ${rows[i]!.id}`
+          continue
+        }
+        /* 存在但不能用 —— 分開講清楚是哪一種：別人的卡要走接管，
+           自己的卡在忙要先處理那一邊。 */
+        if (mine && String(mine.user_id) !== me) {
+          throw new Rollback(409, {
+            error: 'CERT_ALREADY_LISTED',
+            message: `鑑定編號 ${certRaw} 已經登記在別人名下 —— 同一張實體卡不能重複登記。`
+              + '如果這張卡是你在站外買到的，請申請接管。'
+          })
+        }
+        if (mine) {
+          throw new Rollback(409, {
+            error: 'CARD_BUSY',
+            message: `鑑定編號 ${certRaw} 的卡目前是「${String(mine.status)}」狀態 —— `
+              + '它正在別的池裡、掛在市場上、或在出貨流程中。先處理完那一邊才能放進新池。'
+          })
+        }
+
         const cardId = `pz-${id}-c${i}`
         await tx`
           insert into prizes (id, user_id, pool_id, card, tier, status,
@@ -526,7 +566,7 @@ pools.post('/', requireAuth, async c => {
                               grader, cert_no, custodian_id, origin)
           values (${cardId}, ${me}, ${id}, ${rows[i]!.card as never}, ${rows[i]!.tier}, 'in_pool',
                   ${now}, ${now}, ${now + STASH_DAYS * 86_400_000},
-                  ${graderRaw ? graderRaw.toUpperCase() : null}, ${certRaw},
+                  ${normGrader}, ${certRaw},
                   ${me}, 'upload')
         `
         await tx`update pool_prizes set card_id = ${cardId} where id = ${rows[i]!.id}`
@@ -536,6 +576,8 @@ pools.post('/', requireAuth, async c => {
     })
     return c.json({ poolId: id, ...result })
   } catch (e) {
+    // Rollback：交易已整筆回滾，回應是我們自己帶出來的（見 db.ts）
+    if (e instanceof Rollback) return c.json(e.body, e.status as 409)
     /* 上游的錯誤訊息不往外送，只進 log。
        這條路上會 throw 的東西是 drand 的 HTTP 狀態（`drand round 6398588 425`）、
        fetch 的逾時、以及 pools-service 的內部狀態檢查（`pool is draft, not committed`）——

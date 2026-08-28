@@ -53,6 +53,10 @@ export type PrizeStatus =
   | 'stashed' | 'listed' | 'ship_requested' | 'shipped' | 'recycled'
   /** 賣家逾期未出貨，票金已從保留額退回買家。卡從來沒有離開賣家手上 */
   | 'refunded'
+  /** 閒置在卡冊：接管來的、或池結束解押回來的。可以上架、可以再進池（migration 021/023） */
+  | 'in_book'
+  /** 押在某個池裡當獎品，抽中前不能動（migration 023 的建池押記） */
+  | 'in_pool'
 
 
 export interface PoolPrize {

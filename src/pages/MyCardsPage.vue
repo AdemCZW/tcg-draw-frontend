@@ -140,6 +140,8 @@ watch(tab, () => {
    完整名稱留在上面的分頁 TABS，兩邊講的是同一件事 */
 const statusShort: Record<UserPrize['status'], string> = {
   stashed: '寄存中',
+  in_book: '在卡冊',
+  in_pool: '押在池裡',
   listed: '販售中',
   ship_requested: '待出貨',
   shipped: '已出貨',
@@ -295,7 +297,9 @@ const sellPick = computed(() => sellPicked.value.map(p => p.id))
 
 /* 只有還在保管庫的卡能上架。定價頁自己也會再濾一次，
    但擋在選取這一步，才不會讓人挑了半天才發現有幾張不算數。 */
-const canSell = (p: UserPrize) => p.status === 'stashed'
+/* in_book（接管來的、或池結束解押回來的）也能上架 —— 那正是那個狀態的意義。
+   後端上架端點兩種都收（in_book 走需寄送，見 routes/public.ts）。 */
+const canSell = (p: UserPrize) => p.status === 'stashed' || p.status === 'in_book'
 
 /* 進選取模式時把展開中的卡片與回收確認一起關掉 ——
    選取模式下整張卡是勾選熱區，底下同時還開著一組動作鈕會有兩套點法在打架。 */

@@ -30,7 +30,7 @@ const all = ref<UserPrize[]>([])
 const loading = ref(true)
 
 /** 只收還在保管庫的卡 —— 已上架、已申請出貨的不能再上架 */
-const cards = computed(() => all.value.filter(p => ids.value.includes(p.id) && p.status === 'stashed'))
+const cards = computed(() => all.value.filter(p => ids.value.includes(p.id) && (p.status === 'stashed' || p.status === 'in_book')))
 
 /** 每張卡各自的定價。預設帶市值當錨點，但一定讓人改得動 —— 市值只是參考 */
 const price = ref<Record<string, number | null>>({})
@@ -43,7 +43,10 @@ onMounted(async () => {
   const found: UserPrize[] = []
   let cursor: string | null = null
   do {
-    const page = await api.myPrizes({ status: 'stashed', cursor, limit: 100 })
+    /* 不帶 status 過濾：可上架的有兩種（stashed 與 in_book），
+       API 的 status 參數一次只能給一個 —— 抓全部再在前端濾，
+       選卡清單本來就已經把不能上架的排除在外。 */
+    const page = await api.myPrizes({ cursor, limit: 100 })
     for (const p of page.items) if (want.has(p.id)) found.push(p)
     cursor = page.nextCursor
   } while (cursor && found.length < want.size)

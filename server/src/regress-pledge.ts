@@ -166,6 +166,54 @@ head('池結束時沒被抽走的押記卡要回賣家卡冊')
   ck('還是同一列（沒有被重建）', after?.id === before?.id, `${before?.id} vs ${after?.id}`)
 }
 
+head('回庫的卡要出得來（audit-3 A-3）：能再開池、重用同一列')
+{
+  /* 上一段結束時 CERT3 的卡在賣家名下、狀態 in_book。
+     拿同一個編號再開一次池 —— 修 A-3 之前這裡會撞 prizes_cert_alive
+     被擋成 CERT_ALREADY_LISTED：自己的卡、完全正當的動作、死路。 */
+  const before = (await json(await call(seller, '/v1/prizes?limit=100')).then((b: Any) =>
+    (b.items ?? []).find((x: Any) => x.status === 'in_book' && x.card?.certNo)))
+  ck('有一張 in_book 的卡可以用', !!before, '前一段的回庫測試要先通過')
+  const cert = before.card.certNo as string
+
+  const r = await makePool('A-3 測試池（重用 in_book）', cert)
+  const body = await json(r.clone())
+  ck('同一個編號再開池成功（不再被自己的卡擋住）', r.ok,
+    `${r.status} ${JSON.stringify(body).slice(0, 160)}`)
+
+  const after = (await json(await call(seller, '/v1/prizes?limit=100')).then((b: Any) =>
+    (b.items ?? []).find((x: Any) => x.card?.certNo === cert)))
+  ck('是同一列（重用，不是開新列）', after?.id === before.id, `${before.id} vs ${after?.id}`)
+  ck('狀態回到 in_pool', after?.status === 'in_pool', `status=${after?.status}`)
+}
+
+head('回庫的卡要出得來（A-3）：能上架市場')
+{
+  /* 再造一張 in_book：開池 → 到期 → 解押。 */
+  const cert = `STUB-OK-217-${RUN}`
+  const r = await makePool('A-3 上架測試池', cert)
+  ck('建池', r.ok)
+  const pid3 = (await json(r.clone())).poolId as string
+  await fetch(`${base}/v1/dev/expire-pool`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ poolId: pid3 })
+  })
+  for (let i = 0; i < 4; i++) {
+    await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST' })
+    const { pool } = await json(await call(seller, `/v1/pools/${pid3}`))
+    if (pool?.status === 'revealed') break
+  }
+  const card = (await json(await call(seller, '/v1/prizes?limit=100')).then((b: Any) =>
+    (b.items ?? []).find((x: Any) => x.card?.certNo === cert)))
+  ck('卡已解押回 in_book', card?.status === 'in_book', `status=${card?.status}`)
+
+  const lr = await call(seller, '/v1/listings', { prizeId: card.id, price: 500 })
+  const lb = await json(lr.clone())
+  ck('in_book 的卡上架成功', lr.ok, `${lr.status} ${JSON.stringify(lb).slice(0, 160)}`)
+  ck('交付方式是需寄送（實體在持有人自己手上）',
+    lb.listing?.delivery === 'ship', `delivery=${lb.listing?.delivery}`)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
 

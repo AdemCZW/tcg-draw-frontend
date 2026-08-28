@@ -30,6 +30,7 @@
  * 逾期掃描可能被多個請求同時觸發，重試必須是安全的。
  */
 import type { Tx } from './db.js'
+import { Rollback } from './db.js'
 import { sql as root } from './db.js'
 import { credit, lockSpender, walletOf } from './money.js'
 import { notify } from './notify.js'
@@ -327,7 +328,7 @@ export async function markShipDefault(tx: Tx, s: SettlementRow, now: number): Pr
  */
 export async function acceptRecycle(
   tx: Tx, s: SettlementRow, points: number, now: number
-): Promise<{ ok: true } | { ok: false; error: 'WRONG_STATE' | 'SELLER_UNFUNDED' }> {
+): Promise<{ ok: true } | { ok: false; error: 'WRONG_STATE' }> {
   const done = await tx`
     update pool_settlements set status = 'recycled', closed_at = ${now}, closed_by = 'recycle'
      where id = ${s.id} and status in ('held', 'awaiting_ship')
@@ -341,7 +342,17 @@ export async function acceptRecycle(
      但單張大獎的買回價可以遠高於一張票的價格（護欄管的是整池的總和，
      不是單張）—— 那時候差額要從賣家自己的可動用出。付不出來就不能成交，
      而且要照實說：假裝成交會讓買家的卡消失卻沒拿到點數。 */
-  if (w.available < points) return { ok: false, error: 'SELLER_UNFUNDED' }
+  /* **throw，不是 return**（audit-3 A-1）：上面已經把結算列改成 recycled，
+     回傳錯誤值的話 sql.begin 照樣 COMMIT —— 實測結果是結算列 recycled、
+     卡片列還是 stashed、零分錄：賣家的保留額被無償釋放，買家的買回承諾
+     永久消失，而且第二次按會撞 WRONG_STATE，死路。
+     throw 讓整筆回滾，狀態回到按下按鈕之前，賣家有錢之後可以再試。 */
+  if (w.available < points) {
+    throw new Rollback(409, {
+      error: 'SELLER_UNFUNDED',
+      message: '賣家目前的保留額不足以支付這筆回收，請稍後再試或改為申請出貨'
+    })
+  }
 
   await credit(tx, s.sellerId, -points, 'pool-recycle-out', s.id)
   /* 付給**卡現在的主人**，不是抽中的人（F-1）。

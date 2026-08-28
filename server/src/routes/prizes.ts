@@ -4,7 +4,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
-import { sql } from '../db.js'
+import { sql, Rollback } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { walletOf } from '../money.js'
 import { recycleEligible } from '../shared/recycle.js'
@@ -159,7 +159,9 @@ prizes.get('/summary', async c => {
  */
 prizes.post('/:id/recycle', async c => {
   const me = c.get('userId')
-  const r = await sql.begin(async tx => {
+  let r
+  try {
+    r = await sql.begin(async tx => {
     /* 鎖 prizes 那一列。這是「同時被回收與被申請出貨」的仲裁點 ——
        兩條路都要先拿到這一列的鎖，而且都要求 status = 'stashed'，
        所以先到的那個把狀態改掉，後到的必然看到不合的狀態而退出。 */
@@ -205,21 +207,28 @@ prizes.post('/:id/recycle', async c => {
 
     const out = await acceptRecycle(tx, s, points, Date.now())
     if (!out.ok) {
-      return out.error === 'SELLER_UNFUNDED'
-        ? { error: 'SELLER_UNFUNDED', message: '賣家目前的保留額不足以支付這筆回收，請稍後再試或改為申請出貨', status: 409 }
+      /* SELLER_UNFUNDED 不會走到這裡 —— 那條在 acceptRecycle 裡是 throw
+         Rollback（整筆回滾，見 db.ts 的說明），由外層 catch 轉成 409。 */
+      return (
         /* 講清楚是哪一種「改變」。原本只說「結算狀態已經改變」，
            使用者不知道發生了什麼，也不知道還能不能補救。
            絕大多數情況是寄存確認期（14 天）已經過了、票金已經放給賣家。 */
-        : {
-            error: 'WRONG_STATE',
-            message: s.status === 'released'
-              ? '這張卡的寄存確認期已經過了，票金已經結算給賣家，不能再回收。你可以申請出貨把卡寄給你'
-              : '這張卡的結算狀態已經改變，不能回收',
-            status: 409
-          }
+        {
+          error: 'WRONG_STATE',
+          message: s.status === 'released'
+            ? '這張卡的寄存確認期已經過了，票金已經結算給賣家，不能再回收。你可以申請出貨把卡寄給你'
+            : '這張卡的結算狀態已經改變，不能回收',
+          status: 409
+        }
+      )
     }
-    return { points, buyback }
-  })
+      return { points, buyback }
+    })
+  } catch (e) {
+    // Rollback：交易已整筆回滾，把帶出來的回應照實回（見 db.ts）
+    if (e instanceof Rollback) return c.json(e.body, e.status as 409)
+    throw e
+  }
   if ('error' in r) return c.json(r, r.status as 404 | 409)
   return c.json({ ...r, wallet: await walletOf(me) })
 })

@@ -291,8 +291,14 @@ pub.post('/listings', requireAuth, async c => {
   const r = await sql.begin(async tx => {
     const [pz] = await tx`select * from prizes where id = ${prizeId} and user_id = ${me} for update`
     if (!pz) return { error: 'NOT_FOUND', message: '找不到這張卡', status: 404 }
-    // 保管中 → 庫內轉移；已出貨到手上 → 需寄送。其他狀態不能上架
-    const delivery = pz.status === 'stashed' ? 'vault' : pz.status === 'shipped' ? 'ship' : null
+    /* 保管中 → 庫內轉移（實體還在開池賣家那，成交只是改登記）；
+       已出貨到手上、或在卡冊閒置（in_book：接管來的／池結束解押回來的）
+       → 需寄送 —— 這兩種的實體都在持有人自己手上，賣掉就得自己寄，
+       走託管訂單。其他狀態不能上架。
+       in_book 不給 vault：vault 的出貨申請走池結算那條路，而 in_book 的卡
+       沒有（或不再有）活著的結算列，買家會拿到一張永遠出不了貨的卡。 */
+    const delivery = pz.status === 'stashed' ? 'vault'
+      : pz.status === 'shipped' || pz.status === 'in_book' ? 'ship' : null
     if (!delivery) return { error: 'WRONG_STATE', message: '這張卡目前不能上架', status: 409 }
     const [u] = await tx`select name, handle from users where id = ${me}`
     const id = 'l-' + randomBytes(5).toString('hex')

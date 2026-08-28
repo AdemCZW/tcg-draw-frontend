@@ -93,8 +93,13 @@ export async function settle(tx: Tx, o: Order) {
 async function releasePrize(tx: Tx, o: Order) {
   if (o.status !== 'completed' && o.status !== 'refunded' && o.status !== 'cancelled') return
   const owner = o.status === 'completed' ? o.buyerId : o.sellerId
+  /* custodian 一起改：託管訂單的完成定義就是「實體卡寄到了買家手上」
+     （出貨＋簽收或鑑賞期滿），退款/取消則是卡根本沒離開賣家。
+     這是站內唯一「實體真的移動」的交易路徑，custodian 不跟著走的話，
+     buyer 之後把這張卡上架，能不能上架的判準（custodian 是不是自己）
+     會給出錯的答案。 */
   await tx`
-    update prizes p set user_id = ${owner}, status = 'shipped'
+    update prizes p set user_id = ${owner}, custodian_id = ${owner}, status = 'shipped'
     from listings l
     where l.id = ${o.listingId} and p.id = l.prize_id and p.status = 'listed'
   `

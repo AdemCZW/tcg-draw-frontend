@@ -10,7 +10,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
-import { sql } from '../db.js'
+import { sql, Rollback } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { publicCard } from '../card-public.js'
 import { lockSpender, walletOf } from '../money.js'
@@ -249,7 +249,9 @@ social.post('/trade-offers/:id/accept', async c => {
   const me = c.get('userId')
   const id = c.req.param('id') ?? ''
 
-  const r = await sql.begin(async tx => {
+  let r
+  try {
+    r = await sql.begin(async tx => {
     const [o] = await tx`select * from trade_offers where id = ${id} for update`
     if (!o) return { error: 'NOT_FOUND', message: '找不到這筆出價', status: 404 }
     if (o.to_user !== me) return { error: 'NOT_PARTY', message: '這筆出價不是給你的', status: 403 }
@@ -273,12 +275,20 @@ social.post('/trade-offers/:id/accept', async c => {
        **這筆出價自己**也還在凍結裡 —— 餘額 1000、出價 1000 的人算出來的
        available 會是 0，每一筆接受都會被自己擋掉。
        改完狀態它就不在 locked 裡了，這時算出來的才是真正付得起多少。
-       檢查沒過就回錯誤，整筆交易連同這次狀態變更一起回滾。 */
+       檢查沒過就 throw Rollback，整筆交易連同這次狀態變更一起回滾（見 db.ts）。 */
     await tx`update trade_offers set status = 'accepted', responded_at = ${Date.now()} where id = ${id}`
 
     const w = await walletOf(o.from_user as string, tx)
+    /* **throw，不是 return**（audit-3 A-2）。上面那句註解原本宣稱
+       「檢查沒過就回錯誤，整筆交易連同這次狀態變更一起回滾」——
+       機制認知是錯的：postgres.js 只在 throw 時回滾，return 照樣 COMMIT。
+       實測後果：出價永久卡在 accepted、沒過戶、沒分錄，買方列表顯示
+       「成交」卻什麼都沒拿到。Rollback 讓狀態退回 pending，
+       對方補了點數之後這筆出價還能再接受一次。 */
     if (w.available < price) {
-      return { error: 'INSUFFICIENT_POINTS', message: '對方的可動用點數已經不足，無法成交', status: 409 }
+      throw new Rollback(409, {
+        error: 'INSUFFICIENT_POINTS', message: '對方的可動用點數已經不足，無法成交'
+      })
     }
     await tx`insert into points_ledger (user_id, delta, reason, ref_id)
              values (${o.from_user}, ${-price}, 'trade-buy', ${id}) on conflict do nothing`
@@ -312,6 +322,11 @@ social.post('/trade-offers/:id/accept', async c => {
     }, tx)
     return { ok: true }
   })
+  } catch (e) {
+    // Rollback：交易已整筆回滾（付不出錢的接受不留下任何狀態），見 db.ts
+    if (e instanceof Rollback) return c.json(e.body, e.status as 409)
+    throw e
+  }
   if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
   return c.json({ ...r, wallet: await walletOf(me) })
 })

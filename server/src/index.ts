@@ -21,11 +21,14 @@ import { files } from './routes/files.js'
 import { social, socialPublic } from './routes/social.js'
 import { sellers } from './routes/sellers.js'
 import { psa } from './routes/psa.js'
+import { tickets } from './routes/tickets.js'
 import { sweep } from './orders-service.js'
 import { sweepPools, sweepStashExpiry } from './pools-service.js'
 import { sweepSettlementsAll } from './pool-settlement.js'
 import { sweepAttempts } from './rate-limit.js'
 import { certUniquenessPreflight } from './preflight.js'
+import { monitor } from './routes/monitor.js'
+import { monitorSweep } from './monitor.js'
 
 const app = new Hono()
 app.use('*', logger())
@@ -141,6 +144,8 @@ app.route('/v1/pools', pools)
 app.route('/v1/prizes', prizes)
 app.route('/v1/auth/line', line)
 app.route('/v1/admin', admin)
+/* 自我檢測（獨立檔案的理由見 routes/monitor.ts 檔頭） */
+app.route('/v1/admin/monitor', monitor)
 app.route('/v1', pub)
 app.route('/v1/files', files)
 /* social 的兩半分開掛：需要登入的那半有 use('*', requireAuth)，
@@ -156,6 +161,10 @@ app.route('/v1/seller', sellers)
 /* PSA 鑑定編號查證。要登入（查證吃 PSA 每天 100 次配額，不開放匿名）。
    真正的把關在建池 API，這支只是讓前端在送出前先問一次。 */
 app.route('/v1/psa', psa)
+/* 客服工單（使用者端）。客服端在 /v1/admin/tickets，走既有的 requireAdmin。
+   掛在 /v1/tickets 而不是 /v1 底下：這支有 use('*', requireAuth)，
+   掛同一個前綴會把 public.ts 那些公開端點一起變成要登入（同 /v1/seller 那條的理由）。 */
+app.route('/v1/tickets', tickets)
 
 /* 逾期掃描。
    時限本身是用時間戳算的，所以這支排程不是唯一真相 —— 它掛掉不會讓狀態算錯，
@@ -176,6 +185,14 @@ setInterval(() => {
       if (warned || expired) console.log(`[stash] 提醒 ${warned} 張快到期、${expired} 張已過期`)
     })
     .catch(e => console.error('[stash] 失敗', e))
+
+  /* 自我檢測：十條不變式，破了就通知管理員一張修復任務。
+     它自己保證不 throw（monitorSweep 內部全 catch）。 */
+  void monitorSweep().then(r => {
+    if (r && (r.findings.length || r.errors.length)) {
+      console.warn(`[monitor] 發現 ${r.findings.length} 個問題、${r.errors.length} 個檢查失敗`)
+    }
+  })
 
   sweepPools()
     .then(({ opened, revealed, expired }) => {
@@ -205,4 +222,8 @@ serve({ fetch: app.fetch, port: env.PORT }, info => {
      一個「順便看看資料乾不乾淨」的功能不該有那種權力。
      它自己保證不 reject，所以 void 是安全的。 */
   void certUniquenessPreflight()
+
+  /* files.purpose 的 ticket-doc 放行已升級成 migration 026，
+     開機補丁（ticketDocPurposePatch）隨之移除 —— 約束的歷史要住在
+     migrations/ 裡讓看 schema 的人找得到。 */
 })
