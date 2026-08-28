@@ -26,6 +26,29 @@ async function pull(): Promise<OrdersRes> {
   return r
 }
 
+/**
+ * 收件資訊。
+ *
+ * **權限判斷已經在伺服器的 SQL 裡做完了**（見 server/src/routes/orders.ts 的
+ * canShip）：只有這筆訂單的賣家、而且訂單還開著的時候才會有值。
+ * 前端不再判斷一次「該不該顯示」—— 同一條規則有兩個來源，遲早會分岔，
+ * 而分岔的其中一個方向是把買家的住址顯示給不該看的人。
+ * 前端只判斷「有沒有值」與「哪幾欄是空的」。
+ *
+ * 型別宣告在這裡而不是 shared/domain.ts：那個檔案前後端共用，這次不動它。
+ * 讀取一律走 shipToOf()，不要在頁面裡自己寫 cast —— 只有一處知道這件事，
+ * 之後型別搬回 domain.ts 時也只有一處要改。
+ */
+export interface ShipTo {
+  name?: string
+  phone?: string
+  zip?: string
+  city?: string
+  line1?: string
+}
+export const shipToOf = (o: Order): ShipTo | undefined =>
+  (o as Order & { ship?: ShipTo }).ship
+
 const KEY = 'vd_orders_v1'
 /** demo 用的時間位移，讓人不用真的等 7 天就能看完整個流程 */
 const OFFSET_KEY = 'vd_orders_offset'
@@ -141,16 +164,39 @@ export const useOrdersStore = defineStore('orders', {
       return o
     },
 
-    /** demo：直接塞一張已經在跑的訂單，用來看賣家視角 */
-    seedSellerOrder(card: CardItem, price: number) {
+    /**
+     * demo：直接塞一張已經在跑的訂單，用來看賣家視角。
+     *
+     * ship 是選填，而且**三種情況都要能造得出來** —— 買家填了完整收件資料、
+     * 只填了一部分、完全沒填。第三種在正式環境是常態（會員資料全部欄位都不
+     * 強制），而它正是最容易被做壞的那個畫面：沒有這個種子，開發時只會看到
+     * 有地址的版本，賣家對著一片空白的那一版永遠沒有人看過。
+     */
+    seedSellerOrder(card: CardItem, price: number, ship?: ShipTo) {
       const t = Date.now() + this.offset
-      this.orders.unshift({
+      const o: Order & { ship?: ShipTo } = {
         id: 'o-seed-' + t.toString(36),
         listingId: 'seed', card, price,
         deposit: depositFor(price, 0),
         buyerId: 'u-9A44', buyerName: 'VD-9A44',
         sellerId: 'me', sellerName: '我',
-        status: 'escrowed', createdAt: t - 6 * 3_600_000
+        status: 'escrowed', createdAt: t - 6 * 3_600_000,
+        ...(ship ? { ship } : {})
+      }
+      this.orders.unshift(o)
+      this.persist()
+    },
+
+    /** demo：買家視角的訂單。刻意不帶 ship —— 伺服器對買家本來就不會給 */
+    seedBuyerOrder(card: CardItem, price: number) {
+      const t = Date.now() + this.offset
+      this.orders.unshift({
+        id: 'o-buy-' + t.toString(36),
+        listingId: 'seed', card, price,
+        deposit: depositFor(price, 0),
+        buyerId: 'me', buyerName: '我',
+        sellerId: 'u-7C12', sellerName: 'VD-7C12',
+        status: 'shipped', createdAt: t - 30 * 3_600_000, shippedAt: t - 4 * 3_600_000
       })
       this.persist()
     },
@@ -163,24 +209,42 @@ export const useOrdersStore = defineStore('orders', {
     /* ---- 四個狀態轉換。每一個都對應規格裡的一個步驟 ---- */
 
     /**
-     * 賣家出貨。
+     * 賣家出貨 ＝「我已寄出」。
      *
-     * 單號驗證在這裡也要做一次，不能只靠 UI 的 disabled ——
-     * 狀態轉換是資料層的規則，任何呼叫端（之後的 API、測試、其他頁面）
-     * 都必須受同一套約束。第一版只擋在按鈕上，直接呼叫 ship(id,'BAD')
-     * 就進得去，訂單會帶著一個假單號變成運送中。
+     * 物流商、單號、出貨照三個門檻全部拿掉了（使用者拍板的模型：寄送與確認
+     * 由雙方私下完成，平台只給收件資訊 ＋ 一個雙方按下完成的機制）。
+     * 所以這個動作現在**不帶任何必要參數也成立**，後端收 {} 就出得了貨。
+     *
+     * 出貨照整條不再送。後端還收得下 photoFileIds 只是為了讓舊版客戶端不壞，
+     * 前端沒有理由繼續傳一組不再是條件的東西。
+     *
+     * 單號有填才驗，而且驗證留在資料層：任何呼叫端（測試、之後的其他頁面）
+     * 都該受同一套約束，只擋在按鈕的 disabled 上，直接呼叫就繞過去了。
+     * 沒填就跳過 —— 空字串不是「格式錯誤」，是「沒有提供」。
      */
-    async ship(id: string, carrier: Carrier, tracking: string, photoFileIds: string[] = []): Promise<boolean> {
+    async ship(id: string, opts: { carrier?: Carrier; tracking?: string } = {}): Promise<boolean> {
+      const tracking = (opts.tracking ?? '').trim()
+      const carrier = opts.carrier
       if (!MOCK) {
-        await http(ORDER_ROUTES.ship(id), { method: 'POST', json: { carrier, tracking, photoFileIds } })
+        /* 沒填的欄位不要送空字串。後端的 tracking 有 min(6) 而且唯一索引把
+           空字串當成一個值 —— 送 '' 會變成「第二筆沒填單號的訂單被擋下來」。 */
+        await http(ORDER_ROUTES.ship(id), {
+          method: 'POST',
+          json: { ...(carrier ? { carrier } : {}), ...(tracking ? { tracking } : {}) }
+        })
         await this.sweep()
         return true
       }
       const o = this.orders.find(x => x.id === id)
       if (!o || o.status !== 'escrowed') return false
-      // mock 也走同一套驗證，不然只有正式環境才擋得到，開發時看不出規則
-      if (!validateTracking(carrier, tracking).ok) return false
-      this.patch(id, { status: 'shipped', shippedAt: Date.now() + this.offset, tracking: tracking.trim() })
+      // 沒選物流商時用最寬鬆的規則驗，跟後端的 carrier ?? 'other' 一致
+      if (tracking && !validateTracking(carrier ?? 'other', tracking).ok) return false
+      this.patch(id, {
+        status: 'shipped',
+        shippedAt: Date.now() + this.offset,
+        // 後端會把單號轉大寫，mock 跟著做，不然兩種模式顯示出來的單號長得不一樣
+        ...(tracking ? { tracking: tracking.toUpperCase() } : {})
+      })
       return true
     },
 
