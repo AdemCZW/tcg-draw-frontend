@@ -134,6 +134,14 @@ export const router = createRouter({
       meta: { depth: 1, title: '卡片挑選器試跑' }
     },
     {
+      /* 公平性驗證的兩頁。**站內目前沒有任何地方連過來** ——
+         入口被 FAIRNESS_UI（見 lib/config.ts）暫時收起來了，等之後要展示時
+         把那個常數改成 true，十處入口一起回來。
+
+         路由本身刻意留著不關，跟 /fx、/dev/card-picker 同一個性質：
+         知道網址的人還是進得去，自己驗收不用改程式。而且後端的
+         commit-reveal 與 /reveal 從來沒停過，這兩頁打開就是能用的，
+         關掉路由只會多出一個「之後要記得復原」的地方。 */
       path: '/fairness', name: 'fairness',
       component: () => import('@/pages/FairnessPage.vue'),
       meta: { depth: 1, title: '公平性驗證' }

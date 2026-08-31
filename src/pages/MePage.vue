@@ -13,6 +13,7 @@ import LoginMethods from '@/components/LoginMethods.vue'
 import { useWalletStore } from '@/stores/wallet'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { hapticsEnabled, hapticsSupported, setHaptics } from '@/lib/haptics'
+import { FAIRNESS_UI } from '@/lib/config'
 import { ref } from 'vue'
 
 const router = useRouter()
@@ -51,7 +52,11 @@ const rows = [
      會從錯誤訊息旁的按鈕進來，但已開的單之後要回來看回覆，
      沒有常駐入口的話那些對話等於寄丟了。 */
   { name: 'support', t: '我的問題', icon: 'chat' },
-  { name: 'fairness', t: '公平性驗證', icon: 'shield' }
+  /* 公平性驗證暫時收起來（見 lib/config.ts 的 FAIRNESS_UI）。
+     用展開而不是把整列刪掉：位置就地保留，開關打開它會回到原本的最後一格，
+     其餘幾格的順序一格都不會動。格狀選單少一格不會留空洞 ——
+     grid 自己收行，最後一列少一格是它本來就有的樣子（管理員那格也是這樣進出）。 */
+  ...(FAIRNESS_UI ? [{ name: 'fairness', t: '公平性驗證', icon: 'shield' }] : [])
 ]
 
 /* 後台入口。原本只放在 AppHeader 的導覽列裡，但那一列在 720px 以下是

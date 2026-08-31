@@ -14,6 +14,7 @@ import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import PoolOriginBadge from '@/components/PoolOriginBadge.vue'
 import SellerChip from '@/components/SellerChip.vue'
 import DrawPanel from '@/components/DrawPanel.vue'
+import { FAIRNESS_UI } from '@/lib/config'
 
 const props = defineProps<{ pool: Pool }>()
 const sellers = useSellerStore()
@@ -74,7 +75,12 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
       <DrawPanel v-if="pool.status === 'open'" :pool="pool" variant="sheet" />
       <div v-else class="done card">
         <p>本池已完抽</p>
-        <RouterLink :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn">驗證抽選結果</RouterLink>
+        <!-- 驗算入口暫時收起來（見 lib/config.ts 的 FAIRNESS_UI）。
+             這張卡本身留著：它是購買面板讓位之後的狀態說明，
+             「本池已完抽」一句話自己就講得完，不是講到一半的段落。 -->
+        <RouterLink
+          v-if="FAIRNESS_UI" :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn"
+        >驗證抽選結果</RouterLink>
       </div>
     </div>
 

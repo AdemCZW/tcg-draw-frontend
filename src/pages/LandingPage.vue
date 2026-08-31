@@ -21,7 +21,7 @@ import ShaderSky from '@/components/ShaderSky.vue'
 import KineticTitle from '@/components/KineticTitle.vue'
 import { canonicalArt } from '@/lib/tcgdex'
 import { haptic } from '@/lib/haptics'
-import { MOCK } from '@/lib/config'
+import { FAIRNESS_UI, MOCK } from '@/lib/config'
 import { ApiError } from '@/lib/http'
 
 const router = useRouter()
@@ -424,7 +424,12 @@ function goLine() {
     </main>
 
     <footer class="foot muted">
-      <RouterLink :to="{ name: 'fairness' }">公平性</RouterLink> ·
+      <!-- 公平性入口暫時收起來（見 lib/config.ts 的 FAIRNESS_UI）。
+           跟全域頁尾一樣：連結連同後面的「·」一起進出，
+           不然這一列會以一個孤零零的間隔點開頭。 -->
+      <template v-if="FAIRNESS_UI">
+        <RouterLink :to="{ name: 'fairness' }">公平性</RouterLink> ·
+      </template>
       <a href="#">會員條款</a> ·
       <a href="#">隱私權政策</a>
       <span class="fine">

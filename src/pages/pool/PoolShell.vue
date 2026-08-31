@@ -16,6 +16,7 @@ import { usePoolStore } from '@/stores/pools'
 import { useSellerStore } from '@/stores/sellers'
 import DrawPanel from '@/components/DrawPanel.vue'
 import { track } from '@/lib/ga'
+import { FAIRNESS_UI } from '@/lib/config'
 
 const route = useRoute()
 const router = useRouter()
@@ -99,7 +100,11 @@ const activeTab = computed(() => String(route.name))
         <DrawPanel v-if="pool.status === 'open'" :pool="pool" />
         <div v-else class="done card">
           <p>本池已完抽</p>
-          <RouterLink :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn">驗證抽選結果</RouterLink>
+          <!-- 驗算入口暫時收起來（見 lib/config.ts 的 FAIRNESS_UI）。
+               跟總覽頁那張同一張卡的桌機版，處理方式要一致：卡留著、只收連結。 -->
+          <RouterLink
+            v-if="FAIRNESS_UI" :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn"
+          >驗證抽選結果</RouterLink>
         </div>
       </aside>
     </div>

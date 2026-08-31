@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useSellerStore } from '@/stores/sellers'
 import NotifyBell from '@/components/NotifyBell.vue'
 import RollingNumber from '@/components/RollingNumber.vue'
+import { FAIRNESS_UI } from '@/lib/config'
 
 const wallet = useWalletStore()
 const auth = useAuthStore()
@@ -83,7 +84,10 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
       <nav class="nav" :class="{ dense: auth.isLoggedIn }" aria-label="主導覽">
         <RouterLink :to="{ name: 'play' }">抽選台</RouterLink>
         <RouterLink :to="{ name: 'market' }">市場</RouterLink>
-        <RouterLink :to="{ name: 'fairness' }" class="opt">公平性驗證</RouterLink>
+        <!-- 公平性驗證暫時收起來（見 lib/config.ts 的 FAIRNESS_UI）。
+             這一列是 flex，少一項不會留空洞，其餘三項自然靠攏。
+             下面 .opt 的窄螢幕收斂規則留著沒動 —— 開關打開就照舊生效。 -->
+        <RouterLink v-if="FAIRNESS_UI" :to="{ name: 'fairness' }" class="opt">公平性驗證</RouterLink>
         <RouterLink v-if="auth.isLoggedIn" :to="{ name: 'cards' }">我的卡冊</RouterLink>
       </nav>
 

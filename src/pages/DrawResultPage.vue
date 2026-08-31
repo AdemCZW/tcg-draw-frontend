@@ -23,6 +23,7 @@ import CardEmerge from '@/components/CardEmerge.vue'
 import Tilt3D from '@/components/Tilt3D.vue'
 import type { Tier } from '@/types/models'
 import { track } from '@/lib/ga'
+import { FAIRNESS_UI } from '@/lib/config'
 
 const route = useRoute()
 const pools = usePoolStore()
@@ -249,7 +250,12 @@ onMounted(() => {
          不想查的人本來就不會讀。
          示範池仍然要當場說清楚不可驗證：把「不需要你信任我們」收起來、
          卻讓人以為這一池可驗證，比原本那一大塊更糟。 -->
-    <p v-if="pool" class="proof">
+    <!-- 整段（含示範池的警告）一起收在 FAIRNESS_UI 之下（見 lib/config.ts）。
+         示範池那句警告是為了避免有人以為「點進驗算頁就能驗這一池」——
+         連結不在了，那個誤會就不存在，單獨留一句「無法驗算」反而在暗示
+         別的池點得進某個驗算頁，而那個入口現在不在。
+         整個 <p> 一起 v-if：只拿掉裡面的內容會留一個有上邊距的空段落。 -->
+    <p v-if="FAIRNESS_UI && pool" class="proof">
       <RouterLink v-if="!isFixture" :to="`/fairness/${result.poolId}`">
         這一池怎麼證明沒有作弊 →
       </RouterLink>

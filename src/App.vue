@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AppBottomNav from '@/components/AppBottomNav.vue'
+import { FAIRNESS_UI } from '@/lib/config'
 
 const route = useRoute()
 
@@ -50,7 +51,13 @@ const showChrome = computed(() => chrome.value !== 'none')
     <div class="container">
       <span class="mono muted">VaultDraw · 定量池鑑定卡抽選</span>
       <span class="muted links">
-        <RouterLink :to="{ name: 'fairness' }">公平性</RouterLink> ·
+        <!-- 公平性入口暫時收起來（見 lib/config.ts 的 FAIRNESS_UI）。
+             連結與它後面那個「·」綁在同一個 <template> 裡一起進出 ——
+             分開寫的話收起來會變成「 · 會員條款 · 隱私權政策」，
+             行首多一個沒有東西可分隔的間隔點。 -->
+        <template v-if="FAIRNESS_UI">
+          <RouterLink :to="{ name: 'fairness' }">公平性</RouterLink> ·
+        </template>
         <a href="#">會員條款</a> ·
         <a href="#">隱私權政策</a>
       </span>

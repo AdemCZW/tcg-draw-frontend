@@ -27,12 +27,6 @@
       "priority": "0.8"
     },
     {
-      "path": "/fairness",
-      "title": "公平性驗證",
-      "description": "籤序怎麼封存、怎麼自己驗算。commit-reveal 加上第三方隨機源，開獎後可以在自己的瀏覽器重跑一次洗牌。",
-      "priority": "0.8"
-    },
-    {
       "path": "/trade-protection",
       "title": "交易保護機制",
       "description": "從上架到買家收貨的每一步、各自的時限與該預防的風險：託管放款、出貨憑證、開箱影片與爭議裁決。",
