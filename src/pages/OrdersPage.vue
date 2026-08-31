@@ -45,6 +45,7 @@ import SellerChip from '@/components/SellerChip.vue'
 import { api } from '@/lib/api'
 import { MOCK } from '@/lib/config'
 import { useMediaQuery } from '@/composables/useMediaQuery'
+import { useKeyboardInset } from '@/composables/useKeyboardInset'
 
 const store = useOrdersStore()
 const wallet = useWalletStore()
@@ -96,6 +97,7 @@ let timer: number | undefined
 onMounted(() => {
   store.load()
   timer = window.setInterval(() => store.sweep(), 60_000)
+  window.addEventListener('keydown', onEsc)
 })
 
 const now = ref(store.now())
@@ -107,7 +109,10 @@ const now = ref(store.now())
    畫面卻永遠停在訂單頁。實測從 /me/orders 走到任何一頁都重現得到。 */
 let tick: number | undefined
 onMounted(() => { tick = window.setInterval(() => { now.value = store.now() }, 1000) })
-onUnmounted(() => { clearInterval(timer); clearInterval(tick); clearTimeout(allT) })
+onUnmounted(() => {
+  clearInterval(timer); clearInterval(tick); clearTimeout(allT)
+  window.removeEventListener('keydown', onEsc)
+})
 
 const list = computed(() =>
   store.orders.filter(o => (tab.value === 'open' ? isOpen(o) : !isOpen(o)))
@@ -394,59 +399,92 @@ const trackHint = computed(() =>
 
 const busy = ref(false)
 
+const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
+
+/* ==================================================================
+   三張面板：貼底覆蓋層
+   ==================================================================
+   為什麼不是行內展開。行內展開的版本在手機上按不到送出鍵，而且是量出來的：
+   393×852 開面板，再讓軟鍵盤升起（視窗剩 420）的那一刻，三張的送出鍵停在
+   508–555 / 595–642 / 682–729，`inView` 全是 false。接著點欄位、瀏覽器把
+   輸入框捲進畫面之後仍然只有出貨那張救得回來：確認那張沒有欄位可點，
+   永遠停在 595；申訴那張捲到 372–419，看得到，但 elementFromPoint 打到的是
+   底部導覽（A.item）—— 看得到、按不到，那是最難自己脫困的一種。
+   上一輪加的 revealPanel() 救不了這個：它只在
+   「開啟的當下」把面板捲進視野跑一次，鍵盤是之後才升起來的，捲過的位置
+   在那一刻就作廢了。所以 revealPanel() 連同它依賴的 .form scroll-margin
+   一起拿掉了 —— 覆蓋層是 position: fixed，本來就不必捲；留著一個不再做事
+   的捲動函式，下一個人會以為位置是它在管的。
+
+   改成站上已經有四處在用的同一套：貼底覆蓋層（.sheetWrap）＋ 自己捲的面板
+   （.sheet）＋ 黏在下緣的動作列（.sheetFoot）。送出鍵的位置從此跟內容多長、
+   捲到哪裡、鍵盤有沒有升起來都無關。 */
+
+/* 軟鍵盤讓位（--kb）。這三張面板有下拉、單號、事由、影片連結四個欄位，
+   鍵盤必然會彈出來，而 position: fixed 貼的是版面視窗、不是 visualViewport ——
+   不讓位的話動作列會躲到鍵盤底下。跟出貨面板、出價面板、登入方式面板同一支。 */
+useKeyboardInset()
+
+/* 面板要顯示訂單自己的內容（金額、賣家名），但它已經不在 v-for 裡面了，
+   拿不到 r.o。存 id 再回 store 查，不存 Order 物件本身：store.confirm()
+   是用 orders.map() 換掉整個物件的，抓在手上的那一份會變成過期的快照。 */
+const shipOrder = computed(() => store.orders.find(o => o.id === shipFor.value) ?? null)
+const confirmOrder = computed(() => store.orders.find(o => o.id === confirmFor.value) ?? null)
+const disputeOrder = computed(() => store.orders.find(o => o.id === disputeFor.value) ?? null)
+
+/**
+ * 開面板。三張共用一支，因為它們要做的三件事完全一樣。
+ *
+ * 三張互斥：它們現在是同一組疊在畫面上的覆蓋層，同時開兩張只會前後蓋住，
+ * 而被蓋住那張的送出鍵仍然吃得到 Tab 與 Enter。原本只有「確認收貨」與
+ * 「申訴」互斥（那兩顆的結果剛好相反），出貨那張是漏掉的。
+ *
+ * 焦點進面板本身、不進第一個欄位：覆蓋層是 aria-modal，焦點不進去的話
+ * Tab 會走到它背後那些讀不到的東西；但直接聚焦輸入框會在手機上立刻叫出
+ * 鍵盤，使用者還沒看清楚這張面板在問什麼，畫面就先少了一半。
+ */
+let sheetTrigger: HTMLElement | null = null
+function openSheet(kind: 'ship' | 'confirm' | 'dispute', id: string) {
+  shipFor.value = kind === 'ship' ? id : null
+  confirmFor.value = kind === 'confirm' ? id : null
+  disputeFor.value = kind === 'dispute' ? id : null
+  err.value = ''
+  sheetTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  void nextTick(() => document.getElementById(`${kind}Sheet`)?.focus())
+}
+
+/** 關法三種都走這裡：點遮罩、取消鍵、Esc。 */
+function closeSheet() {
+  shipFor.value = null
+  confirmFor.value = null
+  disputeFor.value = null
+  /* 焦點回到剛才按的那顆鈕：訂單卡還在原地，使用者的位置沒有變，焦點也不該變。
+     isConnected 一定要驗 —— 放款成功之後那張卡已經換到「已結案」分頁去了，
+     節點不在文件裡，focus() 會落回 body，讀屏使用者會被丟回頁首。 */
+  if (sheetTrigger?.isConnected) {
+    const t = sheetTrigger
+    void nextTick(() => t.focus())
+  }
+  sheetTrigger = null
+}
+
+/* Esc。面板是 Teleport 到 body 的，焦點不一定落在裡面（點遮罩之後就在 body 上），
+   所以監聽掛在 window 而不是面板節點上。 */
+function onEsc(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  if (shipFor.value || confirmFor.value || disputeFor.value) closeSheet()
+}
+
 /** 打開出貨表單。上一次填的一定要清掉 —— 表單是頁面層級的狀態，
     不清的話 A 訂單填的單號會跟著出現在 B 訂單的表單裡，
     而那會把一組單號掛到另一張卡的訂單上（單號在後端是唯一的）。 */
 function openShip(o: Order) {
-  shipFor.value = o.id
   tracking.value = ''
   carrier.value = ''
-  err.value = ''
-  /* 出貨面板是這一頁三張裡最高的（物流商下拉 + 單號 + 兩段說明 + 動作列），
-     而「我已寄出」就在訂單卡的最下緣 —— 不把面板帶進視野的話，賣家按下去
-     看到的是畫面完全沒動。確認收貨與申訴早就這樣做了，這一顆是漏掉的那個。 */
-  revealPanel('[data-testid="ship-submit"]')
+  openSheet('ship', o.id)
 }
-function closeShip() {
-  shipFor.value = null
-}
-
-const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
-
-/**
- * 把剛打開的那張面板帶到眼前。
- *
- * 實測（393×852）：這兩顆鈕就在訂單卡的最下緣，捲到它們時位置是 top 808，
- * 面板接在下面 —— top 864、送出鍵 999，整張都在視窗外。使用者按了「我已收到」
- * 會看到畫面完全沒動，然後再按一次。守門面板開在看不見的地方等於沒有守門。
- *
- * 用 data-testid 找節點而不是 template ref：這三張面板長在 v-for 裡，
- * ref 會收到一個陣列，還要自己對應是哪一筆；而 confirmFor / disputeFor
- * 一次只可能有一個值，所以選擇器本來就唯一。
- */
-async function revealPanel(sel: string) {
-  await nextTick()
-  document.querySelector(sel)?.closest('.form')?.scrollIntoView({
-    behavior: reduceMotion.value ? 'auto' : 'smooth',
-    /* nearest：只捲到剛好看得見，不要把使用者剛剛在看的訂單卡推出畫面 */
-    block: 'nearest'
-  })
-}
-
-/* 兩張面板互斥：同一張訂單卡上同時攤開「確認收貨」與「申訴」的話，
-   兩組送出鍵會前後相鄰，而它們的結果剛好相反 —— 那正是這條要修的問題本身。 */
-function openConfirm(o: Order) {
-  confirmFor.value = o.id
-  disputeFor.value = null
-  err.value = ''
-  revealPanel('[data-testid="confirm-submit"]')
-}
-function openDispute(o: Order) {
-  disputeFor.value = o.id
-  confirmFor.value = null
-  err.value = ''
-  revealPanel('[data-testid="dispute-submit"]')
-}
+function openConfirm(o: Order) { openSheet('confirm', o.id) }
+function openDispute(o: Order) { openSheet('dispute', o.id) }
 
 /**
  * 放款成功之後留在畫面上的一句話。
@@ -465,7 +503,7 @@ async function doConfirm(o: Order) {
   busy.value = true
   try {
     await store.confirm(o.id)
-    confirmFor.value = null
+    closeSheet()
     /* 自動切到「已結案」：訂單剛從「進行中」消失，畫面還停在原本那個分頁的話
        使用者看到的是一整片「目前沒有進行中的訂單」加一段教學文 ——
        他會以為訂單被系統吃掉了，而不是自己剛把它結掉。 */
@@ -495,7 +533,7 @@ async function doShip(o: Order) {
       carrier: carrier.value || undefined,
       tracking: tracking.value.trim() || undefined
     })
-    closeShip()
+    closeSheet()
     tracking.value = ''
   } catch (e) { err.value = e instanceof Error ? e.message : '出貨失敗' }
   finally { busy.value = false }
@@ -506,7 +544,7 @@ async function doDispute(o: Order) {
   busy.value = true
   try {
     await store.dispute(o.id, reason.value.trim() || '未說明', true, videoUrl.value.trim())
-    disputeFor.value = null
+    closeSheet()
     reason.value = ''
     hasVideo.value = false
     videoUrl.value = ''
@@ -734,7 +772,7 @@ async function doDispute(o: Order) {
             我已寄出
           </button>
           <!-- 這一顆不再直接呼叫 store.confirm()：它是全站唯一「按一下就
-               不可還原地把錢放出去」的按鈕，先開確認面板（見下面 .form） -->
+               不可還原地把錢放出去」的按鈕，先開確認面板（見下面的 #confirmSheet） -->
           <button v-if="a === 'confirm'" type="button" class="btn primary sm" @click="openConfirm(r.o)">
             我已收到
           </button>
@@ -753,96 +791,6 @@ async function doDispute(o: Order) {
         </template>
       </div>
 
-      <!-- 出貨表單。兩欄都是選填，畫面上要明說 —— 舊版看起來像必填，
-           賣家會以為沒單號就出不了貨 -->
-      <div v-if="shipFor === r.o.id" class="form">
-        <p class="lead">
-          按下「我已寄出」代表卡已經寄出去了，買家的收貨時鐘會從那一刻開始跑。
-          下面兩欄<b>都是選填，不填也能出貨</b>。
-        </p>
-        <label>
-          物流商（選填）
-          <select v-model="carrier">
-            <option value="">不指定</option>
-            <option v-for="c in CARRIERS" :key="c.id" :value="c.id">{{ c.label }}</option>
-          </select>
-        </label>
-        <label>
-          物流單號（選填）
-          <input
-            v-model="tracking" type="text"
-            :placeholder="trackHint"
-            :aria-invalid="!!trackErr"
-          />
-          <!-- 錯在哪要當場講。只說「格式不正確」的話賣家看不出問題，
-               只會一直重打同一組 -->
-          <span v-if="trackErr" class="warnLine">{{ trackErr }}</span>
-        </label>
-        <p class="hint">
-          平台沒有串物流，不會去查這組單號，也不會拿它當放款條件。填了只是在
-          爭議時多一個客服查得到的線索。真正的送達確認是買家按下「我已收到」。
-        </p>
-
-        <div class="frow">
-          <button type="button" class="btn sm" @click="closeShip()">取消</button>
-          <button
-            type="button" class="btn primary sm" data-testid="ship-submit"
-            :disabled="!!trackErr || busy" @click="doShip(r.o)"
-          >{{ busy ? '處理中…' : '我已寄出' }}</button>
-        </div>
-      </div>
-
-      <!-- 收貨確認。沿用「我已寄出」那張面板的形狀（.form / .lead / .hint / .frow）——
-           這一頁只該有一種確認面板，兩種長相會讓人以為它們是不同性質的東西。
-           文案要講滿三件事：不可還原、多少錢、給誰。少講任何一件，
-           使用者按下去的時候就不知道自己在同意什麼。 -->
-      <div v-if="confirmFor === r.o.id" class="form">
-        <p class="lead">
-          確認之後，<b>{{ r.o.price.toLocaleString() }} 點會立刻放款給賣家 {{ r.o.sellerName }}</b>。
-          這個動作<b>不能還原</b>，這筆訂單之後也不能再申訴。
-        </p>
-        <p class="hint">
-          卡還沒收到、或東西跟描述不符，就先按「取消」，改按「我要申訴」——
-          申訴要附完整未剪輯的開箱影片，所以拆封前先開始錄。
-        </p>
-        <div class="frow">
-          <button type="button" class="btn sm" @click="confirmFor = null">取消</button>
-          <button
-            type="button" class="btn primary sm" data-testid="confirm-submit"
-            :disabled="busy" @click="doConfirm(r.o)"
-          >{{ busy ? '處理中…' : '確定收到，放款給賣家' }}</button>
-        </div>
-      </div>
-
-      <!-- 申訴表單：沒有開箱影片不受理 -->
-      <div v-if="disputeFor === r.o.id" class="form">
-        <label>
-          發生什麼事
-          <input v-model="reason" type="text" placeholder="例如：盒內是空的" />
-        </label>
-        <label v-if="MOCK" class="chk">
-          <input v-model="hasVideo" type="checkbox" />
-          我有完整未剪輯的開箱影片（從封箱狀態開始、拍到面單與鑑定編號）
-        </label>
-        <label v-else>
-          開箱影片連結（完整未剪輯、從封箱狀態開始、拍到面單與鑑定編號）
-          <input v-model="videoUrl" type="url" placeholder="https://…" />
-        </label>
-        <p class="hint">沒有影片無法受理索賠 —— 買東西不強制錄影，但要申請退款必須附。</p>
-        <!-- 灰按鈕的理由，就在動作列正上方。用 --warn-ink 不用 --danger：
-             使用者沒做錯事，只是還沒填完。role="status" 讓讀屏在貼上連結的
-             當下就聽到門檻過了，不必自己去 Tab 一圈猜。 -->
-        <p v-if="disputeBlockWhy" id="disputeWhy" class="blockWhy" role="status">{{ disputeBlockWhy }}</p>
-        <div class="frow">
-          <button type="button" class="btn sm" @click="disputeFor = null">取消</button>
-          <button
-            type="button" class="btn primary sm" data-testid="dispute-submit"
-            :disabled="!canDispute() || busy"
-            :aria-describedby="disputeBlockWhy ? 'disputeWhy' : undefined"
-            @click="doDispute(r.o)"
-          >{{ busy ? '處理中…' : '送出申訴' }}</button>
-        </div>
-      </div>
     </article>
 
     <!-- 時間旅行：不用真的等 7 天就能看完整條流程。只有 mock 有；伺服器的時間不能撥 -->
@@ -874,6 +822,151 @@ async function doDispute(o: Order) {
         <button type="button" class="btn sm ghost" @click="store.reset()">全部清除</button>
       </div>
     </section>
+
+    <!-- ── 三張面板：貼底覆蓋層 ────────────────────────────────────
+         「我已寄出」「我已收到」「我要申訴」原本是行內展開的 .form，
+         三張的送出鍵在鍵盤升起（393×420）的那一刻都掉到視窗外
+         （實測 508 / 595 / 682，inView 全是 false）。改成覆蓋層之後三張
+         一律停在 311–355，hittable 都是按鈕自己。
+         改成站上既有的那一套：貼底、面板自己捲、動作列黏在面板下緣，
+         送出鍵的位置從此跟內容多長、捲到哪、鍵盤有沒有升起來都無關。
+
+         Teleport 到 body 不是整潔問題：換頁轉場會在 .page 上加 transform，而
+         **祖先只要有 transform，position: fixed 的定位基準就會變成那個祖先
+         而不是視窗**（docs/HANDOFF.md 2.2）—— 面板會被推出畫面外並被裁掉。
+         .sheetWrap / .sheet.hasFoot / .sheetFoot 跟卡冊的出貨面板、公開卡冊的
+         出價面板、登入方式面板是同一套。使用者只要學一次。
+         關法三種：點遮罩、取消鍵、Esc。
+
+         三張都掛 .hasFoot（連只有說明文字的收貨確認也是）：確認面板的第一段
+         會把賣家名字唸出來，而那是使用者自己填的自由字串（demo 的「超長名稱」
+         那顆就是在測它）—— 內容會長大的面板，動作列就得黏底。 -->
+
+    <!-- 出貨。兩欄都是選填，畫面上要明說 —— 舊版看起來像必填，
+         賣家會以為沒單號就出不了貨 -->
+    <Teleport to="body">
+      <div v-if="shipOrder" class="sheetWrap" @click.self="closeSheet()">
+        <div
+          id="shipSheet" class="sheet card hasFoot"
+          role="dialog" aria-modal="true" aria-label="我已寄出" tabindex="-1"
+        >
+          <h2 class="sheetH">我已寄出</h2>
+          <p class="lead">
+            按下「我已寄出」代表卡已經寄出去了，買家的收貨時鐘會從那一刻開始跑。
+            下面兩欄<b>都是選填，不填也能出貨</b>。
+          </p>
+          <label>
+            物流商（選填）
+            <select v-model="carrier">
+              <option value="">不指定</option>
+              <option v-for="c in CARRIERS" :key="c.id" :value="c.id">{{ c.label }}</option>
+            </select>
+          </label>
+          <label>
+            物流單號（選填）
+            <input
+              v-model="tracking" type="text"
+              :placeholder="trackHint"
+              :aria-invalid="!!trackErr"
+            />
+            <!-- 錯在哪要當場講。只說「格式不正確」的話賣家看不出問題，
+                 只會一直重打同一組 -->
+            <span v-if="trackErr" class="warnLine">{{ trackErr }}</span>
+          </label>
+          <p class="hint">
+            平台沒有串物流，不會去查這組單號，也不會拿它當放款條件。填了只是在
+            爭議時多一個客服查得到的線索。真正的送達確認是買家按下「我已收到」。
+          </p>
+
+          <!-- 動作列黏在面板下緣（.sheetFoot 是 position: sticky）。
+               送出失敗的訊息要在這裡再說一次：頁面層級那一行被遮罩蓋住了，
+               而使用者的眼睛在這張面板上。 -->
+          <div class="sheetFoot">
+            <p v-if="err" class="errLine" role="alert">{{ err }}</p>
+            <div class="acts">
+              <button
+                type="button" class="btn primary sm" data-testid="ship-submit"
+                :disabled="!!trackErr || busy" @click="doShip(shipOrder)"
+              >{{ busy ? '處理中…' : '我已寄出' }}</button>
+              <button type="button" class="btn sm" :disabled="busy" @click="closeSheet()">取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 收貨確認。它是全站唯一「按一下就不可還原地把錢放出去」的動作，
+         文案要講滿三件事：不可還原、多少錢、給誰。少講任何一件，
+         使用者按下去的時候就不知道自己在同意什麼。 -->
+    <Teleport to="body">
+      <div v-if="confirmOrder" class="sheetWrap" @click.self="closeSheet()">
+        <div
+          id="confirmSheet" class="sheet card hasFoot"
+          role="dialog" aria-modal="true" aria-label="確認收貨" tabindex="-1"
+        >
+          <h2 class="sheetH">確認收貨</h2>
+          <p class="lead">
+            確認之後，<b>{{ confirmOrder.price.toLocaleString() }} 點會立刻放款給賣家 {{ confirmOrder.sellerName }}</b>。
+            這個動作<b>不能還原</b>，這筆訂單之後也不能再申訴。
+          </p>
+          <p class="hint">
+            卡還沒收到、或東西跟描述不符，就先按「取消」，改按「我要申訴」——
+            申訴要附完整未剪輯的開箱影片，所以拆封前先開始錄。
+          </p>
+          <div class="sheetFoot">
+            <p v-if="err" class="errLine" role="alert">{{ err }}</p>
+            <div class="acts">
+              <button
+                type="button" class="btn primary sm" data-testid="confirm-submit"
+                :disabled="busy" @click="doConfirm(confirmOrder)"
+              >{{ busy ? '處理中…' : '確定收到，放款給賣家' }}</button>
+              <button type="button" class="btn sm" :disabled="busy" @click="closeSheet()">取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 申訴：沒有開箱影片不受理 -->
+    <Teleport to="body">
+      <div v-if="disputeOrder" class="sheetWrap" @click.self="closeSheet()">
+        <div
+          id="disputeSheet" class="sheet card hasFoot"
+          role="dialog" aria-modal="true" aria-label="我要申訴" tabindex="-1"
+        >
+          <h2 class="sheetH">我要申訴</h2>
+          <label>
+            發生什麼事
+            <input v-model="reason" type="text" placeholder="例如：盒內是空的" />
+          </label>
+          <label v-if="MOCK" class="chk">
+            <input v-model="hasVideo" type="checkbox" />
+            我有完整未剪輯的開箱影片（從封箱狀態開始、拍到面單與鑑定編號）
+          </label>
+          <label v-else>
+            開箱影片連結（完整未剪輯、從封箱狀態開始、拍到面單與鑑定編號）
+            <input v-model="videoUrl" type="url" placeholder="https://…" />
+          </label>
+          <p class="hint">沒有影片無法受理索賠 —— 買東西不強制錄影，但要申請退款必須附。</p>
+          <div class="sheetFoot">
+            <p v-if="err" class="errLine" role="alert">{{ err }}</p>
+            <!-- 灰按鈕的理由，就在動作列正上方。用 --warn-ink 不用 --danger：
+                 使用者沒做錯事，只是還沒填完。role="status" 讓讀屏在貼上連結的
+                 當下就聽到門檻過了，不必自己去 Tab 一圈猜。 -->
+            <p v-if="disputeBlockWhy" id="disputeWhy" class="blockWhy" role="status">{{ disputeBlockWhy }}</p>
+            <div class="acts">
+              <button
+                type="button" class="btn primary sm" data-testid="dispute-submit"
+                :disabled="!canDispute() || busy"
+                :aria-describedby="disputeBlockWhy ? 'disputeWhy' : undefined"
+                @click="doDispute(disputeOrder)"
+              >{{ busy ? '處理中…' : '送出申訴' }}</button>
+              <button type="button" class="btn sm" :disabled="busy" @click="closeSheet()">取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -1121,7 +1214,7 @@ a.who2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .money.held .mIco { color: var(--gold); }
 
 .lead {
-  font-size: 12.5px; line-height: 1.8; color: var(--muted); margin: 0 0 10px;
+  font-size: 12.5px; line-height: 1.8; color: var(--muted); margin: 0; min-width: 0;
 }
 .lead b { color: var(--ink); font-weight: 600; }
 
@@ -1129,7 +1222,8 @@ a.who2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
    那個值一千多像素遠 —— 兩個東西看起來不像同一組；長行的說明文字也不好讀。 */
 @media (min-width: 721px) {
   .idBox, .send, .mine { max-width: 620px; }
-  .howL li, .howR li, .todo, .lead, .hint { max-width: 720px; }
+  /* .lead 與 .hint 不列進來：它們現在只出現在面板裡，而面板自己就 520px 寬 */
+  .howL li, .howR li, .todo { max-width: 720px; }
 }
 
 .acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
@@ -1138,19 +1232,63 @@ a.who2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .acts .btn.sm { min-height: 44px; padding: 8px 16px; font-size: 13px; }
 .btn.ghost { opacity: .72; font-size: 12px; }
 
-.form {
-  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line);
-  /* revealPanel() 用 scrollIntoView 把面板帶進畫面，而「畫面底部」不等於
-     視窗底部：手機上最後那 56px 加安全區被底部導覽蓋著。沒有這一行，
-     面板會剛好停在導覽底下 —— 送出鍵看得到一半、按不到（同 DrawPanel 的寫法）。 */
-  scroll-margin-bottom: calc(12px + max(var(--nav-total, 0px), var(--safe-b, 0px)));
+/* ---- 三張面板 ----
+   跟 MyCardsPage 的出貨／回收覆蓋層、PublicCardbookPage 的出價覆蓋層、
+   LoginMethods 的登入方式覆蓋層同一套視覺與行為。四處要一起改。
+   （目前抽成共用元件只是多一層間接 —— 差異在內容，不在容器。） */
+.sheetWrap {
+  position: fixed; inset: 0; z-index: 80;
+  display: flex; align-items: flex-end; justify-content: center;
+  background: var(--scrim);
+  /* 下緣讓給軟鍵盤（--kb 由 useKeyboardInset() 寫進根節點，預設 0）。
+     不用 inset: 0 是因為 bottom 要能被覆蓋。 */
+  bottom: var(--kb, 0px);
 }
-.form label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+.sheet {
+  width: 100%; max-width: min(520px, 100vw);
+  /* 保險絲：內容壓不住時讓它自己橫捲，不要把面板撐出視窗外被裁掉 */
+  overflow-x: hidden;
+  /* 88% 而不是 88dvh：.sheetWrap 的高度已經扣掉鍵盤了，
+     dvh 量的是整個視窗，鍵盤彈出時算出來的面板會比放得下的還高 */
+  max-height: min(88%, 720px); overflow-y: auto; overscroll-behavior: contain;
+  border-radius: 18px 18px 0 0;
+  padding: 18px 16px calc(18px + var(--safe-b, 0px));
+  display: grid; gap: 10px; align-content: start; min-width: 0;
+}
+/* 焦點是程式送進來的（tabindex="-1"），不該畫出一圈使用者沒有自己走到的外框 */
+.sheet:focus-visible { outline: none; }
+.sheetH { font-size: 17px; margin: 0; }
+
+/* 底部內距搬進 .sheetFoot，sticky 的 bottom: 0 才貼得到面板真正的下緣，
+   不然會浮在 18px 內距上面、露出一條會捲動的縫 */
+.sheet.hasFoot { padding-bottom: 0; }
+.sheetFoot {
+  position: sticky; bottom: 0; z-index: 1;
+  /* 負的左右外距讓它撐滿面板寬度，那條分隔線才切得斷、
+     看得出「上面會捲、下面不會」 */
+  margin: 2px -16px 0;
+  padding: 10px 16px calc(12px + var(--safe-b, 0px));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  display: grid; gap: 8px; min-width: 0;
+}
+/* 面板裡沿用訂單卡那組 .acts，兩處的按鈕尺寸（44px）自動一致，
+   這裡只覆蓋外距與方向。主要動作排在前面，跟其他三張面板一致 ——
+   手機上這一組是直排的，順序就是視覺順序。 */
+.sheetFoot .acts { margin-top: 0; flex-wrap: nowrap; }
+.sheetFoot .acts .btn { flex: 1; min-width: 0; }
+@media (max-width: 720px) {
+  .sheetFoot .acts { flex-direction: column; }
+}
+.errLine { margin: 0; min-width: 0; font-size: 12.5px; line-height: 1.55; color: var(--danger-ink); overflow-wrap: anywhere; }
+
+.sheet label { display: block; font-size: 12.5px; color: var(--muted); margin: 0; min-width: 0; }
+.sheet select { width: 100%; min-width: 0; margin-top: 5px; }
 /* 選擇器不能只挑 type="text"：API 模式的開箱影片欄是 type="url"，
    原本整個吃不到這段樣式 —— 那一欄在正式環境是沒有邊框、沒有 44px 高的裸欄位，
    而它正好是唯一擋住「送出申訴」的那一欄。checkbox 排除掉，它不該被撐成 44px 寬。 */
-.form input:not([type="checkbox"]) {
-  display: block; width: 100%; margin-top: 5px;
+.sheet input:not([type="checkbox"]) {
+  display: block; width: 100%; margin-top: 5px; min-width: 0;
   background: var(--field); border: 1px solid var(--line);
   border-radius: var(--radius); color: var(--ink);
   /* 16px 不是排版偏好，是 iOS 的門檻：欄位字級小於 16 就會在聚焦時
@@ -1161,12 +1299,11 @@ a.who2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 .chk { display: flex; gap: 8px; align-items: flex-start; line-height: 1.6; }
 .chk input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
-.hint { font-size: 11.5px; line-height: 1.65; color: var(--muted); margin: 0 0 10px; }
-.frow { display: flex; gap: 8px; justify-content: flex-end; }
+.hint { font-size: 11.5px; line-height: 1.65; color: var(--muted); margin: 0; }
 /* 灰按鈕的理由。--warn-ink 而不是 --danger：使用者沒做錯事，只是還沒填完，
    紅字會讀成「出錯了」（同卡冊出貨面板、出價面板、上架列） */
 .blockWhy {
-  margin: 0 0 10px; min-width: 0;
+  margin: 0; min-width: 0;
   font-size: 12.5px; line-height: 1.55; color: var(--warn-ink);
   overflow-wrap: anywhere;
 }
