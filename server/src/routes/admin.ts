@@ -12,9 +12,10 @@ import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { markShipped } from '../pool-settlement.js'
 import { credit, walletOf } from '../money.js'
-import { notify } from '../notify.js'
+import { notify, notifyMany } from '../notify.js'
 import { act } from './orders.js'
 import { PLATFORM_ID } from '../orders-service.js'
+import type { Order } from '../shared/domain.js'
 import { PageQuery, decodeCursor, encodeCursor, isNumeric, slicePage } from '../pagination.js'
 import {
   LIVE_STATUSES, TICKET_KINDS, applyTakeover, certHolderOf, loadMessages, loadTicket,
@@ -31,9 +32,22 @@ async function requireAdmin(c: Context, next: Next) {
 }
 admin.use('*', requireAdmin)
 
+/**
+ * 寫一筆稽核，並把那一列的 id 回傳。
+ *
+ * 回傳 id 是為了給通知當 refId 用。後台的動作跟系統自動觸發的不一樣：
+ * 「把賣家調成 verified」可以合法地發生第二次（先降級、再升回來），
+ * 所以 refId 不能綁實體（賣家 id）也不能綁狀態值（tier）—— 那兩種都會
+ * 把第二次的通知靜默吃掉。admin_actions.id 是「這一次動作」本身，
+ * 一次動作一則通知，重按就是另一列、另一則，語意剛好對上。
+ */
 async function audit(adminId: string, action: string, target: string | null, payload: unknown, note = '') {
-  await sql`insert into admin_actions (admin_id, action, target, payload, note)
-            values (${adminId}, ${action}, ${target}, ${payload as never}, ${note})`
+  const [r] = await sql<{ id: string }[]>`
+    insert into admin_actions (admin_id, action, target, payload, note)
+    values (${adminId}, ${action}, ${target}, ${payload as never}, ${note})
+    returning id
+  `
+  return String(r?.id ?? '')
 }
 
 /* ---- 發點數 ----
@@ -56,6 +70,22 @@ admin.post('/grant', async c => {
     await credit(tx, userId, points, 'admin-grant', ref)
   })
   await audit(me, 'grant', userId, { points, ref }, note)
+  /* 錢憑空多出來一筆，而收到的人不在場。沒有這一則，他只能在某次打開
+     錢包時發現數字不對，然後開一張客服單問「這是什麼」。
+
+     **note 刻意不帶進 body**：那是發放的人寫給稽核看的內部字（「補償 #123」
+     之類），不是寫給當事人的。要知道為什麼就去看點數明細或問客服。
+
+     refId 綁發放編號 ref（同時也是 points_ledger 的 ref_id，靠 ledger_once
+     擋重送）—— 一筆發放一則通知，跟帳本那一列一對一。
+     用 notifyMany 走「失敗只記 log」那條：點數已經進帳了，通知寫不進去
+     不該讓這支端點回錯誤，那會誘導發放的人再按一次。 */
+  await notifyMany([{
+    userId, kind: 'system',
+    title: '平台發放了點數',
+    body: `${points.toLocaleString('zh-TW')} 點已入帳，可以直接使用。明細看點數紀錄。`,
+    link: '/me/wallet', refId: ref
+  }])
   return c.json({ ok: true, ref, wallet: await walletOf(userId) })
 })
 
@@ -66,9 +96,39 @@ admin.post('/sellers/:id/tier', async c => {
   const id = c.req.param('id') ?? ''
   const parsed = Verify.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '參數不合法' }, 400)
+  /* 先讀舊值：等級沒真的變的時候不該發通知（客服重按一次、或批次把整批
+     都設成 verified 時掃到已經是 verified 的那些）。這是純粹的通知判斷，
+     跟資料無關，所以不必跟 UPDATE 綁在同一個交易裡。 */
+  const [before] = await sql<{ tier: string | null }[]>`select tier from sellers where id = ${id}`
   const r = await sql`update sellers set tier = ${parsed.data.tier} where id = ${id} returning id`
   if (!r.length) return c.json({ error: 'NOT_FOUND', message: '找不到這個賣家' }, 404)
-  await audit(me, 'seller-tier', id, { tier: parsed.data.tier }, parsed.data.note)
+  const auditId = await audit(me, 'seller-tier', id, { tier: parsed.data.tier }, parsed.data.note)
+
+  /* ── 賣家等級 = 他能不能開池 ──────────────────────────────────────
+     routes/pools.ts 的第一道門就是 `if (s.tier === 'pending') → 403
+     SELLER_PENDING`。也就是說這一行 UPDATE 直接決定了對方能不能做生意，
+     而他完全不在場。原本這件事一則通知都沒有 —— 賣家送完件之後只能
+     每天回來按一次「我的賣家狀態」看有沒有變。
+
+     升級與降級都要發。降級尤其不能省：他下次開池會撞到一個沒有預警的
+     403，而那時候他已經把卡準備好了。
+
+     refId 綁 admin_actions.id（見 audit() 的說明）：等級可以來回改，
+     綁賣家 id 或綁 tier 值都會讓第二次靜默消失。 */
+  if (before && before.tier !== parsed.data.tier) {
+    const t = parsed.data.tier
+    await notifyMany([{
+      userId: id, kind: 'system',
+      title: t === 'pending' ? '你的賣家資格已改回待審核' : '賣家審核通過',
+      body: t === 'pending'
+        ? '在恢復之前不能開新池。已經開著的池不受影響，出貨義務也還在。'
+        : t === 'trusted'
+          ? '你已經是信任賣家，可以開池。'
+          : '你的賣家等級是已驗證，現在可以開池了。',
+      link: t === 'pending' ? '/support/new' : '/seller/new',
+      refId: 'seller-tier:' + auditId
+    }])
+  }
   return c.json({ ok: true })
 })
 
@@ -165,6 +225,45 @@ admin.get('/disputes', async c => {
    而不是 role='admin'：目前兩者剛好是同一個人，但多開一個管理員就會靜默 403。
    而且它不寫稽核 —— 這是會實際移動點數而且不可逆的動作，沒有紀錄不行。
    改走這裡：權限由 requireAdmin 認，動作仍交給 orders 的狀態機，額外補上稽核。 */
+/**
+ * 裁決結果通知**雙方**。
+ *
+ * 這是全站少數「錢的歸屬由第三人單方面決定」的動作，而且不可逆：
+ * 判給買家＝退款＋沒收賣家保證金，判給賣家＝貨款放行。兩個人都不在場，
+ * 而在此之前這條路一則通知都沒有 —— 走工單那條至少會發一則「工單已處理」
+ * 給開單人（通常是買家），賣家則是完全靜默：他的保證金被沒收了，
+ * 只能在某次打開錢包時發現。
+ *
+ * refId 綁**訂單 id**：一張訂單只裁決得了一次（act() 的狀態機守衛 +
+ * 工單那條的 `o.status === 'disputed'` 分支），所以是一次性的事實。
+ * 兩條裁決入口（/disputes/:id/resolve 與工單結案）共用同一個 refId
+ * 是刻意的 —— 就算兩邊先後跑到，當事人也只會收到一則。
+ *
+ * 失敗只記 log（notifyMany）：錢已經動完了，通知寫不進去不該讓端點回錯誤，
+ * 那會誘導客服再裁一次。
+ */
+async function notifyDisputeResolved(o: Order, to: 'buyer' | 'seller') {
+  const name = o.card?.name ?? '卡片'
+  await notifyMany([
+    {
+      userId: o.buyerId, kind: 'order',
+      title: to === 'buyer' ? '爭議判給你，貨款已退回' : '爭議裁決：貨款判給賣家',
+      body: to === 'buyer'
+        ? `「${name}」的 ${o.price.toLocaleString('zh-TW')} 點已解除凍結，回到你的可動用點數。`
+        : `「${name}」的貨款已付給賣家。有疑問可以開客服單。`,
+      link: '/me/orders', refId: 'dispute-resolved:' + o.id
+    },
+    {
+      userId: o.sellerId, kind: 'order',
+      title: to === 'seller' ? '爭議判給你，貨款已入帳' : '爭議判給買家，貨款已退回',
+      body: to === 'seller'
+        ? `「${name}」的 ${o.price.toLocaleString('zh-TW')} 點已入帳。`
+        : `「${name}」的貨款退回買家，保證金 ${o.deposit.toLocaleString('zh-TW')} 點也一併沒收。`,
+      link: '/seller/shipping', refId: 'dispute-resolved:' + o.id
+    }
+  ])
+}
+
 const Resolve = z.object({
   to: z.enum(['buyer', 'seller']),
   note: z.string().trim().min(4).max(200)
@@ -185,6 +284,7 @@ admin.post('/disputes/:id/resolve', async c => {
     }))
   if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
   await audit(me, 'dispute-resolve', id, { to }, note)
+  await notifyDisputeResolved(r.order, to)
   return c.json(r)
 })
 
@@ -274,7 +374,12 @@ admin.post('/shipments/:id/status', async c => {
         userId: sh.user_id as string, kind: 'shipment',
         title: shipped ? '你的卡已經寄出' : '你的卡已送達',
         body: tracking ? `物流單號 ${tracking}` : shipped ? '出貨單已寄出。' : '出貨單已送達。',
-        link: '/me/cards', refId: id
+        /* refId 要帶狀態。原本只帶出貨單 id —— 而 notifications_once 是
+           unique(user_id, kind, ref_id)，同一張單先「已寄出」再「已送達」
+           時，第二則會被 `on conflict do nothing` 靜默吃掉：使用者永遠
+           收不到送達通知，而且從外面完全看不出來（那支端點照樣回 ok）。
+           一張單的兩個里程碑是兩件事，refId 就該是兩個。 */
+        link: '/me/cards', refId: `${id}:${status}`
       }, tx)
     }
     return { ok: true }
@@ -341,6 +446,40 @@ admin.get('/verifications', async c => {
   return c.json({ verifications: rows })
 })
 
+/**
+ * 送件的賣家：你的證件審過了／被退回了。
+ *
+ * ── 為什麼一定要有 ────────────────────────────────────────────────
+ * 這件事有兩個入口（這支端點，以及 seller-doc 工單結案），兩邊都只改
+ * seller_verifications 那一列就結束。賣家送完件之後**沒有任何訊號**：
+ * 他只能自己一直回來打開 /v1/seller/me 看 verification.status 有沒有變。
+ * 被退回的更糟 —— 他看到的是「還在審」，實際上已經沒有人會再看那份文件。
+ *
+ * ── 為什麼措辭是「證件」不是「可以開池了」──────────────────────────
+ * 通過這一份文件**不會**動 sellers.tier，而開池的門檻讀的是 tier
+ * （routes/pools.ts 的 SELLER_PENDING）。寫成「現在可以開池了」對一半的
+ * 賣家是假的：他點進去照樣 403。能不能開池由 /sellers/:id/tier 那一步
+ * 決定，那一步有它自己的通知。這裡只講這一份文件的結果。
+ *
+ * refId 綁**這一份 verification 的 id**：一份文件只會被審一次
+ * （兩個入口的 UPDATE 都帶 `status = 'pending'` 守衛），所以這是
+ * 「知道了就好」的一次性事實，比照 pools-service 的寄存提醒綁 prize id。
+ * 兩個入口共用同一個 refId 是刻意的 —— 就算兩邊都跑到也只會有一則。
+ */
+async function notifyVerification(
+  sellerId: string, verificationId: string, status: 'approved' | 'rejected', note: string
+) {
+  const reason = note.trim()
+  await notifyMany([{
+    userId: sellerId, kind: 'system',
+    title: status === 'approved' ? '賣家證件審核通過' : '賣家證件沒有通過',
+    body: status === 'approved'
+      ? '你送出的證明文件已經通過。開池權限由平台在審核後開通，開通時會再通知你。'
+      : (reason ? `原因：${reason}。` : '') + '可以重新送件，或開客服單詢問。',
+    link: '/seller/new', refId: 'seller-verify:' + verificationId
+  }])
+}
+
 const VerifyDoc = z.object({
   status: z.enum(['approved', 'rejected']),
   note: z.string().max(200).default('')
@@ -357,6 +496,7 @@ admin.post('/verifications/:id/review', async c => {
   `
   if (!r.length) return c.json({ error: 'WRONG_STATE', message: '這筆文件不存在或已審核過' }, 409)
   await audit(me, 'verification-review', id, { status: parsed.data.status }, parsed.data.note)
+  await notifyVerification(String(r[0]!.seller_id), id, parsed.data.status, parsed.data.note)
   return c.json({ ok: true })
 })
 
@@ -610,6 +750,28 @@ admin.post('/tickets/:id/resolve', async c => {
       // prize_id 補記下來：事後覆核時要看得出當時動的是哪一列，不用再靠編號反查
       await sql`update tickets set prize_id = ${r.prizeId} where id = ${id}`
 
+      /* ── 通知**失去這張卡的那個人** ──────────────────────────────────
+         接管是站內唯一「一張卡從甲的卡冊消失、出現在乙的卡冊」的動作，
+         而它由客服單方面執行 —— 甲不是開單人，工單那則
+         「你的工單已經處理完成」跟他無關，他不會收到任何東西。
+         下一次打開卡冊少一張卡，而且沒有任何紀錄告訴他發生過什麼。
+
+         changed = false 時不發：那是「卡本來就已經在申請人名下」
+         （客服重按一次），沒有人失去任何東西。
+         from === 申請人 也不發：那是同一個人。
+
+         refId 綁**工單 id**：一張接管單只會過戶一次（過完就結案），
+         所以這是一次性的事實；綁卡片 id 的話同一張卡日後再被接管一次
+         （合法：可以再轉手）就會被靜默吃掉。 */
+      if (r.changed && r.fromUserId !== String(row.user_id)) {
+        await notifyMany([{
+          userId: r.fromUserId, kind: 'system',
+          title: '一張卡已從你的卡冊轉出',
+          body: '有人以站外轉手接管了這個鑑定編號的卡。如果你認為有誤，請立刻開客服單。',
+          link: '/support/new', refId: 'takeover-out:' + id
+        }])
+      }
+
     } else if (kind === 'order-dispute') {
       if (!disputeTo) {
         return c.json({
@@ -634,6 +796,9 @@ admin.post('/tickets/:id/resolve', async c => {
           }))
         if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
         effect.dispute = { to: disputeTo, orderStatus: r.order.status }
+        /* 跟 /disputes/:id/resolve 走同一個通知（同一個 refId），
+           理由跟「同一個 act()」一樣：這是同一件事，不該有兩套說法。 */
+        await notifyDisputeResolved(r.order, disputeTo)
       } else {
         /* 訂單已經不在 disputed：有人先用既有的 /v1/admin/disputes/:id/resolve
            裁決過了（那條刻意保留著當退路），或是這一支上次跑到一半掛了。
@@ -655,6 +820,11 @@ admin.post('/tickets/:id/resolve', async c => {
         returning id
       `
       effect.verification = { updated: done.length > 0 }
+      /* 只有真的改到那一列才通知。沒改到＝客服早就從審核頁按過了，
+         那一則已經發過（refId 兩邊共用同一份 verification id）。 */
+      if (done.length) {
+        await notifyVerification(String(row.seller_id ?? ''), String(done[0]!.id), 'approved', resolution)
+      }
     }
     /* 其餘 kind（card-issue / account / other）只結案，不做別的 ——
        它們本來就沒有對應的既有邏輯可以呼叫。 */
@@ -676,6 +846,11 @@ admin.post('/tickets/:id/resolve', async c => {
       returning id
     `
     effect.verification = { updated: done.length > 0, rejected: true }
+    /* 駁回這一側更需要通知：工單那則只說「沒有受理」，賣家不會知道
+       那句話同時也把他的證件審核判掉了。 */
+    if (done.length) {
+      await notifyVerification(String(row.seller_id ?? ''), String(done[0]!.id), 'rejected', resolution)
+    }
   }
 
   const now = Date.now()

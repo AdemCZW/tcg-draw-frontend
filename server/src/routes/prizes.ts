@@ -7,7 +7,9 @@ import { randomBytes } from 'node:crypto'
 import { sql, Rollback } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { walletOf } from '../money.js'
+import { notify } from '../notify.js'
 import { recycleEligible } from '../shared/recycle.js'
+import { POOL_SHIP_DEADLINE_MS } from '../shared/pool-settlement.js'
 import {
   acceptRecycle, markShipRequested, release, sweepSettlements, toSettlement
 } from '../pool-settlement.js'
@@ -309,6 +311,39 @@ prizes.post('/ship', async c => {
        「賣家什麼時候算違約」兩件事的共同起點 —— 少了這一步，
        買家申請了出貨，賣家卻沒有任何期限壓力，而錢也永遠釋放不掉。 */
     await markShipRequested(tx, prizeIds, Date.now())
+
+    /* ── 通知賣家：時鐘已經開始跑了 ──────────────────────────────────
+       上面那一行替賣家掛上一個**有時限的義務**（72 小時），逾期的後果是
+       退款給買家＋記一次違約。而在這之前這件事對賣家是完全靜默的：
+       他要自己想到去打開「出貨與結算」那一頁才看得到。這是整份稽核裡
+       唯一「使用者會因為沒收到通知而被罰」的路徑，所以它比任何一則都該發。
+
+       為什麼要 group by seller_id：一次申請可以夾帶多個賣家的卡（F-9），
+       每個賣家只該收到一則、而且只該看到自己那幾張的數量。
+
+       條件跟 markShipRequested 剛剛寫的兩個 UPDATE 對齊 —— 正常路徑
+       （awaiting_ship）與 F-5（票金已釋放但還欠卡）都算義務。
+
+       refId 綁**出貨單 id**：一次申請就是一個事件，重送會建新的出貨單、
+       也就該有新的通知。同一張單重試（同一個 id）則只發一次。
+       唯一索引帶 user_id，所以多個賣家共用這個 refId 不會互相擋掉。 */
+    const owed = await tx<{ seller_id: string; n: number }[]>`
+      select st.seller_id, count(*)::int as n
+        from pool_settlements st
+       where st.prize_id = any(${prizeIds})
+         and st.ship_due_at is not null and st.shipped_at is null
+         and st.status in ('awaiting_ship', 'released')
+       group by st.seller_id
+    `
+    for (const o of owed) {
+      await notify({
+        userId: o.seller_id, kind: 'shipment',
+        title: '有買家申請出貨了',
+        body: `${o.n} 張卡等你寄出，期限 ${POOL_SHIP_DEADLINE_MS / 3_600_000} 小時 —— `
+            + '逾期會退款給買家並記一次違約。收件地址在出貨頁上。',
+        link: '/seller/shipping', refId: 'ship-req:' + id
+      }, tx)
+    }
     return { shipmentId: id }
   })
   if ('error' in r) return c.json(r, r.status as 409)

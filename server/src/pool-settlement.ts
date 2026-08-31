@@ -36,7 +36,7 @@ import { credit, lockSpender, walletOf } from './money.js'
 import { notify } from './notify.js'
 import { PLATFORM_ID } from './orders-service.js'
 import {
-  POOL_SHIP_DEADLINE_MS, RESERVED_STATUSES, applySettlementDeadline,
+  POOL_SHIP_DEADLINE_MS, RESERVED_STATUSES, SELLER_DEFAULT_LIMIT, applySettlementDeadline,
   physicalShipOverdue, splitTicket, type SettlementStatus, type Settlement
 } from './shared/pool-settlement.js'
 
@@ -233,17 +233,46 @@ export async function markShipped(tx: Tx, prizeIds: string[], now: number) {
   `
 }
 
+/** 釋放的三條路，講成賣家看得懂的話。狀態機的字（closed_by）不該原樣丟給人看 */
+const RELEASE_REASON: Record<'buyer-confirm' | 'inspect-timeout' | 'vault-accept', string> = {
+  'buyer-confirm': '買家已確認收貨',
+  'inspect-timeout': '7 天鑑賞期已滿',
+  'vault-accept': '14 天寄存確認期已滿'
+}
+
 /**
  * 釋放一筆。**不寫分錄** —— 錢在抽卡當下就已經在賣家名下，
  * 這裡改的只是「還算不算保留額」。
+ *
+ * ── 為什麼要通知賣家（這支原本一則都不發）────────────────────────────
+ * 「不寫分錄」對帳本是對的，對賣家卻造成一個看不見的時刻：他的總餘額
+ * 從抽卡當下就沒再變過，變的是**可動用**那個數字 —— 而那是推導出來的，
+ * 沒有任何一列帳可以讓他知道「就是現在」。三條釋放路徑（買家確認、
+ * 鑑賞期滿、寄存確認期滿）全部發生在他不在場的時候，其中兩條還是掃描
+ * 觸發的。結果是賣家只能反覆打開錢包看數字有沒有變。
+ *
+ * refId 綁**結算 id**（比照 pools-service 的寄存提醒綁 prize id）：
+ * 一筆結算只會釋放一次，這是「知道了就好」的事實，不是要一直吵的狀態。
+ * 上面的 `returning id` 是第一道閘 —— 掃描會重跑，沒有它同一筆會重發。
  */
 export async function release(
   tx: Tx, s: SettlementRow, closedBy: 'buyer-confirm' | 'inspect-timeout' | 'vault-accept', now: number
-) {
-  await tx`
+): Promise<boolean> {
+  const done = await tx`
     update pool_settlements set status = 'released', closed_at = ${now}, closed_by = ${closedBy}
      where id = ${s.id} and status = any(${RESERVED_STATUSES as unknown as string[]})
+     returning id
   `
+  // 影響 0 列表示別人先處理過了（掃描與買家確認可能同時到）。不能再通知一次
+  if (!done.length) return false
+
+  await notify({
+    userId: s.sellerId, kind: 'listing-sold',
+    title: '票金已入帳，可以動用了',
+    body: `${RELEASE_REASON[closedBy]}，${s.amount} 點從保留額轉為可動用。`,
+    link: '/me/wallet', refId: 'pool-release:' + s.id
+  }, tx)
+  return true
 }
 
 /**
@@ -276,7 +305,22 @@ export async function refund(tx: Tx, s: SettlementRow, now: number) {
     userId: s.ownerId, kind: 'system',
     title: '賣家逾期未出貨，已退還票金',
     body: `${s.amount + s.fee} 點已經退回你的帳戶。`,
-    link: '/wallet', refId: 'pool-refund:' + s.id
+    /* 原本寫的是 '/wallet' —— 前端沒有這條路由（只有 '/me/wallet'，
+       見 src/router/index.ts），點下去會掉進 404 的 catch-all。
+       通知的價值一半在「點得進去」，指錯地方等於只剩一半。 */
+    link: '/me/wallet', refId: 'pool-refund:' + s.id
+  }, tx)
+  /* 賣家那一側原本完全靜默，而這一則對他的份量比對買家還重：
+     票金被收回去了（他可能已經把那筆錢算進可動用），而且違約次數 +1 ——
+     滿 SELLER_DEFAULT_LIMIT 次就再也開不了池。這件事發生在掃描裡，
+     他不在場，下次撞到 SELLER_SUSPENDED 才知道就太晚了。
+     refId 另外開一個前綴：買賣雙方是兩則不同的通知，共用同一個 refId 不會
+     互相擋掉（唯一索引帶 user_id），但前綴分開讀 log 時才看得出是哪一側。 */
+  await notify({
+    userId: s.sellerId, kind: 'system',
+    title: '逾期未出貨，票金已退還買家',
+    body: `${s.amount} 點從你的帳戶收回，並記一次違約（滿 ${SELLER_DEFAULT_LIMIT} 次不能再開池）。`,
+    link: '/seller/shipping', refId: 'pool-refund-seller:' + s.id
   }, tx)
   return true
 }
@@ -308,6 +352,16 @@ export async function markShipDefault(tx: Tx, s: SettlementRow, now: number): Pr
     body: '這張卡的票金在寄存確認期滿時已經結算，所以不會退款。'
         + '我們已經記錄賣家一次違約，請透過客服協助後續。',
     link: '/me/cards', refId: 'pool-ship-default:' + s.id
+  }, tx)
+  /* 賣家那一側：**義務沒有結清**，這是這一則跟退款那一則最大的差別。
+     票金不會被收回（那筆錢已經依規則釋放了），所以賣家從錢包上完全看不出
+     發生過什麼 —— 唯一的變化是一次違約，以及那張他還欠著的實體卡。
+     講清楚「現在該做什麼」＝ 還是要寄，不是「已經算了」。 */
+  await notify({
+    userId: s.sellerId, kind: 'system',
+    title: '逾期未交卡，已記一次違約',
+    body: `票金不會收回，但這張卡還是要寄（滿 ${SELLER_DEFAULT_LIMIT} 次違約不能再開池）。`,
+    link: '/seller/shipping', refId: 'pool-ship-default-seller:' + s.id
   }, tx)
   return true
 }
@@ -360,6 +414,16 @@ export async function acceptRecycle(
      所以 ownerId 就是按下按鈕的那個人。 */
   await credit(tx, s.ownerId, points, 'pool-recycle-in', s.id)
   await tx`update prizes set status = 'recycled' where id = ${s.prizeId}`
+  /* 回收是**買家單方面按下去**的，賣家不在場，而他這一刻同時發生兩件事：
+     帳戶被扣了買回價，以及那張卡不用寄了（他可能已經包好貼上標籤）。
+     第二件比第一件更需要當下就知道 —— 寄出去之後那張卡就要不回來了。
+     refId 綁結算 id：一筆結算只回收得了一次（上面的 returning 守衛）。 */
+  await notify({
+    userId: s.sellerId, kind: 'system',
+    title: '買家接受了你的買回價',
+    body: `${points} 點已付給買家，這張卡回到你手上 —— 不用再寄了。`,
+    link: '/seller/shipping', refId: 'pool-recycle-seller:' + s.id
+  }, tx)
   return { ok: true }
 }
 
@@ -453,8 +517,10 @@ export async function sweepSettlements(tx: Tx, userId?: string): Promise<number>
     if (next.status === 'refunded') {
       if (await refund(tx, s, now)) changed++
     } else if (next.status === 'released') {
-      await release(tx, s, next.closedBy as 'inspect-timeout' | 'vault-accept', now)
-      changed++
+      /* release() 現在會回報有沒有真的改到（它多了 returning 守衛）——
+         沒改到就不該計數，不然掃描回報的「處理了幾筆」會把別人先處理掉的
+         那些也算進來。 */
+      if (await release(tx, s, next.closedBy as 'inspect-timeout' | 'vault-accept', now)) changed++
     }
   }
   return changed

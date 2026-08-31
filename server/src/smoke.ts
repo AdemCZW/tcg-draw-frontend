@@ -1772,6 +1772,186 @@ async function run() {
         `${remain0} → ${a5.pool.remainingTickets}`)
     }
 
+    /* ---------------- 通知完整性（docs/notifications-audit.md）----------------
+       驗的是同一句話：**會動到使用者的錢、卡、權限或義務的事，發生時他不在場，
+       所以一定要有一則通知。**
+
+       每一條都驗三件事，缺一不可：
+         1 真的寫進 notifications（不是「端點回 ok」就算數）
+         2 refId 冪等 —— 重複觸發（掃描會重跑）只留一則
+         3 link 指到前端真的存在的路由（'/wallet'、'/cards' 都曾經是死連結）
+
+       第 3 點用一張白名單比對，而不是逐條 assert 字串：新增通知時忘了對
+       src/router/index.ts 的成本就是「使用者點了通知掉進 404」，
+       那從伺服器這一側完全看不出來。 */
+    console.log('\n通知完整性：')
+    {
+      /* src/router/index.ts 有的路徑。動態段（:id）用前綴比對。
+         這份清單改動時要跟前端路由表對一次 —— 它就是那張表的影子。 */
+      const ROUTES = ['/me/wallet', '/me/cards', '/me/orders', '/me/offers', '/me/profile',
+        '/seller/new', '/seller/shipping', '/support', '/support/new', '/admin/overview']
+      const linkOk = (l: string | null) =>
+        l == null || ROUTES.includes(l) || l.startsWith('/support/') || l.startsWith('/draw/')
+          || l.startsWith('/admin/')
+      const notifs = async (t: string): Promise<Any[]> =>
+        (await json(await call(t, '/v1/social/notifications'))).notifications ?? []
+      const withRef = (rows: Any[], ref: string) => rows.filter((n: Any) => n.ref_id === ref)
+
+      /* ---- 1. 買家申請出貨 → 賣家有一個 72 小時的義務 ----
+         這是整份稽核裡唯一「使用者會因為沒收到通知而被**罰**」的路徑：
+         逾期的後果是退款給買家並記一次違約，而違約滿門檻就不能再開池。 */
+      const gN = await drawOne(buyer, genId('p-seed-1'))
+      if (gN) {
+        const sh = await json(await call(buyer, '/v1/prizes/ship',
+          { prizeIds: [gN.stashId], address: ADDR }))
+        const ref = 'ship-req:' + sh.shipmentId
+        const sn = await notifs(seller)
+        const hit = withRef(sn, ref)
+        check('買家申請出貨後，賣家收到「有買家申請出貨了」', hit.length === 1,
+          `${hit.length} 則 ref=${ref}`)
+        check('那一則指到賣家真的能處理它的頁面（出貨與結算）',
+          hit[0]?.link === '/seller/shipping', `${hit[0]?.link}`)
+        check('內文講得出期限與後果（不是只說「狀態已更新」）',
+          String(hit[0]?.body ?? '').includes('72') && String(hit[0]?.body ?? '').includes('違約'),
+          `${hit[0]?.body}`)
+
+        /* ---- 2. 票金結算入帳 ----
+           賣家的總餘額從抽卡當下就沒再變過，變的是**可動用** —— 那是推導的，
+           沒有任何一列帳讓他知道「就是現在」。 */
+        const stN = await settlementOf(seller, gN.stashId)
+        await call(seller, `/v1/seller/settlements/${stN.id}/ship`, {})
+        await call(buyer, `/v1/prizes/${gN.stashId}/confirm`, {})
+        const relRef = 'pool-release:' + stN.id
+        const rel = withRef(await notifs(seller), relRef)
+        check('票金釋放時賣家收到「票金已入帳，可以動用了」', rel.length === 1,
+          `${rel.length} 則 ref=${relRef}`)
+        check('那一則指到錢包（看得到可動用的地方）',
+          rel[0]?.link === '/me/wallet', `${rel[0]?.link}`)
+        check('內文說得出是哪一條路釋放的與金額',
+          String(rel[0]?.body ?? '').includes('確認收貨') && String(rel[0]?.body ?? '').includes('3250'),
+          `${rel[0]?.body}`)
+
+        /* 冪等：讀清單會觸發 sweepSettlements，掃描一天會跑很多次 ——
+           refId 綁結算 id 就是為了讓重跑不再發一次。 */
+        await call(seller, '/v1/seller/settlements')
+        await call(buyer, '/v1/prizes?limit=100')
+        check('掃描重跑不會再發一次（refId 綁結算 id）',
+          withRef(await notifs(seller), relRef).length === 1)
+      } else check('（跳過出貨申請與結算入帳的通知：抽不到卡）', false)
+
+      /* ---- 3. 逾期未出貨：買賣雙方各一則 ----
+         原本只有買家那一側有。賣家被收回票金**而且**記一次違約，
+         那件事發生在掃描裡，他不在場 —— 下次撞到 SELLER_SUSPENDED 才知道就太晚了。 */
+      {
+        const g = await drawOne(buyer, genId('p-shop-1'))
+        if (g) {
+          await call(buyer, '/v1/prizes/ship', { prizeIds: [g.stashId], address: ADDR })
+          await rewind(g.stashId, 4 * 86_400_000)
+          await allPrizes(buyer)   // 讀卡冊順手補算時限
+          const mine = (await notifs(shop)).filter((n: Any) =>
+            String(n.ref_id).startsWith('pool-refund-seller:'))
+          check('逾期未出貨時賣家也收到通知（原本只有買家有）', mine.length >= 1,
+            '找不到 ref_id 以 pool-refund-seller: 開頭的通知')
+          check('賣家那一則把兩個後果都講出來：錢被收回 + 記違約',
+            String(mine[0]?.body ?? '').includes('收回') && String(mine[0]?.body ?? '').includes('違約'),
+            `${mine[0]?.body}`)
+          const before = mine.length
+          await allPrizes(buyer)   // 再掃一次
+          check('逾期通知冪等（掃描重跑不會洗版）',
+            (await notifs(shop)).filter((n: Any) =>
+              String(n.ref_id).startsWith('pool-refund-seller:')).length === before)
+          /* 買家那一側的連結曾經是 '/wallet' —— 前端沒有這條路由 */
+          const bn = (await notifs(buyer)).filter((n: Any) =>
+            String(n.ref_id).startsWith('pool-refund:'))
+          check('買家的退款通知指到 /me/wallet（不是不存在的 /wallet）',
+            bn.every((n: Any) => n.link === '/me/wallet'),
+            JSON.stringify(bn.map((n: Any) => n.link)))
+        } else check('（跳過逾期未出貨的賣家通知：抽不到卡）', false)
+      }
+
+      /* ---- 4. 回收：賣家被扣款、卡回到他手上 ----
+         第二件比第一件更急 —— 寄出去之後那張卡就要不回來了。 */
+      {
+        const g = await drawOne(buyer, genId('p-seed-1'))
+        if (g) {
+          const r = await call(buyer, `/v1/prizes/${g.stashId}/recycle`, {})
+          if (r.ok) {
+            const rn = (await notifs(seller)).filter((n: Any) =>
+              String(n.ref_id).startsWith('pool-recycle-seller:'))
+            check('買家按下回收後，賣家收到「買家接受了你的買回價」', rn.length >= 1)
+            check('而且講清楚「不用再寄了」', String(rn[0]?.body ?? '').includes('不用再寄'),
+              `${rn[0]?.body}`)
+          } else check('（跳過回收通知：這張卡回收不了）', false, `${r.status}`)
+        } else check('（跳過回收通知：抽不到卡）', false)
+      }
+
+      /* ---- 5. 平台發點數 ---- */
+      {
+        const ref = (await json(await call(platform, '/v1/admin/grant',
+          { userId: 'u-shop', points: 777, note: '內部備註：不該出現在通知裡' }))).ref
+        const gn = withRef(await notifs(shop), ref)
+        check('平台發放點數時收款人收到通知', gn.length === 1, `ref=${ref}`)
+        check('通知帶得出金額與去處', String(gn[0]?.body ?? '').includes('777') && gn[0]?.link === '/me/wallet',
+          `${gn[0]?.body} link=${gn[0]?.link}`)
+        /* 發放的 note 是寫給稽核看的內部字，不是寫給當事人的 */
+        check('內部備註不會外流到通知裡',
+          !String(gn[0]?.body ?? '').includes('內部備註'), `${gn[0]?.body}`)
+      }
+
+      /* ---- 6. 賣家等級：這一行 UPDATE 決定他能不能做生意 ---- */
+      {
+        const tierOf = async () =>
+          (await json(await call(platform, '/v1/admin/sellers'))).sellers
+            ?.find((s: Any) => s.id === 'u-shop')?.tier
+        const t0 = await tierOf()
+        const target = t0 === 'verified' ? 'trusted' : 'verified'
+        const n0 = (await notifs(shop)).filter((n: Any) => String(n.ref_id).startsWith('seller-tier:')).length
+        check('調整賣家等級', (await call(platform, `/v1/admin/sellers/u-shop/tier`,
+          { tier: target, note: 'smoke' })).ok)
+        const n1 = (await notifs(shop)).filter((n: Any) => String(n.ref_id).startsWith('seller-tier:'))
+        check('等級變更會通知賣家（那是他能不能開池的門檻）', n1.length === n0 + 1,
+          `${n0} → ${n1.length}`)
+        check('等級通知點得進去', linkOk(n1[0]?.link ?? null), `${n1[0]?.link}`)
+        /* 重按同一個等級不該再發一則 —— 那不是一次變更 */
+        await call(platform, `/v1/admin/sellers/u-shop/tier`, { tier: target, note: 'smoke 重按' })
+        check('重設成同一個等級不會再發一則',
+          (await notifs(shop)).filter((n: Any) => String(n.ref_id).startsWith('seller-tier:')).length === n0 + 1)
+        /* 降回 pending 是**擋住他開池**，一定要說 */
+        await call(platform, `/v1/admin/sellers/u-shop/tier`, { tier: 'pending', note: 'smoke 降級' })
+        const n2 = (await notifs(shop)).filter((n: Any) => String(n.ref_id).startsWith('seller-tier:'))
+        check('降級（開不了池了）也會通知', n2.length === n0 + 2, `${n1.length} → ${n2.length}`)
+        await call(platform, `/v1/admin/sellers/u-shop/tier`, { tier: t0 ?? 'verified', note: 'smoke 還原' })
+      }
+
+      /* ---- 7. 出貨單 shipped → delivered 是兩件事（refId 撞號迴歸）----
+         原本兩則共用同一個 refId = 出貨單 id，而 notifications_once 是
+         unique(user_id, kind, ref_id) —— 第二則被 `on conflict do nothing`
+         靜默吃掉，使用者永遠收不到送達通知，端點卻照樣回 ok。 */
+      {
+        const g = await drawOne(buyer, genId('p-seed-1'))
+        if (g) {
+          const sh = await json(await call(buyer, '/v1/prizes/ship',
+            { prizeIds: [g.stashId], address: ADDR }))
+          const id = sh.shipmentId
+          await call(platform, `/v1/admin/shipments/${id}/status`,
+            { status: 'shipped', tracking: 'SMOKE87654321', note: 'smoke' })
+          await call(platform, `/v1/admin/shipments/${id}/status`, { status: 'delivered', note: 'smoke' })
+          const bn = await notifs(buyer)
+          check('已寄出與已送達是兩則獨立的通知（refId 帶狀態）',
+            withRef(bn, `${id}:shipped`).length === 1 && withRef(bn, `${id}:delivered`).length === 1,
+            `shipped=${withRef(bn, id + ':shipped').length} delivered=${withRef(bn, id + ':delivered').length}`)
+        } else check('（跳過出貨單兩段通知：抽不到卡）', false)
+      }
+
+      /* ---- 8. 每一則通知的 link 都要指到存在的路由 ----
+         這條是整段的安全網：上面漏驗的那些也逃不掉。 */
+      for (const [who, tok] of [['買家', buyer], ['賣家', seller], ['賣場', shop]] as const) {
+        const bad = (await notifs(tok)).filter((n: Any) => !linkOk(n.link))
+        check(`${who}的通知沒有指向不存在的路由`, bad.length === 0,
+          JSON.stringify(bad.map((n: Any) => ({ t: n.title, l: n.link }))))
+      }
+    }
+
     /* ---------------- 客服工單 ----------------
        整段最重要的兩條，其餘都是護欄：
          1 接管單結案**真的把卡過到申請人名下** —— user_id 與 custodian_id
@@ -1924,6 +2104,18 @@ async function run() {
           got?.custodian_id === 'u-buyer', String(got?.custodian_id))
         check('狀態設成 in_book（可以上架、可以進池）', got?.status === 'in_book', String(got?.status))
 
+        /* 站內唯一「一張卡從甲的卡冊消失」的動作，而甲不是開單人 ——
+           工單那則「已處理完成」跟他無關，他原本收不到任何東西。 */
+        const lost = String(done.effect?.takeover?.fromUserId ?? '')
+        if (lost && lost !== 'u-buyer') {
+          const lt = lost === 'u-seller' ? seller : await login(lost.replace(/^u-/, ''), lost)
+          const ln = ((await json(await call(lt, '/v1/social/notifications'))).notifications ?? [])
+            .filter((n: Any) => n.ref_id === 'takeover-out:' + tid)
+          check('卡被接管走的那一方收得到通知（他不是開單人，沒有別的訊號）',
+            ln.length === 1, `${ln.length} 則，fromUserId=${lost}`)
+          check('而且告訴他有誤要立刻開客服單', ln[0]?.link === '/support/new', `${ln[0]?.link}`)
+        } else check('（跳過接管轉出通知：卡本來就在申請人名下）', true)
+
         const closed = await call(buyer, `/v1/tickets/${tid}/messages`, { body: '再問一句' })
         const cj = await json(closed)
         check('已結案的單不能再回覆（409）',
@@ -1996,6 +2188,22 @@ async function run() {
               const legacy2 = await json(await call(platform, '/v1/admin/disputes'))
               check('裁決之後既有端點的爭議清單也跟著清掉（同一個事實，不是兩份）',
                 !(legacy2.disputes ?? []).some((d: Any) => d.id === oid))
+
+              /* 裁決是「錢的歸屬由第三人單方面決定」而且不可逆，雙方都不在場。
+                 賣家那一側原本完全靜默 —— 保證金被沒收了他只能自己發現。 */
+              const dref = 'dispute-resolved:' + oid
+              /* 賣家是哪一位由訂單決定，不能寫死 u-seller —— 這一段買的是
+                 「當下還在架上的需寄送掛單」，前面的測試會把它換掉。 */
+              const sellerId = String(bought.order?.sellerId ?? '')
+              const sellerTok = sellerId === 'u-seller' ? seller : await login(sellerId.replace(/^u-/, ''), sellerId)
+              const bN = ((await json(await call(buyer, '/v1/social/notifications'))).notifications ?? [])
+                .filter((n: Any) => n.ref_id === dref)
+              const sN = ((await json(await call(sellerTok, '/v1/social/notifications'))).notifications ?? [])
+                .filter((n: Any) => n.ref_id === dref)
+              check('裁決會通知買家', bN.length === 1, `${bN.length} 則`)
+              check('裁決也會通知賣家（原本這一側完全靜默）', sN.length === 1, `${sN.length} 則`)
+              check('賣家那一則說得出保證金被沒收',
+                String(sN[0]?.body ?? '').includes('保證金'), `${sN[0]?.body}`)
             }
           }
         }
@@ -2024,6 +2232,13 @@ async function run() {
               sr.effect?.verification?.updated === true, JSON.stringify(sr.effect))
             check('既有的 /v1/admin/verifications 仍然讀得到',
               (await call(platform, '/v1/admin/verifications')).ok)
+            /* 審核結果一定要通知送件的人。工單那則只說「已經處理完成」，
+               不會讓賣家知道那句話同時也是他證件的判決。 */
+            const vn = ((await json(await call(buyer, '/v1/social/notifications'))).notifications ?? [])
+              .filter((n: Any) => String(n.ref_id).startsWith('seller-verify:'))
+            check('審核結果會通知送件的賣家', vn.length >= 1,
+              '找不到 ref_id 以 seller-verify: 開頭的通知')
+            check('而且指到賣家看得到自己狀態的頁面', vn[0]?.link === '/seller/new', `${vn[0]?.link}`)
           }
         }
       }
