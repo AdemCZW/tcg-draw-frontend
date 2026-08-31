@@ -1,0 +1,790 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VaultDraw 標題字型樣張 — 五套候選、真實字串、真實成本</title>
+
+<!--
+  這一頁是「給人挑字型用的樣張」，不是實作。它刻意不改 src/ 任何檔案。
+
+  三件事要在這一頁看得完：
+   1. 這五套字放在**站上真的會出現的那些字串與字級**上，好不好看。
+      不用「The quick brown fox」，也不把每一組都放大到 48px ——
+      放大會讓每一套都好看，而站上真正吃字型的地方是 25px 的大廳標題、
+      20px 的價格、11.5px 的賞別籤，那才是要比的東西。
+   2. 日文字型用在繁體中文會不會掉字。這是這一頁最重要的一節：
+      五套候選全部都是**日文字型**，字集是日本的漢字表，台灣常用而日本
+      沒有的字會逐字掉回備援字型 —— 一句話裡混兩種字型，而且不會有任何
+      錯誤訊息。所以這裡用 canvas 實際量「這個字到底是誰畫的」。
+   3. 成本。每一套實際下載多少 KB（真的抓下來量的，不是估的），
+      以及三種用法（全站標題／只用拉丁數字／只用固定短字串）差多少。
+
+  色票整組抄自 src/styles/tokens.css，深淺兩套都在，右上角可切。
+-->
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<!--
+  字重只列各家**真的有**的（已逐一對 Google Fonts 的 css2 端點驗過，
+  要不存在的字重會回 HTTP 400）：
+    Dela Gothic One ......... 只有 400
+    Shippori Mincho B1 ...... 400 500 600 700 800
+    Zen Kaku Gothic New ..... 300 400 500 700 900
+    Klee One ................ 400 600
+    M PLUS Rounded 1c ....... 100 300 400 500 700 800 900
+  列了不存在的字重，Google 會回 400 而整份樣式表拿不到 ——
+  那正是「靜靜退回系統字」最常見的來源。
+-->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Dela+Gothic+One&family=Shippori+Mincho+B1:wght@400;500;600;700;800&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=Klee+One:wght@400;600&family=M+PLUS+Rounded+1c:wght@400;500;700;800&display=swap" />
+
+<style>
+/* ── 色票：整組抄自 src/styles/tokens.css ─────────────────────────
+   只抄這一頁用得到的那些。深色是站上的預設，淺色在 <html data-theme="light">。 */
+:root{
+  --bg:#0d0c0f; --surface:#17161a; --surface-2:#1e1c22; --surface-3:#272430;
+  --line:#302d38; --line-soft:#222029;
+  --ink:#f4f1ee; --text:#f4f1ee; --muted:#a49b96; --faint:#6f6862;
+  --accent:#f73b20; --on-accent:#fff; --accent-soft:#ff5236; --accent-wash:#2c1512;
+  --wash-peach:#2b1a17; --wash-lilac:#1b1930;
+  --holo-a:#6ee4f5; --holo-b:#ab8dff; --holo-c:#ff9ede;
+  --holo:linear-gradient(115deg,var(--holo-a),var(--holo-b) 48%,var(--holo-c));
+  --tier-a:#f2b544; --tier-last:#ff5638; --gold-deep:#ecc063;
+  --ok:#35c98a; --warn:#f0a13a; --danger:#ff5a4d;
+  --ok-wash:#11251c; --warn-wash:#2a2114; --danger-wash:#2c1614;
+  --ok-ink:#4fd8a0; --warn-ink:#f0a13a; --danger-ink:#ff5a4d;
+  --info-wash:#14203a; --info-ink:#6aa9f5;
+  --font-body:"Inter","Noto Sans TC",system-ui,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,monospace;
+  --radius:18px; --radius-lg:28px; --pill:999px;
+  --shadow:0 10px 34px rgba(0,0,0,.58);
+}
+:root[data-theme="light"]{
+  --bg:#fdfbfa; --surface:#ffffff; --surface-2:#f6f2f0; --surface-3:#efe9e6;
+  --line:#e8e0dc; --line-soft:#f0eae7;
+  --ink:#1a1614; --text:#1a1614; --muted:#7a706b; --faint:#a89f9a;
+  --accent:#f73b20; --accent-soft:#f84d35; --accent-wash:#fde8e4;
+  --wash-peach:#fce4dd; --wash-lilac:#e9e3fb;
+  --holo-a:#5ad6e8; --holo-b:#9b7ef5; --holo-c:#f58fd0;
+  --tier-a:#e0961b; --tier-last:#f73b20; --gold-deep:#b9801c;
+  --ok:#23a06a; --warn:#d98324; --danger:#e0453a;
+  --ok-wash:#eaf7ee; --warn-wash:#fdf4e3; --danger-wash:#fdeceb;
+  --ok-ink:#1c7d68; --warn-ink:#8a5108; --danger-ink:#b3251c;
+  --info-wash:#e8effa; --info-ink:#1e4e8c;
+  --shadow:0 10px 30px rgba(26,22,20,.10);
+}
+
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:var(--font-body); font-size:15px; line-height:1.7;
+  -webkit-font-smoothing:antialiased;
+  /* 整頁禁用合成字重。
+     為什麼一定要關：Dela Gothic One 只有 400 一個字重，而站上標題寫的是
+     700。瀏覽器遇到「要 700、只有 400」會自己把字撐粗（faux bold），
+     樣張看起來就像它有 700 —— 那是假的，而且不同算繪引擎撐出來的樣子
+     還不一樣。關掉之後，畫面呈現的就是這套字真正的樣子。 */
+  font-synthesis:none;
+}
+.wrap{max-width:1100px;margin:0 auto;padding:0 20px;}
+.wide{max-width:1560px;margin:0 auto;padding:0 20px;}
+
+/* 全息箔頂條 —— 站上用它標稀有度，這裡當品牌記號 */
+.foil{height:5px;background:var(--holo);}
+
+header.head{padding:44px 0 30px;}
+.kicker{
+  display:inline-block; font-size:11.5px; font-weight:700; letter-spacing:.18em;
+  text-transform:uppercase; color:var(--accent);
+  background:var(--accent-wash); padding:6px 14px; border-radius:var(--pill);
+}
+h1.pageTitle{font-size:34px;line-height:1.2;letter-spacing:-.02em;margin:18px 0 10px;font-weight:700;}
+.lede{color:var(--muted);max-width:74ch;margin:0 0 8px;}
+.lede b{color:var(--ink);font-weight:600;}
+
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:22px;}
+button.tgl{
+  font:inherit;font-size:13px;font-weight:600;cursor:pointer;
+  background:var(--surface-2);color:var(--ink);border:1px solid var(--line);
+  padding:9px 16px;border-radius:var(--pill);min-height:44px;
+}
+button.tgl:hover{background:var(--surface-3);}
+
+h2{font-size:22px;letter-spacing:-.01em;margin:0 0 6px;font-weight:700;}
+h3.sub{font-size:15px;font-weight:700;margin:28px 0 8px;color:var(--ink);}
+section{padding:34px 0;border-top:1px solid var(--line-soft);}
+.secNote{color:var(--muted);font-size:13.5px;max-width:82ch;margin:0 0 18px;line-height:1.75;}
+.secNote b{color:var(--ink);}
+code{font-family:var(--font-mono);font-size:.88em;background:var(--surface-2);padding:1px 5px;border-radius:5px;}
+
+/* ── 載入狀態燈 ───────────────────────────────────────────────
+   og.mjs 踩過的坑：字體沒生效時畫面**不會壞**，只是靜靜換成系統字。
+   所以這一頁把「這六套現在到底載進來沒有」直接印在最上面。 */
+.status{display:flex;flex-wrap:wrap;gap:8px;}
+.pill{
+  display:inline-flex;align-items:center;gap:7px;
+  font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:var(--pill);
+  background:var(--surface-2);border:1px solid var(--line);
+}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none;}
+.pill.ok{background:var(--ok-wash);border-color:transparent;color:var(--ok-ink);}
+.pill.ok .dot{background:var(--ok-ink);}
+.pill.bad{background:var(--danger-wash);border-color:transparent;color:var(--danger-ink);}
+.pill.bad .dot{background:var(--danger-ink);}
+.pill.wait{color:var(--muted);}
+
+/* ── 樣張網格：一列六欄，現況在最左 ────────────────────────────
+   六欄並排是刻意的 —— 兩兩比較很難看出差異，六個一起才知道誰在同一群。 */
+.grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;}
+.col{
+  min-width:0;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--radius);padding:14px 13px 16px;
+  overflow-wrap:anywhere;
+}
+.col.base{border-color:var(--accent);}
+.colHead{
+  font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--muted);
+  padding-bottom:9px;margin-bottom:12px;border-bottom:1px solid var(--line-soft);
+  display:flex;flex-direction:column;gap:2px;
+}
+.colHead .nm{color:var(--ink);font-size:12px;overflow-wrap:anywhere;}
+.col.base .colHead .nm{color:var(--accent);}
+.colHead .wt{font-family:var(--font-mono);font-weight:500;font-size:10px;color:var(--faint);letter-spacing:0;}
+
+/* 標題字只套在標記為 .d 的元素上 —— 站上 --font-display 的用法就是這樣，
+   內文與輔助字仍然是 Inter + Noto Sans TC。整欄都換字會誇大差異。 */
+.d{font-family:var(--fd,var(--font-body));}
+
+/* ── 站上元件的真實字級（抄自各檔案，註解標出處） ───────────────── */
+.spec + .spec{margin-top:26px;}
+.specHead{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;margin:0 0 10px;}
+.specHead b{font-size:14.5px;font-weight:700;}
+.specHead span{font-size:12px;color:var(--faint);font-family:var(--font-mono);}
+
+/* LobbyPage.vue：.prizeTag / .ptTier 11.5px 700 .06em / .ptName 14px 600 */
+.prizeTag{display:flex;flex-wrap:wrap;align-items:center;gap:6px;
+  background:#221c1a;border-radius:var(--pill);padding:5px 11px;margin-bottom:12px;}
+.ptTier{font-size:11.5px;font-weight:700;letter-spacing:.06em;color:var(--tier-last);}
+.ptName{font-size:14px;font-weight:600;color:#f4f1ee;}
+.ptState{font-size:11.5px;font-weight:500;letter-spacing:.04em;color:#5ce08a;}
+/* LobbyPage.vue:974 —— 手機上的大廳主標就是 25px */
+.h1lobby{font-size:25px;line-height:1.18;letter-spacing:-.02em;font-weight:700;margin:0 0 10px;}
+/* LobbyPage.vue:987 .price 20px / .per 13px */
+.priceRow{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;margin-bottom:4px;}
+.priceBig{font-size:20px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;}
+.perSm{font-size:13px;font-weight:400;color:var(--muted);}
+/* LobbyPage.vue:723 .meterLbl 12.5px。站上這一行是等寬字；這裡改吃候選字，
+   否則就看不出各套字的數字長什麼樣 */
+.meterLbl{font-size:12.5px;color:var(--muted);}
+.meter{height:4px;border-radius:var(--pill);background:var(--surface-3);overflow:hidden;margin-top:8px;}
+.meter i{display:block;height:100%;width:55%;background:linear-gradient(90deg,var(--accent),var(--accent-soft));}
+
+/* TierBadge.vue:19 —— 12.5px / 600 */
+.tierRow{display:flex;flex-wrap:wrap;gap:6px;}
+.tier{font-size:12.5px;font-weight:600;letter-spacing:-.01em;padding:4px 12px;border-radius:var(--pill);
+  background:var(--surface-3);color:var(--ink);}
+.tier.a{background:var(--accent-wash);color:var(--tier-a);}
+.tier.last{background:var(--accent-wash);color:var(--tier-last);}
+/* LobbyPage.vue:854 角標 10.5px / 700 */
+.miniTag{display:inline-block;font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:var(--pill);
+  background:var(--surface-3);color:var(--muted);}
+
+/* PoolCard.vue：h3 18px/700 / .top 12px / .price 17px/700 / .rest 11px */
+.cardName{font-size:18px;font-weight:700;line-height:1.22;letter-spacing:-.01em;margin:0 0 6px;}
+.cardName2{font-size:16px;font-weight:600;line-height:1.25;margin:0 0 6px;}
+.cardTop{font-size:12px;color:var(--muted);margin:0 0 8px;}
+.cardPrice{font-size:17px;font-weight:700;letter-spacing:-.01em;}
+.cardRest{font-size:11px;color:var(--muted);}
+
+/* LobbyPage.vue:811 .urgNum 34px / 700 / -.04em */
+.numHuge{font-size:34px;font-weight:700;line-height:.9;letter-spacing:-.04em;font-variant-numeric:tabular-nums;}
+.numMid{font-size:22px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;}
+.numSm{font-size:13px;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums;}
+
+/* AppHeader 的標誌：Vault 用文字色、Draw 用強調色、字距 -.03em、600
+   （值取自 scripts/og.mjs 的 .brand，那是照抄頁首來的） */
+.brandLogo{font-size:26px;font-weight:600;letter-spacing:-.03em;line-height:1.1;}
+.brandLogo em{font-style:normal;color:var(--accent);}
+/* LobbyPage.vue:542 的 eyebrow：11.5px、字距 .18em */
+.brandCaps{font-size:11.5px;font-weight:700;letter-spacing:.18em;color:var(--muted);margin-top:8px;}
+
+/* ── 缺字檢測的方格 ───────────────────────────────────────────── */
+.covGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(58px,1fr));gap:7px;}
+.cell{
+  border:1px solid var(--line);border-radius:12px;background:var(--surface);
+  text-align:center;padding:8px 2px 6px;min-width:0;
+}
+.cell .g{font-size:30px;line-height:1.2;display:block;}
+.cell .t{font-size:9.5px;font-weight:700;letter-spacing:.02em;margin-top:4px;display:block;}
+.cell.has .t{color:var(--ok-ink);}
+.cell.miss{border-color:var(--danger);background:var(--danger-wash);}
+.cell.miss .t{color:var(--danger-ink);}
+
+.fontBlock{margin:0 0 22px;}
+.fontBlock .bh{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;margin:0 0 9px;}
+.fontBlock .bh b{font-size:14.5px;}
+.fontBlock .bh .sum{font-size:12.5px;color:var(--muted);}
+.fontBlock .bh .sum.bad{color:var(--danger-ink);font-weight:600;}
+.fontBlock .bh .sum.good{color:var(--ok-ink);font-weight:600;}
+
+/* 站上字串逐字檢查：掉字的那個字直接標紅底 */
+.strTable{width:100%;border-collapse:collapse;font-size:13px;min-width:900px;}
+.strTable th,.strTable td{border-bottom:1px solid var(--line-soft);padding:9px 10px;text-align:left;vertical-align:top;}
+.strTable th{font-size:11.5px;letter-spacing:.04em;color:var(--muted);font-weight:700;}
+.strTable td.s{font-size:15px;line-height:1.55;overflow-wrap:anywhere;}
+mark.gone{background:var(--danger-wash);color:var(--danger-ink);border-radius:4px;padding:0 2px;
+  outline:1px solid var(--danger);}
+.miss{font-size:11px;font-family:var(--font-body);color:var(--danger-ink);margin-top:4px;}
+.tblWrap{overflow-x:auto;}
+
+/* 字形比對：同一個字，六種寫法並排 */
+.shapeRow{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;align-items:end;margin-bottom:10px;}
+.shapeCell{text-align:center;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 4px 8px;min-width:0;}
+.shapeCell .g{font-size:44px;line-height:1.15;display:block;}
+.shapeCell .n{font-size:9.5px;color:var(--faint);margin-top:5px;display:block;overflow-wrap:anywhere;line-height:1.4;}
+.shapeCell.missCell{border-color:var(--danger);background:var(--danger-wash);}
+.shapeCell.missCell .n{color:var(--danger-ink);font-weight:700;}
+
+/* 成本表 */
+table.cost{width:100%;border-collapse:collapse;font-size:13.5px;min-width:720px;}
+table.cost th,table.cost td{border-bottom:1px solid var(--line-soft);padding:10px 12px;text-align:right;white-space:nowrap;}
+table.cost th:first-child,table.cost td:first-child{text-align:left;white-space:normal;}
+table.cost th{font-size:11.5px;letter-spacing:.04em;color:var(--muted);font-weight:700;vertical-align:bottom;}
+table.cost tbody tr.base td{color:var(--accent);}
+table.cost td.n{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
+table.cost td.big{color:var(--danger-ink);font-weight:600;}
+table.cost td.small{color:var(--ok-ink);font-weight:600;}
+
+.callout{
+  background:var(--info-wash);color:var(--info-ink);border-radius:var(--radius);
+  padding:16px 18px;font-size:13.5px;line-height:1.8;margin:18px 0 0;
+}
+.callout.warn{background:var(--warn-wash);color:var(--warn-ink);}
+.callout b{font-weight:700;}
+.callout code{background:rgba(128,128,128,.2);color:inherit;}
+
+footer.foot{padding:34px 0 70px;color:var(--muted);font-size:13px;border-top:1px solid var(--line-soft);}
+
+/* 窄螢幕：六欄排不下就折成三欄、再折成兩欄。
+   刻意不折成一欄 —— 一欄就不是比較了，寧可字小一點也要並排。 */
+@media (max-width:1180px){ .grid,.shapeRow{grid-template-columns:repeat(3,minmax(0,1fr));} }
+@media (max-width:720px){ .grid,.shapeRow{grid-template-columns:repeat(2,minmax(0,1fr));} }
+</style>
+</head>
+<body>
+<div class="foil"></div>
+
+<div class="wrap">
+<header class="head">
+  <span class="kicker">Type specimen</span>
+  <h1 class="pageTitle">VaultDraw 要不要加一套標題字型</h1>
+  <p class="lede">
+    現在 <code>--font-display</code> 與 <code>--font-body</code> 是<b>同一個值</b>（<code>src/styles/tokens.css:88-89</code>）——
+    等於全站沒有標題字型，所有字都是 Inter + Noto Sans TC。這一頁把五套候選放進站上真的會出現的字串與字級裡，
+    並且把「日文字型用在繁體中文」的代價量出來，而不是只寫一句警語。
+  </p>
+  <p class="lede">
+    最左邊那一欄永遠是<b>現況</b>。所有樣張只把候選字套在「會吃 <code>--font-display</code> 的元素」上，
+    輔助文字維持現況字體 —— 整欄換掉會誇大差異。
+  </p>
+  <div class="bar">
+    <button class="tgl" id="themeBtn" type="button">切到淺色主題</button>
+    <button class="tgl" id="reBtn" type="button">重跑缺字量測</button>
+  </div>
+</header>
+</div>
+
+<div class="wrap">
+<section>
+  <h2>字型是不是真的載入了</h2>
+  <p class="secNote">
+    <code>scripts/og.mjs</code> 踩過這個坑：網頁字沒生效時畫面<b>不會壞</b>，只是靜靜換成系統字，
+    而那種「看起來沒事」的退化沒有人會發現。所以先把狀態印出來 ——
+    每一顆燈都對該字型的<b>拉丁字面與漢字各驗一次</b>，用的是下面那一節的實際算繪比對，不是宣告值。
+    有任何一顆是紅的，這一頁下面的比較就都不算數。
+  </p>
+  <div class="status" id="status"><span class="pill wait"><i class="dot"></i>量測中</span></div>
+</section>
+</div>
+
+<div class="wide">
+<section>
+  <h2>樣張：站上真的會出現的字串</h2>
+  <p class="secNote">
+    字級全部照抄原始碼，每一組標出處。刻意<b>不放大</b> —— 放到 48px 每一套都好看，
+    而站上真正吃標題字型的是 25px 的大廳主標、20px 的價格、12.5px 的賞別籤、18px 的池名，
+    那才是要比的東西。
+    <br />
+    整頁 <code>font-synthesis:none</code>：Dela Gothic One 只有 400 一個字重，站上標題寫 700，
+    不關掉的話瀏覽器會自己把它撐粗，樣張就會顯示一個這套字實際上沒有的字重。
+  </p>
+  <div id="specimens"></div>
+</section>
+</div>
+
+<div class="wrap">
+<section>
+  <h2>缺字：日文字集裡沒有的台灣常用字</h2>
+  <p class="secNote">
+    五套候選<b>全部都是日文字型</b>，它們的漢字覆蓋是日本的字集。台灣常用而日本字集沒有的字，
+    瀏覽器會<b>逐字</b>掉回下一個字型 —— 也就是同一句話裡混著兩種字型，字重、字寬、重心全部對不上，
+    而且不會有任何錯誤訊息，開發時看不出來、上線後也沒有人會報。
+  </p>
+  <div class="callout">
+    <b>量法，以及為什麼可靠。</b>
+    對每一個字畫兩次：一次用 <code>"候選字型", "Noto Sans TC"</code> 的堆疊，一次只用 <code>"Noto Sans TC"</code>（也就是這個候選後面接的備援）。
+    兩張都讀出 <code>ImageData</code> 的 alpha 通道逐位元組比對。
+    <b>畫出來一模一樣，就代表候選字型沒有畫到它</b> —— 瀏覽器掉回了跟對照組同一套字，兩邊當然像素相同。
+    <br />
+    為什麼不用字寬差：漢字幾乎全部是等寬的一個字身，日文字型與 Noto Sans TC 量出來會是同一個數字，字寬對 CJK 完全無效。
+    <br />
+    兩個前提：每個字都先 <code>await document.fonts.load()</code>，否則對應的 unicode-range 子集根本還沒下載，會全部看起來像缺字；
+    比對一律用 400 字重（五套都有 400），避免合成字重污染像素。
+    <br />
+    <b>自我檢查</b>：先拿一個五套一定都有的字，驗「候選跟對照確實畫得不一樣」。這一關過不了，這個量法對那套字就不成立，會直接標示出來。
+  </div>
+  <div class="callout warn" style="margin-top:14px">
+    <b>為什麼不能用 <code>document.fonts.check</code>，也不能看 Google 的 unicode-range —— 這兩個都會說謊。</b>
+    <br />
+    Google 給日文字型的 unicode-range 是一套<b>固定的共用切法</b>（五套候選都被切成一百二十幾塊、邊界一模一樣），
+    它宣告的是「這一塊涵蓋哪些碼位」，不是「這支檔案裡真的有哪些字」。所以樣式表會宣告字型其實沒有的字，
+    <code>document.fonts.check</code> 讀的正是這份宣告，於是對每一個缺字都回 <code>true</code>。
+    下面方格裡標 <code>*</code> 的，就是 <code>check</code> 說有、實際算繪卻掉回備援字的字 —— 實測每一個缺字都會標到。
+    <br />
+    像素法的結果另外用<b>字型檔本身的 cmap 表</b>對過（把 google/fonts 上的原始 ttf 抓下來讀），
+    Dela Gothic One（9,030 個碼位）、Zen Kaku Gothic New（7,737）、Klee One（10,178）、M PLUS Rounded 1c（8,201）四套<b>完全吻合</b>。
+    <br />
+    唯一不吻合的一格反而更說明問題：<b>Shippori Mincho B1 的原始 ttf 有「值」（它收了 15,363 個碼位，五套最多），
+    但 Google 切出來的一百二十幾塊子集裡，沒有任何一塊的 unicode-range 宣告 U+503C</b> ——
+    這個字在瀏覽器裡永遠拿不到，一定掉回 Noto Sans TC。
+    所以連「讀原始字型的 cmap」都不夠：使用者真正拿到的是 Google 的網頁子集，只有在瀏覽器裡量才算數。
+  </div>
+  <div id="selfcheck" style="margin-top:14px"></div>
+
+  <h3 class="sub">台灣常用字逐字檢查</h3>
+  <p class="secNote">
+    紅框那格就是這套字沒有的字 —— 畫面上看到的那個字形是 Noto Sans TC 頂上來的。
+    標 <code>*</code> 表示 <code>document.fonts.check</code> 對這個字的答案跟實際算繪不一致（它說有、其實沒有）。
+  </p>
+  <div id="coverage"></div>
+
+  <h3 class="sub">站上實際字串：哪幾個字會掉</h3>
+  <p class="secNote">賞別、池名、卡名、按鈕文案，取自 <code>src/mocks/data.ts</code>、<code>LobbyPage.vue</code>、<code>PoolCard.vue</code>。紅底的字就是會掉回 Noto Sans TC 的字。</p>
+  <div class="tblWrap"><table class="strTable" id="strings"></table></div>
+</section>
+
+<section>
+  <h2>字形：有這個字，不代表是台灣的寫法</h2>
+  <p class="secNote">
+    上一節查的是「有沒有」。這一節是另一個坑：字<b>有</b>，但畫出來是<b>日本字形</b>。
+    點的有無、筆畫的接與不接、部件的方向，在日文字型與 Noto Sans TC（台灣字形）之間有系統性的差異。
+    這種問題不會掉字、量不出來，只能用看的 —— 所以直接把同一個字六種寫法並排，最左邊那格是現況。
+    <br />
+    <b>先分清楚兩件事。</b>「值 / 値」「內 / 内」「戶 / 戸」「每 / 毎」「溫 / 温」「關 / 関」「獎 / 奨」這幾組不屬於這一節 ——
+    它們是<b>兩個不同的 Unicode 碼位</b>，日文字型只收日本那一個，繁體那一個是直接缺字，所以它們在上一節。
+    下面這一組是同一個碼位、只是筆形不同的字，而且五套候選都確認有 —— 真的缺的格子會被標成紅色。
+  </p>
+  <div id="shapes"></div>
+</section>
+
+<section>
+  <h2>成本：實際下載多少 KB</h2>
+  <p class="secNote">
+    以下數字是<b>真的抓下來量的</b>：對 Google Fonts 的 <code>css2</code> 端點要每一個字重的樣式表，
+    把裡面每一個 <code>fonts.gstatic.com</code> 的 woff2 全部下載並加總（UA 必須偽裝成新版 Chrome，
+    否則 Google 回的是大很多的 ttf —— <code>scripts/og.mjs</code> 的註解裡已經寫過這件事）。量測日期 2026-08-31。
+  </p>
+  <div class="tblWrap" id="cost"></div>
+  <div class="callout" style="margin-top:20px">
+    <b>三種用法的差別在哪裡。</b>
+    <br />
+    <b>① 全站標題都用</b>：中文標題要吃這套字，就得備齊整個 CJK 字集。Google 會切成一百二十幾個 unicode-range 子集，
+    使用者只下載真的遇到的那幾塊 —— 但一頁大廳就會踩到幾十塊，而且每換一頁踩到新字就再下載。
+    表上「全套」那一欄是這個做法的上限。
+    <br />
+    <b>② 只用在拉丁字母與數字</b>：中文仍走 Noto Sans TC，標題字只負責 <code>VaultDraw</code>、<code>4,800</code>、<code>PSA 10</code>。
+    這時只會下載 <code>U+0000-00FF</code> 那一塊子集（它在 Google 的樣式表裡宣告在最後，所以 ASCII 由它接手）。
+    成本是全套的百分之一以下，代價是中英混排的標題會是兩套字拼起來的 —— 而站上的標題幾乎都是中英混排。
+    <br />
+    <b>③ 只用在極短的固定字串</b>：<code>&amp;text=</code> 參數讓 Google 現切一份只含指定字元的子集。
+    <code>scripts/og.mjs</code> 就是用這招把字內嵌進分享預覽圖。適合品牌標誌這種永遠不變的字串，
+    不適合池名／卡名 —— 那些是資料庫來的，字元集不固定，而且每多一個字就要重新請求一份新子集。
+  </div>
+  <div class="callout warn" style="margin-top:14px" id="notoWarn"></div>
+</section>
+
+<section>
+  <h2>五套並排的量測總表</h2>
+  <p class="secNote">
+    這一張表完全由上面的量測即時產生 —— 不是手寫的結論，改了字集或字串它會跟著變。
+    三欄各自代表一個否決條件：<b>字重數</b> 決定做不做得出層級、<b>掉字數</b> 決定中文能不能用、<b>全套大小</b> 決定值不值得。
+  </p>
+  <div class="tblWrap" id="summary"></div>
+</section>
+
+<footer class="foot">
+  <div>樣張，不是實作。這一頁沒有改動 <code>src/</code> 或 <code>server/</code> 的任何檔案。</div>
+  <div style="margin-top:6px">字級來源：<code>src/pages/LobbyPage.vue</code>、<code>src/pages/pool/PoolShell.vue</code>、<code>src/components/PoolCard.vue</code>、<code>src/components/TierBadge.vue</code>；色票：<code>src/styles/tokens.css</code>。</div>
+</footer>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   六個版本
+   weights 只列 Google Fonts 上真的存在的字重（逐一對 css2 端點驗過，
+   不存在的字重會回 HTTP 400）。這一欄本身就是判準之一：
+   只有一個字重的字型，站上任何「標題要比內文粗一階」的層級都做不出來。
+   ══════════════════════════════════════════════════════════════ */
+/* 字族名一律用**單引號**。這些堆疊會被塞進 HTML 的 style="..." 屬性裡，
+   用雙引號的話屬性會在第一個字族名就被切斷 —— 樣張會靜靜地整片變成
+   內文字體，六欄長得一模一樣，而且不會有任何錯誤。CSS 兩種引號都收。 */
+var FALLBACK = "'Noto Sans TC',system-ui,sans-serif";
+var FONTS = [
+  { id:'now',  name:'現況', sub:'Inter + Noto Sans TC', family:null,
+    stack:"'Inter'," + FALLBACK, weights:[400,500,600,700], base:true },
+  { id:'dela', name:'Dela Gothic One', sub:'極粗黑體', family:'Dela Gothic One',
+    stack:"'Dela Gothic One'," + FALLBACK, weights:[400] },
+  { id:'ship', name:'Shippori Mincho B1', sub:'明朝體', family:'Shippori Mincho B1',
+    stack:"'Shippori Mincho B1'," + FALLBACK, weights:[400,500,600,700,800] },
+  { id:'zen',  name:'Zen Kaku Gothic New', sub:'現代日式黑體', family:'Zen Kaku Gothic New',
+    stack:"'Zen Kaku Gothic New'," + FALLBACK, weights:[300,400,500,700,900] },
+  { id:'klee', name:'Klee One', sub:'硬筆楷書', family:'Klee One',
+    stack:"'Klee One'," + FALLBACK, weights:[400,600] },
+  { id:'mpr',  name:'M PLUS Rounded 1c', sub:'圓體', family:'M PLUS Rounded 1c',
+    stack:"'M PLUS Rounded 1c'," + FALLBACK, weights:[100,300,400,500,700,800,900] }
+];
+
+/* 實測檔案大小（bytes）。量測腳本把每個子集的 woff2 抓下來加總。
+   數字寫死在這裡，是因為這一頁要能離線開、而且結果必須是可重現的。 */
+var SIZES = {
+  now:  { label:'Inter 700 + Noto Sans TC 700', full:97680 + 2294468, latin:24456 + 13332, text:5684, notoText:true, subsets:'7 + 105' },
+  dela: { label:'Dela Gothic One 400',          full:1517592, latin:13800, text:6712,  subsets:123 },
+  ship: { label:'Shippori Mincho B1 700',       full:5252752, latin:32540, text:12656, subsets:122 },
+  zen:  { label:'Zen Kaku Gothic New 700',      full:1417872, latin:9680,  text:5352,  subsets:121 },
+  klee: { label:'Klee One 600',                 full:3488988, latin:36308, text:16712, subsets:124 },
+  mpr:  { label:'M PLUS Rounded 1c 700',        full:1659328, latin:22244, text:6720,  subsets:126 }
+};
+
+/* ── 樣張情境：全部抄自真實畫面 ─────────────────────────────── */
+var SPECS = [
+  { title:'大廳主視覺',
+    src:'LobbyPage.vue — .ptTier 11.5/700 · .ptName 14/600 · h1 25px · .price 20px · .meterLbl 12.5px',
+    html:
+      '<div class="prizeTag">' +
+        '<span class="ptTier d">最後賞</span><span class="ptName d">牡丹 SAR</span><span class="ptState">未出</span>' +
+      '</div>' +
+      '<div class="h1lobby d">滿分場 #30 · 全 PSA 10</div>' +
+      '<div class="priceRow"><strong class="priceBig d">4,800 點</strong><span class="perSm">/ 抽</span></div>' +
+      '<div class="meterLbl d">剩 11 / 20 籤</div>' +
+      '<div class="meter"><i></i></div>' },
+
+  { title:'賞別籤',
+    src:'TierBadge.vue:19 — 12.5px/600 · LobbyPage.vue:854 角標 10.5px/700',
+    html:
+      '<div class="tierRow" style="margin-bottom:8px">' +
+        '<span class="tier a d">A 賞</span><span class="tier last d">最後賞</span></div>' +
+      '<div class="tierRow" style="margin-bottom:12px">' +
+        '<span class="tier d">爆賞</span><span class="tier d">無敵賞</span></div>' +
+      '<span class="miniTag d">即將開賣</span>' },
+
+  { title:'卡名（中日混排）',
+    src:'PoolCard.vue — h3 18px/700 · .top 12px · .price 17px/700 · .rest 11px',
+    html:
+      '<div class="cardName d">噴火龍 ex UR</div>' +
+      '<div class="cardName d">リザードンex</div>' +
+      '<div class="cardName2 d">月亮伊布 ex SAR</div>' +
+      '<p class="cardTop">A 賞 · 未出</p>' +
+      '<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px">' +
+        '<span class="cardPrice d">1,280 點</span><span class="cardRest">剩 37 / 80</span></div>' },
+
+  { title:'數字',
+    src:'LobbyPage.vue:811 .urgNum 34px/700/-.04em · .price 22px · 識別碼 13px',
+    html:
+      '<div class="numHuge d">1,280</div>' +
+      '<div class="numMid d" style="margin-top:14px">100,000,000</div>' +
+      '<div class="numMid d" style="margin-top:8px">72.2%</div>' +
+      '<div class="numSm d" style="margin-top:10px">VD-000431 · 82345671</div>' },
+
+  { title:'品牌',
+    src:'AppHeader / scripts/og.mjs — 標誌 600/-.03em · eyebrow 11.5px/.18em',
+    html:
+      '<div class="brandLogo d">Vault<em>Draw</em></div>' +
+      '<div class="brandCaps d">VAULT DRAW</div>' +
+      '<div class="brandCaps d" style="margin-top:6px">定量池 · 可驗證開獎</div>' },
+
+  { title:'池頁標頭',
+    src:'PoolShell.vue:168 h1 22px（手機 19px） · .meta 13px',
+    html:
+      '<div class="d" style="font-size:22px;letter-spacing:-.01em;margin:0 0 8px;font-weight:700;line-height:1.25">關都卡舖 · 無敵賞 #1</div>' +
+      '<div style="font-size:13px;color:var(--muted)"><span class="d" style="color:var(--ok);font-weight:600">開賣中</span> · 共 80 籤</div>' +
+      '<div class="d" style="font-size:19px;letter-spacing:-.01em;margin:16px 0 0;font-weight:700;line-height:1.25">莉莉艾 無敵賞（已完抽）</div>' }
+];
+
+/* ── 檢測字集 ──────────────────────────────────────────────── */
+/* 台灣常用、日本字集不一定收的字，分三群：
+   ① 台灣書面語的日常字，日本完全不用：臺 裏 妳 喔 嗎 麼 逾
+   ② 台日各自用不同碼位的異體字 —— 這一群最容易被忽略，因為它們
+      「看起來只是寫法不同」，實際上是兩個不同的 Unicode 碼位，
+      日文字型收的是日本那一個，繁體這一個直接不存在：
+      值/値、你/儞、內/内、戶/戸、每/毎、溫/温、關/関、獎/奨
+   ③ 站上專有名詞會用到的字：卡 舖 籤 賞 鑑 儲 鑽 噴 龍… */
+var TW_CHARS = ('臺裡著為麼嗎喔妳裏鑑籤賞儲鑽逾' +
+                '值你內戶每溫關卡獎' +
+                '噴龍伊布莉艾牡丹舖蝦皮滿點抽').split('');
+/* 同一個碼位、不同字形的常見字。點的有無、接筆、部件方向。
+   這一組全部經過確認：五套候選都有這些字，所以看到的差異純粹是字形，
+   不是掉字（頁面上仍然會再驗一次，真的缺就標出來）。 */
+var SHAPE_CHARS = '者海直骨角真具令差過練象派花言紙社次'.split('');
+/* 站上真的會排出來的字串 */
+var SITE_STRINGS = [
+  'A 賞', '最後賞', '爆賞', '無敵賞',
+  '噴火龍 ex UR', 'リザードンex', '月亮伊布 ex SAR',
+  '滿分場 #30 · 全 PSA 10',
+  '關都卡舖 · 無敵賞 #1',
+  '莉莉艾 無敵賞（已完抽）',
+  '4,800 點 / 抽', '剩 11 / 20 籤',
+  '開這一池', '滑動挑池', '我已收到', '即將開賣',
+  '鑑定卡的線上定量池抽選',
+  '籤序在開賣前以雜湊封存，開獎後任何人都能自行驗算。',
+  '這張卡已經在你的卡冊裡', '點數不足，請先儲值', '賣家逾期未寄出', '看看還差什麼',
+  'VaultDraw'
+];
+/* 五套一定都有的字，拿來驗「這個量法本身有沒有效」。
+   一 = U+4E00，任何 CJK 字型都有；賞 是站上到處都在用的字。 */
+var SENTINELS = '一賞'.split('');
+
+/* ══════════════════════════════════════════════════════════════
+   量測核心
+   ══════════════════════════════════════════════════════════════ */
+var PX = 64;                       /* 夠大才有足夠像素差異，又不必畫太久 */
+var cv = document.createElement('canvas');
+cv.width = PX * 2; cv.height = PX * 2;
+var cx = cv.getContext('2d', { willReadFrequently: true });
+
+/* 把一個字用指定字體堆疊畫出來，回傳 alpha 通道的雜湊。
+   只取 alpha：字色固定黑，形狀資訊全在 alpha 的覆蓋率裡，
+   一個通道就夠而且省四分之三的迴圈。 */
+function inkHash(stack, ch) {
+  cx.clearRect(0, 0, cv.width, cv.height);
+  cx.font = '400 ' + PX + 'px ' + stack;
+  cx.textBaseline = 'alphabetic';
+  cx.fillStyle = '#000';
+  cx.fillText(ch, PX * 0.4, PX * 1.4);
+  var d = cx.getImageData(0, 0, cv.width, cv.height).data;
+  var h = 2166136261;                                   /* FNV-1a */
+  for (var i = 3; i < d.length; i += 4) { h ^= d[i]; h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+
+var hashCache = new Map();
+function hashOf(stack, ch) {
+  var k = stack + '@@' + ch;
+  if (!hashCache.has(k)) hashCache.set(k, inkHash(stack, ch));
+  return hashCache.get(k);
+}
+
+/* 先把每個字需要的 unicode-range 子集實際下載下來。
+   少了這一步，所有字都會「看起來像缺字」—— 因為它們確實還沒到。 */
+async function warm(font, chars) {
+  if (!font.family) return;
+  var spec = '400 ' + PX + 'px "' + font.family + '"';
+  try { await document.fonts.load(spec, chars.join('')); } catch (e) {}
+  /* 再逐字補一輪：一次丟整串時，某些實作只會取第一個匹配到的子集。 */
+  for (var i = 0; i < chars.length; i++) {
+    try { await document.fonts.load(spec, chars[i]); } catch (e) {}
+  }
+}
+
+/* 這個字，是不是真的由這套候選字型畫出來的 */
+function drawnBy(font, ch) {
+  if (!font.family) return true;                        /* 現況欄的備援就是它自己 */
+  return hashOf(font.stack, ch) !== hashOf(FALLBACK, ch);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   畫面
+   ══════════════════════════════════════════════════════════════ */
+function $(s) { return document.querySelector(s); }
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, function (c) {
+    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c];
+  });
+}
+function kb(b) { return (b / 1024).toFixed(b < 102400 ? 1 : 0) + ' KB'; }
+function mb(b) { return (b / 1048576).toFixed(2) + ' MB'; }
+
+function colHead(f) {
+  return '<div class="colHead"><span class="nm">' + esc(f.name) + '</span>' +
+         '<span>' + esc(f.sub) + '</span>' +
+         '<span class="wt">字重 ' + f.weights.join(' / ') + '</span></div>';
+}
+
+/* 樣張 */
+$('#specimens').innerHTML = SPECS.map(function (s) {
+  return '<div class="spec"><div class="specHead"><b>' + esc(s.title) + '</b>' +
+    '<span>' + esc(s.src) + '</span></div><div class="grid">' +
+    FONTS.map(function (f) {
+      return '<div class="col' + (f.base ? ' base' : '') + '" style="--fd:' + f.stack + '">' +
+        colHead(f) + s.html + '</div>';
+    }).join('') + '</div></div>';
+}).join('');
+
+/* 字形並排。在量測跑完之後才畫 —— 因為要標出「這一格其實是缺字」：
+   如果不標，一個掉回 Noto Sans TC 的字會被誤讀成「這套字的字形跟現況一樣」，
+   那是這一節最容易出的錯。 */
+function drawShapes() {
+  $('#shapes').innerHTML = SHAPE_CHARS.map(function (ch) {
+    return '<div class="shapeRow">' + FONTS.map(function (f) {
+      var gone = !f.base && !drawnBy(f, ch);
+      return '<div class="shapeCell' + (gone ? ' missCell' : '') + '">' +
+        '<span class="g" style="font-family:' + f.stack + '">' + ch + '</span>' +
+        '<span class="n">' + esc(f.name) + (gone ? '<br>缺字，這是備援' : '') + '</span></div>';
+    }).join('') + '</div>';
+  }).join('');
+}
+
+/* ── 主流程 ──────────────────────────────────────────────── */
+async function run() {
+  $('#status').innerHTML = '<span class="pill wait"><i class="dot"></i>下載字型子集並量測中</span>';
+
+  var seen = {};
+  var allChars = [];
+  TW_CHARS.concat(SHAPE_CHARS, SENTINELS, SITE_STRINGS.join('').split(''))
+    .forEach(function (c) {
+      if (c.trim() === '' || seen[c]) return;
+      seen[c] = 1; allChars.push(c);
+    });
+
+  await document.fonts.ready;
+  for (var i = 0; i < FONTS.length; i++) await warm(FONTS[i], allChars);
+  hashCache.clear();                                   /* 子集下載完才開始量 */
+
+  /* 1) 載入狀態燈：拉丁與漢字各驗一次。
+        漢字用「賞」—— 站上到處都是，而且日文字集一定有它。 */
+  $('#status').innerHTML = FONTS.map(function (f) {
+    if (f.base) {
+      var ok = document.fonts.check('700 25px "Inter"', 'VaultDraw') &&
+               document.fonts.check('400 25px "Noto Sans TC"', '賞籤鑑');
+      return '<span class="pill ' + (ok ? 'ok' : 'bad') + '"><i class="dot"></i>' +
+        esc(f.name) + '：' + (ok ? 'Inter + Noto Sans TC 生效' : '沒有生效') + '</span>';
+    }
+    var latin = drawnBy(f, 'R');
+    var han = drawnBy(f, '賞');
+    var good = latin && han;
+    return '<span class="pill ' + (good ? 'ok' : 'bad') + '"><i class="dot"></i>' +
+      esc(f.name) + '：' +
+      (good ? '拉丁 + 漢字都生效'
+            : (latin ? '拉丁生效、漢字沒生效' : '沒有生效（畫面是備援字）')) + '</span>';
+  }).join('');
+
+  /* 2) 量法自我檢查 */
+  $('#selfcheck').innerHTML = '<div class="status">' +
+    FONTS.filter(function (f) { return !f.base; }).map(function (f) {
+      var ok = SENTINELS.every(function (ch) { return drawnBy(f, ch); });
+      return '<span class="pill ' + (ok ? 'ok' : 'bad') + '"><i class="dot"></i>' +
+        esc(f.name) + '：' + (ok ? '量法成立' : '量法對這套字不成立') + '</span>';
+    }).join('') + '</div>';
+
+  /* 3) 台灣常用字逐字 */
+  $('#coverage').innerHTML = FONTS.filter(function (f) { return !f.base; }).map(function (f) {
+    var miss = TW_CHARS.filter(function (ch) { return !drawnBy(f, ch); });
+    var sum = miss.length === 0
+      ? '<span class="sum good">' + TW_CHARS.length + ' 個字全部有</span>'
+      : '<span class="sum bad">掉 ' + miss.length + ' / ' + TW_CHARS.length + ' 個字：' + miss.join(' ') + '</span>';
+    return '<div class="fontBlock"><div class="bh"><b>' + esc(f.name) + '</b>' + sum + '</div>' +
+      '<div class="covGrid">' + TW_CHARS.map(function (ch) {
+        var has = drawnBy(f, ch);
+        var chk = document.fonts.check('400 ' + PX + 'px "' + f.family + '"', ch);
+        return '<div class="cell ' + (has ? 'has' : 'miss') + '">' +
+          '<span class="g" style="font-family:' + f.stack + '">' + ch + '</span>' +
+          '<span class="t">' + (has ? '有' : '無') + (chk === has ? '' : ' *') + '</span></div>';
+      }).join('') + '</div></div>';
+  }).join('');
+
+  /* 4) 站上字串 */
+  var cands = FONTS.filter(function (f) { return !f.base; });
+  var t = '<thead><tr><th>站上字串</th>' +
+    cands.map(function (f) { return '<th>' + esc(f.name) + '</th>'; }).join('') +
+    '</tr></thead><tbody>';
+  SITE_STRINGS.forEach(function (s) {
+    t += '<tr><td style="font-size:12.5px;color:var(--muted);max-width:170px">' + esc(s) + '</td>';
+    cands.forEach(function (f) {
+      var miss = [];
+      var marked = s.split('').map(function (ch) {
+        if (ch === ' ') return '&nbsp;';
+        if (drawnBy(f, ch)) return esc(ch);
+        miss.push(ch);
+        return '<mark class="gone">' + esc(ch) + '</mark>';
+      }).join('');
+      t += '<td class="s" style="font-family:' + f.stack + '">' + marked +
+        (miss.length ? '<div class="miss">掉 ' + esc(miss.join(' ')) + '</div>' : '') + '</td>';
+    });
+    t += '</tr>';
+  });
+  $('#strings').innerHTML = t + '</tbody>';
+
+  /* 5) 成本表 */
+  var c = '<table class="cost"><thead><tr><th>字型（單一字重）</th>' +
+    '<th>① 全站標題<br><span style="font-weight:400">完整 CJK 子集</span></th>' +
+    '<th>② 只用拉丁 + 數字<br><span style="font-weight:400">U+0000-00FF 子集</span></th>' +
+    '<th>③ 只用固定短字串<br><span style="font-weight:400">&amp;text= 現切</span></th>' +
+    '<th>子集數</th></tr></thead><tbody>';
+  FONTS.forEach(function (f) {
+    var s = SIZES[f.id];
+    c += '<tr' + (f.base ? ' class="base"' : '') + '><td>' + esc(s.label) +
+      (f.base ? '（現況，已經在載）' : '') + '</td>' +
+      '<td class="n ' + (s.full > 3000000 ? 'big' : '') + '">' + mb(s.full) + '</td>' +
+      '<td class="n small">' + kb(s.latin) + '</td>' +
+      '<td class="n">' + (s.notoText ? 'Inter ' + kb(s.text) + ' / TC 不適用' : kb(s.text)) + '</td>' +
+      '<td class="n">' + s.subsets + '</td></tr>';
+  });
+  $('#cost').innerHTML = c + '</tbody></table>';
+
+  /* 6) 總表。全部由上面的量測即時算出來，不是手寫的結論。 */
+  var siteUniq = [];
+  var seen2 = {};
+  SITE_STRINGS.join('').split('').forEach(function (ch) {
+    if (ch.trim() === '' || seen2[ch]) return; seen2[ch] = 1; siteUniq.push(ch);
+  });
+  var g = '<table class="cost"><thead><tr><th>字型</th><th>字重數</th>' +
+    '<th>台灣常用字<br><span style="font-weight:400">' + TW_CHARS.length + ' 字中掉幾個</span></th>' +
+    '<th>站上字串<br><span style="font-weight:400">' + siteUniq.length + ' 個相異字中掉幾個</span></th>' +
+    '<th>掉的是哪些字</th><th>全套大小</th></tr></thead><tbody>';
+  FONTS.forEach(function (f) {
+    var mTw = f.base ? [] : TW_CHARS.filter(function (ch) { return !drawnBy(f, ch); });
+    var mSite = f.base ? [] : siteUniq.filter(function (ch) { return !drawnBy(f, ch); });
+    g += '<tr' + (f.base ? ' class="base"' : '') + '><td>' + esc(f.name) + '</td>' +
+      '<td class="n' + (f.weights.length === 1 ? ' big' : '') + '">' + f.weights.length + '</td>' +
+      '<td class="n' + (mTw.length ? ' big' : ' small') + '">' + mTw.length + '</td>' +
+      '<td class="n' + (mSite.length ? ' big' : ' small') + '">' + mSite.length + '</td>' +
+      '<td style="text-align:left;white-space:normal">' + (f.base ? '—' : (mTw.concat(mSite.filter(function (c) { return mTw.indexOf(c) < 0; })).join(' ') || '（一個都不缺）')) + '</td>' +
+      '<td class="n">' + mb(SIZES[f.id].full) + '</td></tr>';
+  });
+  $('#summary').innerHTML = g + '</tbody></table>';
+
+  drawShapes();
+}
+
+/* Noto Sans TC 的 text= 是壞的 —— 這是量測時撞到的。寫在這裡是因為它同時
+   決定了「用法 ③」對誰成立，也影響 scripts/og.mjs 現在的產物。 */
+$('#notoWarn').innerHTML =
+  '<b>量測時撞到的一件事：<code>&amp;text=</code> 對 Noto Sans TC 無效。</b><br>' +
+  '對 <code>Noto+Sans+TC:wght@700&amp;text=賞最</code> 要子集，回來的樣式表 <code>unicode-range</code> 確實只寫了那兩個碼位，' +
+  '但那支 woff2 實際是 <b>3,186,716 bytes（3.04 MB），整套字</b>。同一招對 Dela Gothic One 只回 960 bytes，' +
+  '所以不是招式的問題，是 Noto Sans TC（v39）這一支的行為。<br>' +
+  '兩個後果：用法 ③ 只對五套候選成立，中文那一半省不掉；而 <code>scripts/og.mjs</code> 目前把 Noto Sans TC ' +
+  '兩個字重 <code>text=</code> 之後 base64 內嵌，等於每跑一次就把約 8 MB 的 base64 塞進那張圖的 HTML。' +
+  '產出的圖是對的，成本不是預期的。這一頁只回報，不動那支腳本。';
+
+$('#themeBtn').addEventListener('click', function () {
+  var light = document.documentElement.getAttribute('data-theme') === 'light';
+  document.documentElement.setAttribute('data-theme', light ? 'dark' : 'light');
+  $('#themeBtn').textContent = light ? '切到淺色主題' : '切回深色主題';
+});
+$('#reBtn').addEventListener('click', function () { hashCache.clear(); run(); });
+
+run();
+</script>
+</body>
+</html>
