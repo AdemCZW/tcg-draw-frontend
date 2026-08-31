@@ -9,7 +9,7 @@
  * 這頁被轉貼出去之後，多數人是在 LINE 內建瀏覽器第一次看到 VaultDraw，
  * 所以上半部先回答「這是誰、收了幾張、有多少能談」，再進卡片格線。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { share, offers, type PublicCard } from '@/lib/social'
 import { ApiError } from '@/lib/http'
@@ -103,13 +103,40 @@ const artSeed = (p: PublicCard) => `placeholder:${hueOf(p.id)}`
 /* ---- 提出交易 ----
    出價要登入、看卡冊不用。沒登入就把人送去登入頁並用 redirect 記住現在這頁，
    登入完回得來 —— 不然使用者要重新去 LINE 裡把那條連結翻出來。
-   redirect 的寫法跟 router/index.ts 的 beforeEach 守衛一致，是同一個約定。 */
-const openOffer = ref<string | null>(null)
-const points = ref('')
+   redirect 的寫法跟 router/index.ts 的 beforeEach 守衛一致，是同一個約定。
+
+   表單做成貼底的覆蓋層，不是就地展開。就地展開是錯的，而且是量得出來的錯：
+   卡片格線一格只有 115px 寬，表單長在裡面會把整張卡往下推 300 多px，
+   而頁面不會跟著捲 —— 實測在 393×852 上按中段的卡，「送出出價」落在
+   視窗下方 56px、按最上面那張更糟（下方 106px），使用者填完金額之後
+   畫面上沒有任何可以按的東西，只能以為「填完就自動送出了」。
+   軟鍵盤再吃掉約 300px，就地展開在手機上沒有任何補救空間。
+
+   覆蓋層跟 MyCardsPage 的出貨／回收面板是同一套（.sheetWrap / .sheet /
+   .sheetFoot）：貼底、自己捲、動作列黏在面板下緣。兩處同一種模式，
+   使用者只要學一次。CSS 是複製過來的 —— 這兩頁之外沒有第三個使用者，
+   現在抽成共用元件只是多一層間接。 */
+const offerFor = ref<PublicCard | null>(null)
+/* string | number 不是隨手寫的：v-model 綁在 <input type="number"> 上時
+   Vue 會自己把值轉成數字，清空時又給回空字串 —— 只標成 string 的話，
+   任何字串方法在使用者打第一個字的當下就會炸掉（實測 .trim() 就是這樣壞的）。 */
+const points = ref<string | number>('')
 const message = ref('')
 const sending = ref(false)
 const offerErr = ref('')
 const sentFor = ref<string | null>(null)
+
+/* 送出鍵按不下去的理由。跟出貨面板同一個寫法：講出缺的是哪一項、
+   連門檻一起講 —— 只說「還差 點數」的話，打了 0 還是灰的時候等於沒說。 */
+const offerBlockWhy = computed(() => {
+  if (sending.value) return ''
+  const raw = String(points.value ?? '').trim()
+  if (!raw) return '還差：要出多少點。'
+  const pts = Math.floor(Number(raw))
+  if (!Number.isFinite(pts) || pts <= 0) return '還差：點數要是大於 0 的整數。'
+  return ''
+})
+const offerReady = computed(() => !offerBlockWhy.value)
 
 function askOffer(p: PublicCard) {
   // 已上架的卡要走市場，不能私下出價
@@ -119,18 +146,28 @@ function askOffer(p: PublicCard) {
     return
   }
   offerErr.value = ''
-  openOffer.value = openOffer.value === p.id ? null : p.id
-  if (openOffer.value) { points.value = ''; message.value = '' }
+  points.value = ''
+  message.value = ''
+  offerFor.value = p
+  /* 覆蓋層是 aria-modal，焦點要進去，不然按 Tab 會走到它背後那些讀不到的東西。
+     聚焦面板本身而不是金額框：在手機上直接聚焦輸入框會馬上叫出鍵盤，
+     使用者還沒看清楚自己在對哪一張卡出價，畫面就先少了一半。 */
+  void nextTick(() => document.getElementById('offerSheet')?.focus())
 }
 
-async function submitOffer(p: PublicCard) {
+function closeOffer() { offerFor.value = null }
+
+async function submitOffer() {
+  const p = offerFor.value
+  if (!p || sending.value) return
   const pts = Math.floor(Number(points.value))
+  // 按鈕已經擋掉了，這裡是最後一道 —— 表單也可能被 Enter 送出
   if (!Number.isFinite(pts) || pts <= 0) { offerErr.value = '請先填寫要出多少點。'; return }
   sending.value = true
   offerErr.value = ''
   try {
     await offers.create(p.id, pts, message.value.trim())
-    openOffer.value = null
+    offerFor.value = null
     // 成功訊息不設定時器自動消失：出價是有金錢意義的動作，
     // 使用者要能確認「我剛剛真的送出去了」，並且從這裡走到收發匣
     sentFor.value = p.id
@@ -140,6 +177,42 @@ async function submitOffer(p: PublicCard) {
     sending.value = false
   }
 }
+
+function onEsc(e: KeyboardEvent) {
+  if (e.key === 'Escape' && offerFor.value) closeOffer()
+}
+
+/* ---- 軟鍵盤 ----
+   覆蓋層是 position: fixed，而 fixed 貼的是「版面視窗」。
+   iOS Safari 的軟鍵盤不會縮版面視窗、只縮 visualViewport，
+   所以鍵盤一彈出來，面板下緣（連同黏在那裡的送出鍵）就躲到鍵盤底下了。
+   出價一定要打字，這是主要路徑不是邊角情況。
+
+   --kb 掛在 documentElement：.sheetWrap 是 Teleport 到 body 的，
+   不在這個元件的 DOM 子樹裡。
+   （同一段也在 MyCardsPage.vue，兩頁各一份 —— 見上面對複製 CSS 的說明。）
+   scale 的防呆：雙指放大時 visualViewport 也會變小，那不是鍵盤。 */
+function syncKeyboardInset() {
+  const vv = window.visualViewport
+  const kb = vv && vv.scale <= 1.01
+    ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+    : 0
+  document.documentElement.style.setProperty('--kb', `${Math.round(kb)}px`)
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onEsc)
+  window.visualViewport?.addEventListener('resize', syncKeyboardInset)
+  window.visualViewport?.addEventListener('scroll', syncKeyboardInset)
+  syncKeyboardInset()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onEsc)
+  window.visualViewport?.removeEventListener('resize', syncKeyboardInset)
+  window.visualViewport?.removeEventListener('scroll', syncKeyboardInset)
+  /* 離開這一頁要還原：--kb 掛在根節點上，留著會讓別頁的固定元件也跟著位移 */
+  document.documentElement.style.removeProperty('--kb')
+})
 </script>
 
 <template>
@@ -236,36 +309,12 @@ async function submitOffer(p: PublicCard) {
 
             <button
               v-if="p.tradable"
-              type="button" class="btn sm act"
-              :class="{ primary: openOffer !== p.id }"
+              type="button" class="btn sm act primary"
               @click="askOffer(p)"
-            >{{ openOffer === p.id ? '取消出價' : '提出交易' }}</button>
+            >提出交易</button>
             <!-- 已上架的卡不給出價入口，而不是給一顆按不動的按鈕：
                  直接說清楚要去哪裡才買得到 -->
             <p v-else class="locked">市場販售中 · 這張要到市場買，不走私下出價</p>
-
-            <!-- 出價表單。跟卡冊的回收確認同一套行內展開，原生對話框放不下這些欄位 -->
-            <form v-if="openOffer === p.id" class="offer" @submit.prevent="submitOffer(p)">
-              <label class="fld">
-                <span class="lb">你要出多少點</span>
-                <input
-                  v-model="points" type="number" min="1" step="1" inputmode="numeric"
-                  class="in mono" placeholder="例如 12000" required
-                />
-              </label>
-              <label class="fld">
-                <span class="lb">留言（可不填）</span>
-                <textarea v-model="message" class="in ta" rows="2" maxlength="120" placeholder="想說的話，例如願意加卡交換"></textarea>
-              </label>
-              <p class="hint">送出後對方會收到通知，接受或婉拒都會再通知你。</p>
-              <p v-if="offerErr" class="errLine" role="alert">{{ offerErr }}</p>
-              <div class="acts">
-                <button type="submit" class="btn primary sm" :disabled="sending">
-                  {{ sending ? '送出中…' : '送出出價' }}
-                </button>
-                <button type="button" class="btn sm" :disabled="sending" @click="openOffer = null">取消</button>
-              </div>
-            </form>
           </div>
         </article>
       </div>
@@ -284,6 +333,56 @@ async function submitOffer(p: PublicCard) {
         @more="list.load()"
       />
     </template>
+
+    <!-- 出價面板。Teleport 到 body 不是整潔問題：換頁轉場會在頁面容器上加
+         transform，而**祖先只要有 transform，position: fixed 的定位基準就會
+         變成那個祖先而不是視窗**（docs/HANDOFF.md 2.2）——
+         面板會被推出畫面外並被裁掉。MyCardsPage 的出貨面板踩過這一顆。
+         關法三種：點遮罩、取消鍵、Esc。 -->
+    <Teleport to="body">
+      <div v-if="offerFor" class="sheetWrap" @click.self="closeOffer">
+        <form
+          id="offerSheet" class="sheet card hasFoot"
+          role="dialog" aria-modal="true" aria-label="提出交易" tabindex="-1"
+          @submit.prevent="submitOffer"
+        >
+          <h2>提出交易</h2>
+          <!-- 對哪一張卡出價要寫在面板裡：面板蓋住了卡片格線，
+               不寫的話使用者要關掉面板才確認得了自己選的是哪一張 -->
+          <p class="muted fine">{{ offerFor.card.name ?? '未命名卡片' }}<span
+            v-if="offerFor.card.value" class="fyi">參考價 {{ offerFor.card.value.toLocaleString() }}</span></p>
+
+          <label class="fld">
+            <span class="lb">你要出多少點</span>
+            <input
+              v-model="points" type="number" min="1" step="1" inputmode="numeric"
+              class="in mono" placeholder="例如 12000"
+            />
+          </label>
+          <label class="fld">
+            <span class="lb">留言（可不填）</span>
+            <textarea v-model="message" class="in ta" rows="2" maxlength="120" placeholder="想說的話，例如願意加卡交換"></textarea>
+          </label>
+          <p class="hint">送出後對方會收到通知，接受或婉拒都會再通知你。</p>
+
+          <!-- 動作列黏在面板下緣。就地展開的版本把送出鍵推到視窗下方 56–106px，
+               黏底之後不管視窗多矮、鍵盤彈不彈，它都在同一個位置 -->
+          <div class="sheetFoot">
+            <p v-if="offerErr" class="errLine" role="alert">{{ offerErr }}</p>
+            <!-- 灰按鈕一定要說得出理由，跟出貨面板同一個位置、同一個寫法 -->
+            <p v-if="offerBlockWhy" id="offerWhy" class="blockWhy" role="status">{{ offerBlockWhy }}</p>
+            <div class="acts">
+              <button
+                type="submit" class="btn primary sm"
+                :disabled="!offerReady || sending"
+                :aria-describedby="offerBlockWhy ? 'offerWhy' : undefined"
+              >{{ sending ? '送出中…' : '送出出價' }}</button>
+              <button type="button" class="btn sm" :disabled="sending" @click="closeOffer">取消</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -344,16 +443,54 @@ h1 { font-size: 21px; margin: 0; line-height: 1.25; overflow-wrap: anywhere; }
 }
 .sentLink { color: var(--ok); text-decoration: underline; }
 
-/* ---- 出價表單 ---- */
-.offer {
-  justify-self: stretch;
-  margin-top: 4px; padding: 12px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  display: grid; gap: 10px;
+/* ---- 出價面板 ----
+   跟 MyCardsPage 的出貨／回收覆蓋層同一套視覺與行為：貼底、自己捲、
+   動作列黏在面板下緣。這裡是複製過去的一份，兩處要一起改。
+   （目前只有這兩個使用者，抽成共用元件只是多一層間接。） */
+.sheetWrap {
+  position: fixed; inset: 0; z-index: 80;
+  display: flex; align-items: flex-end; justify-content: center;
+  background: #000a;
+  /* 下緣讓給軟鍵盤（--kb 由 syncKeyboardInset() 寫進根節點，預設 0） */
+  bottom: var(--kb, 0px);
 }
-.fld { display: grid; gap: 5px; }
+.sheet {
+  width: 100%; max-width: min(520px, 100vw);
+  /* 保險絲：內容壓不住時讓它自己橫捲，不要把面板撐出視窗外被裁掉 */
+  overflow-x: hidden;
+  /* 88% 而不是 88dvh：.sheetWrap 的高度已經扣掉鍵盤了，
+     dvh 量的是整個視窗，鍵盤彈出時算出來的面板會比放得下的還高 */
+  max-height: min(88%, 720px); overflow-y: auto; overscroll-behavior: contain;
+  border-radius: 18px 18px 0 0;
+  padding: 18px 16px calc(18px + var(--safe-b, 0px));
+  display: grid; gap: 10px; align-content: start; min-width: 0;
+}
+.sheet:focus-visible { outline: none; }
+.sheet h2 { font-size: 17px; margin: 0; }
+.sheet .fine { margin: -4px 0 2px; font-size: 12.5px; line-height: 1.5; }
+.fyi { margin-left: 8px; font-size: 11.5px; color: var(--faint); }
+
+/* 底部內距搬進 .sheetFoot，sticky 的 bottom: 0 才貼得到面板真正的下緣，
+   不然會浮在 18px 內距上面、露出一條會捲動的縫 */
+.sheet.hasFoot { padding-bottom: 0; }
+.sheetFoot {
+  position: sticky; bottom: 0; z-index: 1;
+  /* 負的左右外距讓它撐滿面板寬度，那條分隔線才切得斷、
+     看得出「上面會捲、下面不會」 */
+  margin: 2px -16px 0;
+  padding: 10px 16px calc(12px + var(--safe-b, 0px));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  display: grid; gap: 8px; min-width: 0;
+}
+/* 灰按鈕的理由。用 --warn-ink 不用 --danger：使用者沒做錯事，
+   只是還沒填完，紅字會讀成「出錯了」 */
+.blockWhy {
+  margin: 0; min-width: 0;
+  font-size: 12.5px; line-height: 1.55; color: var(--warn-ink);
+  overflow-wrap: anywhere;
+}
+.fld { display: grid; gap: 5px; min-width: 0; }
 .lb { font-size: 11.5px; color: var(--muted); }
 .in {
   width: 100%; padding: 10px 12px;
@@ -377,13 +514,18 @@ h1 { font-size: 21px; margin: 0; line-height: 1.25; overflow-wrap: anywhere; }
   h1 { font-size: 18px; }
   .stats { gap: 18px; }
   .stats dd { font-size: 20px; }
-  /* 兩欄格線：每張卡的內容區只剩約 115px，按鈕與表單一律撐滿、不並排 */
-  .grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
-  .item { padding: 8px; }
-  .body { gap: 6px; padding: 9px 2px 2px; }
+  /* 兩欄格線：每張卡的內容區只剩約 115px，按鈕一律撐滿、不並排。
+     minmax(0, 1fr) 不是可有可無：1fr 等同 minmax(auto, 1fr)，
+     只要某一格的內容固有寬度超過軌道，那一格就會被撐開、隔壁被擠扁
+     （HANDOFF 2.1） */
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .item { padding: 8px; min-width: 0; }
+  .body { gap: 6px; padding: 9px 2px 2px; min-width: 0; }
   .name { font-size: 12.5px; }
   .btn.sm { width: 100%; padding: 9px 6px; font-size: 12px; }
-  .offer { padding: 10px; }
+  /* 面板的寬度是整個視窗，不是 115px 的卡片格 —— 上面那條為了塞進格子
+     而降到 12px 的字級不該跟進來，而且這兩顆要吃滿 44px 觸控門檻 */
+  .sheet .btn.sm { padding: 11px 12px; font-size: 13.5px; min-height: 44px; }
   .acts { flex-direction: column; }
 }
 </style>

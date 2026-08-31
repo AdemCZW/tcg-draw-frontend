@@ -281,11 +281,31 @@ const sellableCount = computed(() =>
   (summary.value?.counts.stashed ?? 0) + (summary.value?.counts.in_book ?? 0))
 
 const addr = ref({ name: '', phone: '', zip: '', city: '', line1: '' })
-const addrReady = computed(() =>
-  addr.value.name.trim().length >= 2 &&
-  addr.value.phone.trim().length >= 8 &&
-  addr.value.city.trim().length >= 2 &&
-  addr.value.line1.trim().length >= 4)
+/* 缺哪幾欄要能講出名字，不能只回一個 true/false。
+   之前送出鍵只是變灰，面板上找不到任何一個字說「地址是必填」——
+   第一次來的人（會員資料還沒填收件資訊，這是最常見的狀態）看到的是
+   一顆按不動的按鈕，他的結論是「這功能壞了」而不是「我還沒填」。
+
+   每一項都連門檻一起寫出來，是因為「填了還是不行」比「沒填」更難懂：
+   電話打了 4 碼還是灰的時候，只說「還差 電話」等於沒說。 */
+const addrMissing = computed(() => {
+  const a = addr.value
+  const miss: string[] = []
+  if (a.name.trim().length < 2) miss.push('收件人姓名（至少 2 個字）')
+  if (a.phone.trim().length < 8) miss.push('電話（至少 8 碼）')
+  if (a.city.trim().length < 2) miss.push('縣市')
+  if (a.line1.trim().length < 4) miss.push('地址（區、路、號）')
+  return miss
+})
+const addrReady = computed(() => addrMissing.value.length === 0)
+/* 送出鍵按不下去的完整理由。沒勾卡也是理由之一，而且要排在地址前面 ——
+   一張卡都沒勾的時候，叫人去補地址是答非所問。 */
+const shipBlockWhy = computed(() => {
+  if (shipBusy.value) return ''
+  if (!shipPick.value.length) return '還差：至少勾選一張要寄的卡。'
+  if (addrMissing.value.length) return `還差：${addrMissing.value.join('、')}。`
+  return ''
+})
 
 /* 收件資料從會員資料帶過來，讓人不用每次重打。
    但仍然可以改 —— 「這次要寄到哪」跟「我的預設地址」是兩件事
@@ -448,14 +468,40 @@ function onChosenKey(e: KeyboardEvent) {
   if (chosenOpen.value) { closeChosen(); return }
   if (openCard.value) closeCard(true)
 }
+/* ---- 軟鍵盤 ----
+   覆蓋層是 position: fixed，而 fixed 貼的是「版面視窗」。
+   iOS Safari 的軟鍵盤不會縮版面視窗，只縮 visualViewport ——
+   所以鍵盤一彈出來，面板的下緣（連同黏在那裡的送出鍵）就躲到鍵盤底下了。
+   在手機上填地址必然會彈鍵盤，這不是邊角情況，是主要路徑。
+
+   把鍵盤吃掉的高度寫成 --kb，讓覆蓋層的下緣停在鍵盤上面。
+   掛在 documentElement 而不是元件內：.sheetWrap 是 Teleport 到 body 的，
+   不在這個元件的 DOM 子樹裡，scoped 的 style 綁得到、CSS 變數要走根節點。
+
+   scale 的防呆：雙指放大時 visualViewport 也會變小，那不是鍵盤，
+   照著縮會讓面板莫名其妙變矮。 */
+function syncKeyboardInset() {
+  const vv = window.visualViewport
+  const kb = vv && vv.scale <= 1.01
+    ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+    : 0
+  document.documentElement.style.setProperty('--kb', `${Math.round(kb)}px`)
+}
 onMounted(() => {
   window.addEventListener('keydown', onChosenKey)
   /* capture：面板裡的按鈕自己會 stopPropagation 的話，冒泡階段就收不到了 */
   document.addEventListener('click', onDocPointer, true)
+  window.visualViewport?.addEventListener('resize', syncKeyboardInset)
+  window.visualViewport?.addEventListener('scroll', syncKeyboardInset)
+  syncKeyboardInset()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onChosenKey)
   document.removeEventListener('click', onDocPointer, true)
+  window.visualViewport?.removeEventListener('resize', syncKeyboardInset)
+  window.visualViewport?.removeEventListener('scroll', syncKeyboardInset)
+  /* 離開這一頁要還原：--kb 掛在根節點上，留著會讓別頁的固定元件也跟著位移 */
+  document.documentElement.style.removeProperty('--kb')
 })
 
 /* 存的是卡片本身而不是 id：確認改成覆蓋層之後，它已經不在那張卡的
@@ -1026,7 +1072,7 @@ async function copyLink() {
          實機上就是這樣壞的（左半邊整個看不到）。 -->
     <Teleport to="body">
     <div v-if="shipOpen" class="sheetWrap" @click.self="shipOpen = false">
-      <div class="sheet card" role="dialog" aria-label="申請出貨">
+      <div class="sheet card hasFoot" role="dialog" aria-label="申請出貨">
         <h2>申請出貨</h2>
         <p class="muted fine">勾選要一起寄出的卡。合併成一張出貨單，只算一次運費。</p>
 
@@ -1061,14 +1107,28 @@ async function copyLink() {
         </div>
         <p class="muted fine">預設帶入會員資料裡的收件資訊，這次要寄別的地方可以直接改。</p>
 
-        <p v-if="shipErr" class="warn">{{ shipErr }}</p>
-        <div class="acts">
-          <button class="btn sm" @click="shipOpen = false">取消</button>
-          <button
-            class="btn primary sm"
-            :disabled="!addrReady || !shipPick.length || shipBusy"
-            @click="submitShip"
-          >{{ shipBusy ? '送出中…' : `送出（${shipPick.length} 張）` }}</button>
+        <!-- 動作列黏在面板底（.sheetFoot 是 position: sticky）。
+             這張面板的內容一定比視窗高（一份會長大的卡片清單 + 五個地址欄），
+             動作鈕跟著內容捲的話，第一眼看到的是「取消」，送出鍵剛好被
+             視窗底切掉 18px —— 實測就是這樣（M-2）。
+             黏底之後不管捲到哪、視窗多矮，送出鍵都在同一個位置。 -->
+        <div class="sheetFoot">
+          <p v-if="shipErr" class="warn err">{{ shipErr }}</p>
+          <!-- 灰按鈕一定要說得出理由。role="status" 讓讀屏在欄位填好的當下
+               就聽到剩下缺什麼，不必自己去 Tab 一圈猜。 -->
+          <p v-if="shipBlockWhy" id="shipWhy" class="blockWhy" role="status">{{ shipBlockWhy }}</p>
+          <!-- 主要動作排在前面，跟同一頁的回收確認與公開卡冊的出價面板一致。
+               手機上這一組是直排的，順序就是視覺順序 —— 三張面板各排各的
+               等於同一個模式要學三次 -->
+          <div class="acts">
+            <button
+              class="btn primary sm"
+              :disabled="!addrReady || !shipPick.length || shipBusy"
+              :aria-describedby="shipBlockWhy ? 'shipWhy' : undefined"
+              @click="submitShip"
+            >{{ shipBusy ? '送出中…' : `送出（${shipPick.length} 張）` }}</button>
+            <button class="btn sm" @click="shipOpen = false">取消</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1241,21 +1301,55 @@ async function copyLink() {
   display: flex; align-items: flex-end; justify-content: center;
   background: #000a;
   padding: 0;
+  /* 下緣讓給軟鍵盤（--kb 由 syncKeyboardInset() 寫進根節點，預設 0）。
+     不用 inset: 0 是因為 bottom 要能被覆蓋。 */
+  bottom: var(--kb, 0px);
 }
 .sheet {
   width: 100%; max-width: min(520px, 100vw);
   /* 保險絲：就算之後有人加了壓不住的內容，也讓它自己橫捲，
      不要把整個面板撐出視窗外被裁掉 */
   overflow-x: hidden;
-  max-height: min(88dvh, 720px); overflow-y: auto; overscroll-behavior: contain;
+  /* 88% 而不是 88dvh：.sheetWrap 的高度已經扣掉鍵盤了，
+     dvh 量的是整個視窗，鍵盤彈出時算出來的面板會比放得下的還高。 */
+  max-height: min(88%, 720px); overflow-y: auto; overscroll-behavior: contain;
   border-radius: 18px 18px 0 0;
   padding: 18px 16px calc(18px + var(--safe-b, 0px));
 }
 .sheet h2 { font-size: 17px; margin: 0 0 6px; }
 
+/* ---- 黏底的動作列 ----
+   這一頁的覆蓋層有兩種：說明型（回收確認，內容固定、放得下）與
+   表單型（出貨，內容會長大）。只有表單型需要 .hasFoot ——
+   底部內距搬進 .sheetFoot，sticky 的 bottom: 0 才貼得到面板真正的下緣，
+   不然會浮在 18px 內距的上面、露出一條會捲動的縫。 */
+.sheet.hasFoot { padding-bottom: 0; }
+.sheetFoot {
+  position: sticky; bottom: 0; z-index: 1;
+  /* 負的左右外距讓它撐滿面板寬度，那條分隔線才切得斷、
+     看得出「上面會捲、下面不會」 */
+  margin: 12px -16px 0;
+  padding: 10px 16px calc(12px + var(--safe-b, 0px));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  display: grid; gap: 8px; min-width: 0;
+}
+.sheetFoot .acts { margin-top: 0; }
+/* 灰按鈕的理由。用 --warn-ink 不用 --danger：使用者沒做錯事，
+   只是還沒填完，紅字會讀成「出錯了」 */
+.blockWhy {
+  margin: 0; min-width: 0;
+  font-size: 12.5px; line-height: 1.55; color: var(--warn-ink);
+  overflow-wrap: anywhere;
+}
+.sheetFoot .warn.err { color: var(--danger-ink); font-size: 12.5px; }
+
 .pickList { list-style: none; margin: 12px 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .pickList label {
   display: flex; align-items: center; gap: 9px;
+  /* 44px 是這一列的觸控門檻，不是裡面那顆 13px 的 checkbox ——
+     整列都可以點，但它原本只有 40px 高，還是不到門檻 */
+  min-height: 44px;
   padding: 9px 10px; border-radius: 10px; background: var(--surface-2);
   font-size: 13.5px; cursor: pointer;
 }
