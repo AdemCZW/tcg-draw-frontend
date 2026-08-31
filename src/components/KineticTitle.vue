@@ -32,7 +32,23 @@ const props = withDefaults(defineProps<{
   label?: string
   /** 待機時的循環故障週期（秒）。0 = 關掉 */
   glitchEvery?: number
-}>(), { stagger: 42, delay: 0, label: undefined, glitchEvery: 5.5 })
+  /**
+   * 掃光。'loop' 每 6.5 秒掃一次、'once' 只在進場掃一次、'off' 不掃。
+   *
+   * 會有這個 prop 是因為掃光是靠一支註冊過的自訂屬性（--bp）在動，
+   * 而註冊過的自訂屬性動畫是**主執行緒**的：它每一幀都要重算樣式、
+   * 再重繪 background-clip: text 的那一層。一行標題切成十九個字元，
+   * 就是十九支這樣的動畫永遠在跑。
+   * 放在結果頁那種看完就走的地方無所謂；放在形象頁的首屏，
+   * 那是使用者停留期間**一直**在付的錢。
+   */
+  shine?: 'loop' | 'once' | 'off'
+}>(), { stagger: 42, delay: 0, label: undefined, glitchEvery: 5.5, shine: 'loop' })
+
+/* 待機的故障（跳字、殘影）只在 glitchEvery > 0 時才掛上去。
+   不是把週期設成 0 就算了 —— 那樣動畫還是存在，只是時長為零，
+   引擎照樣要為每個字元建立動畫物件。要省就要真的不要那條規則。 */
+const idle = computed(() => props.glitchEvery > 0)
 
 /** 切成字元，同時記錄全域序號 —— 跨行連續才有一條走過去的節奏 */
 const rows = computed(() => {
@@ -53,7 +69,7 @@ const srText = computed(() => props.label ?? props.lines.join(' '))
 </script>
 
 <template>
-  <div class="kt">
+  <div class="kt" :class="[`sh-${shine}`, { idle }]">
     <span class="sr-only">{{ srText }}</span>
     <div
       v-for="(row, r) in rows" :key="r"
@@ -108,7 +124,11 @@ const srText = computed(() => props.label ?? props.lines.join(' '))
 .ch {
   display: inline-block;
   transform-origin: 50% 100%;
-  will-change: transform, opacity, filter;
+  /* 這裡本來有 will-change: transform, opacity, filter。
+     那是十九個永久的合成層（每個還帶兩個 mix-blend-mode 的偽元素），
+     為了一段九百毫秒的進場長期佔著記憶體。
+     transform / filter 動畫進行中瀏覽器本來就會自己提升圖層，
+     講明反而只是讓它提早、而且不放手。 */
 }
 
 /* ---- 進場：升起 + 對焦 + 轉正 + 過衝定格 ---- */
@@ -122,8 +142,11 @@ const srText = computed(() => props.label ?? props.lines.join(' '))
   }
   .ch::before { color: #ff3b6b; mix-blend-mode: screen; }
   .ch::after  { color: #35e8ff; mix-blend-mode: screen; --dir: -1; }
-  /* 待機故障時色差副本也跳一下，而且跳得比進場那次遠 —— 訊號斷裂的感覺 */
   .ch::before, .ch::after {
+    animation: ktSplit 900ms cubic-bezier(.16, 1.36, .3, 1) var(--d) both;
+  }
+  /* 待機故障時色差副本也跳一下，而且跳得比進場那次遠 —— 訊號斷裂的感覺 */
+  .idle .ch::before, .idle .ch::after {
     animation:
       ktSplit 900ms cubic-bezier(.16, 1.36, .3, 1) var(--d) both,
       ktGhost var(--ge) steps(1, end) var(--g) infinite;
@@ -136,10 +159,15 @@ const srText = computed(() => props.label ?? props.lines.join(' '))
   62%  { transform: translateY(-7%) rotateX(6deg) scale(1.03); }   /* 過衝 */
   100% { transform: translateY(0) rotateX(0deg) scale(1); }
 }
+/* 對焦。**刻意沒有 opacity。**
+   字一開始就在槽底、被 .slot 的 overflow: hidden 裁掉，看不見是因為
+   「被擋住」不是因為「還沒亮」—— 這跟煙霧揭曉是同一條原則。
+   而且 opacity: 0 的元素不算 LCP 候選，加了淡入等於把標題整個
+   移出首屏指標之外。 */
 @keyframes ktFocus {
-  0%   { opacity: 0; filter: blur(11px); }
-  55%  { opacity: 1; filter: blur(1.5px); }
-  100% { opacity: 1; filter: blur(0); }
+  0%   { filter: blur(9px); }
+  55%  { filter: blur(1.5px); }
+  100% { filter: blur(0); }
 }
 /* 只在中段可見 —— 定格前後都要是乾淨的字，殘影只有一瞬間 */
 @keyframes ktSplit {
@@ -168,12 +196,36 @@ const srText = computed(() => props.label ?? props.lines.join(' '))
   color: transparent;
   -webkit-text-fill-color: transparent;
 }
+/* 進場的兩支是所有情況都有的：升起（過衝定格）與對焦。 */
 @media (prefers-reduced-motion: no-preference) {
   .ch {
+    animation-name: ktRise, ktFocus;
+    animation-duration: 900ms, 620ms;
+    animation-timing-function: cubic-bezier(.16, 1.36, .3, 1), ease-out;
+    animation-delay: var(--d), var(--d);
+    animation-fill-mode: both, both;
+    animation-iteration-count: 1, 1;
+  }
+  /* 掃光。--bp 是註冊過的自訂屬性，動畫在主執行緒跑 ——
+     'once' 只付一次，'loop' 是永遠付。 */
+  .sh-once .ch { animation-name: ktRise, ktFocus, ktShine;
+    animation-duration: 900ms, 620ms, 1.5s;
+    animation-timing-function: cubic-bezier(.16, 1.36, .3, 1), ease-out, ease-out;
+    animation-delay: var(--d), var(--d), calc(var(--d) + 620ms);
+    animation-fill-mode: both, both, none;
+    animation-iteration-count: 1, 1, 1; }
+  .sh-loop .ch { animation-name: ktRise, ktFocus, ktShine;
+    animation-duration: 900ms, 620ms, 6.5s;
+    animation-timing-function: cubic-bezier(.16, 1.36, .3, 1), ease-out, ease-in-out;
+    animation-delay: var(--d), var(--d), 1.2s;
+    animation-fill-mode: both, both, none;
+    animation-iteration-count: 1, 1, infinite; }
+  /* 待機故障：整組只在 .idle 時存在。
+     故障用 steps()：數位訊號是硬切的，一用平滑緩動就變成普通的抖動動畫。
+     這是「看起來像故障」跟「看起來像沒做完的動畫」的分界。 */
+  .idle .ch {
     animation-name: ktRise, ktFocus, ktShine, ktGlitch, ktBlink;
     animation-duration: 900ms, 620ms, 6.5s, var(--ge), var(--ge);
-    /* 故障用 steps()：數位訊號是硬切的，一用平滑緩動就變成普通的抖動動畫。
-       這是「看起來像故障」跟「看起來像沒做完的動畫」的分界。 */
     animation-timing-function:
       cubic-bezier(.16, 1.36, .3, 1), ease-out, ease-in-out,
       steps(1, end), steps(1, end);
@@ -186,6 +238,8 @@ const srText = computed(() => props.label ?? props.lines.join(' '))
   0%, 62% { --bp: 180%; }
   100%    { --bp: -260%; }
 }
+/* 'once' 的掃光是一支獨立的 1.5 秒動畫，掃完 --bp 回到初始值 180%
+   （fill-mode: none），字停在乾淨的實色上。 */
 @property --bp { syntax: '<percentage>'; inherits: false; initial-value: 180%; }
 
 /* ---- 待機故障 ----

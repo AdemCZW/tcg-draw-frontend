@@ -2,12 +2,89 @@
 /**
  * 形象頁 —— 進站的第一眼，展示版。
  *
- * 分層（由後往前）：
- *   0 極光星雲 → 1 星塵 → 2 流星 → 3 軌道環 → 4 環繞卡 → 5 球 → 6 屬性光點 → 7 文字
- * 每一層動的速度不同，滑鼠／陀螺儀移動時位移量也不同，做出視差深度。
+ * ================= 這一版把進場整個換掉的理由 =================
+ *
+ * 開卡演出（CardEmerge / reveal-fx-research.md）把四條原則寫得很清楚，
+ * 逐條對回來，這一頁本來四條全部沒做到：
+ *
+ *  1「揭曉靠遮蔽物散開，不是靠淡入」
+ *    —— 本來每一層都是 fadeIn / riseIn，從 opacity 0 長出來。
+ *    而且這不只是品味問題：opacity:0 的元素不算 LCP 候選，
+ *    整頁的字因此沒有一個進得了首屏指標，最後 LCP 落在一張
+ *    要打兩趟第三方網路才拿得到的裝飾卡圖上（實測 2.0 s）。
+ *    改成：內容一開始就畫好、opacity 1，前面蓋一層**保管庫的門**，
+ *    門往兩側退場才露出來。遮蔽物在前、內容不動 —— 跟煙霧揭曉同一件事。
+ *
+ *  2「動作是深度，不是 Y 軸」
+ *    —— 本來 riseIn 是 translateY(18px)，字和舞台都在上下滑。
+ *    改成：舞台由遠推近（scale 1.075 → 1），卡片各自從深處歸位。
+ *    上下位移只留卡片待機那一點浮動。
+ *
+ *  3「衝擊感來自對比，不是更亮更多」
+ *    —— 本來五幕是 night(.12) → wake(.55) → align(.85) → burst(1)，
+ *    爆發前是全場第二亮的一幕，等於沒有基準線。
+ *    改成：門關著的那 260 ms 是全片最暗最靜的一格，之後才放。
+ *
+ *  4「加碼只給高賞別 —— 衝擊一旦變成常態就不再是衝擊」
+ *    —— 這一條原本被違反得最嚴重：一個全幕白閃 + 衝擊波環，
+ *    每 30 秒在使用者讀登入按鈕的時候重播一次，永遠。
+ *    **這一條也是唯一一條不能照搬的**：開卡是抽完才播一次的高潮，
+ *    形象頁是每次進站都會看到的門面。所以這裡的正確做法不是
+ *    「把爆點做得更好」，而是把它整個拿掉，改成只在進站那一次發生。
+ *    詳見下面的「拿掉了什麼」。
+ *
+ * ---- 拿掉了什麼（以及為什麼） ----
+ *   五幕 30 秒迴圈       整段刪除。門面不需要劇情，需要的是安靜。
+ *   --e 自訂屬性         宣告了、@property 註冊了、transition 了 2.2 s，
+ *                        然後**沒有任何一條 CSS 讀它**。而它 inherits: true，
+ *                        每次幕次切換都讓整棵子樹重算樣式 2.2 秒。
+ *   全幕白閃 .flash      見上面第 4 條。
+ *   衝擊波環 .shock      同上。
+ *   神之光 .rays         784×784 的 repeating-conic + mask + screen 混色，
+ *                        永遠在轉。shader 已經畫了同一顆光源的光暈與光斑，
+ *                        這層是同一件事畫兩次。
+ *   散景光斑 .bokehs     九顆 screen 混色的色斑。原本的註解自己承認
+ *                        shader 開著時要 dim 到 .45 —— 那就是冗餘的自白。
+ *   極光簾幕 .curtains   同理，改成只在 shader 退場時才出現（那裡才需要雲氣）。
+ *   流星 .meteors        兩條帶 drop-shadow 的全幕位移，九秒閃一次。
+ *   星座連線 .lines      14 秒淡進淡出一次的 SVG 折線，沒人看得到。
+ *   屬性光點 .motes      四顆帶 drop-shadow 的圖示飄過整個登入表單，永遠。
+ *   電弧 .arcs           三條 stroke-dashoffset + drop-shadow 的 SVG，
+ *                        實測單這一層就吃 22 ms/s 主執行緒，而它 84% 的
+ *                        時間是隱形的。球的「有能量」交給 .halo 與 .pulse。
+ *   地板捲動 floorRun    背景往前捲是跑步機，不是敘事。格線留著當地面，不動。
+ *   主鈕呼吸 breathe     box-shadow 動畫 = 每一幀主執行緒重繪，永遠。
+ *                        深色頁上唯一的紅色按鈕本來就夠顯眼。
+ *   卡片 drop-shadow     換成 .card 的 box-shadow。同樣的影子，
+ *                        但 filter 會讓整個子樹每幀重算濾鏡區域。
+ *   星塵 46 → 30 顆
+ *
+ * 加回來的只有一個東西：**保管庫的門**（.vault），而且它在 1.5 秒後
+ * 整組從 DOM 移除，之後成本歸零。
+ *
+ * ---- 進場的節拍 ----
+ *   sealed  0 – 150 ms   門合著，中縫一道光。內容已經全部畫好在門後。
+ *                        這是「收」：全片最暗、最靜的一格。
+ *   open    150 – 930 ms  門往兩側退場（transform，合成層）；
+ *                        同時舞台由遠推近、卡片從深處歸位、
+ *                        中縫的光橫向炸開一次 —— 全片唯一的一次亮點。
+ *   calm    1060 ms 起    永久待機。之後不會再有任何一次性事件。
+ *
+ * 整段不到 1.1 秒，而且全程 pointer-events: none —— 門還在播的時候
+ * 登入／註冊／先逛逛就已經按得到。
+ *
+ * 為什麼是 1.1 秒不是原本設計的 1.5 秒：逐格比對前後版本時發現，
+ * 舊版在 60 ms 就已經能讀到 CTA（因為它根本沒有遮蔽物，只是各層還在淡入），
+ * 而 1.5 秒版的門要到 700 ms 才讓人看得懂畫面。**門面頁不能用結局演出的長度。**
+ * 壓到 1.1 秒之後，可讀的時間點回到 450 ms 左右，
+ * 揭曉的動作還在，但不再是「先讓使用者等一下」。
+ *
+ * ---- 分層（由後往前） ----
+ *   0 著色器星空（或 CSS 退路）→ 0e 地平線 → 1 星塵 → 3 軌道環
+ *   → 4 環繞卡 → 5 球 → 7 文字 → 9 保管庫的門（只在前 1.5 秒）
  *
  * 寶可夢元素全部用 CSS／SVG 畫出「形狀語彙」，不下載官方素材：
- * 寶貝球分模線、屬性能量符號（火水草電）、精靈球開闔的光。
+ * 寶貝球分模線、精靈球開闔的光。
  * 唯一的外部素材是卡面示意圖，走專案既有的 TCGdex 管線
  * （見 lib/tcgdex.ts 開頭對授權風險與使用邊界的說明）。
  *
@@ -50,25 +127,21 @@ onMounted(async () => {
   if (why) loginErr.value = why === 'denied' ? '你取消了 LINE 登入' : 'LINE 登入沒有完成，請再試一次'
 })
 
-/* ================= 場次導演機 =================
-   之前每一層都各自無限循環，沒有開始也沒有收尾 —— 那是氛圍壁紙不是一部片。
-   改成一段 30 秒的循環短片，分五幕，每一幕整個畫面的狀態都不同：
-   鏡頭會推近拉遠、能量會累積、爆發、然後沉降回夜色。
+/* ================= 進場節拍 =================
+   三個狀態，一次演完，然後永遠停在最後一個。
 
-   實作跟 RevealBuildup 同一套：一串 Act 推進根節點的 class，
-   CSS 用 transition 接住幕與幕之間的變化，一次性事件（閃光、衝擊波）用 animation。
+   前一版是五幕 30 秒無限迴圈。拿掉它的理由不是效能（雖然效能也是）：
+   形象頁是使用者**每次進站都會看到**的畫面，不是抽完卡才播一次的結局。
+   在這裡放一個每 30 秒重來一次的爆發，等於把「衝擊」變成壁紙的一部分 ——
+   而且那 30 秒裡使用者多半正在讀登入按鈕，畫面卻在搶他的注意力。
 
-   用 setTimeout 不用 rAF：分頁被節流時 rAF 不推進，整部片會停在某一幕，
-   使用者切回來看到的是凍住的畫面。setTimeout 被節流只是慢，不會卡死。 */
-type Act = 'night' | 'wake' | 'align' | 'burst' | 'ember'
-const SCRIPT: { k: Act; ms: number }[] = [
-  { k: 'night', ms: 7000 },   // 靜夜：深空緩慢漂移，球沉睡，鏡頭遠
-  { k: 'wake', ms: 6500 },    // 甦醒：能量聚集，電弧變密，鏡頭推近
-  { k: 'align', ms: 6500 },   // 共鳴：卡片收攏成環一起公轉，色調流轉
-  { k: 'burst', ms: 3200 },   // 爆發：白閃、衝擊波、卡片被推開
-  { k: 'ember', ms: 6800 }    // 餘燼：光點沉降，回到夜色
-]
-const act = ref<Act>('night')
+   門的開闔本身用 CSS animation + delay，不靠這裡的 class 準時翻 ——
+   setTimeout 會漂，animation-delay 不會，兩者差幾毫秒門就會抽一下。
+   這裡的 stage 只負責兩件事：餵 shader 的能量、以及把門從 DOM 拿掉。 */
+type Stage = 'sealed' | 'open' | 'calm'
+const stage = ref<Stage>('sealed')
+/** 門還在不在 DOM 裡。演完就整組移除，之後成本歸零 */
+const veiled = ref(true)
 
 /* 著色器背景。拿不到 WebGL2（或跑太慢被判定為軟體渲染）就 fail，
    退回原本那套 CSS 圖層 —— 兩者是同一個視覺方向，退化不會像壞掉。 */
@@ -77,8 +150,10 @@ const act = ref<Act>('night')
    那種情況偵測不到，得有一個使用者或客服能直接指定的開關。 */
 const sky3d = ref(!new URLSearchParams(location.search).has('nogl'))
 const skyFps = ref<number | null>(null)
-/** 各幕的能量餵給 shader，跟 CSS 的 --e 是同一組數字 */
-const ENERGY: Record<Act, number> = { night: .12, wake: .55, align: .85, burst: 1, ember: .3 }
+/* 餵給 shader 的能量。三個數字就是這一頁的明暗節拍：
+   門關著的時候最暗（這是基準線），門開的那一下最亮，然後落到待機。
+   shader 內部每幀往目標插值 2%，所以這裡給階梯值、畫面上是滑過去的。 */
+const ENERGY: Record<Stage, number> = { sealed: .08, open: .78, calm: .34 }
 
 /* 球在畫面上的垂直位置，餵給 shader 當光源座標。
    實測量出來的：桌機球心約在 28%、手機約 26%。寫死一個近似值就夠 ——
@@ -90,32 +165,41 @@ onMounted(() => {
   const b = el.getBoundingClientRect()
   if (b.height) coreY.value = (b.top + b.height / 2) / window.innerHeight
 })
-const cycle = ref(0)          // 每輪 +1，用來重播一次性動畫
-let timer: number | undefined
+const timers: number[] = []
 
-const reduceMotion = () =>
-  typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
+const mq = (q: string) => typeof matchMedia !== 'undefined' && matchMedia(q).matches
+const reduceMotion = () => mq('(prefers-reduced-motion: reduce)')
 
-function runScene(i = 0) {
-  const step = SCRIPT[i % SCRIPT.length]
-  act.value = step.k
-  if (step.k === 'night') cycle.value++
-  timer = window.setTimeout(() => runScene(i + 1), step.ms)
-}
 onMounted(() => {
-  // 關動效的人停在最安靜的那一幕，不跑劇本
-  if (!reduceMotion()) runScene()
+  /* 關動效的人：門從來不掛上去，直接是最終畫面。
+     因為內容本來就是 opacity 1，少了門畫面仍然成立 ——
+     這是把揭曉做成「遮蔽物」而不是「淡入」順帶換到的好處：
+     降級路徑不需要另外寫一份，把遮蔽物拿掉就是了。 */
+  if (reduceMotion()) { stage.value = 'calm'; veiled.value = false; return }
+  timers.push(window.setTimeout(() => { stage.value = 'open' }, 150))
+  timers.push(window.setTimeout(() => { stage.value = 'calm'; veiled.value = false }, 1060))
 })
-onBeforeUnmount(() => clearTimeout(timer))
+onBeforeUnmount(() => timers.forEach(clearTimeout))
+
+/* 分頁看不見就把待機的環境動畫停掉。
+   ShaderSky 自己已經會停 rAF；這裡停的是 CSS 那幾層（星塵、光暈、卡片浮動）。
+   瀏覽器在背景分頁本來就會少畫，但明確 paused 才是真的不排合成工作。 */
+const away = ref(false)
+function onVis() { away.value = document.hidden }
+onMounted(() => document.addEventListener('visibilitychange', onVis))
+onBeforeUnmount(() => document.removeEventListener('visibilitychange', onVis))
 
 /* ---- 環繞的卡 ----
    先畫卡背（不必等網路），卡面示意圖抓到才淡入蓋上去。
    這樣首屏永遠是完整的，慢網路只是少了圖不是缺一塊。 */
+/* `in` 是進場時各自從深處歸位的延遲（秒）。四張不同時到位 ——
+   同時到位讀起來是一整片貼圖在縮放，錯開才像四個各自有距離的東西。
+   上排先、下排後：近的東西後到，符合「鏡頭推近」的視差順序。 */
 const ORBIT = [
-  { name: '噴火龍', x: -168, y: -74, rot: -15, s: .96, dur: 6.4, delay: 0 },
-  { name: '皮卡丘', x: 172, y: -56, rot: 13, s: 1, dur: 7.2, delay: -1.6 },
-  { name: '夢幻', x: -140, y: 104, rot: 11, s: .88, dur: 6.8, delay: -3.1 },
-  { name: '妙蛙種子', x: 150, y: 118, rot: -10, s: .92, dur: 7.6, delay: -4.4 }
+  { name: '噴火龍', x: -168, y: -74, rot: -15, s: .96, dur: 6.4, delay: 0, in: .19 },
+  { name: '皮卡丘', x: 172, y: -56, rot: 13, s: 1, dur: 7.2, delay: -1.6, in: .25 },
+  { name: '夢幻', x: -140, y: 104, rot: 11, s: .88, dur: 6.8, delay: -3.1, in: .31 },
+  { name: '妙蛙種子', x: 150, y: 118, rot: -10, s: .92, dur: 7.6, delay: -4.4, in: .37 }
 ]
 const art = ref<(string | null)[]>(ORBIT.map(() => null))
 onMounted(() => {
@@ -123,41 +207,6 @@ onMounted(() => {
     canonicalArt(c.name, 'low').then(u => { if (u) art.value[i] = u })
   })
 })
-
-/* ---- 屬性能量光點 ----
-   四個基本屬性的色與符號。符號是通用的自然形狀（火焰／水滴／葉／閃電），
-   不是官方能量圖示的複製。 */
-const MOTES = [
-  { c: '#ff6a3d', p: 'M12 3c3 4 5 6 5 9a5 5 0 0 1-10 0c0-2 1-3 2-4 0 1 1 2 2 2 0-3 0-5 1-7z', x: 18, d: 0, dur: 9 },
-  { c: '#3fa9ff', p: 'M12 3c3 4 6 7.5 6 11a6 6 0 0 1-12 0c0-3.5 3-7 6-11z', x: 38, d: -2.4, dur: 11 },
-  { c: '#4fd07a', p: 'M20 4C10 4 4 9 4 16c0 2 1 4 1 4s6-9 15-11c0 0-7 4-10 11 8 1 12-5 12-11 0-3 0-5-2-5z', x: 62, d: -5.1, dur: 10 },
-  { c: '#ffd23d', p: 'M13 2 4 14h6l-1 8 9-12h-6l1-8z', x: 82, d: -7.3, dur: 12 }
-]
-
-/* ---- 散景光斑 ----
-   失焦的圓形光點，前後景各幾顆。用 radial-gradient 畫而不是 filter: blur() ——
-   blur 每一幀都要重算，這裡有九顆會直接吃掉幀率；gradient 是靜態的，
-   瀏覽器只要平移合成層。 */
-const BOKEH = [
-  { c: '#a06bff', x: 12, y: 22, r: 190, o: .16, dur: 26, d: 0, depth: 26 },
-  { c: '#3fa9ff', x: 84, y: 16, r: 150, o: .14, dur: 31, d: -6, depth: 20 },
-  { c: '#ff5f8f', x: 72, y: 74, r: 210, o: .12, dur: 35, d: -12, depth: 30 },
-  { c: '#5fe0c0', x: 22, y: 78, r: 130, o: .1, dur: 29, d: -3, depth: 16 },
-  { c: '#ffc94d', x: 50, y: 8, r: 110, o: .1, dur: 24, d: -17, depth: 12 },
-  { c: '#8b5cf6', x: 6, y: 54, r: 160, o: .12, dur: 33, d: -9, depth: 24 },
-  { c: '#ff7a3d', x: 92, y: 48, r: 120, o: .1, dur: 27, d: -21, depth: 14 },
-  { c: '#4f8dff', x: 38, y: 92, r: 170, o: .1, dur: 37, d: -14, depth: 22 },
-  { c: '#e879f9', x: 62, y: 36, r: 100, o: .09, dur: 22, d: -5, depth: 10 }
-]
-
-/* ---- 能量電弧 ----
-   球周圍偶爾竄一下的電流。三條各自的節奏，大部分時間是隱形的 ——
-   一直閃就變成霓虹燈，偶爾才閃才像有能量在裡面。 */
-const ARCS = [
-  { d: 'M14 78 C 40 52, 62 96, 96 62', delay: 0, dur: 7 },
-  { d: 'M18 30 C 48 58, 66 22, 98 44', delay: -2.8, dur: 9 },
-  { d: 'M10 56 C 36 88, 70 40, 92 84', delay: -5.4, dur: 11 }
-]
 
 /* ---- 星塵 ----
    固定種子的偽亂數：每次進站星星位置一樣，不會因為重繪而跳動。 */
@@ -169,8 +218,11 @@ function mulberry32(a: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }
+/* 46 → 30 顆。星塵是這一頁待機時唯一還在動的 DOM 層，每一顆都是一支
+   無限的 opacity 動畫；顆數就是成本。實際看過去，30 顆跟 46 顆的差別
+   是「數不出來」跟「數不出來」。 */
 const rnd = mulberry32(20260817)
-const STARS = Array.from({ length: 46 }, () => ({
+const STARS = Array.from({ length: 30 }, () => ({
   x: +(rnd() * 100).toFixed(2),
   y: +(rnd() * 100).toFixed(2),
   s: +(rnd() * 1.9 + 0.7).toFixed(2),
@@ -179,17 +231,14 @@ const STARS = Array.from({ length: 46 }, () => ({
   delay: +(-rnd() * 6).toFixed(1)
 }))
 
-/* 星座連線：從星塵裡挑相鄰的幾顆連成折線。
-   不是隨機連 —— 挑出來的點先照 x 排序再連，線才不會亂交叉成一團毛球。 */
-const CONSTELLATIONS = (() => {
-  const pick = (from: number, n: number) =>
-    STARS.slice(from, from + n).sort((a, b) => a.x - b.x).map(s => `${s.x},${s.y}`).join(' ')
-  return [pick(2, 5), pick(14, 4), pick(28, 5)]
-})()
-
 /* ---- 視差 ----
    指標移動時各層位移不同。用 CSS 變數餵給 transform，
    不在 JS 裡逐層改 style —— 一次寫兩個變數，其餘交給 CSS。 */
+/* --px / --py 掛在根節點上，而且是**沒有註冊過**的自訂屬性 ——
+   改它一次就讓整棵子樹的樣式失效。桌機上滑鼠一動就是每幀一次全樹重算。
+   所以只在真的有精確指標的裝置才掛這個監聽：
+   觸控裝置本來就沒有 pointermove（而且 720px 以下的 media query
+   已經把位移歸零），關動效的人也不需要。 */
 const px = ref(0)
 const py = ref(0)
 let raf = 0
@@ -201,7 +250,10 @@ function onMove(e: PointerEvent) {
     py.value = (e.clientY / window.innerHeight - 0.5) * 2
   })
 }
-onMounted(() => window.addEventListener('pointermove', onMove, { passive: true }))
+onMounted(() => {
+  if (reduceMotion() || !mq('(hover: hover) and (pointer: fine)')) return
+  window.addEventListener('pointermove', onMove, { passive: true })
+})
 onBeforeUnmount(() => {
   window.removeEventListener('pointermove', onMove)
   if (raf) cancelAnimationFrame(raf)
@@ -232,50 +284,38 @@ function goLine() {
 </script>
 
 <template>
-  <div class="land" :class="`sc-${act}`" :style="{ '--px': px, '--py': py }">
+  <div class="land" :class="[`st-${stage}`, { away }]" :style="{ '--px': px, '--py': py }">
     <!-- ===== 0 背景 =====
          優先用著色器即時算的星雲；失敗才退回下面那套 CSS 圖層。
          兩者不同時開 —— 疊在一起會互相洗掉對比，變成一片灰紫。 -->
     <ShaderSky
       v-if="sky3d"
       class="skyGl"
-      :energy="ENERGY[act]"
-      :burst="act === 'burst'"
+      :energy="ENERGY[stage]"
+      :burst="stage === 'open'"
       :core-y="coreY"
       @fail="sky3d = false"
       @fps="v => (skyFps = v)"
     />
 
-    <div v-if="!sky3d" class="sky" aria-hidden="true">
-      <div class="aur a1"></div>
-      <div class="aur a2"></div>
-      <div class="aur a3"></div>
-      <div class="vignette"></div>
-    </div>
+    <!-- CSS 退路：拿不到 WebGL2 時才出現。
+         簾幕（.curtains）本來是無條件掛上去、shader 開著時再 dim 到 .34 ——
+         那等於承認它在 shader 模式下是多的。改成跟 .sky 一起只走退路：
+         那邊沒有 shader 算出來的雲氣，才真的需要有東西填出層次。 -->
+    <template v-if="!sky3d">
+      <div class="sky" aria-hidden="true">
+        <div class="aur a1"></div>
+        <div class="aur a2"></div>
+        <div class="aur a3"></div>
+        <div class="vignette"></div>
+      </div>
+      <div class="curtains" aria-hidden="true">
+        <div class="curtain c1"></div>
+        <div class="curtain c2"></div>
+      </div>
+    </template>
 
-    <!-- ===== 0b 極光簾幕：shader 版已經有雲氣，這裡只留一點方向性的光帶 ===== -->
-    <div class="curtains" :class="{ dim: sky3d }" aria-hidden="true">
-      <div class="curtain c1"></div>
-      <div class="curtain c2"></div>
-    </div>
-
-    <!-- ===== 0c 神之光：從球心放射的光柱，極慢旋轉 ===== -->
-    <div class="rays" aria-hidden="true"></div>
-
-    <!-- ===== 0d 散景光斑 ===== -->
-    <div class="bokehs" :class="{ dim: sky3d }" aria-hidden="true">
-      <span
-        v-for="(b, i) in BOKEH" :key="i"
-        class="bokeh"
-        :style="{
-          left: b.x + '%', top: b.y + '%',
-          width: b.r + 'px', height: b.r + 'px',
-          '--c': b.c, '--o': b.o, '--dur': b.dur + 's', '--delay': b.d + 's', '--depth': b.depth
-        }"
-      ></span>
-    </div>
-
-    <!-- ===== 0e 透視地平線格線 ===== -->
+    <!-- ===== 0e 透視地平線格線：靜態。給球一個站的地方，不捲動 ===== -->
     <div class="floor" aria-hidden="true"><span></span></div>
 
     <!-- ===== 1 星塵 ===== -->
@@ -289,30 +329,6 @@ function goLine() {
         }"
       ></i>
     </div>
-
-    <!-- ===== 1b 星座連線 ===== -->
-    <svg class="lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      <polyline v-for="(pts, i) in CONSTELLATIONS" :key="i" :points="pts" :style="{ '--i': i }" />
-    </svg>
-
-    <!-- ===== 2 流星：兩道，長週期，不搶戲 ===== -->
-    <div class="meteors" aria-hidden="true"><span class="m1"></span><span class="m2"></span></div>
-
-    <!-- ===== 6 屬性光點：從底下升起。掛在頁面層而不是 .hero 裡面 ——
-         放進 .hero 的話 z-index 是相對 hero 的堆疊上下文，會蓋在文字上，
-         看起來像有東西黏在字上而不是背景的氛圍。 ===== -->
-    <div class="motes" aria-hidden="true">
-      <span
-        v-for="(m, i) in MOTES" :key="i"
-        class="mote"
-        :style="{ '--c': m.c, left: m.x + '%', '--delay': m.d + 's', '--dur': m.dur + 's' }"
-      >
-        <svg viewBox="0 0 24 24"><path :d="m.p" /></svg>
-      </span>
-    </div>
-
-    <!-- 全幕白閃：爆發那一拍蓋過整個畫面 -->
-    <div v-if="act === 'burst'" :key="'f' + cycle" class="flash" aria-hidden="true"></div>
 
     <header class="brand">
       <span class="wordmark">Vault<em>Draw</em></span>
@@ -330,29 +346,26 @@ function goLine() {
           class="fly"
           :style="{
             '--x': c.x + 'px', '--y': c.y + 'px', '--rot': c.rot + 'deg', '--s': c.s,
-            '--dur': c.dur + 's', '--delay': c.delay + 's'
+            '--dur': c.dur + 's', '--delay': c.delay + 's', '--in': c.in + 's'
           }"
         >
-          <div class="back">
+          <!-- 多一層 .card：待機的浮動掛在這裡，用純 px 的 transform。
+               本來浮動是掛在 .fly 的 translate 上，而那個 translate 帶著
+               `- 50%` 的百分比置中 —— 百分比要對元素自己的盒子解析，
+               瀏覽器因此每一幀都替整個舞台重跑一次版面配置（實測 60 次/秒）。
+               把「定位」與「浮動」拆成兩層之後，浮動就純粹是合成層的事。 -->
+          <div class="card">
             <span class="emblem"></span>
             <img v-if="art[i]" :src="art[i]!" alt="" class="face" loading="lazy" decoding="async" />
             <span class="sheen"></span>
           </div>
         </div>
 
-        <!-- 5 球 + 能量脈衝環 + 電弧 -->
+        <!-- 5 球 + 能量脈衝環 -->
         <div class="ball">
           <span class="pulse p1"></span>
           <span class="pulse p2"></span>
           <span class="halo"></span>
-          <!-- 衝擊波：只在爆發那一幕出現。key 綁 cycle，每輪重新掛載才會重播 -->
-          <span v-if="act === 'burst'" :key="cycle" class="shock"></span>
-          <svg class="arcs" viewBox="0 0 108 108" aria-hidden="true">
-            <path
-              v-for="(a, i) in ARCS" :key="i"
-              :d="a.d" :style="{ '--delay': a.delay + 's', '--dur': a.dur + 's' }"
-            />
-          </svg>
           <CapsuleArt tier="LAST" compact flat />
         </div>
       </div>
@@ -360,18 +373,23 @@ function goLine() {
       <!-- 7 文字
            英文當主視覺（動態標題），中文留在下面當真正讀的那一行 ——
            使用者是台灣人，資訊要用中文讀；英文負責的是氣勢不是傳達。
-           key 綁 cycle：每一輪短片回到「靜夜」時標題重新演一次。
 
            不用「寶可夢」當主標：那是別人的商標，放成自己的招牌會讀起來
            像官方授權或聯名，跟「我們賣寶可夢卡」這種描述性使用不是同一件事。
-           主標講的是這個站是什麼（鑑定卡的交易場），品類留在說明行。 -->
+           主標講的是這個站是什麼（鑑定卡的交易場），品類留在說明行。
+
+           標題只演一次（本來綁 :key="cycle"，每輪 30 秒重演一遍）。
+           shine="once" 與 glitch-every="0" 關掉待機時的無限迴圈 ——
+           那幾支動畫加起來是 95 支永遠在跑的動畫，全部長在首屏上。
+           delay 對齊門開的那一拍：字是被門讓開之後才升起來的。 -->
       <h1 class="title">
         <KineticTitle
-          :key="cycle"
           :lines="['GRADED', 'CARD EXCHANGE']"
           label="Graded card exchange"
-          :stagger="46"
-          :delay="180"
+          :stagger="24"
+          :delay="190"
+          shine="once"
+          :glitch-every="0"
         />
       </h1>
       <p class="zh">鑑定卡的交易中心</p>
@@ -437,6 +455,22 @@ function goLine() {
         卡面為示意圖，版權屬各自所有權人。
       </span>
     </footer>
+
+    <!-- ===== 9 保管庫的門 =====
+         這是整個進場唯一新增的東西，而且 1.5 秒後整組從 DOM 移除。
+
+         它為什麼是門而不是煙：CardEmerge 用煙，是因為那裡要的是「材料」——
+         煙散開之後還要變成卡片凝聚的原料。這裡不需要材料，需要的是一個
+         「本來關著、現在開了」的動作，而這個站叫 VaultDraw，門就是它自己的字。
+
+         全程 pointer-events: none：門還在播的時候三個出口就已經按得到。
+         使用者不必等演出結束，這是門面跟結局演出的另一個差別。 -->
+    <div v-if="veiled" class="vault" aria-hidden="true">
+      <span class="leaf l"></span>
+      <span class="leaf r"></span>
+      <span class="seam"></span>
+      <span class="haze"></span>
+    </div>
   </div>
 </template>
 
@@ -486,125 +520,120 @@ function goLine() {
 @keyframes aur2 { to { transform: translate(-8vmax, 4vmax) scale(1.1);  opacity: .3; } }
 @keyframes aur3 { to { transform: translate(5vmax, -6vmax) scale(1.16); opacity: .2; } }
 
-/* ================= 分幕演出 =================
-   每一幕改的是「狀態」，不是重新播一支動畫 —— 所以各層都給 transition，
-   幕與幕之間是滑過去的。一次性的事件（白閃、衝擊波）才用 animation。
+/* ================= 保管庫的門 =================
+   進場的主角。原則是 CardEmerge 的第一條：**揭曉靠遮蔽物散開，不是靠淡入。**
 
-   .land 上的 --e 是這一幕的「能量強度」(0→1)，各層拿它去調自己的亮度／速度，
-   不必每一層都寫五份規則。 */
-.land { --e: 0; --cam: 1; transition: --e 2.2s ease; }
-@property --e { syntax: '<number>'; inherits: true; initial-value: 0; }
+   所以這底下的內容一律不做 opacity 動畫 —— 它們從第一幀就是完成品，
+   只是被門蓋著。門走了就露出來。這帶來三個好處：
+     1 讀起來是「開門」而不是「東西一個一個浮出來」
+     2 opacity: 0 的元素不算首屏 LCP 候選，不做淡入就不會拖到指標
+     3 關動效時把門拿掉就是最終畫面，降級路徑不必另外寫
 
-.sc-night { --e: .12; --cam: 1.00; }
-.sc-wake  { --e: .55; --cam: 1.06; }
-.sc-align { --e: .85; --cam: 1.11; }
-.sc-burst { --e: 1;   --cam: 1.16; }
-.sc-ember { --e: .3;  --cam: 1.03; }
-
-/* 鏡頭：整組舞台隨幕次推近拉遠。
-   用獨立的 scale 屬性，不用 transform —— .orbit 的 transform 已經被進場動畫
-   riseIn 佔用（它的終點是 transform: none 且 fill: both，會一直壓著），
-   translate 又給了視差。scale 是第三個互不干擾的屬性。 */
-.orbit {
-  transition: scale 3.4s cubic-bezier(.33, 0, .2, 1);
-  scale: var(--cam);
+   門的動作全部是 transform / opacity，而且只有四個元素，
+   所以整段進場在合成層上跑，不碰版面配置。 */
+.vault {
+  position: absolute; inset: 0; z-index: 9;
+  pointer-events: none;          /* 三個出口在門還沒開完時就要按得到 */
+  contain: strict;
 }
-/* 爆發那一拍鏡頭要頓一下，不能慢慢推 */
-.sc-burst .orbit { transition: scale .5s cubic-bezier(.2, 1.4, .3, 1); }
-
-/* 極光：越後面越亮越飽和 */
-.curtain { transition: opacity 2.6s ease, filter 2.6s ease; }
-.sc-night .curtain { opacity: .28; filter: saturate(.7); }
-.sc-wake  .curtain { opacity: .7; }
-.sc-align .curtain { opacity: .95; filter: saturate(1.35); }
-.sc-burst .curtain { opacity: 1; filter: saturate(1.8) brightness(1.3); }
-.sc-ember .curtain { opacity: .45; filter: saturate(.9); }
-
-/* 神之光：靜夜幾乎看不見，共鳴時最強 */
-.rays { transition: opacity 2.4s ease; }
-.sc-night .rays { opacity: .03; }
-.sc-wake  .rays { opacity: .1; }
-.sc-align .rays { opacity: .2; }
-.sc-burst .rays { opacity: .34; }
-.sc-ember .rays { opacity: .06; }
-
-/* 地平線格線：能量越高捲得越快 */
-.floor span { transition: opacity 2s ease; }
-.sc-night .floor span { opacity: .28; animation-duration: 9s; }
-.sc-wake  .floor span { opacity: .5;  animation-duration: 5s; }
-.sc-align .floor span { opacity: .75; animation-duration: 2.4s; }
-.sc-burst .floor span { opacity: .95; animation-duration: 1.1s; }
-.sc-ember .floor span { opacity: .35; animation-duration: 7s; }
-
-/* 光暈掃描：共鳴時轉快 */
-.sc-night .halo { animation-duration: 16s; opacity: .35; }
-.sc-wake  .halo { animation-duration: 9s; }
-.sc-align .halo { animation-duration: 4s; }
-.sc-burst .halo { animation-duration: 1.6s; }
-.sc-ember .halo { animation-duration: 13s; opacity: .5; }
-.halo { transition: opacity 1.8s ease; }
-
-/* 電弧：靜夜不放電，越後面越密 */
-.sc-night .arcs path { animation-duration: 14s; }
-.sc-wake  .arcs path { animation-duration: 5s; }
-.sc-align .arcs path { animation-duration: 2.2s; }
-.sc-burst .arcs path { animation-duration: 1s; }
-.sc-ember .arcs path { animation-duration: 11s; }
-
-/* 環繞卡：
-   靜夜散得開、共鳴時被吸近球、爆發被推出去。
-   位移量用 --spread 統一縮放，一個變數就能收攏整組。 */
-.fly { --spread: 1; transition: transform 3s cubic-bezier(.33, 0, .2, 1), filter 2s ease; }
-.sc-night .fly { --spread: 1.12; filter: drop-shadow(0 14px 30px rgba(0,0,0,.66)) brightness(.75); }
-.sc-wake  .fly { --spread: 1; }
-.sc-align .fly { --spread: .74; filter: drop-shadow(0 14px 34px rgba(120,80,255,.5)) brightness(1.12); }
-.sc-burst .fly { --spread: 1.42; filter: drop-shadow(0 14px 40px rgba(255,220,150,.6)) brightness(1.5); }
-.sc-ember .fly { --spread: 1.05; filter: drop-shadow(0 14px 30px rgba(0,0,0,.6)) brightness(.9); }
-
-/* 星塵：爆發時整片被吹亮一下 */
-.stars i { transition: opacity 1.4s ease; }
-.sc-burst .stars i { opacity: 1; }
-
-/* 散景：能量高時脹大 */
-.bokeh { transition: opacity 2.4s ease; }
-.sc-night .bokeh { opacity: calc(var(--o) * .5); }
-.sc-align .bokeh { opacity: calc(var(--o) * 1.6); }
-.sc-burst .bokeh { opacity: calc(var(--o) * 2.2); }
-
-/* ---- 一次性事件 ---- */
-/* 衝擊波：從球心炸開的環 */
-.shock {
-  position: absolute; left: 50%; top: 50%;
-  width: 60%; aspect-ratio: 1; translate: -50% -50%;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 236, 190, .9);
-  pointer-events: none; z-index: 3;
-  animation: shockOut 1.5s cubic-bezier(.15, .7, .3, 1) forwards;
+.leaf {
+  position: absolute; top: -2%; bottom: -2%; width: 54%;
+  will-change: transform;
 }
-@keyframes shockOut {
-  0%   { transform: scale(.5); opacity: 0; border-width: 4px; }
-  12%  { opacity: 1; }
-  100% { transform: scale(5.2); opacity: 0; border-width: .5px; }
+/* 內緣要羽化。硬邊的門看起來是兩塊色塊在滑，
+   羽化過的內緣看起來才像光從縫裡漏出來、越開越多。 */
+.l {
+  left: 0;
+  background: linear-gradient(90deg,
+    #07050e 0 74%, rgba(7, 5, 14, .97) 88%, rgba(9, 6, 18, .62) 96%, rgba(9, 6, 18, 0) 100%);
 }
-/* 全幕白閃：很短，只有一拍 */
-.flash {
-  position: absolute; inset: 0; z-index: 6; pointer-events: none;
-  background: radial-gradient(circle at 50% 42%, rgba(255, 245, 225, .82), rgba(255, 220, 190, .12) 42%, transparent 66%);
+.r {
+  right: 0;
+  background: linear-gradient(270deg,
+    #07050e 0 74%, rgba(7, 5, 14, .97) 88%, rgba(9, 6, 18, .62) 96%, rgba(9, 6, 18, 0) 100%);
+}
+/* 中縫的光。門合著的時候它是唯一亮的東西 —— 也就是說，
+   第一格畫面不是全黑（全黑讀起來像還沒載入），是「有東西關在裡面」。 */
+.seam {
+  position: absolute; left: 50%; top: 0; bottom: 0;
+  width: 3px; translate: -50% 0;
+  background: linear-gradient(180deg,
+    transparent 0%, rgba(255, 236, 196, .1) 18%, rgba(255, 242, 214, .95) 46%,
+    rgba(255, 242, 214, .95) 54%, rgba(255, 236, 196, .1) 82%, transparent 100%);
   mix-blend-mode: screen;
-  animation: flashOut 1.1s ease-out forwards;
+  will-change: transform, opacity;
 }
-@keyframes flashOut {
-  0%  { opacity: 0; }
-  8%  { opacity: 1; }
-  100% { opacity: 0; }
+/* 殘餘的暖霾：門帶走的那一層。跟著門一起散，不是自己淡出。
+   刻意小而短：第一版做到 150vmax、峰值 .9，結果是一片奶油色的膜蓋在
+   登入按鈕上將近一秒 —— 霧是用來「被帶走」的，不是用來蓋住 CTA 的。
+   收到 78vmax、峰值 .5，而且比門早一點收乾淨。 */
+.haze {
+  position: absolute; left: 50%; top: 34%;
+  width: 78vmax; height: 78vmax; translate: -50% -50%;
+  background: radial-gradient(circle closest-side,
+    rgba(255, 226, 178, .26) 0%, rgba(190, 140, 255, .12) 36%, transparent 70%);
+  mix-blend-mode: screen;
+  opacity: 0;
+  will-change: transform, opacity;
 }
+
+/* ---- 節拍 ----
+   用 animation + delay 而不是 class 翻頁的 transition：
+   class 是 setTimeout 翻的，會漂幾毫秒；門一漂就會抽一下。
+   animation-delay 是算繪引擎自己排的，不會漂。 */
+@media (prefers-reduced-motion: no-preference) {
+  /* sealed（0–260 ms）由 animation-delay 的空窗負責：門就停在起點不動。 */
+  .l { animation: leafL .78s cubic-bezier(.56, 0, .14, 1) .15s both; }
+  .r { animation: leafR .78s cubic-bezier(.56, 0, .14, 1) .15s both; }
+  .seam { animation: seamFlare .78s cubic-bezier(.2, .78, .28, 1) .15s both; }
+  .haze { animation: hazeOut .70s cubic-bezier(.24, .68, .2, 1) .17s both; }
+}
+@keyframes leafL { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-104%, 0, 0); } }
+@keyframes leafR { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(104%, 0, 0); } }
+/* 中縫：門一開，累了 260 ms 的光橫向炸開一次，然後被門帶走。
+   這是全片唯一的亮點 —— 只有一次，所以它是衝擊而不是壁紙。 */
+@keyframes seamFlare {
+  0%   { opacity: .9;  transform: scaleX(1) scaleY(.86); }
+  9%   { opacity: 1;   transform: scaleX(16) scaleY(1); }
+  26%  { opacity: .30; transform: scaleX(38) scaleY(1); }
+  58%  { opacity: .06; transform: scaleX(74) scaleY(1); }
+  100% { opacity: 0;   transform: scaleX(118) scaleY(1.04); }
+}
+/* 亮度必須比寬度先退。第一版讓它在 46% 還留著 .45 的不透明度，
+   那時它已經 190 px 寬 —— 讀起來不是「光從縫裡溢出來」，
+   是「畫面中間插了一根白棒子」。光要炸得快、退得更快。 */
+@keyframes hazeOut {
+  0%   { opacity: .5; transform: translate(-50%, -50%) scale(.4); }
+  62%  { opacity: .22; }
+  100% { opacity: 0;  transform: translate(-50%, -50%) scale(1.1); }
+}
+
+/* ================= 鏡頭 =================
+   由遠推近，不是由下往上。CardEmerge 的第二條：動作是深度，不是 Y 軸。
+   用獨立的 scale 屬性 —— translate 給了視差，兩者互不干擾。 */
+@media (prefers-reduced-motion: no-preference) {
+  .orbit { animation: camIn .95s cubic-bezier(.24, .74, .22, 1) .15s both; }
+}
+@keyframes camIn { from { scale: 1.075; } to { scale: 1; } }
 
 /* 著色器背景鋪在最底 */
 .skyGl { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
-/* shader 已經畫了雲氣，CSS 這兩層就收斂成點綴，不然疊起來會糊成一片灰紫 */
-.curtains.dim { opacity: .34; }
-.bokehs.dim { opacity: .45; }
-.curtains, .bokehs { transition: opacity .6s ease; }
+
+/* 待機的環境動畫（星塵、光暈、脈衝、球的浮動、卡片的浮動）在兩種情況下停住：
+
+   away      分頁看不見。無限迴圈在使用者看不到的時候沒有理由繼續。
+   st-sealed 門還關著。「最靜的一格」如果底下有東西在動，那就不是最靜的一格 ——
+             基準線要低，就要真的低。環境的生命從門開的那一刻才開始。 */
+.land.away .stars i,
+.land.away .halo,
+.land.away .pulse,
+.land.away .ball,
+.land.away .card,
+.land.st-sealed .stars i,
+.land.st-sealed .halo,
+.land.st-sealed .pulse,
+.land.st-sealed .ball,
+.land.st-sealed .card { animation-play-state: paused; }
 
 /* ===== 0b 極光簾幕 =====
    conic-gradient 轉起來就是一片繞著中心掃的光帶，很像極光。
@@ -635,43 +664,6 @@ function goLine() {
 }
 @keyframes spinSlow { to { transform: rotate(1turn); } }
 
-/* ===== 0c 神之光 =====
-   repeating-conic 做出等距光柱，遮罩讓它從球心往外散開後消失 */
-.rays {
-  position: absolute; left: 50%; top: 42%; z-index: 0;
-  width: 92vmax; height: 92vmax; translate: -50% -50%;
-  pointer-events: none;
-  mix-blend-mode: screen;
-  opacity: .1;
-  background: repeating-conic-gradient(from 0deg at 50% 50%,
-    rgba(214, 190, 255, .42) 0deg 1.2deg, transparent 1.2deg 22deg);
-  /* 只在球外圍一圈可見：內側讓給球本身，外側在碰到文字前就散掉 */
-  -webkit-mask-image: radial-gradient(circle closest-side, transparent 11%, #000 20%, transparent 44%);
-  mask-image: radial-gradient(circle closest-side, transparent 11%, #000 20%, transparent 44%);
-}
-@media (prefers-reduced-motion: no-preference) {
-  .rays { animation: spinSlow 120s linear infinite; }
-}
-
-/* ===== 0d 散景光斑 =====
-   --depth 越大位移越多，視差就有前後之分 */
-.bokehs { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
-.bokeh {
-  position: absolute;
-  border-radius: 50%;
-  translate: calc(var(--px) * var(--depth) * 1px) calc(var(--py) * var(--depth) * 1px);
-  background: radial-gradient(circle closest-side, var(--c), transparent 72%);
-  opacity: var(--o);
-  mix-blend-mode: screen;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .bokeh { animation: drift var(--dur) ease-in-out var(--delay) infinite alternate; }
-}
-@keyframes drift {
-  from { transform: translate(-16px, 10px) scale(.9); }
-  to   { transform: translate(18px, -14px) scale(1.12); }
-}
-
 /* ===== 0e 透視地平線 =====
    兩組線做出往遠方收束的地板。background-position 往下捲＝往觀者靠近。 */
 .floor {
@@ -688,33 +680,11 @@ function goLine() {
   background-image:
     repeating-linear-gradient(90deg, rgba(168, 130, 255, .3) 0 1px, transparent 1px 68px),
     repeating-linear-gradient(0deg,  rgba(168, 130, 255, .26) 0 1px, transparent 1px 68px);
-  opacity: .5;
+  opacity: .42;
 }
-@media (prefers-reduced-motion: no-preference) {
-  .floor span { animation: floorRun 5.5s linear infinite; }
-}
-@keyframes floorRun { to { background-position: 0 68px, 0 68px; } }
-
-/* ===== 1b 星座連線 ===== */
-.lines {
-  position: absolute; inset: 0; z-index: 1;
-  width: 100%; height: 100%; pointer-events: none;
-  translate: calc(var(--px) * -6px) calc(var(--py) * -6px);
-}
-.lines polyline {
-  fill: none;
-  stroke: rgba(190, 210, 255, .34);
-  stroke-width: .12;
-  vector-effect: non-scaling-stroke;
-  opacity: 0;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .lines polyline { animation: lineFade 14s ease-in-out calc(var(--i) * -4.6s) infinite; }
-}
-@keyframes lineFade {
-  0%, 62%, 100% { opacity: 0; }
-  22%, 38%      { opacity: 1; }
-}
+/* 本來這裡有 floorRun：格線永遠往觀者捲。拿掉了 ——
+   那是跑步機不是敘事，而且 background-position 動畫每一幀都要主執行緒
+   重繪整條 42vh 的帶子。地板的工作是給球一個站的地方，站著就好。 */
 
 /* ===== 1 星塵 ===== */
 .stars { position: absolute; inset: 0; z-index: 1; pointer-events: none;
@@ -728,25 +698,6 @@ function goLine() {
   .stars i { animation: twinkle var(--dur) ease-in-out var(--delay) infinite alternate; }
 }
 @keyframes twinkle { from { opacity: calc(var(--o) * .25); } to { opacity: var(--o); } }
-
-/* ===== 2 流星 ===== */
-.meteors { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
-.meteors span {
-  position: absolute; width: 190px; height: 2px; opacity: 0;
-  background: linear-gradient(90deg, transparent, #fff, transparent);
-  filter: drop-shadow(0 0 6px #9fd8ff);
-  rotate: 22deg;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .m1 { left: -18%; top: 16%; animation: shoot 9s ease-in 2.4s infinite; }
-  .m2 { left: -18%; top: 31%; animation: shoot 13s ease-in 7.8s infinite; }
-}
-@keyframes shoot {
-  0%   { transform: translate(0, 0); opacity: 0; }
-  6%   { opacity: .9; }
-  16%  { transform: translate(135vw, 40vh); opacity: 0; }
-  100% { transform: translate(135vw, 40vh); opacity: 0; }
-}
 
 .brand { position: relative; z-index: 8; padding: 22px var(--pad) 0; }
 .wordmark { font-size: 20px; font-weight: 700; letter-spacing: -.03em; }
@@ -828,56 +779,40 @@ function goLine() {
   .halo { animation: spinSlow 9s linear infinite; }
 }
 
-/* 電弧：大部分時間隱形，偶爾竄一下。stroke-dash 讓它像是「畫過去」 */
-.arcs {
-  position: absolute; inset: -8%;
-  width: 116%; height: 116%;
-  pointer-events: none; z-index: -1;
-  overflow: visible;
-}
-.arcs path {
-  fill: none;
-  stroke: #cbb2ff;
-  stroke-width: 1.1;
-  stroke-linecap: round;
-  filter: drop-shadow(0 0 4px #a97dff);
-  stroke-dasharray: 26 200;
-  opacity: 0;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .arcs path { animation: crackle var(--dur) ease-in-out var(--delay) infinite; }
-}
-@keyframes crackle {
-  0%, 84%, 100% { opacity: 0; stroke-dashoffset: 40; }
-  87%           { opacity: .95; }
-  92%           { opacity: .45; }
-  97%           { opacity: 0; stroke-dashoffset: -200; }
-}
-
 /* 4 環繞卡 */
+/* .fly 只負責「在哪裡」，而且是靜態的。
+   進場動的是 scale（由遠歸位），待機動的是子層的 translateY。
+   三個屬性各歸各的，誰都不用去覆蓋誰。 */
 .fly {
   position: absolute; top: 50%; left: 50%; z-index: 4;
   width: calc(100px * var(--k) * var(--s));
   aspect-ratio: 5 / 7;
-  translate: calc(var(--x) * var(--k) * var(--spread) - 50%) calc(var(--y) * var(--k) * var(--spread) - 50%);
+  translate: calc(var(--x) * var(--k) - 50%) calc(var(--y) * var(--k) - 50%);
   rotate: var(--rot);
-  filter: drop-shadow(0 14px 30px rgba(0, 0, 0, .66));
 }
 @media (prefers-reduced-motion: no-preference) {
-  .fly { animation: bobCard var(--dur) ease-in-out var(--delay) infinite alternate; }
+  /* 進場：從深處（小、更遠）歸位。四張各自的 --in 錯開 */
+  .fly { animation: cardIn .82s cubic-bezier(.2, .78, .24, 1) var(--in) both; }
+  /* 待機：純 px 的上下浮動，掛在子層，不碰版面 */
+  .card { animation: bobCard var(--dur) ease-in-out var(--delay) infinite alternate; }
 }
+@keyframes cardIn { from { scale: .74; } to { scale: 1; } }
 @keyframes bobCard {
-  from { translate: calc(var(--x) * var(--k) * var(--spread) - 50%) calc(var(--y) * var(--k) * var(--spread) - 50% - 11px); }
-  to   { translate: calc(var(--x) * var(--k) * var(--spread) - 50%) calc(var(--y) * var(--k) * var(--spread) + 13px - 50%); }
+  from { transform: translateY(-11px); }
+  to   { transform: translateY(13px); }
 }
 /* 卡背先畫好，卡面抓到才蓋上去 —— 慢網路只是少了圖，不是缺一塊 */
-.back {
+/* 影子用 box-shadow 不用 filter: drop-shadow。
+   這是一個有 border-radius 的矩形，兩者看起來一樣；但 drop-shadow 是濾鏡，
+   子層一動就要重算整個濾鏡區域，box-shadow 只是合成層的一部分。 */
+.card {
   position: relative; width: 100%; height: 100%;
   border-radius: calc(9px * var(--k)); overflow: hidden;
   background:
     radial-gradient(120% 90% at 50% 0%, #3a2f52, transparent 60%),
     linear-gradient(160deg, #241d35 0%, #171226 52%, #221a33 100%);
   border: 1px solid rgba(255, 255, 255, .14);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, .66);
 }
 .emblem {
   position: absolute; left: 50%; top: 50%;
@@ -901,38 +836,23 @@ function goLine() {
   animation: faceIn .5s ease both;
 }
 @keyframes faceIn { from { opacity: 0; } to { opacity: 1; } }
-/* 全像反光：斜掃過卡面，各張錯開 */
+/* 全像反光。本來是 5.5 秒無限迴圈 —— background-position 是主執行緒
+   重繪的屬性，四張卡等於永遠有四塊在重畫。
+   改成：進場掃一次（那是卡片「到位」的那一下），之後停在斜角的靜態高光。
+   靜態高光已經足夠說明「這是有膜的卡」，掃光的資訊只在它掃過的那一瞬間。 */
 .sheen {
   position: absolute; inset: 0;
   background: linear-gradient(112deg, transparent 30%, rgba(255, 255, 255, .42) 48%, transparent 66%);
   background-size: 260% 100%;
+  background-position: 78% 0;
   mix-blend-mode: screen;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .sheen { animation: holo 5.5s ease-in-out var(--delay) infinite; }
+  .sheen { animation: holo 1.1s ease-out calc(var(--in) + .18s) both; }
 }
 @keyframes holo {
-  0%, 62% { background-position: 190% 0; }
-  100%    { background-position: -70% 0; }
-}
-
-/* ===== 6 屬性光點 ===== */
-.motes { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
-.mote {
-  position: absolute; bottom: -8%;
-  width: 26px; height: 26px; opacity: 0;
-  color: var(--c);
-  filter: drop-shadow(0 0 10px var(--c));
-}
-.mote svg { width: 100%; height: 100%; fill: currentColor; opacity: .8; }
-@media (prefers-reduced-motion: no-preference) {
-  .mote { animation: rise var(--dur) linear var(--delay) infinite; }
-}
-@keyframes rise {
-  0%   { transform: translateY(0) scale(.7) rotate(0deg); opacity: 0; }
-  12%  { opacity: .85; }
-  78%  { opacity: .5; }
-  100% { transform: translateY(-92vh) scale(1.05) rotate(28deg); opacity: 0; }
+  from { background-position: 190% 0; }
+  to   { background-position: 78% 0; }
 }
 
 /* ===== 7 文字 ===== */
@@ -1025,19 +945,25 @@ function goLine() {
 
 .loginErr { margin: 12px 0 0; font-size: 13px; color: var(--danger); }
 .btn.big { padding: 14px 32px; font-size: 16px; }
-/* 主鈕呼吸光暈 */
-@media (prefers-reduced-motion: no-preference) {
-  .btn.primary.big { animation: breathe 2.8s ease-in-out infinite; }
-}
-@keyframes breathe {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); }
-  50%      { box-shadow: 0 0 0 12px color-mix(in srgb, var(--accent) 0%, transparent); }
-}
+/* 本來主鈕有一支 breathe 光暈（box-shadow 無限迴圈）。拿掉了：
+   box-shadow 動畫是每一幀主執行緒重繪，而且是永遠 —— 實測它是整頁
+   清空所有圖層之後**還剩下**的那 27 ms/s。深色頁面上唯一的實心紅按鈕
+   本來就是全場最顯眼的東西，再讓它呼吸只是替它自己製造雜訊。 */
 /* 文字連結。不加底線 —— 底線的視覺重量會讓它跟上面的按鈕搶層級，
    它要明顯更輕才對。mock 模式是排在 .acts 那一列裡，維持行內間距。 */
-.peek { font-size: 14px; color: var(--muted); text-decoration: none; transition: color .18s; }
+.peek {
+  font-size: 14px; color: var(--muted); text-decoration: none; transition: color .18s;
+  /* 觸控目標補到 44px。做法與頁尾連結、App.vue 一致：
+     內距長出可點範圍，等量負外距把版面高度收回來。
+     這一行本來只有 22 px 高，而它是三個出口之一 —— 不登入直接逛的那個出口，
+     偏偏是最不該讓人點不到的。 */
+  display: inline-block;
+  padding: 12px 10px;
+  margin: -12px 0;
+}
 .acts .peek { margin-left: 6px; }
-.peek.solo { display: inline-block; margin-top: 20px; font-size: 13.5px; }
+/* 原本 margin-top: 20px。補了 12px 內距之後要加回去才是同樣的視覺間距 */
+.peek.solo { margin-top: 32px; font-size: 13.5px; }
 @media (hover: hover) { .peek:hover { color: #e8e2f4; } }
 .demo { margin: 2px 0 0; font-size: 11px; letter-spacing: .06em; color: var(--faint); }
 
@@ -1057,30 +983,30 @@ function goLine() {
   max-width: 46ch;
 }
 
-/* ===== 進場編排：由後往前依序浮現 ===== */
-@media (prefers-reduced-motion: no-preference) {
-  .sky, .stars, .curtains, .bokehs, .floor, .lines { animation: fadeIn 1.4s ease both; }
-  /* 不能共用 fadeIn：它的終點是 opacity:1，會蓋掉 .rays 自己的 .1，
-     光柱就會亮到吃掉整個畫面。自己一條，終點停在設計值。 */
-  .rays          { animation: spinSlow 120s linear infinite, raysIn 2.4s ease .4s both; }
-  .orbit         { animation: riseIn 1s cubic-bezier(.2, .8, .3, 1) .1s both; }
-  /* .title 不套 riseIn —— KineticTitle 自己有逐字進場，再疊一層整體位移會打架 */
-  .zh            { animation: riseIn .8s cubic-bezier(.2,.8,.3,1) .95s both; }
-  .tag           { animation: riseIn .8s cubic-bezier(.2,.8,.3,1) 1.08s both; }
-  .acts          { animation: riseIn .8s cubic-bezier(.2,.8,.3,1) .54s both; }
-  .demo, .foot   { animation: fadeIn .9s ease .7s both; }
-}
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes raysIn { from { opacity: 0; } to { opacity: .1; } }
-@keyframes riseIn { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+/* ===== 進場編排 =====
+   這裡本來有七條 fadeIn / riseIn：背景層、舞台、中文行、標語、按鈕組、
+   說明、頁尾，各自從 opacity 0 加 translateY(18px) 長出來。全部拿掉了。
+
+   理由有兩層。
+   表面那層是 CardEmerge 的前兩條：揭曉要靠遮蔽物離開，不是靠內容淡入；
+   而位移要走深度，不是走 Y 軸。這七條同時違反了兩條。
+   底下那層是量出來的：opacity 0 的元素不是 LCP 候選，
+   所以整頁的字沒有一個進得了首屏指標 —— 實測 LCP 候選只有兩個，
+   一個是左上角的 wordmark，一個是要打兩趟第三方網路才拿得到的裝飾卡圖。
+   把淡入拿掉，字從第一幀就在那裡（只是被門蓋著），指標與體感同時變好。
+
+   現在還留著的進場動作只有三個，而且全部是「深度」或「遮蔽」：
+     .vault  門往兩側退場（遮蔽物離開）
+     .orbit  camIn，舞台由遠推近（深度）
+     .fly    cardIn，四張卡各自從深處歸位（深度）
+   文字完全不動 —— 它本來就在那裡。 */
 
 @media (max-width: 900px) { .orbit { --k: .8; } }
 @media (max-width: 720px) {
   .orbit { --k: .66; }
   .acts { grid-auto-flow: row; width: 100%; max-width: 320px; }
   .btn.big { width: 100%; }
-  .acts .peek { margin: 4px 0 0; }
-  .mote { width: 20px; height: 20px; }
+  .acts .peek { margin: -8px 0 -12px; }
   /* 觸控裝置沒有指標視差，把位移歸零免得殘留 */
   .stars, .orbit { translate: none; }
 }
