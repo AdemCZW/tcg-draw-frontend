@@ -122,7 +122,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
   background: var(--surface); border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 30;
 }
-.brand { font-size: 13px; font-weight: 800; letter-spacing: .08em; }
+.brand { font-size: 13px; font-weight: 700; letter-spacing: .08em; }
 .brand i {
   font-style: normal; font-size: 10px; font-weight: 700; letter-spacing: .1em;
   margin-left: 6px; padding: 2px 6px; border-radius: 5px;
@@ -167,7 +167,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .badge {
   margin-left: auto; min-width: 20px; padding: 1px 6px;
   border-radius: 999px; background: var(--gold); color: #1a1410;
-  font-size: 11px; font-weight: 800; text-align: center;
+  font-size: 11px; font-weight: 700; text-align: center;
 }
 
 .main {

@@ -195,7 +195,7 @@ h3 {
    .pool 是 overflow: hidden，「剩 37/80」的右邊 21px 被切掉。
    換行之後擠不下的那一項自己掉到第二行，資訊完整。 */
 .foot { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; }
-.price { font-size: 17px; font-weight: 800; letter-spacing: -.01em; text-shadow: 0 2px 8px rgba(0, 0, 0, .7); }
+.price { font-size: 17px; font-weight: 700; letter-spacing: -.01em; text-shadow: 0 2px 8px rgba(0, 0, 0, .7); }
 .per { font-size: 11px; font-weight: 400; opacity: .7; }
 .rest { font-size: 11px; opacity: .68; white-space: nowrap; }
 

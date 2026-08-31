@@ -43,7 +43,7 @@ withDefaults(defineProps<{
   border-radius: var(--pill);
   background: var(--info-ink);
   color: var(--bg);
-  font-size: 10.5px; font-weight: 800; line-height: 1.2;
+  font-size: 10.5px; font-weight: 700; line-height: 1.2;
   letter-spacing: .02em;
   /* 疊在卡圖上時要跟底下的圖分得開 */
   box-shadow: var(--shadow-sm);

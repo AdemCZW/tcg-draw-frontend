@@ -387,7 +387,7 @@ const refs = computed(() => {
 .holder.missing { background: var(--danger-wash); border-color: var(--danger); }
 .holder h3 { margin: 0 0 8px; font-size: 13px; color: var(--warn-ink); }
 .holder.missing h3 { color: var(--danger-ink); }
-.hname { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 6px; font-size: 17px; font-weight: 800; }
+.hname { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 6px; font-size: 17px; font-weight: 700; }
 .hno { font-size: 12.5px; font-weight: 600; color: var(--muted); overflow-wrap: anywhere; }
 .hwhy { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--ink); }
 

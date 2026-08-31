@@ -533,7 +533,7 @@ async function delist() {
 
 .name { font-size: 20px; line-height: 1.35; margin: 0; letter-spacing: -.02em; }
 .priceRow { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.p { font-size: 30px; font-weight: 800; letter-spacing: -.03em; }
+.p { font-size: 30px; font-weight: 700; letter-spacing: -.03em; }
 .u { font-size: 13px; color: var(--muted); }
 .tag { font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: var(--pill); }
 .tag.good { background: var(--ok); color: #06210f; }

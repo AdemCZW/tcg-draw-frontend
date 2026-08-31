@@ -1385,7 +1385,7 @@ async function copyLink() {
 .ovVal { margin: 0; white-space: nowrap; min-width: 0; }
 .ovNum {
   font-size: clamp(25px, 7.6vw, 34px);
-  font-weight: 800; letter-spacing: -.025em; line-height: 1.05;
+  font-weight: 700; letter-spacing: -.025em; line-height: 1.05;
   color: var(--gold-deep);
   /* 大字用比例數字：tabular 會讓每個數字都佔 0 的寬度，整串看起來鬆散 */
   font-variant-numeric: proportional-nums;

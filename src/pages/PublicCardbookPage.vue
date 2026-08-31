@@ -397,7 +397,7 @@ h1 { font-size: 21px; margin: 0; line-height: 1.25; overflow-wrap: anywhere; }
 
 .stats { display: flex; gap: 28px; flex-wrap: wrap; margin: 0; }
 .stats dt { font-size: 11.5px; color: var(--faint); letter-spacing: .04em; }
-.stats dd { margin: 2px 0 0; font-size: 24px; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; }
+.stats dd { margin: 2px 0 0; font-size: 24px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
 .stats dd.val { color: var(--gold); }
 .unit { font-size: 11.5px; font-weight: 500; color: var(--muted); margin-left: 3px; }
 .lead { margin: 0; font-size: 12.5px; line-height: 1.7; }

@@ -353,7 +353,7 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .dealArt :deep(img) { width: 100%; height: 100%; object-fit: cover; }
 .dealPct {
   position: absolute; top: 5px; left: 5px;
-  font-size: 11px; font-weight: 800;
+  font-size: 11px; font-weight: 700;
   padding: 2px 7px; border-radius: var(--pill);
   background: var(--ok); color: #06210f;
 }
@@ -364,7 +364,7 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   background: linear-gradient(0deg, rgba(8,6,14,.94), transparent);
   color: #fff;
 }
-.dealPrice { font-size: 13px; font-weight: 800; }
+.dealPrice { font-size: 13px; font-weight: 700; }
 .dealRef { font-size: 9.5px; opacity: .6; text-decoration: line-through; }
 
 /* 已鑑定：橫式寬卡，跟上面的小方塊形狀完全不同 */
@@ -394,9 +394,9 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
    只剩一條藍線。要讓的是卡名，不是標示。 */
 .gTop .omark { flex: 0 0 auto; }
 .gTop .gName { min-width: 0; }
-.gName { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gName { font-size: 13.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gCert { font-size: 10px; color: #d8b25a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gPrice { font-size: 15px; font-weight: 800; margin-top: 1px; }
+.gPrice { font-size: 15px; font-weight: 700; margin-top: 1px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
 
@@ -451,7 +451,7 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   text-shadow: 0 1px 6px rgba(0, 0, 0, .7);
 }
 .price { display: flex; align-items: baseline; gap: 5px; margin-top: 2px; }
-.p { font-size: 23px; font-weight: 800; letter-spacing: -.02em; text-shadow: 0 2px 10px rgba(0, 0, 0, .8); }
+.p { font-size: 23px; font-weight: 700; letter-spacing: -.02em; text-shadow: 0 2px 10px rgba(0, 0, 0, .8); }
 .u { font-size: 12px; opacity: .8; }
 .tag { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: var(--pill); margin-left: 2px; }
 .tag.good { background: var(--ok); color: #06210f; }

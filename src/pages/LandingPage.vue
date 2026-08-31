@@ -946,7 +946,7 @@ function goLine() {
 }
 .title :deep(.r0) {
   font-size: clamp(46px, 12vw, 104px);
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: -.028em;
 }
 .title :deep(.r1) {

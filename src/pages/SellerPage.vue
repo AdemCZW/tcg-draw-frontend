@@ -138,7 +138,7 @@ const gap = computed(() => {
 .pzArt { width: 44px; flex: none; }
 .pzText { display: grid; gap: 3px; min-width: 0; }
 .pzTop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.pzTop strong { font-size: 14px; font-weight: 650; }
+.pzTop strong { font-size: 14px; font-weight: 700; }
 .pzMeta { font-size: 11px; }
 
 

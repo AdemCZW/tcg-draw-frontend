@@ -506,7 +506,7 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   background: var(--accent); color: var(--on-accent);
   transition: background .15s;
 }
-.ctaPrice { font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+.ctaPrice { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
 .ctaPrice .per { font-size: 11.5px; font-weight: 400; opacity: .8; }
 .ctaGo { font-size: 13px; font-weight: 600; white-space: nowrap; }
 @media (hover: hover) { .cta:hover { background: var(--accent-soft); } }
