@@ -5,7 +5,8 @@
     "buildCommand": "npm run build"
   },
   "deploy": {
-    "startCommand": "npm run migrate && npm run seed && npm start",
+    "//": "啟動指令刻意不含 npm run seed。重啟不該改變資料 —— seed 掛在這裡的時候，每次部署或當機重啟都會再灌一批示範池，正式站於是變成 100% 示範資料。本機開發的種子改由 server/package.json 的 dev 腳本負責，見 src/seed.ts 開頭的守門。",
+    "startCommand": "npm run migrate && npm start",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3
   }

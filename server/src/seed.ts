@@ -12,6 +12,53 @@ import { assertSeedEntropy } from './pools-service.js'
 import { BUYBACK_MIN } from './shared/pool-settlement.js'
 import { commitV2, manifestHashOf, seatSequence, type ManifestVersion } from './shared/fairness.js'
 import { floorAllowed, floorRatio } from './shared/economics.js'
+import { env } from './env.js'
+
+/**
+ * 種子的目標庫守門。
+ *
+ * ── 為什麼要有這道閘 ────────────────────────────────────────────────
+ * 這支腳本原本掛在 Railway 的 startCommand 裡（`migrate && seed && start`），
+ * 於是**每一次部署或當機重啟都會再灌一批示範池**。正式站因此長成
+ * 32 個池全是 fixture、其中 10 個還開著賣 —— 要給卡商看的時候，
+ * 簡報上標了「示意」的畫面，站上卻沒有任何一個字說那是假的。
+ *
+ * 把 seed 從 startCommand 拿掉（見 railway.json）解決了「這次」的問題。
+ * 但那只是一行設定，下一個人為了讓新環境有東西看，很容易又把它接回去。
+ * 這道閘是機械式的防線：**種子只准打進用完就丟的庫**。
+ *
+ * ── 判準：主機是不是本機 ────────────────────────────────────────────
+ * 不看 NODE_ENV —— 那是一個誰都可以設、而且在 Railway 上預設就是
+ * 'production' 之外還有一堆邊界情況的值。看連線指向哪裡才是誠實的問題：
+ * 種子會寫進哪個資料庫，只由 DATABASE_URL 決定。
+ *
+ * 逃生口留 SEED_ALLOW_REMOTE=1，因為「開一個全新的雲端測試環境、想灌一批
+ * 示範資料」是合理需求。它必須是**當下那一次呼叫明確打上去的**，
+ * 不能是設一次就永遠生效的東西 —— 所以刻意不寫進 .env.example。
+ */
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
+
+function assertSeedTargetIsDisposable() {
+  let host = ''
+  try {
+    host = new URL(env.DATABASE_URL).hostname
+  } catch {
+    /* 解析不出來就當成「不是本機」。這裡的預設值必須是拒絕：
+       看不懂的連線字串最不該做的事，就是猜它是安全的。 */
+    host = '(無法解析)'
+  }
+  if (LOCAL_HOSTS.has(host)) return
+  if (process.env.SEED_ALLOW_REMOTE === '1') {
+    console.warn(`[seed] ⚠️  目標是非本機資料庫（${host}），因 SEED_ALLOW_REMOTE=1 而放行`)
+    return
+  }
+  console.error(
+    `[seed] 拒絕執行：目標資料庫不是本機（host = ${host}）。\n` +
+    `       種子會憑空生出示範池與示範點數，正式環境不該有這種東西。\n` +
+    `       真的要灌進遠端環境的話，加上 SEED_ALLOW_REMOTE=1 再跑一次。`
+  )
+  process.exit(1)
+}
 
 const users: [string, string, string][] = [
   [PLATFORM_ID, 'platform', 'VaultDraw 官方'],
@@ -562,6 +609,9 @@ async function seedPool(d: PoolDef) {
 }
 
 async function run() {
+  /* 第一件事就是問「我要寫進哪裡」。任何一句 INSERT 之前 ——
+     半灌進正式庫再中止，比完全沒跑更難收拾。 */
+  assertSeedTargetIsDisposable()
   for (const [id, handle, name] of users) {
     await sql`insert into users (id, handle, name) values (${id}, ${handle}, ${name})
               on conflict (id) do nothing`
