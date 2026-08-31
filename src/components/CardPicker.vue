@@ -23,7 +23,8 @@ import ListSentinel from '@/components/ListSentinel.vue'
 import BottomActionBar from '@/components/BottomActionBar.vue'
 import {
   searchCards, cardDetail, artUrlOf, CatalogError,
-  type CatalogCard, type CatalogHit, type CatalogVariant
+  type CatalogCard, type CatalogHit, type CatalogVariant,
+  type SearchField, type SearchResult
 } from '@/lib/tcgdex-catalog'
 import { pickFromCatalog, pickFromPrize, type PickedCard } from '@/lib/card-pick'
 import { mergeByCard, certTailOf, type MergeGroup } from '@/lib/card-merge'
@@ -65,7 +66,22 @@ function toggle(p: PickedCard) {
 }
 
 /* ---------- 來源切換 ---------- */
+/**
+ * 預設站在**有東西可以立刻點**的那一邊。
+ *
+ * 開池表單不帶 defaultSource，所以走預設值 'cardbook' —— 那一頁一進去
+ * 就列得出卡、點得到。目錄那一頁不打字是**整片空白**，
+ * 站在那裡的使用者只會以為「這裡沒有卡」。
+ * （卡片登記頁刻意傳 'catalog'：要登記的卡照定義還不在卡冊裡。）
+ */
 const source = ref<'cardbook' | 'catalog'>(props.defaultSource)
+
+/** 使用者自己按過分頁鍵。按過之後就不再自動幫他換 —— 那會變成搶方向盤 */
+const sourcePinned = ref(false)
+function chooseSource(s: 'cardbook' | 'catalog') {
+  sourcePinned.value = true
+  source.value = s
+}
 
 /* ---------- 來源一：我的卡冊 ---------- */
 /* 分頁交給既有的 useInfiniteList —— 卡冊本來就是游標分頁的，
@@ -76,10 +92,32 @@ const book = useInfiniteList<UserPrize>((cursor, signal) =>
 /* 模板的字串 ref 要綁到 setup 的頂層 binding；巢狀在物件裡的 ref 綁不到 */
 const bookSentinel = book.sentinel
 
+/** 卡冊確定是空的（載完了、沒有錯誤、零張）。載入中不算 —— 那還沒有結論 */
+const bookEmpty = computed(() =>
+  book.ready.value && !book.error.value && !book.items.value.length)
+
+/**
+ * 卡冊空的時候自動落到目錄。
+ *
+ * 為什麼要自動：卡冊是空的時候，「從我的卡冊挑」是一條**確定走不通**的路，
+ * 把使用者留在那裡等於讓他自己去發現另一個分頁存在。
+ * 為什麼只做一次、而且只在他還沒自己選過的時候做：他手動切回卡冊
+ * （例如正要去登記卡片、想先看一眼）時再把他推走，就是跟他搶方向盤。
+ */
+watch(bookEmpty, empty => {
+  if (empty && !sourcePinned.value && source.value === 'cardbook') source.value = 'catalog'
+}, { immediate: true })
+
 /* ---------- 來源二：卡片目錄 ---------- */
 const query = ref('')
 const hits = ref<CatalogHit[]>([])
 const hiddenNoArt = ref(0)
+/* 這一次是用哪一個欄位查到的、以及英文名繞路對到了誰。
+   **一定要顯示**：使用者打 'Charizard' 拿到一整排日文卡名，
+   不講清楚「我是用全國圖鑑編號對到這隻寶可夢的」就等於在變魔術。 */
+const field = ref<SearchField>('name-ja')
+const bridge = ref<SearchResult['bridge']>(null)
+const truncated = ref(0)
 const searching = ref(false)
 /** 已經搜過至少一次（成功或失敗）。在那之前的「查無結果」是假的 */
 const searched = ref(false)
@@ -104,10 +142,15 @@ async function runSearch(q: string) {
     if (my !== gen) return
     hits.value = r.hits
     hiddenNoArt.value = r.hiddenNoArt
+    field.value = r.field
+    bridge.value = r.bridge
+    truncated.value = r.truncated
   } catch (e) {
     if (my !== gen || ac.signal.aborted) return
     hits.value = []
     hiddenNoArt.value = 0
+    bridge.value = null
+    truncated.value = 0
     searchError.value = e instanceof CatalogError ? e.message : '搜尋失敗，請稍後再試'
   } finally {
     if (my === gen) { searching.value = false; searched.value = true }
@@ -124,6 +167,8 @@ watch(query, q => {
     ctrl?.abort()
     hits.value = []
     hiddenNoArt.value = 0
+    bridge.value = null
+    truncated.value = 0
     searching.value = false
     searched.value = false
     searchError.value = ''
@@ -139,6 +184,26 @@ function retrySearch() {
   const s = query.value.trim()
   if (s.length >= 2) void runSearch(s)
 }
+
+/**
+ * 「我是用什麼幫你找到的」。
+ *
+ * 搜尋跨了四個欄位又會自動往下掉（見 lib/tcgdex-catalog.ts 的 resolve），
+ * 不說一聲的話使用者無從判斷結果對不對 —— 尤其英文名那條路回的是
+ * 「同一隻寶可夢的所有日版卡」，不是「同一張卡」。
+ */
+const foundBy = computed<string | null>(() => {
+  if (!hits.value.length) return null
+  switch (field.value) {
+    case 'card-no': return `用卡號找到 ${hits.value.length} 張`
+    case 'set':     return `列出「${query.value.trim().toUpperCase()}」這一套的 ${hits.value.length} 張`
+    case 'name-en': return bridge.value
+      ? `英文名「${bridge.value.enName}」對到全國圖鑑編號 ${bridge.value.dexId}，`
+        + `以下是這隻寶可夢的日版卡 ${hits.value.length} 張（不是同一張卡的英文名）`
+      : null
+    default:        return null
+  }
+})
 
 /* ---------- 目錄卡的詳情 / 變體 ---------- */
 /**
@@ -258,12 +323,15 @@ const hitPickedCount = (h: CatalogHit) =>
     <div class="tabs" role="tablist">
       <button
         type="button" role="tab" class="tab" :class="{ on: source === 'cardbook' }"
-        :aria-selected="source === 'cardbook'" @click="source = 'cardbook'">
+        :aria-selected="source === 'cardbook'" @click="chooseSource('cardbook')">
         從我的卡冊挑
+        <!-- 張數直接寫在分頁上：使用者要決定「往哪一邊走」，
+             靠的就是「那一邊有沒有東西」，不該切過去才知道 -->
+        <span v-if="book.ready.value" class="tabCount">{{ book.items.value.length }}</span>
       </button>
       <button
         type="button" role="tab" class="tab" :class="{ on: source === 'catalog' }"
-        :aria-selected="source === 'catalog'" @click="source = 'catalog'">
+        :aria-selected="source === 'catalog'" @click="chooseSource('catalog')">
         搜卡片目錄
       </button>
     </div>
@@ -278,7 +346,10 @@ const hitPickedCount = (h: CatalogHit) =>
 
       <p v-else-if="!book.items.value.length && !book.error.value" class="empty">
         卡冊裡沒有可以開池的卡。<br>
-        <span class="muted">只有寄存中的卡能當獎品 —— 已上架或已出貨的卡不在這裡。</span>
+        <span class="muted">只有寄存中的卡能當獎品 —— 已上架或已出貨的卡不在這裡。</span><br>
+        <!-- 空清單一定要接出路。沒有出路的空狀態就是一條死路 -->
+        <RouterLink class="emptyGo" :to="{ name: 'upload-card' }">去登記一張卡</RouterLink>
+        <button type="button" class="emptyGo" @click="chooseSource('catalog')">改用卡片目錄搜</button>
       </p>
 
       <ul v-else class="grid">
@@ -328,12 +399,21 @@ const hitPickedCount = (h: CatalogHit) =>
         </svg>
         <input
           v-model="query" type="search" inputmode="search"
-          placeholder="輸入卡名，例如 リザードン"
+          placeholder="卡號 SV4a-349、349/190，或卡名"
           aria-label="搜尋卡片目錄">
       </label>
-      <p class="hintLine muted">
-        日文卡名查得最準（這裡查的是日版目錄）。至少輸入兩個字。
-      </p>
+      <!-- 支援什麼就寫什麼。原本這一行只寫「日文卡名查得最準」，
+           而使用者的回饋正是「搜索是要輸入日文，沒辦法用別的方式？」——
+           能用卡號搜卻沒有人講，等於這個功能不存在。 -->
+      <div class="hintLine">
+        <p class="hintHead muted">四種搜法都可以，至少輸入兩個字：</p>
+        <ul class="hintList">
+          <li><b class="mono">SV4a-349</b><span>卡號（大小寫、空白、補零都可以）</span></li>
+          <li><b class="mono">349/190</b><span>卡面印的編號／總數</span></li>
+          <li><b class="mono">Charizard</b><span>英文寶可夢名（對到同一隻的日版卡）</span></li>
+          <li><b>リザードン</b><span>日文卡名，查得最準</span></li>
+        </ul>
+      </div>
 
       <div v-if="searching" class="grid" aria-hidden="true">
         <span v-for="i in 6" :key="i" class="skel"></span>
@@ -347,12 +427,41 @@ const hitPickedCount = (h: CatalogHit) =>
       <p v-else-if="searched && !hits.length" class="empty">
         找不到「{{ query.trim() }}」。<br>
         <span class="muted">
-          試試日文卡名，或只打寶可夢的名字不要帶 ex / SAR 這種後綴。
+          卡號、英文寶可夢名、日文卡名都試過了。<br>
+          卡號要帶套牌代號才認得出是哪一套（<b class="mono">SV4a-349</b>）；
+          英文名只對得到寶可夢，訓練家卡與能量卡沒有圖鑑編號，對不到；
+          日文卡名只打寶可夢的名字、不要帶 ex / SAR 這種後綴。
           <template v-if="hiddenNoArt">（另有 {{ hiddenNoArt }} 張同名卡沒有卡圖，無法用挑的）</template>
-        </span>
+        </span><br>
+        <!-- 出路。**卡冊空的時候不能叫人切回卡冊** —— 那是一條已知走不通的路；
+             那時唯一有意義的下一步是先去登記一張卡。 -->
+        <RouterLink v-if="bookEmpty" class="emptyGo" :to="{ name: 'upload-card' }">
+          去登記一張卡（登記完就會出現在卡冊）
+        </RouterLink>
+        <button v-else type="button" class="emptyGo" @click="chooseSource('cardbook')">
+          改從我的卡冊挑<template v-if="book.ready.value">（{{ book.items.value.length }} 張）</template>
+        </button>
+      </p>
+
+      <!-- 還沒打字。原本這裡**什麼都沒有** —— 一個搜尋框加一大片空白，
+           使用者以為那裡會列卡片可以點，結果一張都沒選到。
+           空白狀態要說「這裡要你做什麼」，還要留一條回卡冊的路。 -->
+      <p v-else-if="!searched && !query.trim()" class="empty" data-testid="catalog-idle">
+        這裡是<b>整個日版卡片目錄</b>，要先搜才會有東西 —— 不打字是空的，不是壞掉。<br>
+        <span class="muted">上面四種寫法任一種都可以，不一定要打日文。</span><br>
+        <!-- 出路。**卡冊空的時候不能叫人切回卡冊** —— 那是一條已知走不通的路；
+             那時唯一有意義的下一步是先去登記一張卡。 -->
+        <RouterLink v-if="bookEmpty" class="emptyGo" :to="{ name: 'upload-card' }">
+          去登記一張卡（登記完就會出現在卡冊）
+        </RouterLink>
+        <button v-else type="button" class="emptyGo" @click="chooseSource('cardbook')">
+          改從我的卡冊挑<template v-if="book.ready.value">（{{ book.items.value.length }} 張）</template>
+        </button>
       </p>
 
       <template v-else-if="hits.length">
+        <!-- 用什麼欄位找到的要講出來，尤其英文名那條路回的是「同一隻寶可夢」 -->
+        <p v-if="foundBy" class="foundBy" data-testid="found-by">{{ foundBy }}</p>
         <ul class="grid">
           <li v-for="h in hits" :key="h.artId" class="cell">
             <button
@@ -373,6 +482,9 @@ const hitPickedCount = (h: CatalogHit) =>
             </button>
           </li>
         </ul>
+        <p v-if="truncated" class="note muted">
+          還有 {{ truncated }} 張沒有列出來（一次最多列 120 張）。再打細一點，例如加上卡號。
+        </p>
         <p v-if="hiddenNoArt" class="note muted">
           另有 {{ hiddenNoArt }} 張同名卡目錄裡沒有卡圖，沒有列出來。
         </p>
@@ -533,6 +645,13 @@ const hitPickedCount = (h: CatalogHit) =>
   transition: background .18s, color .18s;
 }
 .tab.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
+/* 卡冊有幾張直接寫在分頁上：要選走哪一邊，靠的就是「那一邊有沒有東西」 */
+.tabCount {
+  display: inline-block; margin-left: 6px; padding: 1px 7px;
+  border-radius: var(--pill); background: var(--surface-3); color: var(--muted);
+  font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.tab.on .tabCount { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 
 /* ---- 已選：貼底列 ---- */
 /* 一行兩塊：左邊是狀態（幾張／上限），右邊是唯一的動作。
@@ -619,12 +738,47 @@ const hitPickedCount = (h: CatalogHit) =>
 .note.warn { color: var(--warn-ink); }
 .muted { color: var(--muted); }
 .mono { font-family: var(--font-mono); }
-.hintLine { margin: 0; font-size: 11.5px; line-height: 1.6; }
+/* ---- 「可以怎麼搜」 ----
+   四種寫法一行一種，範例用等寬字體排在左邊、說明在右邊。
+   寫成一整段散文的話沒有人會讀完，而這幾行的重點正是「照著打就會動」。 */
+.hintLine { margin: 0; min-width: 0; }
+.hintHead { margin: 0 0 5px; font-size: 11.5px; line-height: 1.6; }
+.hintList {
+  list-style: none; margin: 0; padding: 0; min-width: 0;
+  display: grid; gap: 3px;
+}
+.hintList li {
+  min-width: 0;
+  display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 8px; align-items: baseline;
+  font-size: 11.5px; line-height: 1.65;
+}
+.hintList b { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.hintList span { color: var(--faint); min-width: 0; }
+
+/* 找到之後說一句「我是用什麼找到的」。英文名那條路尤其要說 —— 回的是
+   同一隻寶可夢的日版卡，不是同一張卡的英文名 */
+.foundBy {
+  min-width: 0; margin: 0 0 10px; padding: 8px 11px;
+  border-radius: 10px; background: var(--surface-2);
+  font-size: 11.5px; line-height: 1.7; color: var(--muted);
+}
 
 .empty {
   min-width: 0; margin: 0; padding: 26px 12px;
   text-align: center; font-size: 13px; line-height: 1.8;
 }
+.empty b { color: var(--ink); }
+/* 空狀態裡的出路。空清單一定要有下一步，不然它就是死路 */
+.emptyGo {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 44px; margin: 10px 5px 0; padding: 0 16px; min-width: 0;
+  border: 1px solid var(--line); border-radius: var(--pill);
+  background: var(--surface-2); color: var(--ink);
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  text-decoration: none; cursor: pointer;
+}
+.emptyGo:hover { border-color: var(--accent); color: var(--accent); }
 .fail { min-width: 0; display: grid; justify-items: center; gap: 10px; padding: 22px 12px; text-align: center; }
 .failMsg { margin: 0; font-size: 13px; color: var(--danger-ink); }
 

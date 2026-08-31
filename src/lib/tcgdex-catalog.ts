@@ -7,11 +7,33 @@
 //
 // 語系一律用 /v2/ja/。實測 /v2/en/ 查不到日版卡（日文卡名在英文端點沒有
 // 索引），而這個平台賣的是日版鑑定卡。
+//
+// ── 目錄實際可以用什麼搜（2026-08 對 api.tcgdex.net 逐一實測，不是推測）──
+//
+//   ?name=      日文卡名。contains、不分大小寫。「リザードン」→ 49 筆。
+//   ?id=        TCGdex 卡片編號（SV4a-349）。**contains、不分大小寫** ——
+//               'sv4a-349' → 1 筆，'SV4a-3' → 61 筆，'SV4a-' → 整套 320 筆。
+//               支援 eq: 運算子（'eq:SV4a-349' → 1 筆）。
+//   ?localId=   套內編號（349）。**只吃 contains，eq: 無效** ——
+//               實測 'localId=eq:349' → 0 筆、'localId=349' → 2 筆
+//               （MC-349 與 SV4a-349）。所以精確比對只能撈回來自己濾。
+//   ?dexId=     全國圖鑑編號。contains 會亂中（'6' → 2397 筆），
+//               但 'eq:25' → 63 筆是準的。
+//
+// **英文卡名：日版目錄沒有。** /v2/en/sets/SV4a → 404，
+// /v2/en/cards/SV4a-349 → 404 —— 日版套牌在英文端點整組不存在，
+// 所以「同一張日版卡的英文名」這個欄位並不存在，做不出來就不要假裝。
+// 唯一做得出來的是**繞路**：英文卡名 → 英文端點查到那張卡 → 它的 dexId
+// → 用 dexId 回頭查日版目錄。對得到的是「同一隻寶可夢」而不是「同一張卡」，
+// 所以 UI 必須照實講（見 SearchResult.bridge）。訓練家卡與能量卡沒有 dexId，
+// 這條路對它們無效，也要照實講。
 // ------------------------------------------------------------------
 
 import { artUrlById, registerSerie, serieFromImageUrl, type ArtQuality } from './tcgdex'
 
 const BASE = 'https://api.tcgdex.net/v2/ja'
+/* 只有「英文名 → dexId」那一步會打這裡。日版卡本身在這個端點不存在 */
+const BASE_EN = 'https://api.tcgdex.net/v2/en'
 
 /**
  * 一張卡的變體。
@@ -126,10 +148,10 @@ export class CatalogError extends Error {
   constructor(message: string, public kind: 'network' | 'server') { super(message) }
 }
 
-async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function getJson<T>(path: string, signal?: AbortSignal, base: string = BASE): Promise<T> {
   let res: Response
   try {
-    res = await fetch(`${BASE}${path}`, { signal })
+    res = await fetch(`${base}${path}`, { signal })
   } catch (e) {
     // AbortError 要原樣往上丟，呼叫端靠它分辨「使用者又打了一個字」與「真的失敗」
     if (e instanceof DOMException && e.name === 'AbortError') throw e
@@ -147,7 +169,7 @@ function learnSerie(setCode: string | undefined, image: string | undefined): voi
 }
 
 /**
- * 依卡名搜尋。
+ * 搜尋結果。
  *
  * 沒有圖的卡直接濾掉並回報數量 —— 實測「ピカチュウ」63 筆裡有 52 筆
  * TCGdex 根本沒有卡圖（多半是很舊的促銷卡）。這是一個要用「看的」挑的介面，
@@ -158,30 +180,266 @@ export interface SearchResult {
   hits: CatalogHit[]
   /** 因為沒有卡圖而被濾掉的筆數 */
   hiddenNoArt: number
+  /** 這一次**實際**是用哪一個欄位查到的。畫面要照實說，不能讓使用者猜 */
+  field: SearchField
+  /** 命中太多、被截掉的筆數。0 代表全部都列出來了 */
+  truncated: number
+  /**
+   * 英文名繞路時對到的那隻寶可夢。
+   * 有值就代表這一頁結果**不是**「這張卡的英文名」，而是「這隻寶可夢的所有日版卡」，
+   * 畫面必須講出來 —— 不講的話使用者會以為系統認得英文卡名。
+   */
+  bridge: { enName: string; dexId: number } | null
 }
+
+/**
+ * 使用者到底是用什麼在搜。
+ *   name-ja  日文卡名
+ *   card-no  卡號（SV4a-349 / 349/190 / 349）
+ *   set      整套代號（SV4a）
+ *   name-en  英文寶可夢名繞 dexId
+ */
+export type SearchField = 'name-ja' | 'card-no' | 'set' | 'name-en'
+
+/* 一次最多列這麼多張。整套 320 張全畫出來只會讓手機捲不完，
+   而且那不是「挑」，是「翻」。超過就截掉並照實說截了幾張。 */
+const MAX_HITS = 120
 
 const searchCache = new Map<string, SearchResult>()
 
-export async function searchCards(name: string, signal?: AbortSignal): Promise<SearchResult> {
-  const q = name.trim()
-  if (!q) return { hits: [], hiddenNoArt: 0 }
+/* ---------- 小工具 ---------- */
 
-  const cached = searchCache.get(q)
-  if (cached) return cached
+/** set 代號是 id 去掉最後一段編號（SV4a-349 → SV4a、SV-P-001 → SV-P） */
+const setCodeOf = (id: string): string => id.slice(0, id.lastIndexOf('-'))
 
-  const raw = await getJson<RawHit[]>(`/cards?name=${encodeURIComponent(q)}`, signal)
+function toHits(raw: RawHit[]): { hits: CatalogHit[]; hiddenNoArt: number } {
   const withArt = raw.filter(c => !!c.image)
-  const result: SearchResult = {
+  return {
     hits: withArt.map(c => {
-      // set 代號是 id 去掉最後一段編號（SV4a-349 → SV4a、SV-P-001 → SV-P）
-      const setCode = c.id.slice(0, c.id.lastIndexOf('-'))
-      learnSerie(setCode, c.image)
+      learnSerie(setCodeOf(c.id), c.image)
       return { artId: c.id, localId: c.localId ?? '', name: c.name ?? '', imageBase: c.image ?? null }
     }),
     hiddenNoArt: raw.length - withArt.length
   }
+}
+
+function pack(raw: RawHit[], field: SearchField, bridge: SearchResult['bridge'] = null): SearchResult {
+  const { hits, hiddenNoArt } = toHits(raw)
+  return {
+    hits: hits.slice(0, MAX_HITS),
+    hiddenNoArt,
+    field,
+    truncated: Math.max(0, hits.length - MAX_HITS),
+    bridge
+  }
+}
+
+/**
+ * 兩個套內編號算不算同一個。
+ *
+ * 為什麼不能直接字串相等：同一套裡卡面印的是 349，但 TCGdex 的 localId
+ * 在別的套是補零的 001。使用者打「SV4a-1」要找得到 SV4a-001，
+ * 打「SV4a-001」也要找得到 —— 兩邊都是數字時就比數值。
+ * 非數字的 localId（TG01、SWSH001 這種）退回字串比對，不亂猜。
+ */
+function sameLocalId(a: string, b: string): boolean {
+  if (a.toUpperCase() === b.toUpperCase()) return true
+  return /^\d+$/.test(a) && /^\d+$/.test(b) && Number(a) === Number(b)
+}
+
+/* ---------- 整套的卡（給卡號與套牌代號用） ---------- */
+
+/**
+ * 撈一整套的卡，快取起來。
+ *
+ * 為什麼要整套撈，而不是直接查那一個編號：`?id=` 是 contains，
+ * 而編號有沒有補零是每一套自己的事 —— 實測 `?id=SV4a-1` 回 60 筆
+ * （SV4a-100…159），**唯獨不含 SV4a-001**，因為 'SV4a-001' 這個字串
+ * 裡沒有 'SV4a-1'。要讓使用者打「SV4a-1」也找得到第 1 號，
+ * 就只能把整套撈回來按**數值**比。
+ *
+ * 一套 320 張的回應實測 35 KB / 0.45s，而且同一套只會撈一次 ——
+ * 比為了補零去猜三個網址各打一次划算，也不會漏。
+ */
+const setCards = new Map<string, RawHit[]>()
+
+async function fetchSet(setCode: string, signal?: AbortSignal): Promise<RawHit[]> {
+  const key = setCode.toUpperCase()
+  const hit = setCards.get(key)
+  if (hit) return hit
+  /* 用 `SV4a-` 而不是 `SV4a`：不加尾巴的話 'SV4' 會撈到 SV4a / SV4b / SV4K，
+     而使用者打的是一個明確的套。加了尾巴仍然是 contains，
+     所以還要自己再濾一次 setCode 完全相等（'P-' 會撈到 'SV-P-001'）。 */
+  const raw = await getJson<RawHit[]>(`/cards?id=${encodeURIComponent(setCode + '-')}`, signal)
+  const mine = raw.filter(c => setCodeOf(c.id).toUpperCase() === key)
+  setCards.set(key, mine)
+  return mine
+}
+
+/* ---------- 套牌總張數（給「349/190」用） ---------- */
+
+/**
+ * setCode → 卡面印的總張數（cardCount.official）。
+ *
+ * 「349/190」裡的 190 是**分母**，它是辨識「哪一套」的唯一線索：
+ * 卡號 349 在 MC 與 SV4a 兩套都有，但只有 SV4a 的分母是 190。
+ * /sets 一次 16 KB、184 套，撈一次就夠整個工作階段用。
+ */
+let setsIndex: Promise<Map<string, number>> | null = null
+
+function officialCounts(signal?: AbortSignal): Promise<Map<string, number>> {
+  if (!setsIndex) {
+    setsIndex = getJson<{ id: string; cardCount?: { official?: number } }[]>('/sets', signal)
+      .then(list => new Map(list.map(s => [s.id.toUpperCase(), s.cardCount?.official ?? 0])))
+      .catch(e => { setsIndex = null; throw e })   // 失敗不要把空表快取起來
+  }
+  return setsIndex
+}
+
+/* ---------- 英文名繞路 ---------- */
+
+/** 英文名（小寫）→ 全國圖鑑編號。null = 查過，但那個名字沒有 dexId（訓練家 / 能量卡） */
+const dexIdCache = new Map<string, { dexId: number; enName: string } | null>()
+
+/**
+ * 英文寶可夢名 → dexId。
+ *
+ * 做法：英文端點查卡名（先 eq: 精確，沒有再 contains）→ 取第一筆的詳情
+ * → 讀 dexId。三個請求、實測 1.5 秒左右，結果快取。
+ * 這是**唯一**能從英文走進日版目錄的路：日版套牌在英文端點整組是 404，
+ * 所以「這張日版卡的英文名」這個欄位根本不存在（見檔案開頭的實測）。
+ */
+async function dexIdFromEnglish(
+  q: string, signal?: AbortSignal
+): Promise<{ dexId: number; enName: string } | null> {
+  const key = q.toLowerCase()
+  if (dexIdCache.has(key)) return dexIdCache.get(key)!
+
+  const exact = await getJson<RawHit[]>(
+    `/cards?name=${encodeURIComponent('eq:' + q)}`, signal, BASE_EN)
+  const list = exact.length
+    ? exact
+    : await getJson<RawHit[]>(`/cards?name=${encodeURIComponent(q)}`, signal, BASE_EN)
+  const first = list[0]
+  if (!first) { dexIdCache.set(key, null); return null }
+
+  const card = await getJson<{ name?: string; dexId?: number[] }>(
+    `/cards/${encodeURIComponent(first.id)}`, signal, BASE_EN)
+  const dexId = card.dexId?.[0]
+  const out = typeof dexId === 'number'
+    ? { dexId, enName: card.name ?? first.name ?? q }
+    : null
+  dexIdCache.set(key, out)
+  return out
+}
+
+/* ---------- 分辨使用者打的是什麼 ---------- */
+
+/* 三種不用打日文的卡號寫法。分隔符收得寬一點（空白 / - / _ / /），
+   因為卡面印的是「349/190」、TCGdex 用的是「SV4a-349」，
+   而使用者兩種都會打，還會打成「sv4a 349」。 */
+const RE_SET_NUM = /^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z]+)*)[\s\-_/]+([0-9A-Za-z]{1,6})$/
+const RE_NO_DENOM = /^(\d{1,4})\s*\/\s*(\d{1,5})$/
+const RE_NUM = /^(\d{1,5})$/
+const RE_SET_ONLY = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z]+)*$/
+/* 英文名：純拉丁字母（含空白、撇號、句點、連字號），至少三個字元。
+   兩個字元的純字母幾乎都是套牌代號（MC、SM），不是寶可夢名。 */
+const RE_EN_NAME = /^[A-Za-z][A-Za-z'\u2019.\- ]{2,}$/
+
+/* ---------- 對外的搜尋 ---------- */
+
+/**
+ * 搜卡片目錄。
+ *
+ * 原本這裡只有一條路：把整串字丟去 `?name=`。而 `?name=` 查的是**日文**卡名，
+ * 所以不打日文就永遠是空白畫面 —— 使用者的原話是「搜索是要輸入日文，
+ * 沒辦法用別的方式？」。日文輸入法在手機上是一道真實的牆。
+ *
+ * 現在是一條**依序往下掉**的路徑，每一段查不到就換下一段：
+ *
+ *   1. 349/190      卡面印的編號/總數 —— 分母用來認是哪一套
+ *   2. SV4a-349     套牌代號 + 編號（大小寫、補零、空白或連字號都收）
+ *   3. 349          只有編號（會跨套，全部列出來讓人用卡圖認）
+ *   4. SV4a         整套代號 —— 列出整套
+ *   5. Charizard    英文寶可夢名，繞 dexId 回日版目錄（見 dexIdFromEnglish）
+ *   6. リザードン    日文卡名（原本唯一的一條路）
+ *
+ * 「往下掉」而不是「一次選定」是刻意的：分類靠的是字串長相，一定會有猜錯的
+ * 時候（「Charizard 349」看起來像套牌 CHARIZARD 的第 349 號）。猜錯時空手
+ * 而回是最糟的結果 —— 使用者只會得到「又是空白」。所以猜錯就往下一種試。
+ */
+export async function searchCards(name: string, signal?: AbortSignal): Promise<SearchResult> {
+  const q = name.trim().replace(/\s+/g, ' ')
+  if (!q) return { hits: [], hiddenNoArt: 0, field: 'name-ja', truncated: 0, bridge: null }
+
+  const cached = searchCache.get(q)
+  if (cached) return cached
+
+  const result = await resolve(q, signal)
   searchCache.set(q, result)
   return result
+}
+
+async function resolve(q: string, signal?: AbortSignal): Promise<SearchResult> {
+  /* ---- 1. 349/190：編號 + 卡面總數 ---- */
+  const denom = RE_NO_DENOM.exec(q)
+  if (denom) {
+    const [, num, official] = denom
+    const raw = await getJson<RawHit[]>(`/cards?localId=${encodeURIComponent(num!)}`, signal)
+    const exact = raw.filter(c => sameLocalId(c.localId ?? '', num!))
+    /* 分母對得起來的那一套優先。對不起來就退回「所有這個編號的卡」——
+       少列比多列糟：使用者至少還能用卡圖認出是哪一張。 */
+    try {
+      const counts = await officialCounts(signal)
+      const bySet = exact.filter(c => counts.get(setCodeOf(c.id).toUpperCase()) === Number(official))
+      if (bySet.length) return pack(bySet, 'card-no')
+    } catch { /* /sets 掛了不該讓整個搜尋失敗，退回不看分母 */ }
+    if (exact.length) return pack(exact, 'card-no')
+  }
+
+  /* ---- 2. SV4a-349 / sv4a 349 ---- */
+  const setNum = RE_SET_NUM.exec(q)
+  if (setNum && /\d/.test(setNum[2]!)) {
+    const [, set, num] = setNum
+    const all = await fetchSet(set!, signal)
+    const exact = all.filter(c => sameLocalId(c.localId ?? '', num!))
+    if (exact.length) return pack(exact, 'card-no')
+    /* 打到一半的編號（SV4a-3）也要有用：列出 3 開頭的那些，讓人接著挑 */
+    const bare = num!.replace(/^0+/, '')
+    const prefix = all.filter(c => (c.localId ?? '').replace(/^0+/, '').startsWith(bare))
+    if (prefix.length) return pack(prefix, 'card-no')
+  }
+
+  /* ---- 3. 349：只有編號，跨套 ---- */
+  const num = RE_NUM.exec(q)
+  if (num) {
+    const raw = await getJson<RawHit[]>(`/cards?localId=${encodeURIComponent(num[1]!)}`, signal)
+    const exact = raw.filter(c => sameLocalId(c.localId ?? '', num[1]!))
+    if (exact.length) return pack(exact, 'card-no')
+  }
+
+  /* ---- 4. SV4a：整套 ----
+     長度 ≤ 5 才試。實測 /sets 的 184 個套牌代號**沒有一個超過 5 個字元**，
+     所以「Charizard」這種純字母的長字串不必先去打一次必然落空的請求。 */
+  if (q.length <= 5 && RE_SET_ONLY.test(q)) {
+    const all = await fetchSet(q, signal)
+    if (all.length) return pack(all, 'set')
+  }
+
+  /* ---- 5. Charizard：英文寶可夢名繞 dexId ---- */
+  if (RE_EN_NAME.test(q)) {
+    const bridge = await dexIdFromEnglish(q, signal)
+    if (bridge) {
+      /* dexId 一定要用 eq:。contains 是災難：實測 '6' → 2397 筆
+         （把 16、26、106… 全撈進來），那不是搜尋，那是整個目錄。 */
+      const raw = await getJson<RawHit[]>(`/cards?dexId=eq:${bridge.dexId}`, signal)
+      if (raw.length) return pack(raw, 'name-en', bridge)
+    }
+  }
+
+  /* ---- 6. 日文卡名。原本唯一的一條路，現在是最後一條 ---- */
+  const raw = await getJson<RawHit[]>(`/cards?name=${encodeURIComponent(q)}`, signal)
+  return pack(raw, 'name-ja')
 }
 
 const detailCache = new Map<string, CatalogCard>()

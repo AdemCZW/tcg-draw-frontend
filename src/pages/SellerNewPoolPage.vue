@@ -34,7 +34,7 @@
  * 「參考價」是選填：它不參與任何計算，強迫賣家填一個沒有外部依據的數字
  * 只會製造一個看起來像官方行情的假資料。
  */
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSellerStore } from '@/stores/sellers'
 import { api } from '@/lib/api'
@@ -217,6 +217,8 @@ const worstBuyback = computed(() => {
 
 const busy = ref(false)
 const error = ref('')
+/* 錯誤訊息那一塊的節點。要「量得到它在不在視窗裡」，就得抓得到它 */
+const errBox = ref<HTMLElement | null>(null)
 /* 撞到 CERT_ALREADY_LISTED 時，可以拿去申請接管的編號。
    平常是空的 —— 這個出口只在被擋住的那一刻存在，不是常駐的一顆按鈕。 */
 const takeoverCerts = ref<{ certNo: string; grader: string }[]>([])
@@ -292,18 +294,37 @@ const problems = computed<Problem[]>(() => {
 })
 const valid = computed(() => problems.value.length === 0)
 
+/* 找不到那一格時留下的話。**不能是空的**：goTo() 原本查無元素就直接
+   return，畫面上一個字都不會變 —— 那正是使用者說的「按了沒反應」。
+   欄位會不會不存在？會：獎項表整段是 v-if，還沒挑卡時 #f-prizes 根本
+   沒有被畫出來，而範本／數量那幾條問題的 anchor 都指著它。 */
+const jumpMiss = ref('')
+
 /**
  * 跳到出問題的那一格。
  *
  * 捲動 + 聚焦兩件都做：只捲動的話使用者還要自己找是哪一格（手機上一屏
  * 就有五六個輸入框），只聚焦的話在畫面外根本看不到焦點跑去哪了。
+ *
+ * 回傳有沒有跳成功 —— 呼叫端要知道，因為「跳失敗」也必須讓使用者看見。
  */
-function goTo(anchor: string) {
+function goTo(anchor: string, msg?: string): boolean {
   const el = document.getElementById(anchor)
-  if (!el) return
+  if (!el) {
+    /* 靜默失敗是這一頁最貴的一個 bug：使用者按下去、畫面完全沒動，
+       他得到的結論是「這顆按鈕壞了」。所以查無元素時把那句話原地講出來，
+       至少他知道要修什麼、也知道系統確實收到了那一下。 */
+    jumpMiss.value = msg
+      ? `找不到「${msg}」對應的欄位（那一區可能還沒出現）。先把上面的表單補齊再試一次。`
+      : '找不到要修正的那一格，請往上檢查表單。'
+    attemptSeq.value++
+    return false
+  }
+  jumpMiss.value = ''
   el.scrollIntoView({ block: 'center', behavior: 'smooth' })
   const focusable = el.matches('input, select') ? el : el.querySelector('input, select')
   ;(focusable as HTMLElement | null)?.focus({ preventScroll: true })
+  return true
 }
 
 /* ---- 以這個池為範本再開一個 ----
@@ -392,11 +413,30 @@ watch(() => [route.query.from, pools.pools.length] as const, ([from]) => {
 /** 按過送出。按過之後缺漏項才變紅 —— 一打開表單就滿江紅是在罵人，不是在幫忙 */
 const attempted = ref(false)
 
+/* ---- 按下去要有「就地」的回應 ----
+
+   實測 393×852：把送出鈕捲到畫面正中央按一下，畫面捲了 2994px 到頁首，
+   按鈕與「還差什麼」清單雙雙離開視窗 —— 使用者的結論是「按了沒反應」。
+   捲動**不是**回饋：它把使用者剛剛在看的東西整個換掉，而在手機上他根本
+   不會把那一下位移讀成「系統回答我了」。
+
+   所以改成三件事：
+     1. 「還差什麼」清單搬到**送出鈕正下方**。按鈕在哪裡，答案就在哪裡。
+     2. 按下去只更新原地的狀態（清單轉紅、按鈕改字、冒出一行「哪一項擋住了」），
+        **不自動捲動**。要跳到那一格是清單裡每一項自己的按鈕，由使用者決定。
+     3. attemptSeq 每按一次就 +1，當成那一行的 :key —— 第二次、第三次按
+        即使問題沒變，那一行也會重新掛載、重播一次動畫。沒有這個，
+        「連按兩下」的第二下一樣是零回饋。 */
+const attemptSeq = ref(0)
+
 async function submit() {
   attempted.value = true
-  /* **不 return 就算了**：按鈕按得下去，所以按下去一定要有回應。
-     把第一個問題捲到眼前並聚焦 —— 使用者要的是「還差什麼」，不是一聲不響。 */
-  if (!valid.value) { goTo(problems.value[0]!.anchor); return }
+  attemptSeq.value++
+  jumpMiss.value = ''
+  /* 不 return 就算了：按鈕按得下去，按下去一定要有回應。回應在按鈕底下
+     那塊 .todo（v-if 在 attempted 之後會多出一行 data-testid="submit-hitch"），
+     不是把人送去別的地方。 */
+  if (!valid.value) return
   if (!me.value) return
   error.value = ''
   takeoverCerts.value = []
@@ -459,7 +499,22 @@ async function submit() {
     } else {
       error.value = e instanceof ApiError ? e.message : '開池失敗，請稍後再試'
     }
+    /* 錯誤訊息本身現在就貼在送出鈕底下，按完按鈕的人本來就在看那裡。
+       但版面會因為 takeover 那一塊冒出來而長高，而且桌機的側欄可能整條
+       捲在別的位置 —— 保險再確認一次它真的在視窗裡。**不是主要回饋**，
+       只是最後一道保險：主要回饋是「按鈕正下方多出一塊紅的」。 */
+    await nextTick()
+    ensureVisible(errBox.value)
   } finally { busy.value = false }
+}
+
+/** 只有在真的看不到的時候才捲。已經看得到卻硬捲一次，就是使用者抱怨的那種位移 */
+function ensureVisible(el: HTMLElement | null) {
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  const vh = window.innerHeight || document.documentElement.clientHeight
+  if (r.top >= 0 && r.bottom <= vh) return
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' })
 }
 </script>
 
@@ -801,13 +856,42 @@ async function submit() {
           </p>
         </div>
 
-        <!-- 「還差什麼」清單。**每一項都點得動**：缺的欄位常常捲在畫面外，
-             只寫一句「請填寫」等於叫使用者自己去找是哪一格。 -->
+        <!-- **刻意不禁用**：禁用的按鈕沒有辦法解釋自己，而這一頁的欄位多半
+             捲在畫面外。按得下去，按下去底下就長出「還差什麼」。
+             按鈕上的字也跟著換 —— 那是按下去當下**最靠近手指**的那個變化，
+             使用者的視線本來就在按鈕上，不必去別的地方找回應。 -->
+        <button type="submit" class="btn primary go" :class="{ notyet: !valid }" :disabled="busy">
+          {{ busy ? '封存籤序中…'
+             : valid ? '開池上架'
+             : attempted ? `還沒送出 —— 還差 ${problems.length} 項（見下方）`
+             : '看看還差什麼' }}
+        </button>
+
+        <!-- 「還差什麼」清單。位置刻意在**送出鈕正下方**：
+             它原本在按鈕上面、而按下去又會把畫面捲到頁首，實測按鈕與清單
+             會一起離開視窗（2994px → 0），使用者看到的就是「按了沒反應」。
+             按鈕在哪裡，答案就要在哪裡。
+             每一項都點得動 —— 缺的欄位常常捲在畫面外，只寫一句「請填寫」
+             等於叫使用者自己去找是哪一格。 -->
         <div v-if="problems.length" class="todo" :class="{ hot: attempted }">
+          <!-- 按下去的「收據」。:key 綁 attemptSeq，所以連按第二下也會
+               重新掛載、重播一次動畫 —— 沒有它，第二下一樣是零回饋。 -->
+          <p
+            v-if="attempted" :key="attemptSeq" class="todoHit"
+            data-testid="submit-hitch" :data-attempt="attemptSeq"
+            role="alert"
+          >
+            <svg class="todoHitIco" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
+              <path d="M12 7.5v5.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+              <circle cx="12" cy="16.6" r="1.2" fill="currentColor" />
+            </svg>
+            <span>收到了，但還開不了池：<strong>{{ problems[0]!.msg }}</strong></span>
+          </p>
           <p class="todoHead">還差 {{ problems.length }} 項才能開池</p>
           <ul>
             <li v-for="p in problems" :key="p.anchor + p.msg">
-              <button type="button" class="todoItem" @click="goTo(p.anchor)">
+              <button type="button" class="todoItem" @click="goTo(p.anchor, p.msg)">
                 <span>{{ p.msg }}</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
@@ -817,7 +901,12 @@ async function submit() {
           </ul>
         </div>
 
-        <p v-if="error" class="err">{{ error }}</p>
+        <!-- goTo() 找不到那一格。原本這個情況是 return，畫面上一個字都不會變 -->
+        <p v-if="jumpMiss" class="jumpMiss" data-testid="jump-miss" role="alert">{{ jumpMiss }}</p>
+
+        <!-- API 的錯誤。位置同樣在按鈕正下方：它原本在按鈕**上面**，
+             而使用者按完按鈕視線就在按鈕與底下，看不到就等於沒發生。 -->
+        <p v-if="error" ref="errBox" class="err" data-testid="submit-error" role="alert">{{ error }}</p>
 
         <!-- 編號已被登記：把出路接在錯誤訊息旁邊。
              使用者被擋住的當下就看得到下一步，而不是自己去找客服頁。 -->
@@ -837,11 +926,6 @@ async function submit() {
             >申請接管 {{ c.grader }} #{{ c.certNo }}</RouterLink>
           </div>
         </div>
-        <!-- **刻意不禁用**：禁用的按鈕沒有辦法解釋自己，而這一頁的欄位多半
-             捲在畫面外。按得下去、按下去把第一個問題捲到眼前並聚焦。 -->
-        <button type="submit" class="btn primary go" :class="{ notyet: !valid }" :disabled="busy">
-          {{ busy ? '封存籤序中…' : valid ? '開池上架' : '看看還差什麼' }}
-        </button>
       </aside>
     </form>
   </div>
@@ -1044,11 +1128,19 @@ dd { margin: 0; font-weight: 600; }
 .fair { padding: 14px 16px; }
 .fair p { font-size: 12px; margin: 0; line-height: 1.6; }
 .fair strong { color: var(--ink); }
-.go { width: 100%; padding: 13px 0; font-size: 15px; }
+.go { width: 100%; padding: 13px 0; font-size: 15px; min-height: 48px; }
+/* 按鈕上的字會從「看看還差什麼」變成「還沒送出 —— 還差 N 項（見下方）」，
+   換行了也不能被裁掉：那句話就是回饋本身 */
+.go { white-space: normal; line-height: 1.4; }
 /* 還不能開池時**不變灰**（灰＝壞掉），改用低調的外框色：按得下去，
    按下去會告訴你還差什麼 */
 .go.notyet { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
-.err { color: var(--danger); font-size: 12.5px; font-weight: 600; margin: 0; }
+.err {
+  margin: 0; padding: 10px 12px; min-width: 0;
+  border-radius: 10px; border: 1px solid var(--danger);
+  background: var(--danger-wash); color: var(--danger-ink);
+  font-size: 12.5px; line-height: 1.7; font-weight: 600; overflow-wrap: anywhere;
+}
 
 /* 編號已被登記時的出口。用強調色的 wash 而不是紅底：
    它不是又一則錯誤，它是**解法**，要讀起來像一條路而不是第二個壞消息。 */
@@ -1077,14 +1169,52 @@ dd { margin: 0; font-weight: 600; }
 .todo.hot .todoHead { color: var(--danger); }
 .todo ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .todoItem {
-  display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0;
-  padding: 7px 9px; font: inherit; font-size: 12.5px; line-height: 1.55; text-align: left;
+  /* min-height 44：這一排是真的要用手指點的，44 是可點目標的下限 */
+  display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; min-height: 44px;
+  padding: 8px 11px; font: inherit; font-size: 12.5px; line-height: 1.55; text-align: left;
   border: 1px solid var(--line-soft); border-radius: 9px;
   background: var(--surface); color: var(--ink); cursor: pointer;
 }
 .todoItem span { min-width: 0; flex: 1; }
 .todoItem svg { width: 14px; height: 14px; flex: none; color: var(--muted); }
 .todoItem:hover { border-color: var(--accent); }
+
+/* ---- 按下送出的「收據」 ----
+
+   為什麼要有這一行，而不是只讓清單轉紅：轉紅是一個**只有前後對照才看得出來**
+   的變化，使用者按下去的當下並沒有另一張截圖可以比。多出一整行字才是
+   「我按了、它回答了」。動畫也是同一個理由 —— 位置固定不動，只有它自己在動，
+   視線不會被帶走（自動捲動就是把視線整個帶走，那才是災難）。 */
+.todoHit {
+  display: flex; align-items: flex-start; gap: 8px; min-width: 0;
+  margin: 0 0 10px; padding: 9px 11px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger-ink);
+  font-size: 12.5px; line-height: 1.6; font-weight: 600;
+  animation: hitIn .28s ease-out;
+}
+.todoHit strong { color: var(--ink); overflow-wrap: anywhere; }
+.todoHit span { min-width: 0; flex: 1; }
+.todoHitIco { width: 16px; height: 16px; flex: none; margin-top: 1px; }
+
+@keyframes hitIn {
+  0%   { opacity: 0; transform: translateY(-6px); }
+  60%  { opacity: 1; transform: translateY(2px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+/* 關掉動態效果的人一樣要看得到那一行，只是不要它跳 */
+@media (prefers-reduced-motion: reduce) {
+  .todoHit { animation: none; }
+}
+
+/* goTo() 找不到那一格時講的話。舊版這個情況是靜默 return —— 按了完全沒事發生 */
+.jumpMiss {
+  margin: 10px 0 0; padding: 9px 11px; min-width: 0;
+  border-radius: 10px;
+  background: var(--warn-wash); color: var(--warn-ink);
+  font-size: 12px; line-height: 1.7; font-weight: 600;
+}
 
 /* 必填徽章。必填就要標出來 —— 使用者不該靠「按鈕按不動」推斷哪一格是必填的 */
 .req {
