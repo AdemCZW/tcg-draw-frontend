@@ -17,6 +17,7 @@ import SellerChip from '@/components/SellerChip.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import PoolOriginBadge from '@/components/PoolOriginBadge.vue'
 import { track } from '@/lib/ga'
+import { POOL_STATUS_LABEL, isDrawable, isUpcoming, isFinished } from '@/lib/pool-status'
 
 const pools = usePoolStore()
 const sellers = useSellerStore()
@@ -27,13 +28,20 @@ onMounted(() => {
   track('view_play')
 })
 
-/** 開放中的排前面；完抽的仍然看得到，但排到後面去 */
+/* 排序：現在抽得到的最前面，接著是幾分鐘內就開賣的，抽完的排最後。
+   本來是「open」與「不是 open」兩堆，於是剛開好的池跟已經結束的池
+   混在同一堆的最後面 —— 一個等一下就能抽的池被埋在一排結束的池裡。 */
 const list = computed<Pool[]>(() => [
-  ...pools.pools.filter(p => p.status === 'open'),
-  ...pools.pools.filter(p => p.status !== 'open')
+  ...pools.pools.filter(isDrawable),
+  ...pools.pools.filter(isUpcoming),
+  ...pools.pools.filter(isFinished)
 ])
 
-const describe = (p: Pool) => `${p.title}，${p.ticketPrice} 點一抽，剩 ${p.remainingTickets} 抽`
+/* 讀屏的位置提示要把狀態唸出來：軌道上一張抽不了的卡，
+   視覺上有角標，讀屏沒有的話就只聽到「剩 100 抽」，反而更誤導。 */
+const describe = (p: Pool) =>
+  `${p.title}，${p.ticketPrice} 點一抽，剩 ${p.remainingTickets} 抽`
+  + (isDrawable(p) ? '' : `，${POOL_STATUS_LABEL[p.status]}`)
 
 /* ---- 背景跟著當前這一池變色 ----
    這一頁的核心是「一次專心看一池」，所以整個環境應該對「你現在看的是哪一池」
@@ -215,18 +223,27 @@ const pct = computed(() => {
 
         <!-- 選池台以前沒有任何行動點，唯一的出口是「點卡片」——
              那是可以點的，但畫面上看不出來。把單價跟入口併成一顆按鈕講明白。
-             完抽的池不掛強調色：那顆橘鈕的意思是「可以買」，
-             對著一池 0 抽還喊價等於騙人進去撞牆。 -->
+             抽不了的池不掛強調色：那顆橘鈕的意思是「可以買」，
+             對著一池 0 抽還喊價等於騙人進去撞牆。
+
+             三種寫法而不是兩種：以前「不是 open」一律印「已完抽 / 看抽選結果」，
+             於是剛開好的池被說成抽完了，而且把人導去看一個還不存在的結果。
+             即將開賣的池仍然掛 done 樣式（現在按下去抽不到），
+             但字要講對：它是「等一下再來」不是「不用再來了」。 -->
         <RouterLink
           :to="{ name: 'pool', params: { id: activePool.id } }"
-          class="cta" :class="{ done: activePool.status !== 'open' }"
+          class="cta" :class="{ done: !isDrawable(activePool) }"
         >
-          <template v-if="activePool.status === 'open'">
+          <template v-if="isDrawable(activePool)">
             <span class="ctaPrice">{{ activePool.ticketPrice.toLocaleString() }} 點<span class="per"> / 抽</span></span>
             <span class="ctaGo">進入這一池</span>
           </template>
+          <template v-else-if="isUpcoming(activePool)">
+            <span class="ctaPrice">{{ POOL_STATUS_LABEL[activePool.status] }}</span>
+            <span class="ctaGo">先看這一池</span>
+          </template>
           <template v-else>
-            <span class="ctaPrice">已完抽</span>
+            <span class="ctaPrice">{{ POOL_STATUS_LABEL[activePool.status] }}</span>
             <span class="ctaGo">看抽選結果</span>
           </template>
         </RouterLink>

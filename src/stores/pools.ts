@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import type { Pool, DrawResult } from '@/types/models'
+import { isDrawable } from '@/lib/pool-status'
 
 /* 開卡結果只活在記憶體裡的話，使用者抽完手滑重整就變成「沒有可顯示的抽選結果」。
    鏡射一份到 sessionStorage（分頁關掉就消失，不會累積）；
@@ -30,7 +31,10 @@ export const usePoolStore = defineStore('pools', {
     lastResult: null as DrawResult | null
   }),
   getters: {
-    openPools: s => s.pools.filter(p => p.status === 'open'),
+    /* 「現在抽得到的池」。判斷借 lib/pool-status.ts 那一份 ——
+       committed 也不是 open，但它是「還沒開賣」不是「不能抽了」，
+       兩者的差別由那個檔統一定義，這裡不再自己寫一次比較式。 */
+    openPools: s => s.pools.filter(isDrawable),
     byId: s => (id: string) => s.pools.find(p => p.id === id),
     /** 依 drawId 取結果：記憶體優先，沒有就從 sessionStorage 撈（reload 之後） */
     resultById: s => (drawId: string): DrawResult | null =>

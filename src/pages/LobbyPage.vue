@@ -60,6 +60,7 @@ import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import SellerChip from '@/components/SellerChip.vue'
 import { track } from '@/lib/ga'
 import { refDiscount, refPriceNum } from '@/lib/refprice'
+import { isDrawable, isUpcoming } from '@/lib/pool-status'
 
 const pools = usePoolStore()
 const sellers = useSellerStore()
@@ -131,34 +132,66 @@ const tint = computed<[number, number, number]>(() => {
    而且 energy 固定在低檔、gain 壓到 0.55。 */
 const sky3d = ref(!new URLSearchParams(location.search).has('nogl'))
 
-/* ---- 分類 ---- */
-type Cat = 'all' | 'official' | 'merchant' | 'personal' | 'hot' | 'cheap' | 'big' | 'special' | 'done'
+/* ---- 分類 ----
+
+   ==== 這一組條件的基準集合是「還在跑的池」，不是「open」====
+
+   舊版每一格都寫 `status === 'open'`，包括「全部」。後果是：
+   一個剛開好的池（committed，最長五分鐘，見 lib/pool-status.ts）
+   **在「全部」裡找不到**，只會出現在「已完抽」——而它一張都沒抽走。
+   賣家開完池回大廳確認自己的池上架了沒，看到的是「沒有」。
+
+   所以基準改成 live = 可以抽（open）＋ 即將可以抽（committed）：
+   這兩種池對買家的意義是「這裡有東西，看得到、進得去」，
+   差別只是現在按下去會不會有反應 —— 而那件事由卡片上的角標與
+   池詳情的狀態列各自講清楚，不該用「從清單裡消失」來表達。
+
+   兩個例外刻意留在 open：
+     hot   「快完抽」的前提是已經賣掉一大半。committed 一定是 100% 剩，
+            本來就永遠不符合條件，寫 live 只是讓條件看起來比實際寬。
+     其餘的條件（來源、價位、賞值、玩法）講的都是「這一池是什麼」，
+            跟賣到哪裡無關，所以一律吃 live。
+*/
+type Cat = 'all' | 'upcoming' | 'official' | 'merchant' | 'personal'
+  | 'hot' | 'cheap' | 'big' | 'special' | 'soldout' | 'revealed'
 const cat = ref<Cat>('all')
 
+/** 還在跑的池：現在抽得到的，加上等外部隨機源、幾分鐘內就開賣的 */
+const live = (p: Pool) => isDrawable(p) || isUpcoming(p)
+
 const MATCH: Record<Cat, (p: Pool) => boolean> = {
-  all: p => p.status === 'open',
+  all: live,
+  /* 即將開賣自己一格。它不是「已結束」的一種，也不該只能靠「全部」翻到 ——
+     願意等幾分鐘的買家（還有剛開完池的賣家）要有地方直接找到它。 */
+  upcoming: isUpcoming,
   // 來源分類：買家最常問的其實是「這池是誰開的」
-  official: p => p.status === 'open' && p.origin === 'official',
-  merchant: p => p.status === 'open' && p.origin === 'merchant',
-  personal: p => p.status === 'open' && p.origin === 'personal',
+  official: p => live(p) && p.origin === 'official',
+  merchant: p => live(p) && p.origin === 'merchant',
+  personal: p => live(p) && p.origin === 'personal',
   // 快完抽：剩不到三成。這是最有張力的狀態，排第一個
   hot: p => p.status === 'open' && leftPct(p) <= 30,
-  cheap: p => p.status === 'open' && p.ticketPrice <= 300,
+  cheap: p => live(p) && p.ticketPrice <= 300,
   /* 高額賞：池裡還沒被抽走的最貴一張市值 >= 5000。
      原本這格寫「A 賞或最後賞還在池裡」，但每個開放中的池都符合 ——
      永遠篩不掉東西的分類等於沒有分類，只是多一個要掃過的按鈕。
      改看金額才真的有選擇性，也才是玩家實際在找的訊號。 */
-  big: p => p.status === 'open' && topLiveValue(p) >= 5000,
+  big: p => live(p) && topLiveValue(p) >= 5000,
   /* 特殊玩法：目前只剩指定賞（連莊與競標整組移除了，後端零實作）。
      muteki 不列在這裡 —— 它是全站唯一開得出來的玩法（見 migration 016），
      每個池都符合的話這一格會列出全部，跟「全部」那一格一模一樣。
      永遠篩不掉東西的分類等於沒有分類，理由跟上面 big 那格的註解相同。
      API 模式下沒有指定賞的池，這一格會被底下的 cats 濾成不顯示。 */
-  special: p => p.status === 'open' && p.mode === 'shitei',
-  done: p => p.status !== 'open'
+  special: p => live(p) && p.mode === 'shitei',
+  /* 「已完抽」拆成兩格。以前 done 是 `status !== 'open'`，
+     一格裝著三種完全不同的狀態：還沒開賣的、抽完等開獎的、已開獎的。
+     現在一格一種狀態，而且格子的標籤跟卡片角標用的是同一個字 ——
+     點「已開獎」進去每一張都印著「開獎」，這才是分類該有的樣子。 */
+  soldout: p => p.status === 'sold_out',
+  revealed: p => p.status === 'revealed'
 }
 const CATS: { k: Cat; label: string }[] = [
   { k: 'all', label: '全部' },
+  { k: 'upcoming', label: '即將開賣' },
   { k: 'official', label: '官方池' },
   { k: 'merchant', label: '商家池' },
   { k: 'personal', label: '個人池' },
@@ -166,7 +199,8 @@ const CATS: { k: Cat; label: string }[] = [
   { k: 'big', label: '高額賞' },
   { k: 'cheap', label: '銅板價' },
   { k: 'special', label: '特殊玩法' },
-  { k: 'done', label: '已完抽' }
+  { k: 'soldout', label: '已完抽' },
+  { k: 'revealed', label: '已開獎' }
 ]
 /** 空的分類不顯示 —— 點進去看到空白比少一個選項糟 */
 const cats = computed(() => CATS.filter(c => pools.pools.some(MATCH[c.k])))

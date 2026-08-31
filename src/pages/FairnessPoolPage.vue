@@ -27,6 +27,7 @@ import { usePoolStore } from '@/stores/pools'
 import { verifyReveal, commitOf, commitV2, manifestHashOf, type Reveal } from '@/shared/fairness'
 import { API_URL, MOCK } from '@/lib/config'
 import { track } from '@/lib/ga'
+import { isRevealed, isUpcoming, isDrawable } from '@/lib/pool-status'
 
 const route = useRoute()
 const pools = usePoolStore()
@@ -105,7 +106,20 @@ const fmt = (ms: number) =>
 // 已開獎的池直接算給他看，不用等他按
 onMounted(async () => {
   await pools.ensureLoaded()
-  if (pool.value?.status === 'revealed') run()
+  if (pool.value && isRevealed(pool.value)) run()
+})
+
+/* 算不動的時候要說對是「為什麼」算不動 —— 三種狀態離「算得動」的距離不同：
+   還沒開賣（連一籤都還沒發出去）、抽選中（種子要等抽完才公開）、
+   抽完了（種子正在公開的路上）。舊版三種一律講成「本池尚未開獎」，
+   那句話對前兩種來說沒有錯，但它把「還要等好幾天」跟「再幾分鐘」
+   講成同一件事，讀者不知道自己該不該再回來。 */
+const whyNotYet = computed(() => {
+  const p = pool.value
+  if (!p || isRevealed(p)) return ''
+  if (isUpcoming(p)) return '本池還沒開賣 —— 籤序已封存，正在等第三方隨機源（drand）的指定輪次到期。要等開賣、抽完、種子公開之後，這一頁才算得動。'
+  if (isDrawable(p)) return '本池還在抽選中。server seed 要等整池抽完才會公開 —— 提前公開等於把後面的籤序告訴還沒抽的人。'
+  return '本池的籤已經抽完，server seed 正在公開中。種子一公開，這一頁就算得動。'
 })
 </script>
 
@@ -120,11 +134,9 @@ onMounted(async () => {
         獎品數量要跟宣告的相符 —— 三件事都成立才算通過。
       </p>
 
-      <p v-if="pool.status !== 'revealed'" class="muted note">
-        本池尚未開獎。server seed 會在完抽後公開，屆時這一頁才算得動。
-      </p>
+      <p v-if="whyNotYet" class="muted note">{{ whyNotYet }}</p>
 
-      <template v-else>
+      <template v-if="isRevealed(pool)">
         <button class="btn primary" :disabled="loading" @click="run">
           {{ loading ? '重算中…' : '重新驗算' }}
         </button>

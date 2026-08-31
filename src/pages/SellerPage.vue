@@ -7,6 +7,7 @@ import PoolCard from '@/components/PoolCard.vue'
 import SellerChip from '@/components/SellerChip.vue'
 import CardArt from '@/components/CardArt.vue'
 import TierBadge from '@/components/TierBadge.vue'
+import { isDrawable, isUpcoming, isFinished } from '@/lib/pool-status'
 
 const route = useRoute()
 const sellers = useSellerStore()
@@ -16,8 +17,17 @@ onMounted(() => { sellers.ensureLoaded(); pools.ensureLoaded() })
 
 const seller = computed(() => sellers.byId(String(route.params.id)))
 const theirPools = computed(() => pools.pools.filter(p => p.sellerId === route.params.id))
-const openPools = computed(() => theirPools.value.filter(p => p.status === 'open'))
-const pastPools = computed(() => theirPools.value.filter(p => p.status !== 'open'))
+/* 三堆而不是兩堆。以前是 open 與「不是 open」，於是賣家剛開好、
+   一張都沒抽走的池會被放進「已完抽」那一區 —— 那一區是拿來證明
+   「這個賣家過去開過什麼」的，把還沒開賣的池放進去，等於把新池
+   當成歷史紀錄展示，買家也不會想去點。 */
+const openPools = computed(() => theirPools.value.filter(isDrawable))
+const upcomingPools = computed(() => theirPools.value.filter(isUpcoming))
+/* 標題用「已結束」而不是「已完抽」：這一區同時裝著抽完等開獎（sold_out）
+   與已開獎（revealed）兩種池，它們在買家眼裡不是同一件事
+   （見 lib/pool-status.ts）。是哪一種由每張卡自己的角標講，
+   區塊標題只負責「這些都跑完了」。 */
+const pastPools = computed(() => theirPools.value.filter(isFinished))
 
 /* 實際 vs 標示的落差。
    正號代表實際比標示好，負號代表比較差。
@@ -102,8 +112,13 @@ const gap = computed(() => {
       <div class="poolGrid"><PoolCard v-for="p in openPools" :key="p.id" :pool="p" /></div>
     </section>
 
+    <section v-if="upcomingPools.length">
+      <h2 class="sec display">即將開賣</h2>
+      <div class="poolGrid"><PoolCard v-for="p in upcomingPools" :key="p.id" :pool="p" /></div>
+    </section>
+
     <section v-if="pastPools.length">
-      <h2 class="sec display">已完抽</h2>
+      <h2 class="sec display">已結束</h2>
       <div class="poolGrid"><PoolCard v-for="p in pastPools" :key="p.id" :pool="p" /></div>
     </section>
 

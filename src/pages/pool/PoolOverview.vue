@@ -15,6 +15,7 @@ import PoolOriginBadge from '@/components/PoolOriginBadge.vue'
 import SellerChip from '@/components/SellerChip.vue'
 import DrawPanel from '@/components/DrawPanel.vue'
 import { FAIRNESS_UI } from '@/lib/config'
+import { POOL_STATUS_LABEL, POOL_STATUS_NOTE, isDrawable, isUpcoming, isRevealed } from '@/lib/pool-status'
 
 const props = defineProps<{ pool: Pool }>()
 const sellers = useSellerStore()
@@ -72,14 +73,24 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
          這一份走 sheet 版 —— 手機一屏就這麼高，合計與按鈕不該一進頁就先佔掉一塊；
          選了抽數才從畫面下緣把購買列叫出來（見 DrawPanel 的 variant 說明） -->
     <div class="mobileCta">
-      <DrawPanel v-if="pool.status === 'open'" :pool="pool" variant="sheet" />
+      <DrawPanel v-if="isDrawable(pool)" :pool="pool" variant="sheet" />
+      <!-- 還沒開賣（committed）跟抽完了（sold_out / revealed）以前共用
+           同一張「本池已完抽」的卡。手機上這一塊就是主 CTA 的位置，
+           講錯的代價最大：一個剛開好、100 籤全在的池被說成沒得抽，
+           買家直接離開，而它其實只要等幾分鐘。 -->
+      <div v-else-if="isUpcoming(pool)" class="done card soonCard">
+        <p class="soonHead">{{ POOL_STATUS_LABEL[pool.status] }}</p>
+        <p class="muted soonNote">{{ POOL_STATUS_NOTE[pool.status] }}</p>
+      </div>
       <div v-else class="done card">
-        <p>本池已完抽</p>
+        <p>{{ POOL_STATUS_LABEL[pool.status] }}</p>
+        <p class="muted soonNote">{{ POOL_STATUS_NOTE[pool.status] }}</p>
         <!-- 驗算入口暫時收起來（見 lib/config.ts 的 FAIRNESS_UI）。
-             這張卡本身留著：它是購買面板讓位之後的狀態說明，
-             「本池已完抽」一句話自己就講得完，不是講到一半的段落。 -->
+             這張卡本身留著：它是購買面板讓位之後的狀態說明。
+             只掛在已開獎的池上 —— 抽完但種子還沒公開時按進去只會看到
+             「本池尚未開獎」，那顆按鈕騙人按。 -->
         <RouterLink
-          v-if="FAIRNESS_UI" :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn"
+          v-if="FAIRNESS_UI && isRevealed(pool)" :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn"
         >驗證抽選結果</RouterLink>
       </div>
     </div>
@@ -126,6 +137,11 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
 .mobileCta { display: none; }
 .done { padding: 20px; text-align: center; display: grid; gap: 10px; }
 .done p { margin: 0; }
+/* --warn-ink 而不是 --warn：淺色主題下 --warn 當字色對比只有 2.6（見 tokens.css） */
+.soonHead { color: var(--warn-ink); font-weight: 700; }
+/* 說明是整段句子不是標籤：行高放寬、字級壓在標題之下，
+   並限寬 —— 桌機一行 60 幾個字讀不下去 */
+.soonNote { font-size: 13px; line-height: 1.65; max-width: 46ch; margin-inline: auto; }
 .hint { font-size: 13px; margin: 0; }
 
 /* 整列可點。min-height 44 是硬性下限，padding 讓字不貼邊；

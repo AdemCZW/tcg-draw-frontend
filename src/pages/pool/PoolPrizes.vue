@@ -21,6 +21,7 @@ import TierBadge from '@/components/TierBadge.vue'
 import { tierOdds, oddsText, poolFloor } from '@/lib/pool-odds'
 import { FLOOR_RATIO_LABEL, FLOOR_RATIO_MEANING } from '@/shared/economics'
 import type { Tier } from '@/types/models'
+import { isDrawable } from '@/lib/pool-status'
 
 const props = defineProps<{ pool: Pool }>()
 
@@ -43,8 +44,10 @@ const worst = computed(() => {
 const tierText = (t: string) => (t === 'BUST' ? '爆賞' : t === 'LAST' ? '最後賞' : t + ' 賞')
 const asTier = (t: string) => t as Tier
 /* 開賣前與開獎後都不該顯示「現在抽中的機率」——
-   前者還沒開始賣、後者已經沒得抽了 */
-const live = computed(() => props.pool.status === 'open' && props.pool.remainingTickets > 0)
+   前者還沒開始賣（committed 連籤位都還沒生成）、後者已經沒得抽了。
+   判斷走 lib/pool-status.ts 的 isDrawable，不自己寫 `=== 'open'`：
+   狀態的判斷全站只有那一份，這一頁的結論本來就跟它一致。 */
+const live = computed(() => isDrawable(props.pool) && props.pool.remainingTickets > 0)
 </script>
 
 <template>

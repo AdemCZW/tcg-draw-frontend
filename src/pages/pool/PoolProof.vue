@@ -19,6 +19,7 @@ import type { Pool } from '@/types/models'
 import CommitHashBox from '@/components/CommitHashBox.vue'
 import EscrowNotice from '@/components/EscrowNotice.vue'
 import { FAIRNESS_UI } from '@/lib/config'
+import { isRevealed } from '@/lib/pool-status'
 defineProps<{ pool: Pool }>()
 </script>
 
@@ -36,11 +37,16 @@ defineProps<{ pool: Pool }>()
     </p>
     <CommitHashBox :pool="pool" />
     <EscrowNotice :pool="pool" />
+    <!-- 「自己驗算」只在種子真的公開了（revealed）之後才成立。
+         以前的條件是 `status === 'open'`，於是還沒開賣的池（committed）
+         與抽完但種子還沒公開的池（sold_out）都掛上「自己驗算這一池 →」，
+         按進去看到的卻是「本池尚未開獎」—— 那是一顆按了會落空的按鈕。
+         沒得算的時候仍然給連結，但字要講對：進去看的是材料，不是答案。 -->
     <RouterLink
       v-if="FAIRNESS_UI"
       :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn verify"
     >
-      {{ pool.status === 'open' ? '看這一池的驗算頁 →' : '自己驗算這一池 →' }}
+      {{ isRevealed(pool) ? '自己驗算這一池 →' : '看這一池的驗算頁 →' }}
     </RouterLink>
     <RouterLink v-if="FAIRNESS_UI" :to="{ name: 'fairness' }" class="more muted">公平性機制完整說明</RouterLink>
   </div>

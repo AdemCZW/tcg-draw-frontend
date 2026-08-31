@@ -32,6 +32,10 @@ const selected = ref<number | null>(props.variant === 'sheet' ? null : 1)
 const error = ref('')
 
 const cost = computed(() => (selected.value ?? 0) * props.pool.ticketPrice)
+/* 這裡判的是**籤數**不是狀態，而且刻意如此：這個面板只會掛在 status === 'open'
+   的池上（PoolShell 與 PoolOverview 都用 isDrawable 擋在外面），
+   所以它要防的不是「這池已經結束了」，是「最後幾籤在我按下去之前被別人買走」。
+   那種情況下「已完抽」三個字是對的 —— 籤真的沒了。 */
 const soldOut = computed(() => props.pool.remainingTickets <= 0)
 const notEnoughTickets = computed(() => (selected.value ?? 0) > props.pool.remainingTickets)
 

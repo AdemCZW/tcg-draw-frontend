@@ -4,6 +4,7 @@ import type { Pool } from '@/types/models'
 import CardArt from './CardArt.vue'
 import PoolModeBadge from './PoolModeBadge.vue'
 import PoolOriginBadge from './PoolOriginBadge.vue'
+import { isDrawable, isUpcoming } from '@/lib/pool-status'
 
 const props = withDefaults(defineProps<{
   pool: Pool
@@ -15,6 +16,17 @@ const props = withDefaults(defineProps<{
 }>(), { variant: 'grid' })
 
 const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.totalTickets) * 100))
+
+/* 角標的字。以前是「不是 open 就印『完抽』」，於是剛開好、100 籤全在的池
+   會同時印著「完抽」跟「剩 100/100」—— 一張卡上兩句互相打架的話。
+   三種非開放狀態要用三個不同的字（見 lib/pool-status.ts）：
+     committed 即將開賣   還不能抽，但東西都還在
+     sold_out  完抽       抽完了，種子還沒公開
+     revealed  開獎       種子公開了，可以驗算
+   角標只放最短的那一版：這是一個蓋在卡圖上的小標，不是句子。 */
+const TAG: Record<string, string> = { committed: '即將開賣', sold_out: '完抽', revealed: '開獎' }
+const tag = computed(() => (isDrawable(props.pool) ? '' : TAG[props.pool.status] ?? ''))
+const soon = computed(() => isUpcoming(props.pool))
 const topPrize = computed(() => props.pool.prizes.find(p => p.tier === 'A') ?? props.pool.prizes.find(p => p.tier === 'LAST'))
 const aLive = computed(() => (topPrize.value?.remaining ?? 0) > 0)
 
@@ -80,7 +92,7 @@ function onLeave() {
 
     <div class="mode-tag"><PoolModeBadge :mode="pool.mode" /></div>
     <div class="origin-tag"><PoolOriginBadge :origin="pool.origin" /></div>
-    <span v-if="pool.status !== 'open'" class="doneTag">完抽</span>
+    <span v-if="tag" class="doneTag" :class="{ soon }">{{ tag }}</span>
 
     <div class="body">
       <h3>{{ pool.title }}</h3>
@@ -160,6 +172,10 @@ function onLeave() {
   padding: 4px 10px; border-radius: var(--pill);
   background: rgba(8, 6, 14, .8); color: #fff;
 }
+/* 「即將開賣」跟另外兩個角標的意思相反 —— 那兩個是「結束了」，
+   這個是「還沒開始，等一下再來」。同一顆黑底灰標會讓它讀起來也像結束，
+   所以換警示色底：它跟強調色（可以買）與中性黑（結束）都不一樣。 */
+.doneTag.soon { background: var(--warn); color: #17130a; }
 
 .body {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;

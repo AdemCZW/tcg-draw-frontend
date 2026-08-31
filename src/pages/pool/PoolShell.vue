@@ -17,6 +17,7 @@ import { useSellerStore } from '@/stores/sellers'
 import DrawPanel from '@/components/DrawPanel.vue'
 import { track } from '@/lib/ga'
 import { FAIRNESS_UI } from '@/lib/config'
+import { POOL_STATUS_LABEL, POOL_STATUS_NOTE, isDrawable, isUpcoming, isRevealed } from '@/lib/pool-status'
 
 const route = useRoute()
 const router = useRouter()
@@ -63,7 +64,11 @@ const activeTab = computed(() => String(route.name))
       <p class="meta mono muted">
         <span>{{ pool.ticketPrice.toLocaleString() }} 點 / 抽</span>
         <span>剩 {{ pool.remainingTickets }} / {{ pool.totalTickets }}</span>
-        <span :class="{ live: pool.status === 'open' }">{{ pool.status === 'open' ? '抽選中' : '已完抽' }}</span>
+        <!-- 狀態的字來自 lib/pool-status.ts。這裡本來是
+             `status === 'open' ? '抽選中' : '已完抽'` —— 四個狀態塞兩個格子，
+             於是剛開好、一張都沒抽走的池會印出「剩 100 / 100　已完抽」，
+             同一行自己打自己。 -->
+        <span :class="{ live: isDrawable(pool), soon: isUpcoming(pool) }">{{ POOL_STATUS_LABEL[pool.status] }}</span>
       </p>
       <nav class="tabs" aria-label="池的分頁">
         <RouterLink
@@ -97,13 +102,24 @@ const activeTab = computed(() => String(route.name))
 
       <!-- 桌機側欄：購買面板一直在。手機收進總覽頁的主 CTA -->
       <aside class="side">
-        <DrawPanel v-if="pool.status === 'open'" :pool="pool" />
+        <DrawPanel v-if="isDrawable(pool)" :pool="pool" />
+        <!-- 還沒開賣：這裡以前跟「抽完了」共用同一張「本池已完抽」的卡。
+             兩者對買家的意義相反 —— 一個是「等一下再來」，一個是「不用再來了」，
+             所以要分開講，而且等待的那一張要把「還要等多久」講出來。 -->
+        <div v-else-if="isUpcoming(pool)" class="done card soonCard">
+          <p class="soonHead">{{ POOL_STATUS_LABEL[pool.status] }}</p>
+          <p class="muted soonNote">{{ POOL_STATUS_NOTE[pool.status] }}</p>
+        </div>
         <div v-else class="done card">
-          <p>本池已完抽</p>
+          <p>{{ POOL_STATUS_LABEL[pool.status] }}</p>
+          <p class="muted soonNote">{{ POOL_STATUS_NOTE[pool.status] }}</p>
           <!-- 驗算入口暫時收起來（見 lib/config.ts 的 FAIRNESS_UI）。
-               跟總覽頁那張同一張卡的桌機版，處理方式要一致：卡留著、只收連結。 -->
+               跟總覽頁那張同一張卡的桌機版，處理方式要一致：卡留著、只收連結。
+               只有已開獎的池算得動，抽完但種子還沒公開的池按進去只會看到
+               「本池尚未開獎」—— 那是一顆騙人按的按鈕。 -->
           <RouterLink
-            v-if="FAIRNESS_UI" :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn"
+            v-if="FAIRNESS_UI && isRevealed(pool)"
+            :to="{ name: 'fairness-pool', params: { poolId: pool.id } }" class="btn"
           >驗證抽選結果</RouterLink>
         </div>
       </aside>
@@ -152,6 +168,11 @@ const activeTab = computed(() => String(route.name))
 h1 { font-size: 22px; margin: 0; letter-spacing: -.01em; }
 .meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; margin: 8px 0 0; }
 .live { color: var(--ok); font-weight: 600; }
+/* 「即將開賣」用警示色而不是綠色：綠色在這一行的意思是「現在可以抽」，
+   給一個抽不了的狀態掛同一個顏色，等於用顏色否定文字。
+   用 --warn-ink 不是 --warn：淺色主題底下 --warn 直接當字色只有 2.6 的對比
+   （tokens.css 那一段有量），--warn-ink 就是為了這種「警示色的字」而存在的。 */
+.soon { color: var(--warn-ink); font-weight: 600; }
 
 /* tab：底線式，選中的字色與底線走強調色。膠囊式在三個以上會太吵 */
 .tabs {
@@ -182,6 +203,9 @@ h1 { font-size: 22px; margin: 0; letter-spacing: -.01em; }
 .side { position: sticky; top: 76px; }
 .done { padding: 20px; text-align: center; display: grid; gap: 10px; }
 .done p { margin: 0; }
+.soonHead { color: var(--warn-ink); font-weight: 700; }
+/* 說明是整段句子，不是標籤 —— 行高放寬，字級壓在標題之下 */
+.soonNote { font-size: 13px; line-height: 1.65; }
 
 .skel { display: grid; gap: 12px; max-width: 520px; }
 .skel i { display: block; height: 18px; border-radius: 6px; background: var(--surface-2); }

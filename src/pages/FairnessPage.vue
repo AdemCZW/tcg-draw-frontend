@@ -40,8 +40,11 @@ const steps = [
     </ol>
     <div class="verify card holo-edge">
       <h3>自助驗算</h3>
-      <p class="muted">完抽的池會在此列出 seed 與籤序，可下載驗算腳本或直接在瀏覽器計算 hash。</p>
-      <RouterLink to="/pools" class="btn">找一個已完抽的池 →</RouterLink>
+      <!-- 「完抽」與「開獎」是兩個狀態，中間隔著一段等待：籤抽完了
+           （sold_out）種子還沒公開，這一頁算不動。列得出 seed 的是
+           已開獎（revealed）的池，所以這兩句話要講已開獎，不是完抽。 -->
+      <p class="muted">已開獎的池會在此列出 seed 與籤序，可下載驗算腳本或直接在瀏覽器計算 hash。</p>
+      <RouterLink to="/pools" class="btn">找一個已開獎的池 →</RouterLink>
     </div>
   </div>
 </template>
