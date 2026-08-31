@@ -16,6 +16,9 @@ import { requireAuth } from '../auth.js'
 import { notify } from '../notify.js'
 import { walletOf } from '../money.js'
 import { markShipped, sweepSettlements, toSettlement } from '../pool-settlement.js'
+/* 市場託管訂單那一半。只讀既有的東西：sweep 補算時限、toOrder 轉型別，
+   兩支都是 routes/orders.ts 在用的同一份 —— 這裡不重寫任何訂單邏輯。 */
+import { sweep as sweepOrders, toOrder } from '../orders-service.js'
 import { validateTracking } from '../shared/escrow.js'
 import { openSellerDocTicket } from '../tickets.js'
 
@@ -109,20 +112,42 @@ sellers.post('/apply', async c => {
   return c.json(r)
 })
 
-/* ---------------- 抽卡池的結算 ---------------- */
+/* ---------------- 賣家要寄的所有東西 ---------------- */
 
 /**
- * 賣家的結算清單 + 保留額。
+ * 賣家的結算清單 + 市場託管訂單 + 保留額。
  *
  * 這條路原本整段不存在，而缺它的後果是賣家看不到自己的錢：票金貸記給賣家
  * 之後是**保留額** —— 看得到、動不了 —— 但如果連「看得到」都沒有介面，
  * 賣家只會看到錢包裡多了一筆不能用的數字，不知道它為什麼被扣著、什麼時候放。
  *
  * 讀取時順手把時限補算到現在，理由跟訂單那邊一樣（「拉」不是「推」）。
+ *
+ * ── 為什麼這裡要一起回市場訂單（orders）─────────────────────────────
+ * 平台有兩條路會讓賣家欠一張實體卡：
+ *   抽卡池被抽走      → pool_settlements
+ *   市場成交・需寄送  → orders（庫內轉移當場過戶，沒有東西要寄）
+ * 這支端點原本只查前者，於是叫「出貨與結算」的那一頁**只涵蓋一半的出貨**。
+ *
+ * 而漏看的代價兩邊一樣重：72 小時沒出貨，池那邊退款給買家並記一次違約
+ * （違約滿 SELLER_DEFAULT_LIMIT 次不能再開池），市場那邊取消訂單並沒收保證金。
+ * 賣家會因為「東西在另一個分頁」而被記違約 —— 那不是不方便，是罰則。
+ *
+ * 所以合併發生在**這一層**，不在前端拼兩支 API：
+ *   兩邊的時限都要用同一個 serverTime 當基準，兩次往返會拿到兩個時鐘；
+ *   而且「我該寄什麼」是一個問題，不該由客戶端負責記得要問兩次。
+ * 兩套狀態機、時限、金流一行都沒有動 —— 這裡只是把第二份清單讀出來。
  */
 sellers.get('/settlements', async c => {
   const me = c.get('userId')
   await sql.begin(tx => sweepSettlements(tx, me)).catch(() => {})
+  /* 訂單的時限也要在這裡補算，理由跟上面那行一樣：這一頁現在是賣家看
+     「我還欠什麼」的唯一入口，如果只有 /orders 會推進訂單時間軸，
+     從這裡看到的狀態就會停在他上次打開訂單頁的那一刻 ——
+     一張早該逾期取消的訂單會在這裡顯示成「還能寄」。
+     用的是既有的 orders-service.sweep()，規則沒有第二份。 */
+  await sql.begin(tx => sweepOrders(tx, me)).catch(() => {})
+
   const rows = await sql`
     select st.*, p.card, p.status as prize_status, pl.title as pool_title,
            b.name as buyer_name, b.member_no as buyer_member_no,
@@ -130,22 +155,71 @@ sellers.get('/settlements', async c => {
               少了這個旗標，賣家在清單上只會看到「已入帳」，
               而那正是他最不會再點開的一列 —— 但它其實還欠著一張卡。 */
            (st.status = 'released' and st.ship_due_at is not null
-            and st.shipped_at is null) as owes_card
+            and st.shipped_at is null) as owes_card,
+           shp.address as ship_to
       from pool_settlements st
       join prizes p on p.id = st.prize_id
       join pools  pl on pl.id = st.pool_id
       /* 買家的名字要一起帶出來：這條清單的用途是「我現在要寄哪幾張、寄給誰」，
-         只給 buyer_id 的話賣家看到的是一串內部鍵，對不上任何一張出貨單。
-         只取 name 與會員編號 —— 收件地址在 shipments 那張表，不屬於結算列。 */
+         只給 buyer_id 的話賣家看到的是一串內部鍵，對不上任何一張出貨單。 */
       /* 接在 prizes 那一列的**當下擁有者**上，不是 st.buyer_id。
          卡在市場轉手之後 buyer_id 是前一個主人 —— 賣家照著它寄，
          包裹會寄錯人。要寄給誰是「這張卡現在是誰的」，不是「誰抽中的」。 */
       join users  b on b.id = p.user_id
+      /* 收件資訊。池這條路的地址在 shipments（買家申請出貨時整包填的，
+         見 routes/prizes.ts 的 ShipBody），而這支端點原本一個字都沒帶出來 ——
+         也就是說賣家在池這條路上**看得到要寄什麼、卻不知道要寄去哪**。
+         （買家的預設地址不能代打：出貨申請允許單次覆寫，照 users 那份寄會寄錯。）
+
+         範圍限定比照 routes/orders.ts 的 canShip，而且**條件寫在 SQL 裡**：
+         撈回來再過濾的話，任何一個忘了濾的新欄位都會把個資送出去。
+           只有這筆結算的賣家 —— where st.seller_id 已經限定
+           只在出貨義務還活著時給 —— 條件跟下面 /ship 端點收的狀態完全一樣
+             （awaiting_ship，或 F-5 的 released 還欠卡）。義務結束就沒有
+             理由繼續持有對方的住址，寄完了也不必再看。
+           收件人必須就是這張卡**現在的主人**（sh.user_id = p.user_id）——
+             對不上就一個字都不給，讓前端引導賣家去問。給一份可能屬於
+             前一個主人的地址，比不給更危險。 */
+      left join lateral (
+        select sh.address
+          from shipments sh
+         where st.prize_id = any(sh.prize_ids)
+           and sh.user_id = p.user_id
+           and (st.status = 'awaiting_ship'
+                or (st.status = 'released' and st.ship_due_at is not null
+                    and st.shipped_at is null))
+         order by sh.created_at desc
+         limit 1
+      ) shp on true
      where st.seller_id = ${me}
      order by st.created_at desc limit 200
   `
+
+  /* 市場託管訂單，賣家視角。
+     收件資訊那五欄是 routes/orders.ts 的 canShip 同一條規則 ——
+     那支端點要同時服務買賣雙方，所以它的條件裡帶了 o.seller_id = me；
+     這裡的 where 本來就只撈自己賣出的，但條件仍然整條照抄不簡化：
+     這是個資的閘門，讀的人要能一眼比對出兩邊是同一條規則，
+     而不是去推導「因為 where 已經限定了所以可以省略」。 */
+  const canShip = sql`o.seller_id = ${me} and o.status in ('escrowed','shipped','delivered','disputed')`
+  const orderRows = await sql`
+    select o.*,
+           case when ${canShip} then b.real_name     end as ship_name,
+           case when ${canShip} then b.phone         end as ship_phone,
+           case when ${canShip} then b.address_zip   end as ship_zip,
+           case when ${canShip} then b.address_city  end as ship_city,
+           case when ${canShip} then b.address_line1 end as ship_line1
+      from orders o join users b on b.id = o.buyer_id
+     where o.seller_id = ${me}
+     order by o.created_at desc limit 200
+  `
+
   return c.json({
     settlements: rows,
+    /* 已結案的訂單也一起回：這一頁的「已結束」分頁要能回答
+       「我上個月寄出去那筆後來怎麼了」。轉型別走既有的 toOrder()，
+       它認得 ship_* 那五欄該怎麼收成一個物件。 */
+    orders: orderRows.map(r => toOrder(r as Record<string, unknown>)),
     wallet: await walletOf(me),
     serverTime: Date.now()
   })
@@ -213,7 +287,10 @@ sellers.post('/settlements/:id/ship', async c => {
       userId: s.ownerId, kind: 'shipment',
       title: '賣家已出貨',
       body: tracking ? `單號 ${tracking}。收到卡片後請確認收貨，或 7 天後自動結案。` : '收到卡片後請確認收貨，或 7 天後自動結案。',
-      link: '/cards', refId: 'pool-ship:' + s.id
+      /* 原本寫的是 '/cards' —— 前端沒有這條路由（卡冊是 '/me/cards'，
+         見 src/router/index.ts），買家點下去只會掉進 404。
+         而這一則正是要他去按「確認收貨」的那一則。 */
+      link: '/me/cards', refId: 'pool-ship:' + s.id
     }, tx)
     return { ok: true }
   })

@@ -6,7 +6,7 @@
 // ------------------------------------------------------------------
 import type {
   Pool, DrawResult, UserPrize, LedgerEntry, WinnerEvent,
-  Seller, Listing, CardItem, PoolStatus, Tier, Grader
+  Seller, Listing, CardItem, PoolStatus, Tier, Grader, Order
 } from '@/types/models'
 import { deliveryOf } from '@/shared/domain'
 import * as mock from '@/mocks/data'
@@ -18,6 +18,10 @@ import { MOCK } from './config'
 import { ApiError, http, idem } from './http'
 import { useWalletStore } from '@/stores/wallet'
 import { useAuthStore } from '@/stores/auth'
+/* 訂單那一半。ShipTo 與「怎麼把出貨動作送出去」都已經有一份了 ——
+   出貨與結算頁要按得到市場那邊的「我已寄出」，走的是同一個 store 動作，
+   不另外發明第二條路（第二條路遲早會跟第一條長得不一樣）。 */
+import { useOrdersStore, type ShipTo } from '@/stores/orders'
 import { refDiscount, refPriceNum } from './refprice'
 import type { SettlementStatus } from '@/shared/pool-settlement'
 import { RESERVED_STATUSES } from '@/shared/pool-settlement'
@@ -119,10 +123,31 @@ export interface SellerSettlement {
   closedAt: number | null
   closedBy: string | null
   selfDraw: boolean
+  /**
+   * 「票金已入帳，但這張卡你還沒寄」（F-5）。後端一直有算這個旗標，
+   * 前端卻沒有收 —— 於是那幾列只顯示「已入帳」躺在已結束分頁裡，
+   * 而它們其實還掛著一個逾期會記違約的出貨期限。
+   */
+  owesCard: boolean
+  /**
+   * 收件資訊。**權限判斷已經在伺服器的 SQL 裡做完了**（見
+   * server/src/routes/sellers.ts 那支 lateral join）：只有這筆結算的賣家、
+   * 而且出貨義務還活著時才會有值。前端只判斷「有沒有值」與「哪幾欄是空的」——
+   * 同一條規則有兩個來源遲早會分岔，而分岔的其中一個方向是把住址給錯的人。
+   */
+  shipTo: ShipTo | null
 }
 
 export interface SellerSettlements {
   settlements: SellerSettlement[]
+  /**
+   * 市場成交・需寄送的託管訂單（賣家視角）。
+   *
+   * 為什麼跟結算放同一支回應：賣家欠實體卡的來源有兩個，而只顯示其中一個
+   * 的那一頁叫「出貨與結算」。兩邊的時限都要用同一個 serverTime 當基準，
+   * 分兩支 API 拿會拿到兩個時鐘。
+   */
+  orders: Order[]
   wallet: SellerWallet
   serverTime: number
 }
@@ -147,7 +172,11 @@ function toSettlement(r: Any): SellerSettlement {
     shippedAt: ms(r.shipped_at),
     closedAt: ms(r.closed_at),
     closedBy: (r.closed_by as string | null) ?? null,
-    selfDraw: Boolean(r.self_draw)
+    selfDraw: Boolean(r.self_draw),
+    owesCard: Boolean(r.owes_card),
+    /* 沒有值就是 null，不要造一個五個欄位都 undefined 的空物件 ——
+       呼叫端會用「有沒有 shipTo」判斷要不要顯示寄件區塊。 */
+    shipTo: (r.ship_to as ShipTo | null) ?? null
   }
 }
 
@@ -629,18 +658,35 @@ export const api = {
         .filter(s => RESERVED_STATUSES.includes(s.status))
         .reduce((a, s) => a + s.amount, 0)
       const locked = w.locked + reserved
+      /* mock 的市場那一半直接讀訂單 store —— 它就是 mock 模式下訂單的
+         唯一真相（demo 用的 seedSellerOrder 也寫在那裡）。在這裡另外造
+         一份假訂單的話，同一筆交易在 /orders 與這一頁會長得不一樣。 */
+      const os = useOrdersStore()
+      await os.load()
       return {
-        settlements: mock.sellerSettlements.map(s => ({ ...s })),
+        settlements: mock.sellerSettlements.map(s => ({
+          ...s,
+          /* mock 的種子沒有這兩欄。owesCard 照後端同一條規則推，
+             shipTo 給 null —— demo 要看得到「買家還沒填」那一版長什麼樣。 */
+          owesCard: s.status === 'released' && s.shipDueAt != null && s.shippedAt == null,
+          shipTo: null
+        })),
+        orders: os.orders.filter(o => o.sellerId === 'me'),
         /* mock 的保留額是從清單推出來的，不是另外記一個數字 ——
            跟後端的 walletOf() 同一個模型（保留額沒有可以直接改的欄位）。 */
         wallet: { points: w.points, locked, reserved, available: w.points - locked },
         serverTime: Date.now()
       }
     }
-    const r = await http<{ settlements: Any[]; wallet: SellerWallet; serverTime: number }>('/v1/seller/settlements')
+    const r = await http<{
+      settlements: Any[]; orders?: Order[]; wallet: SellerWallet; serverTime: number
+    }>('/v1/seller/settlements')
     applyWallet(r)
     return {
       settlements: r.settlements.map(toSettlement),
+      /* 舊版後端不回這個欄位。缺的時候當成空陣列而不是壞掉 ——
+         前端會先於後端上線，那段時間這一頁只是回到「只有池」的樣子。 */
+      orders: r.orders ?? [],
       wallet: r.wallet,
       serverTime: Number(r.serverTime) || Date.now()
     }
@@ -666,6 +712,22 @@ export const api = {
       // 沒填單號就整個欄位不送：送空字串會被 zod 的 min(4) 擋成 400
       json: tracking ? { tracking, carrier: opts.carrier ?? 'other' } : {}
     })
+  },
+
+  /**
+   * 標記某一筆**市場託管訂單**已出貨。
+   *
+   * 出貨與結算頁要成為賣家唯一要看的地方，那就必須在同一頁按得下這個動作 ——
+   * 只把訂單列出來卻要人跳去 /orders 才按得到，等於把漏看的風險換個地方擺。
+   *
+   * 委託給訂單 store 而不是自己打一次 HTTP：那支已經處理了
+   * 「空單號不要送」與 mock 模式的狀態轉換，而且送完會 sweep 一次。
+   * 這裡再寫一份的話，兩條路對同一個端點的參數會慢慢分岔。
+   * 失敗時 store 會把錯誤往外丟，呼叫端照樣逐筆收得到。
+   */
+  async shipOrder(id: string, opts: { carrier?: Carrier; tracking?: string } = {}): Promise<void> {
+    const ok = await useOrdersStore().ship(id, opts)
+    if (!ok) throw new Error('這張訂單目前不是等待出貨的狀態')
   },
 
   /** 目前錢包（API 模式用來初始化；mock 模式回 store 現值） */
