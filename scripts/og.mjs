@@ -60,9 +60,18 @@ const FONT_MONO = '"IBM Plex Mono", Menlo, ui-monospace, monospace'
    那種「看起來沒壞」的退化最危險，因為沒有人會發現。
 
    作法：用 Google Fonts 的 `text=` 參數只要我們真的用到的那幾個字，
-   回來的是每個字重一支幾 KB 的 woff2（要全套的話光 Noto Sans TC 就是
-   上百個 unicode-range 子集、幾十次請求）。抓到手就轉成 data: URI 內嵌，
-   截圖當下不再有任何外部請求，排版結果因此是決定性的。
+   抓到手轉成 data: URI 內嵌，截圖當下不再有任何外部請求，
+   排版結果因此是決定性的。
+
+   ⚠️ **`text=` 的縮小效果不是每一種查詢形狀都成立。** 2026-08-31 實測：
+   這支腳本現在這種寫法（多個字重 + display=block + 完整字串）拿到的是
+   Inter 15 KB／Noto Sans TC 35 KB／IBM Plex Mono 2 KB，subset 有生效。
+   但把同一個 family 改成單一字重、拿掉 display=block 去要同樣的字，
+   Google 回的是**整套** Noto Sans TC（3,106,140 bytes）——
+   CSS 裡的 unicode-range 仍然只宣告那幾個字，所以光看 CSS 看不出來。
+
+   結論不是「text= 不能用」，是**不要憑查詢字串長度或直覺假設它縮了多少**。
+   下面每一套都會把實際位元組印出來，改了查詢就看得到有沒有踩到那個坑。
 
    連不上就**大聲失敗**，不偷偷產一張退化的圖。真的要在沒有網路的機器上
    重跑，加 --offline 明確表示「我知道字會不一樣」。 */
@@ -98,13 +107,21 @@ async function fetchEmbeddedFontCss() {
        「等多久算等夠」的猜測 —— document.fonts.ready 就是確定的答案。 */
     const urls = [...sheet.matchAll(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+)\)/g)]
     if (urls.length === 0) throw new Error(`${family} 的 CSS 裡沒有任何字體檔網址`)
+    let bytes = 0
     for (const [, fontUrl] of urls) {
       const f = await fetch(fontUrl, { headers: { 'user-agent': UA } })
       if (!f.ok) throw new Error(`下載字體檔失敗：HTTP ${f.status} ${fontUrl}`)
-      const b64 = Buffer.from(await f.arrayBuffer()).toString('base64')
-      sheet = sheet.replace(fontUrl, `data:font/woff2;base64,${b64}`)
+      const buf = Buffer.from(await f.arrayBuffer())
+      bytes += buf.length
+      sheet = sheet.replace(fontUrl, `data:font/woff2;base64,${buf.toString('base64')}`)
     }
-    console.log(`[og] 內嵌 ${family.split(':')[0].replace(/\+/g, ' ')}：${urls.length} 個字重`)
+    /* 把實際大小印出來。`text=` 對某些字型（Noto Sans TC）不會真的縮小檔案，
+       而那件事從程式碼上完全看不出來 —— 只有印出來才知道。
+       不設成失敗：圖是對的，這只是成本，擋掉會讓一支能用的腳本變成不能用。 */
+    const kb = (bytes / 1024).toFixed(0)
+    const name = family.split(':')[0].replace(/\+/g, ' ')
+    console.log(`[og] 內嵌 ${name}：${urls.length} 個字重、${kb} KB`
+      + (bytes > 200 * 1024 ? '（text= 對這一套沒有生效，拿到的是整套）' : ''))
     css += sheet + '\n'
   }
   return css
