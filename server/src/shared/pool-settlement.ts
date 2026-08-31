@@ -104,6 +104,44 @@ export const SELLER_DEFAULT_LIMIT = 3
 export const FIRST_POOL_TICKET_CAP = 100
 export const FIRST_POOL_VALUE_CAP = 100_000
 
+/**
+ * 「完成第一個池」是什麼意思。
+ *
+ * 為什麼要有這一句常數：後端擋下來時說的是「完成第一個池之後就會解除」，
+ * 而「完成」沒有被定義過（走查 P14）。賣家手上有三個已經開賣、甚至已經
+ * 賣完的池，照字面讀會以為早該解除了 —— 其實一個都不算。
+ *
+ * 真正的判準在 server/src/routes/pools.ts：`status in ('revealed', 'cancelled')`。
+ * 兩個都是「種子已經公布、這個池的承諾已經被驗算過」的狀態：
+ *   revealed  完抽之後揭曉
+ *   cancelled 到期收攤，一樣會被 revealPool 揭曉（pools-service.ts）
+ * 也就是說 committed / open / sold_out 全都還不算完成 —— 賣完了但還沒揭曉
+ * 的池，賣家的出貨義務都還沒開始跑，這條上限要壓住的風險原封不動還在。
+ *
+ * 這句話只有一份，前端要講「什麼時候解除」時直接用它，不要各自造句。
+ */
+export const FIRST_POOL_DONE_MEANING =
+  '「完成」指第一個池的種子已經公布 —— 完抽後揭曉，或到期收攤後揭曉。' +
+  '還在賣、甚至已經賣完但還沒揭曉，都還不算。'
+
+/**
+ * 這個池有沒有超過首池額度。
+ *
+ * **兩條各自獨立，任一條超過就擋**（跟 routes/pools.ts 的判斷式同一份規則）：
+ * 籤數壓的是「有多少人的錢被凍住」，票收壓的是「凍住多少錢」，
+ * 便宜的大池與昂貴的小池各自會踩到其中一條。
+ *
+ * 這裡只回答「這組數字超不超標」，**不回答「這條規則適不適用於這個賣家」**
+ * —— 後者要查賣家有沒有走完過一個池，那是資料庫的事，不是純函式的事。
+ * 兩件事分開才不會逼這個檔案去認識賣家。
+ */
+export function firstPoolCapCheck(totalTickets: number, ticketPrice: number) {
+  const value = totalTickets * ticketPrice
+  const overTickets = totalTickets > FIRST_POOL_TICKET_CAP
+  const overValue = value > FIRST_POOL_VALUE_CAP
+  return { tickets: totalTickets, value, overTickets, overValue, exceeded: overTickets || overValue }
+}
+
 /* ---------------- 金額 ---------------- */
 
 /**

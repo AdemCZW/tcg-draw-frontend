@@ -44,9 +44,12 @@ import { usePoolStore } from '@/stores/pools'
 import { computeEconomics } from '@/lib/economics'
 import { BUYBACK_MIN, BUYBACK_MAX } from '@/lib/recycle'
 import { buybackValid } from '@/shared/recycle'
-import { FLOOR_RATIO_LABEL, FLOOR_RATIO_MEANING } from '@/shared/economics'
+import { FLOOR_RATIO_LABEL, FLOOR_RATIO_MEANING, FLOOR_VERDICT_STAMP } from '@/shared/economics'
 // 到期日不在這張表上，但要講得出是幾天 —— 常數只有一份，不要在文案裡硬寫數字
-import { POOL_DEFAULT_DAYS } from '@/shared/pool-settlement'
+import {
+  POOL_DEFAULT_DAYS,
+  FIRST_POOL_TICKET_CAP, FIRST_POOL_VALUE_CAP, FIRST_POOL_DONE_MEANING, firstPoolCapCheck
+} from '@/shared/pool-settlement'
 import { artUrlOf } from '@/lib/tcgdex-catalog'
 import type { PickedCard } from '@/lib/card-pick'
 import type { Pool, PoolMode, PoolPrize, Tier } from '@/types/models'
@@ -78,12 +81,34 @@ const me = computed(() => sellers.me)
    id 沒被挑進來，送出那一段只好去撈 mock 的 sellers.me，於是有了這次的 bug。 */
 const remote = ref<{ seller: { id: string; tier: string } | null; verification: { status: string; note: string | null } | null } | null>(null)
 const loadingSeller = ref(!MOCK)
-onMounted(async () => {
-  if (MOCK) return
-  try { remote.value = await api.sellerStatus() }
-  catch { remote.value = { seller: null, verification: null } }
-  finally { loadingSeller.value = false }
-})
+
+/* ---- 「問不到」不是「你不是賣家」（走查 P5）----
+
+   舊版是 `catch { remote.value = { seller: null, verification: null } }`
+   —— 把請求失敗壓成「這個帳號沒有賣家資料」，而畫面對這兩件事的反應
+   是同一個：整頁換成「先申請成為賣家」的表單。
+   實測（後端進程被回收的那一刻剛好在這一頁）：一個**已經核准**的賣家
+   看到的是一張申請表，唯一的按鈕是「送出申請」。他會以為資格被取消了；
+   如果照著填一次，送出的是一份重複申請。
+
+   伺服器是賣家資格的唯一真相，問不到就是**不知道**，不知道時唯一誠實的
+   畫面是「現在讀不到，這跟你的資格無關，重試一次」。所以錯誤另外收在
+   loadErr，remote 保持 null，兩種狀態在模板上是兩個分支。 */
+const loadErr = ref('')
+
+async function loadSeller() {
+  loadingSeller.value = true
+  loadErr.value = ''
+  try {
+    remote.value = await api.sellerStatus()
+  } catch (e) {
+    remote.value = null
+    loadErr.value = e instanceof ApiError ? e.message : '連不上伺服器，請檢查網路後重試'
+  } finally {
+    loadingSeller.value = false
+  }
+}
+onMounted(() => { if (!MOCK) loadSeller() })
 
 const tier = computed(() => MOCK ? (me.value?.tier ?? null) : (remote.value?.seller?.tier ?? null))
 const canList = computed(() => !!tier.value && tier.value !== 'pending')
@@ -275,6 +300,79 @@ const econ = computed(() =>
 )
 const blocked = computed(() => econ.value.verdict === 'mint' || econ.value.verdict === 'predatory')
 
+/* ---- 首池額度（走查 P4）----
+
+   新賣家的第一個池最多 100 籤、票收 100,000 點。這條規則以前**只存在於
+   送出的那一瞬間**：賣家挑完 101 張卡、填完賞別、看著即時試算的綠字寫著
+   「合格 / 保底回饋率 50.0%」，按下去才收到 403。這一頁其他每一條規則都是
+   邊填邊講的，只有這一條是送出才講。
+
+   ── 為什麼不做成第四種護欄狀態（FloorVerdict），而是獨立的一條 ──
+
+   FloorVerdict 是**一個比率**的函式：floorVerdict(ratio) 進去一個數字、
+   出來一句話，前後端共用同一份。首池額度不是那種東西：
+     1. 它的輸入是「籤數、票收」加上**這個賣家的歷史**，不是那個比率。
+        把它塞進 floorVerdict 等於逼 shared/economics.ts 去認識賣家 ——
+        那個檔案是純函式，後端建池時也在用，弄髒它的代價比省下的多。
+     2. 兩者正交：一個池可以同時「保底回饋率完全合理」與「超過首池額度」，
+        而一個 enum 一次只講得出一件事。真的合併，賣家就會少看到一半。
+     3. 修法不同。護欄不過是**永久**的（改數字才會消失），首池額度是
+        **暫時**的（走完第一個池就沒了）。同一枚章講兩種期限只會讓人誤讀。
+     4. 執行的地方也不同：護欄由 economics.ts 判、首池額度在 routes/pools.ts
+        查完資料庫才判。合併會讓前端看起來像有權決定後者，它沒有。
+   所以：economics 的判定照舊，首池額度是自己的一塊、自己的一句話。
+
+   ── 「還沒解除」怎麼判 ──
+
+   後端的判準是 `select count(*) from pools where seller_id = 我 and
+   status in ('revealed','cancelled')`，前端沒有這支查詢，只有公開池清單
+   （GET /v1/pools，回 committed/open/sold_out/revealed，最多 100 個）。
+   所以這裡只拿得到**正面證據**：看得到自己的池已經 revealed，就一定解除了。
+   （'cancelled' 不在公開清單裡，但它是過渡狀態 —— 到期收攤的池會被
+   revealPool 揭曉成 revealed，所以只看 revealed 不會漏掉那條路。）
+
+   看不到證據時當作「還沒解除」，跟後端同一邊 —— 但那是**推論不是事實**
+   （清單只有最近 100 個池，老賣家的第一個池可能已經被擠出去了）。
+   把推論當事實鎖死使用者，就是這次要修的那一類 bug（見上面 P5 那段）。
+   所以畫面照實說這是推論，並留一顆「我已經完成過第一個池」的開關：
+   按下去這一頁不再擋，送出時由伺服器 —— 唯一的權威 —— 判。 */
+const firstPoolDone = computed(() => myPools.value.some(p => p.status === 'revealed'))
+
+/** 賣家自己說「我已經完成過第一個池了」。只影響這一頁擋不擋，不影響伺服器 */
+const capOverride = ref(false)
+
+/** 這一頁要不要把首池額度算進去 */
+const capOn = computed(() => !firstPoolDone.value && !capOverride.value)
+
+/** 這個池目前的籤數 / 票收 對上兩條上限。判斷式跟後端同一份（shared） */
+const cap = computed(() => firstPoolCapCheck(econ.value.seatCount, form.ticketPrice || 0))
+
+/** 照現在這樣送出**一定**會被 403 擋下 */
+const capBlocked = computed(() => capOn.value && cap.value.exceeded && !!form.prizes.length)
+
+/* ---- 判定「章」上寫的字 ----
+
+   使用者讀這一枚章讀的是「這個池到底開不開得成」，不是「保底回饋率這一項
+   評分幾分」。所以：
+     - 首池額度超標時章要先講那件事 —— 比率合理不代表按得下去，
+       而舊版就是在一個注定 403 的池上蓋「合格」。
+       底下那句「保底回饋率 50.0%，落在合理區間」照舊留著（它仍然是真的），
+       兩句話合起來才是完整的：這一項沒問題，但被另一條擋住。
+     - thin 蓋的是自己的章，不是 ok 那一枚（理由見 shared/economics.ts）。
+     - 一張卡都還沒挑的時候不蓋任何判定：那不是「不合格」，那是還沒開始。
+       （比率此時是 0%，照 floorVerdict 會落進 predatory。） */
+const stamp = computed(() => {
+  if (!form.prizes.length) return '還沒挑卡'
+  if (capBlocked.value) return '超過首池額度，開不了'
+  return FLOOR_VERDICT_STAMP[econ.value.verdict]
+})
+/** 章的顏色。thin 有自己的一檔 —— 跟 ok 同色正是 P12 的病 */
+const stampTone = computed<'idle' | 'ok' | 'thin' | 'no'>(() => {
+  if (!form.prizes.length) return 'idle'
+  if (capBlocked.value || blocked.value) return 'no'
+  return econ.value.verdict === 'thin' ? 'thin' : 'ok'
+})
+
 /* ---- 「還差什麼」是一份清單，不是一個布林 ----
 
    原本這裡是六個各自獨立的布林旗標，而**只有經濟那一項會顯示訊息** ——
@@ -330,6 +428,17 @@ const problems = computed<Problem[]>(() => {
      那只是還沒開始。同一個畫面上同時說「先挑幾張卡」跟「保底幾乎等於沒有」
      會讓人以為那是兩件事。 */
   if (blocked.value && form.prizes.length) out.push({ anchor: 'f-econ', msg: econ.value.message })
+  /* 首池額度。放進這份清單而不是只印一行警語 —— 這份清單就是「按下去會不會
+     成功」的定義，不放進來就等於明知道會 403 還讓他按。訊息的形狀刻意跟
+     後端那句一樣（兩個上限、你這池的兩個數字），差別只在這裡是**事前**看到。 */
+  if (capBlocked.value) {
+    out.push({
+      anchor: 'f-cap',
+      msg: `超過第一個池的額度：上限 ${FIRST_POOL_TICKET_CAP} 籤、票收 ` +
+        `${FIRST_POOL_VALUE_CAP.toLocaleString()} 點，這個池是 ${cap.value.tickets} 籤、` +
+        `票收 ${cap.value.value.toLocaleString()} 點`
+    })
+  }
   return out
 })
 const valid = computed(() => problems.value.length === 0)
@@ -577,6 +686,16 @@ async function runSubmit() {
           .map(p => ({ certNo: p.pick.card.certNo ?? '', grader: p.pick.card.grader || 'PSA' }))
           .filter(c => c.certNo && !seen.has(c.certNo) && seen.add(c.certNo))
       }
+    } else if (e instanceof ApiError && e.code === 'FIRST_POOL_CAP') {
+      /* 走到這裡只有兩種可能：這一頁看漏了（公開池清單只有最近 100 個池），
+         或賣家自己按過「我已經完成過第一個池了」而其實還沒。兩種都是
+         **伺服器說了算**，所以把這一頁的檢查收回來 —— 額度那一塊會重新
+         出現，籤數與票收對著上限即時走，他不必靠猜就知道要減多少。 */
+      capOverride.value = false
+      /* 後端那句話結尾是「完成第一個池之後就會解除」，而「完成」沒有定義過
+         （走查 P14）—— 手上有三個已開賣、甚至已售完的池，照字面讀會以為
+         早該解除了。定義只有一份，就接在它後面。 */
+      error.value = `${e.message}（${FIRST_POOL_DONE_MEANING}）`
     } else {
       error.value = e instanceof ApiError ? e.message : '開池失敗，請稍後再試'
     }
@@ -634,6 +753,23 @@ function bottomOccluded(): number {
     <h1 class="display">開一個新的池</h1>
 
     <div v-if="loadingSeller" class="gate card"><p class="muted">確認賣家身分中…</p></div>
+
+    <!-- 讀不到賣家資格。**這一格不能長得像申請表**：
+         「問不到」跟「你不是賣家」是兩件事，而一張申請表等於在告訴一個
+         已經核准的賣家「你的資格沒了」。所以這裡只講三件事：
+         發生了什麼、它跟你的資格無關、按哪裡再試一次。 -->
+    <div v-else-if="loadErr" class="gate card loadFail" data-testid="seller-load-failed" role="alert">
+      <p class="big">讀不到你的賣家資格</p>
+      <p class="muted">{{ loadErr }}</p>
+      <p class="muted">
+        這是<strong>這一頁問不到伺服器</strong>，不是你的資格有問題 ——
+        已經通過審核的賣家資格不會因為這次連線失敗而改變，也<strong>不需要重新申請</strong>。
+        連上之後這一頁就會直接變成開池表單。
+      </p>
+      <button type="button" class="btn primary retry" :disabled="loadingSeller" @click="loadSeller">
+        再試一次
+      </button>
+    </div>
 
     <!-- 審核中：講清楚在等什麼、通過之前能做什麼，不要只寫「審核中」讓人乾等 -->
     <div v-else-if="isPending" class="gate card">
@@ -935,7 +1071,7 @@ function bottomOccluded(): number {
       <aside class="side">
         <!-- 即時試算。**送出前就要看得到**：護欄不過在送出時才被退回的話，
              賣家不知道是哪一格害的，只知道「開不了」。 -->
-        <div id="f-econ" class="card econ" :class="econ.verdict">
+        <div id="f-econ" class="card econ" :class="[form.prizes.length ? econ.verdict : 'idle', { capBad: capBlocked }]">
           <h2>即時試算</h2>
           <dl class="figures live">
             <div><dt>票收</dt><dd class="mono">{{ econ.revenue.toLocaleString() }}</dd></div>
@@ -944,18 +1080,72 @@ function bottomOccluded(): number {
           <div class="ratio">
             <span class="mono big-num">{{ econ.ratio.toFixed(1) }}%</span>
             <span class="muted lbl">{{ FLOOR_RATIO_LABEL }}</span>
-            <!-- 圖示一律 inline SVG，手機版不放 emoji -->
-            <svg v-if="!blocked && econ.seatCount" class="mark ok" viewBox="0 0 24 24" aria-hidden="true">
+          </div>
+          <!-- 判定的章。**看得見的字**，不再只有一個綠勾加一段 sr-only ——
+               綠勾在 thin（93.3%）跟 ok（50%）上長得一模一樣，而那兩種池
+               對賣家的意思天差地遠。圖示一律 inline SVG，手機版不放 emoji。 -->
+          <p class="stamp" :class="stampTone" data-testid="econ-stamp">
+            <svg v-if="stampTone === 'ok'" class="mark" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M5 13l4 4L19 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-            <svg v-else-if="blocked" class="mark no" viewBox="0 0 24 24" aria-hidden="true">
+            <svg v-else-if="stampTone === 'thin'" class="mark" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3.6l9 15.4H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+              <path d="M12 10v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+              <circle cx="12" cy="17" r="1.1" fill="currentColor" />
+            </svg>
+            <svg v-else-if="stampTone === 'no'" class="mark" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" />
             </svg>
-            <span class="sr-only">{{ blocked ? '不合格，無法開池' : '合格' }}</span>
-          </div>
-          <p class="verdict">{{ econ.message }}</p>
-          <p class="meaning muted">{{ FLOOR_RATIO_MEANING }}</p>
+            <span>{{ stamp }}</span>
+          </p>
+          <!-- 一張卡都還沒挑的時候不要說「保底回饋率僅 0.0%，等於幾乎沒有保底，
+               對玩家過於不利」—— 那個池還不存在，判它「對玩家不利」是在講一件
+               沒發生的事。（「還差什麼」那份清單早就是這樣處理的，兩邊要一致。） -->
+          <p class="verdict">{{ form.prizes.length ? econ.message : '先挑幾張卡、填好買回價，這裡就會即時算給你看。' }}</p>
+          <p v-if="form.prizes.length" class="meaning muted">{{ FLOOR_RATIO_MEANING }}</p>
         </div>
+
+        <!-- ---------- 首池額度 ----------
+             這一塊**在還沒撞到之前就在**：籤數與票收邊填邊跟著上限走，
+             不是按下去才收到 403。只在「看不到自己有完成過的池」時顯示 ——
+             解除之後它就消失，不會變成一句對老賣家永遠沒有意義的常駐提醒。 -->
+        <div
+          v-if="capOn" id="f-cap" class="card cap" :class="{ over: capBlocked }"
+          data-testid="first-pool-cap"
+        >
+          <h2>第一個池的額度</h2>
+          <dl class="figures">
+            <div :class="{ bad: capOn && cap.overTickets && form.prizes.length }">
+              <dt>籤數</dt>
+              <dd class="mono">{{ cap.tickets.toLocaleString() }} / {{ FIRST_POOL_TICKET_CAP.toLocaleString() }}</dd>
+            </div>
+            <div :class="{ bad: capOn && cap.overValue && form.prizes.length }">
+              <dt>票收</dt>
+              <dd class="mono">{{ cap.value.toLocaleString() }} / {{ FIRST_POOL_VALUE_CAP.toLocaleString() }}</dd>
+            </div>
+          </dl>
+          <p v-if="capBlocked" class="capOver" data-testid="cap-over">
+            照這樣送出會被擋下。
+            {{ cap.overTickets ? `籤數超過 ${(cap.tickets - FIRST_POOL_TICKET_CAP).toLocaleString()} 支。` : '' }}
+            {{ cap.overValue ? `票收超過 ${(cap.value - FIRST_POOL_VALUE_CAP).toLocaleString()} 點（降票價或減籤數都可以）。` : '' }}
+          </p>
+          <p class="capWhy muted">
+            兩條各自獨立，任一條超過就開不了。
+            這是給還沒完成過池的賣家設的：平台沒有收保證金，上限把「萬一沒出貨」的損失壓在一個有界的範圍內。
+            <strong>完成第一個池之後就解除。</strong>{{ FIRST_POOL_DONE_MEANING }}
+          </p>
+          <!-- 這一頁判斷「有沒有完成過」靠的是公開池清單，那是**推論不是事實**
+               （清單只有最近 100 個池）。推論錯的時候不能把人鎖死在這裡，
+               所以留一條出口：關掉這一頁的檢查，讓伺服器去判。 -->
+          <button type="button" class="capOff" @click="capOverride = true" data-testid="cap-override">
+            我已經完成過第一個池了 —— 不要在這裡擋我
+          </button>
+        </div>
+        <p v-else-if="capOverride" class="capNote" data-testid="cap-override-note">
+          已關掉這一頁的首池額度檢查。伺服器仍然會照它自己的紀錄判 ——
+          如果其實還沒完成，送出時會被擋下，並告訴你目前的籤數與票收。
+          <button type="button" class="capBack" @click="capOverride = false">恢復檢查</button>
+        </p>
 
         <div class="card fair">
           <h2>公平性</h2>
@@ -1280,15 +1470,71 @@ input.missing { border-color: var(--danger); }
 .econ.thin .big-num { color: var(--warn); }
 .econ.mint .big-num, .econ.predatory .big-num { color: var(--danger); }
 .lbl { font-size: 12px; font-weight: 600; }
-.mark { width: 18px; height: 18px; flex: none; align-self: center; margin-left: auto; }
-.mark.ok { color: var(--ok); }
-.mark.no { color: var(--danger); }
+/* 首池額度超標時整張卡轉紅：比率那一項合格，但這個池按下去一定被擋，
+   卡片的底色講的是後者 */
+.econ.capBad { background: var(--danger-wash); }
+
+/* ---- 判定的章 ----
+   四種判定四種寫法（見 shared/economics.ts 的 FLOOR_VERDICT_STAMP）。
+   thin 用 --warn 而不是 --ok：它跟 ok 同色正是「合格」與「可能倒貼」
+   互相抵消的來源。 */
+.stamp {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  margin: 8px 0 0; font-size: 13px; font-weight: 700; line-height: 1.45;
+}
+.stamp span { min-width: 0; }
+.mark { width: 18px; height: 18px; flex: none; }
+.stamp.ok { color: var(--ok); }
+.stamp.thin { color: var(--warn-ink); }
+.stamp.no { color: var(--danger-ink); }
+.stamp.idle { color: var(--muted); font-weight: 600; }
 .verdict { font-size: 12.5px; font-weight: 600; margin: 8px 0 0; line-height: 1.5; }
 .meaning { font-size: 11.5px; margin: 6px 0 0; line-height: 1.6; }
 .figures { display: grid; gap: 6px; margin: 0 0 12px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
 .figures div { display: flex; justify-content: space-between; gap: 8px; min-width: 0; font-size: 12.5px; }
 dt { color: var(--muted); font-weight: 600; }
 dd { margin: 0; font-weight: 600; }
+/* ---- 首池額度 ----
+   平常是一張安靜的卡（它只是一條要知道的規則），超標才轉紅。
+   一開始就紅的話，一個籤數還在 12 的新賣家會以為自己已經做錯了什麼。 */
+.cap { padding: 14px 16px; }
+.cap.over { background: var(--danger-wash); }
+.cap .figures { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+/* 超標的是哪一條要指得出來 —— 兩條都寫著 x / y，只說「超過」等於要他自己比 */
+.cap .figures div.bad dt, .cap .figures div.bad dd { color: var(--danger-ink); }
+.capOver {
+  margin: 10px 0 0; font-size: 12.5px; font-weight: 700; line-height: 1.6;
+  color: var(--danger-ink);
+}
+.capWhy { font-size: 11.5px; line-height: 1.75; margin: 10px 0 0; }
+.capWhy strong { color: var(--ink); }
+/* 出口。低調（它是例外，不是常規動作），但**點得到**：44px 是可點目標的下限 */
+.capOff {
+  display: flex; align-items: center; width: 100%; min-height: 44px; margin-top: 8px;
+  padding: 8px 0; font: inherit; font-size: 11.5px; line-height: 1.5; text-align: left;
+  border: 0; background: none; color: var(--muted);
+  text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+}
+.capOff:hover { color: var(--ink); }
+.capNote {
+  margin: 0; padding: 10px 12px; min-width: 0;
+  border-radius: 10px; background: var(--surface-2);
+  font-size: 11.5px; line-height: 1.75; color: var(--muted);
+}
+.capBack {
+  display: inline-flex; align-items: center; min-height: 44px;
+  padding: 0; margin-left: 4px;
+  font: inherit; font-size: 11.5px; border: 0; background: none;
+  color: var(--accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+}
+
+/* ---- 讀不到賣家資格 ----
+   .gate 是置中的說明版型，這一格沿用它（它就是一段說明 + 一個動作），
+   只是需要一顆真的按得到的重試鈕 */
+.loadFail .big { color: var(--danger-ink); }
+.loadFail strong { color: var(--ink); }
+.retry { min-height: 44px; padding: 0 20px; }
+
 .fair { padding: 14px 16px; }
 .fair p { font-size: 12px; margin: 0; line-height: 1.6; }
 .fair strong { color: var(--ink); }
