@@ -35,7 +35,7 @@
  * 只會製造一個看起來像官方行情的假資料。
  */
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useSellerStore } from '@/stores/sellers'
 import { api } from '@/lib/api'
 import { ApiError } from '@/lib/http'
@@ -53,13 +53,17 @@ import type { Pool, PoolMode, PoolPrize, Tier } from '@/types/models'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import CardPicker from '@/components/CardPicker.vue'
 
-const router = useRouter()
 const route = useRoute()
 const sellers = useSellerStore()
 const pools = usePoolStore()
-sellers.ensureLoaded()
+/* ensureLoaded() 是 async 而這裡沒有人接 —— 網路一斷它就變成 unhandled
+   rejection（實測 console 上是一行紅字 `連不上伺服器，請檢查網路後重試`）。
+   賣家清單載不到不影響開池（只會少掉「以既有的池為範本」），
+   所以吞掉；pools.ensureLoaded() 自己內部已經接住了。 */
+sellers.ensureLoaded().catch(() => {})
 pools.ensureLoaded()
 
+/** mock 假資料裡的「我」。**只有 MOCK 模式能用**，理由見 mySellerId */
 const me = computed(() => sellers.me)
 
 /* ---- 賣家身分 ----
@@ -69,7 +73,10 @@ const me = computed(() => sellers.me)
 
    MOCK 模式仍然讀 sellers store：那是展示用的假資料，把它換成「你不是賣家」
    會讓沒有後端時連開池表單都看不到。 */
-const remote = ref<{ seller: { tier: string } | null; verification: { status: string; note: string | null } | null } | null>(null)
+/* seller.id 是**送出時要帶的賣家 id**（見下面的 mySellerId）。
+   舊版這個型別只挑了 tier —— 只挑用得到的欄位本來是好習慣，但也正因為
+   id 沒被挑進來，送出那一段只好去撈 mock 的 sellers.me，於是有了這次的 bug。 */
+const remote = ref<{ seller: { id: string; tier: string } | null; verification: { status: string; note: string | null } | null } | null>(null)
 const loadingSeller = ref(!MOCK)
 onMounted(async () => {
   if (MOCK) return
@@ -81,6 +88,30 @@ onMounted(async () => {
 const tier = computed(() => MOCK ? (me.value?.tier ?? null) : (remote.value?.seller?.tier ?? null))
 const canList = computed(() => !!tier.value && tier.value !== 'pending')
 const isPending = computed(() => tier.value === 'pending')
+
+/* ---- 送出時的賣家 id ----
+
+   **這一行就是「按下開池上架完全沒有反應」的根因。**
+
+   舊版直接用 `sellers.me`，而那個 getter 是 `sellers.find(x => x.id === 's3')`
+   —— 's3' 是 mock 假資料裡「關都卡舖」的 id，只存在於 src/mocks/data.ts。
+   API 模式下 /v1/sellers 回來的 id 是 u-shop / u-seller 這一種真的 id，
+   永遠找不到 s3，所以 me 恆為 undefined，submit() 走到 `if (!me.value) return`
+   就靜靜結束：沒有送出任何請求、沒有錯誤、沒有一個像素改變。
+   實測 393×852（12 籤、A 賞 4800、D 賞 36、72.2%）：
+   按下去前後 scrollY 都是 9243、按鈕字都是「開池上架」、
+   側欄的 innerHTML 逐字相同、network 一個 POST 都沒有、console 一片乾淨。
+
+   真正的病不是那個 return，是**兩個不同源的身分判斷**：
+   閘門（canList）看 remote.seller，送出卻看 sellers.me。
+   只要兩邊不同源，遲早會長出「看得到表單、卻送不出去」這種畫面。
+   所以這裡跟 tier 用同一個來源：MOCK 讀假資料、API 讀 /v1/seller/me。
+
+   （API 模式其實根本不需要這個 id —— 後端從 token 取賣家，
+   見 server/src/routes/pools.ts 的 `const me = c.get('userId')`。
+   它在這裡只是 createPool 的型別上有這個欄位。） */
+const mySellerId = computed<string | null>(() =>
+  MOCK ? (me.value?.id ?? null) : (remote.value?.seller?.id ?? null))
 
 /* ---- 申請成為賣家 ---- */
 const apply = reactive({ name: '', origin: 'personal' as 'personal' | 'merchant', bio: '' })
@@ -219,6 +250,15 @@ const busy = ref(false)
 const error = ref('')
 /* 錯誤訊息那一塊的節點。要「量得到它在不在視窗裡」，就得抓得到它 */
 const errBox = ref<HTMLElement | null>(null)
+/* 開好的池。有值＝這一次送出成功了。
+   **成功之後不再自動導頁**：舊版直接 router.push 到池詳情，而 API 模式建好的池
+   是 committed（還沒開賣，要等 drand 的外部亂數，由後端每五分鐘的掃描推開，
+   見 server/src/index.ts 的 sweepPools），賣家被丟到一個「還不能買」的頁面，
+   沒有一句話解釋剛剛發生了什麼、也不知道要不要再按一次。
+   改成就地留下一塊結果：講出池叫什麼、現在是什麼狀態、下一步點哪裡。
+   順帶擋掉重複送出 —— 成功之後那顆按鈕整顆換成這一塊。 */
+const created = ref<Pool | null>(null)
+const doneBox = ref<HTMLElement | null>(null)
 /* 撞到 CERT_ALREADY_LISTED 時，可以拿去申請接管的編號。
    平常是空的 —— 這個出口只在被擋住的那一刻存在，不是常駐的一顆按鈕。 */
 const takeoverCerts = ref<{ certNo: string; grader: string }[]>([])
@@ -345,8 +385,10 @@ function goTo(anchor: string, msg?: string): boolean {
        第二個人會被 listings_cert_live 擋下並被告知「這張卡已經在市場上了」。
        所以鑑定資訊整組拿掉，那一列標成「要重挑」並擋住送出。
 */
+/* 這裡原本也是讀 sellers.me，於是 API 模式下「以既有的池為範本」整段
+   永遠不出現 —— 同一個病的另一個症狀，一起用 mySellerId 修掉 */
 const myPools = computed(() =>
-  me.value ? pools.pools.filter(p => p.sellerId === me.value!.id) : [])
+  mySellerId.value ? pools.pools.filter(p => p.sellerId === mySellerId.value) : [])
 
 /** 範本用到的池。有就顯示一條提示，讓賣家知道現在這一份是從哪裡來的 */
 const fromPool = ref<Pool | null>(null)
@@ -429,21 +471,56 @@ const attempted = ref(false)
         「連按兩下」的第二下一樣是零回饋。 */
 const attemptSeq = ref(0)
 
+/**
+ * 送出。
+ *
+ * 外層再包一次 try：runSubmit 內部已經接住 API 的錯，走到這裡的只剩
+ * **程式自己的例外**（讀到 null、型別對不上）。那種例外在 @submit.prevent
+ * 底下會被 Vue 吞成 console 的 unhandled rejection —— 畫面上一個字都不會變，
+ * 又是一次「按了沒反應」。所以最後一道：任何例外都要在按鈕底下留下一句話。
+ */
 async function submit() {
+  try {
+    await runSubmit()
+  } catch (e) {
+    console.error('[開池] 未預期的例外', e)
+    error.value = '開池時出了預期外的錯，池沒有開成。請重新整理這一頁再試一次；'
+      + '如果一直這樣，把這個畫面截圖給客服。'
+    busy.value = false
+    await nextTick()
+    ensureVisible(errBox.value)
+  }
+}
+
+async function runSubmit() {
+  // 按鈕在 busy 時是 disabled，理論上進不來；擋住是為了鍵盤 Enter 連按
+  if (busy.value) return
   attempted.value = true
   attemptSeq.value++
   jumpMiss.value = ''
+  error.value = ''
+  takeoverCerts.value = []
   /* 不 return 就算了：按鈕按得下去，按下去一定要有回應。回應在按鈕底下
      那塊 .todo（v-if 在 attempted 之後會多出一行 data-testid="submit-hitch"），
      不是把人送去別的地方。 */
   if (!valid.value) return
-  if (!me.value) return
-  error.value = ''
-  takeoverCerts.value = []
+
+  /* 身分拿不到就**講出來**，不要靜靜 return（那正是這次的 bug）。
+     走到這裡代表閘門放行了（canList 為真）卻拿不到 id，那是資料出了問題，
+     使用者能做的只有重載，所以就直接把那句話講給他聽。 */
+  const sellerId = mySellerId.value
+  if (!sellerId) {
+    error.value = '讀不到你的賣家身分，所以沒有送出。請重新整理這一頁；'
+      + '如果重整後還是這樣，代表帳號的賣家資料有問題，請聯絡客服。'
+    await nextTick()
+    ensureVisible(errBox.value)
+    return
+  }
+
   busy.value = true
   try {
     const pool = await pools.createPool({
-      sellerId: me.value.id,
+      sellerId,
       title: form.title.trim(),
       mode: form.mode,
       ticketPrice: form.ticketPrice,
@@ -462,7 +539,11 @@ async function submit() {
         certConfirmed: p.certConfirmed || undefined
       }))
     })
-    router.push({ name: 'pool', params: { id: pool.id } })
+    /* 成功。不導頁 —— 就地把結果留在按鈕原本的位置（理由見 created 的宣告）。
+       nextTick 之後確認它真的在視窗裡：桌機的側欄可能整條捲在別處。 */
+    created.value = pool
+    await nextTick()
+    ensureVisible(doneBox.value)
   } catch (e) {
     /* PSA 查到的卡跟賣家挑的對不上：後端不硬擋，要賣家自己確認是不是同一張
        （PSA 是英文、目錄是日文，卡名無法字串相等）。把對不上的列標出來、
@@ -508,13 +589,43 @@ async function submit() {
   } finally { busy.value = false }
 }
 
-/** 只有在真的看不到的時候才捲。已經看得到卻硬捲一次，就是使用者抱怨的那種位移 */
+/**
+ * 只有在真的看不到的時候才捲。已經看得到卻硬捲一次，就是使用者抱怨的那種位移。
+ *
+ * 「看得到」不等於 `bottom <= 視窗高度`：這一頁的下緣在手機上**疊著兩層
+ * 貼底的東西** —— 挑卡元件的「已選 N 張／查看清單」那條，以及底部分頁列。
+ * 實測 393×852，結果面板量到 bottom 747（< 852，照舊規則算「看得到」），
+ * 但第二顆出口「回我的賣場」實際上被那條貼底列蓋掉一半。
+ * 被蓋住跟捲出視窗，對使用者是同一件事：他看不到。
+ */
 function ensureVisible(el: HTMLElement | null) {
   if (!el) return
   const r = el.getBoundingClientRect()
   const vh = window.innerHeight || document.documentElement.clientHeight
-  if (r.top >= 0 && r.bottom <= vh) return
+  if (r.top >= 0 && r.bottom <= vh - bottomOccluded()) return
   el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
+
+/**
+ * 視窗下緣有多少像素是被貼底的東西蓋住的。
+ *
+ * 兩段高度都不是拍腦袋量的，是各自的來源本來就宣告過的：
+ *   - 底部分頁列：高度讀 --nav-h（tokens.css），只在 720px 以下出現
+ *   - 挑卡的貼底列：CardPicker 傳給 BottomActionBar 的 spacer=84，
+ *     而它只在 900px 以下浮起來（CardPicker 的 wide 斷點，桌機是 inline）
+ *
+ * 高度讀權杖、斷點寫在這裡：**不要讀 --nav-total**。那一支的值是
+ * `calc(56px + env(safe-area-inset-bottom))`，而自訂屬性不會被算成 px ——
+ * getPropertyValue 拿到的是 `calc(...)` 這串字，parseFloat 直接 NaN。
+ * 實測就是這樣靜靜退化成 0，結果面板在 393×852 停在 bottom 747 被蓋住。
+ * （安全區那幾十像素沒算進來，而 84 的留白本來就比那條列高，蓋得住。）
+ */
+function bottomOccluded(): number {
+  const navH = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--nav-h')) || 56
+  const nav = window.matchMedia('(max-width: 720px)').matches ? navH : 0
+  const picker = window.matchMedia('(min-width: 900px)').matches ? 0 : 84
+  return nav + picker
 }
 </script>
 
@@ -856,16 +967,69 @@ function ensureVisible(el: HTMLElement | null) {
           </p>
         </div>
 
+        <!-- ---------- 開好了 ----------
+             成功之後按鈕整顆換成這一塊：既是「它成功了」的證據，
+             也順手擋掉重複送出（同一份表單再按一次就是第二個池）。 -->
+        <div v-if="created" ref="doneBox" class="done" data-testid="submit-done" role="status">
+          <p class="doneT">
+            <svg class="doneIco" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
+              <path d="M7.5 12.4l3 3 6-6.4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span>池開好了：{{ created.title }}</span>
+          </p>
+          <!-- 「開好了」跟「買得到了」不是同一件事，講清楚差在哪 ——
+               不講的話賣家點進去看到一個不能買的池，會以為剛剛沒成功 -->
+          <p class="doneP">
+            <template v-if="created.status === 'open'">
+              {{ created.totalTickets }} 支籤的順序已經封存，池現在就在架上，買家找得到。
+            </template>
+            <template v-else>
+              {{ created.totalTickets }} 支籤的順序已經封存、公平性承諾已經產生。
+              系統取到外部亂數之後會自動開賣（通常幾分鐘內），在那之前買家還買不到 ——
+              這不是出錯，是承諾的隨機來源要等下一輪。
+            </template>
+          </p>
+          <div class="doneBtns">
+            <RouterLink
+              class="btn primary doneGo" data-testid="done-go"
+              :to="{ name: 'pool', params: { id: created.id } }"
+            >去看這個池</RouterLink>
+            <RouterLink
+              v-if="mySellerId" class="btn doneGo" data-testid="done-mine"
+              :to="{ name: 'seller', params: { id: mySellerId } }"
+            >回我的賣場看全部的池</RouterLink>
+          </div>
+        </div>
+
         <!-- **刻意不禁用**：禁用的按鈕沒有辦法解釋自己，而這一頁的欄位多半
              捲在畫面外。按得下去，按下去底下就長出「還差什麼」。
              按鈕上的字也跟著換 —— 那是按下去當下**最靠近手指**的那個變化，
              使用者的視線本來就在按鈕上，不必去別的地方找回應。 -->
-        <button type="submit" class="btn primary go" :class="{ notyet: !valid }" :disabled="busy">
-          {{ busy ? '封存籤序中…'
+        <button
+          v-else type="submit" class="btn primary go"
+          :class="{ notyet: !valid, working: busy }" :disabled="busy" :aria-busy="busy"
+        >
+          <!-- 送出中要在按鈕上看得出來。只換文字不夠：使用者按完手指還壓在
+               按鈕上，字被蓋住的機率不低，而且「封存籤序中…」跟「開池上架」
+               長度相近，餘光掃過去像沒變。加一個會轉的圈，它是唯一
+               一直在動的東西。 -->
+          <svg v-if="busy" class="spin" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.6" opacity=".3" />
+            <path d="M12 3a9 9 0 0 1 9 9" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" />
+          </svg>
+          <span>{{ busy ? '封存籤序中…'
              : valid ? '開池上架'
              : attempted ? `還沒送出 —— 還差 ${problems.length} 項（見下方）`
-             : '看看還差什麼' }}
+             : '看看還差什麼' }}</span>
         </button>
+
+        <!-- 送出中的說明。按鈕上只放得下五個字，而這一段等待有可能好幾秒
+             （要跟 drand 拿外部亂數），沒有一句話說明的等待會被讀成當機。 -->
+        <p v-if="busy" class="busyLine" data-testid="submit-busy" role="status">
+          正在把 {{ econ.seatCount }} 支籤的順序洗好、封存，並產生公平性承諾。
+          先不要離開這一頁或再按一次。
+        </p>
 
         <!-- 「還差什麼」清單。位置刻意在**送出鈕正下方**：
              它原本在按鈕上面、而按下去又會把畫面捲到頁首，實測按鈕與清單
@@ -1135,6 +1299,40 @@ dd { margin: 0; font-weight: 600; }
 /* 還不能開池時**不變灰**（灰＝壞掉），改用低調的外框色：按得下去，
    按下去會告訴你還差什麼 */
 .go.notyet { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+/* 送出中：轉圈跟文字並排。按鈕本來只有文字，多了圖示就要自己排 */
+.go { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.go .spin { width: 17px; height: 17px; flex: none; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* 關掉動態效果的人看不到轉圈，所以那時**文字**必須自己撐起回饋 ——
+   圈不動就讓它停在原地當一個狀態圖示，底下的 .busyLine 才是主要說明 */
+@media (prefers-reduced-motion: reduce) { .go .spin { animation: none; } }
+.busyLine {
+  margin: 0; padding: 9px 11px; min-width: 0;
+  border-radius: 10px; background: var(--surface-2);
+  font-size: 12px; line-height: 1.7; color: var(--muted);
+}
+
+/* ---- 開好了 ----
+   用 --ok 的 wash 而不是 accent：這一塊要一眼讀成「成功」，
+   而 accent 在這一頁到處都是（必填徽章、覆寫框線），分不出來。 */
+.done {
+  padding: 14px 15px; min-width: 0;
+  border: 1px solid var(--ok); border-radius: 12px;
+  background: var(--ok-wash);
+}
+.doneT {
+  display: flex; align-items: flex-start; gap: 8px; min-width: 0;
+  margin: 0; font-size: 14px; font-weight: 700; color: var(--ok-ink);
+}
+.doneT span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.doneIco { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+.doneP { margin: 8px 0 0; font-size: 12px; line-height: 1.85; color: var(--muted); }
+.doneBtns { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 12px; }
+/* 44px 是可點目標的下限，而這兩顆是成功之後唯一的出路 */
+.doneGo {
+  display: grid; place-items: center; min-height: 44px; padding: 0 14px; min-width: 0;
+  font-size: 13px; text-decoration: none; white-space: normal; line-height: 1.4;
+}
 .err {
   margin: 0; padding: 10px 12px; min-width: 0;
   border-radius: 10px; border: 1px solid var(--danger);
