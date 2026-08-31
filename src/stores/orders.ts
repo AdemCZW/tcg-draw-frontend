@@ -13,6 +13,7 @@ import { defineStore } from 'pinia'
 import type { CardItem, Listing, Order } from '@/types/models'
 import { applyDeadlines, depositFor, isOpen, validateTracking, type Carrier } from '@/shared/escrow'
 import { useWalletStore } from '@/stores/wallet'
+import { useAuthStore } from '@/stores/auth'
 import { MOCK } from '@/lib/config'
 import { http } from '@/lib/http'
 import { ORDER_ROUTES } from '@/shared/contract'
@@ -49,6 +50,26 @@ export interface ShipTo {
 export const shipToOf = (o: Order): ShipTo | undefined =>
   (o as Order & { ship?: ShipTo }).ship
 
+/**
+ * 「訂單上的這個 id 是不是我」。
+ *
+ * 角色判斷（我是買家還是賣家）以前是拿 id 去跟寫死的字串 'me' 比 ——
+ * 那是 mock 種子留下來的代號。正式環境的 buyerId / sellerId 是真的 user id
+ * （u-xxxx），**永遠不等於 'me'**，所以每一筆訂單都會被判成「我是買家」：
+ * 賣家在正式站看自己的訂單會拿到買家視角，看不到收件資訊、按不到「我已寄出」，
+ * 然後在出貨期限到期時被判逾期未出貨、沒收保證金。錢會因為這個字串搬到錯的人手上。
+ *
+ * 判準改成跟登入者的 id 比對。'me' 仍然要收：localStorage 裡已經存在的 mock
+ * 訂單是用那個字串寫進去的，不收的話使用者本機的舊訂單會整批變成「不是我的」。
+ * 但新造的種子一律改用真實格式的 id（見 seedSellerOrder / seedBuyerOrder），
+ * 這樣開發時看到的形狀就跟正式環境一樣 —— 同一個 bug 才不會再躲過一次。
+ */
+export function isSelf(id?: string | null): boolean {
+  if (!id) return false
+  if (id === 'me') return true
+  return id === useAuthStore().user?.id
+}
+
 const KEY = 'vd_orders_v1'
 /** demo 用的時間位移，讓人不用真的等 7 天就能看完整個流程 */
 const OFFSET_KEY = 'vd_orders_offset'
@@ -66,8 +87,8 @@ export const useOrdersStore = defineStore('orders', {
   getters: {
     /** demo 時鐘。所有時限判斷都走這裡，不直接用 Date.now() */
     now: (s) => () => Date.now() + (MOCK ? s.offset : s.serverOffset),
-    asBuyer: (s) => s.orders.filter(o => o.buyerId === 'me'),
-    asSeller: (s) => s.orders.filter(o => o.sellerId === 'me'),
+    asBuyer: (s) => s.orders.filter(o => isSelf(o.buyerId)),
+    asSeller: (s) => s.orders.filter(o => isSelf(o.sellerId)),
     openCount: (s) => s.orders.filter(isOpen).length
   },
 
@@ -108,7 +129,7 @@ export const useOrdersStore = defineStore('orders', {
         const next = applyDeadlines(o, t)
         if (next === o) return o
         changed = true
-        if (o.buyerId === 'me' && next.status === 'completed') useWalletStore().charge(next.price)
+        if (isSelf(o.buyerId) && next.status === 'completed') useWalletStore().charge(next.price)
         return next
       })
       if (changed) this.persist()
@@ -125,7 +146,7 @@ export const useOrdersStore = defineStore('orders', {
       const w = useWalletStore()
       w.setLocked(
         this.orders
-          .filter(o => o.buyerId === 'me' && isOpen(o))
+          .filter(o => isSelf(o.buyerId) && isOpen(o))
           .reduce((sum, o) => sum + o.price, 0)
       )
     },
@@ -153,7 +174,10 @@ export const useOrdersStore = defineStore('orders', {
         card: l.card as CardItem,
         price: l.price,
         deposit: depositFor(l.price, completed),
-        buyerId: 'me', buyerName,
+        /* 買家 id 用登入者真實的 id，不要再寫 'me'。
+           mock 造出來的訂單形狀要跟伺服器回來的一樣，否則只有 mock 會過的
+           判斷（例如角色判斷）會一路活到正式環境才爆。沒登入才退回 'me'。 */
+        buyerId: useAuthStore().user?.id ?? 'me', buyerName,
         sellerId: l.sellerId, sellerName: l.sellerName,
         status: 'escrowed',
         createdAt: t
@@ -174,12 +198,17 @@ export const useOrdersStore = defineStore('orders', {
      */
     seedSellerOrder(card: CardItem, price: number, ship?: ShipTo) {
       const t = Date.now() + this.offset
+      /* sellerId 用登入者真實的 id，不再寫 'me'。
+         這一行本身就是那個角色判斷 bug 之所以躲了這麼久的原因：種子造出來的
+         訂單長得跟正式環境不一樣，所以「sellerId === 'me'」在開發時永遠是對的。
+         種子必須跟伺服器回來的資料同形，它才有資格當驗證的依據。 */
+      const me = useAuthStore().user
       const o: Order & { ship?: ShipTo } = {
         id: 'o-seed-' + t.toString(36),
         listingId: 'seed', card, price,
         deposit: depositFor(price, 0),
         buyerId: 'u-9A44', buyerName: 'VD-9A44',
-        sellerId: 'me', sellerName: '我',
+        sellerId: me?.id ?? 'me', sellerName: me?.name ?? '我',
         status: 'escrowed', createdAt: t - 6 * 3_600_000,
         ...(ship ? { ship } : {})
       }
@@ -187,17 +216,52 @@ export const useOrdersStore = defineStore('orders', {
       this.persist()
     },
 
-    /** demo：買家視角的訂單。刻意不帶 ship —— 伺服器對買家本來就不會給 */
-    seedBuyerOrder(card: CardItem, price: number) {
+    /**
+     * demo：買家視角的訂單。刻意不帶 ship —— 伺服器對買家本來就不會給。
+     *
+     * 五種狀態都造得出來，因為買家那半的畫面**每一種狀態講的話都不一樣**
+     * （在等什麼、錢在哪、我能按什麼）。只造得出一種的話，其餘四種永遠
+     * 沒有人看過，而「已完成」與「爭議中」正是使用者最焦慮、最會回來看的兩種。
+     *
+     * 賣家用 mock 的真實賣家（保庫堂 s1），不是隨手編的 u-7C12 ——
+     * 買家視角要顯示賣家等級與評價，那些資料掛在賣家檔案上，
+     * 編一個不存在的 id 只會讓開發時永遠看到「查不到賣家」的退路版本。
+     */
+    seedBuyerOrder(
+      card: CardItem, price: number,
+      status: 'escrowed' | 'shipped' | 'delivered' | 'disputed' | 'completed' = 'shipped',
+      seller: { id: string; name: string } = { id: 's1', name: '保庫堂' }
+    ) {
       const t = Date.now() + this.offset
+      const H = 3_600_000
+      const me = useAuthStore().user
+      /* 每一種狀態的時間戳都要讓倒數落在「看得出意義」的區間，而且
+         remainText 的兩種格式都要驗到：escrowed 留 14 小時（小時級）、
+         shipped 留 13 天（天級）。只驗天級的話，小時級那條分支
+         （剩不到一天、最急的那一刻）永遠沒有人看過。 */
+      const stamps: Record<string, Partial<Order>> = {
+        escrowed: { createdAt: t - 58 * H },
+        shipped: { createdAt: t - 30 * H, shippedAt: t - 4 * H },
+        delivered: { createdAt: t - 120 * H, shippedAt: t - 96 * H, deliveredAt: t - 24 * H },
+        disputed: {
+          createdAt: t - 144 * H, shippedAt: t - 120 * H, deliveredAt: t - 48 * H,
+          disputedAt: t - 3 * H, disputeReason: '外盒完好，但卡片邊角有壓痕，跟賣場照片不符',
+          hasUnboxingVideo: true
+        },
+        completed: {
+          createdAt: t - 216 * H, shippedAt: t - 192 * H, deliveredAt: t - 168 * H,
+          settledAt: t - H, closedBy: 'buyer-confirm'
+        }
+      }
       this.orders.unshift({
         id: 'o-buy-' + t.toString(36),
         listingId: 'seed', card, price,
         deposit: depositFor(price, 0),
-        buyerId: 'me', buyerName: '我',
-        sellerId: 'u-7C12', sellerName: 'VD-7C12',
-        status: 'shipped', createdAt: t - 30 * 3_600_000, shippedAt: t - 4 * 3_600_000
-      })
+        buyerId: me?.id ?? 'me', buyerName: me?.name ?? '我',
+        sellerId: seller.id, sellerName: seller.name,
+        status, createdAt: t,
+        ...stamps[status]
+      } as Order)
       this.persist()
     },
 
@@ -271,7 +335,7 @@ export const useOrdersStore = defineStore('orders', {
       if (!o || (o.status !== 'shipped' && o.status !== 'delivered')) return
       const next: Order = { ...o, status: 'completed', settledAt: Date.now() + this.offset, closedBy: 'buyer-confirm' }
       this.orders = this.orders.map(x => (x.id === id ? next : x))
-      if (o.buyerId === 'me') this.releaseFor(next)
+      if (isSelf(o.buyerId)) this.releaseFor(next)
       this.persist()
     },
 
@@ -302,7 +366,7 @@ export const useOrdersStore = defineStore('orders', {
         closedBy: to === 'buyer' ? 'dispute-buyer' : 'dispute-seller'
       }
       this.orders = this.orders.map(x => (x.id === id ? next : x))
-      if (o.buyerId === 'me') this.releaseFor(next)
+      if (isSelf(o.buyerId)) this.releaseFor(next)
       this.persist()
     },
 

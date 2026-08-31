@@ -11,6 +11,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import LoginMethods from '@/components/LoginMethods.vue'
 import { useWalletStore } from '@/stores/wallet'
+import { useOrdersStore } from '@/stores/orders'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { hapticsEnabled, hapticsSupported, setHaptics } from '@/lib/haptics'
 import { FAIRNESS_UI } from '@/lib/config'
@@ -23,7 +24,15 @@ const hapticsOn = ref(hapticsEnabled())
 function toggleHaptics() { hapticsOn.value = !hapticsOn.value; setHaptics(hapticsOn.value) }
 const auth = useAuthStore()
 const wallet = useWalletStore()
-onMounted(() => wallet.loadLedger())
+/* 訂單也在這裡讀一次，只為了那顆數字徽章。
+   「我有 2 筆交易在跑」是把人帶進訂單頁的理由；沒有數字的話這一格
+   看起來跟其他八格一樣是靜態入口，剛買完卡的人不會知道裡面有東西在等他。
+   讀失敗就不顯示徽章，不擋整頁 —— 入口本身不依賴這次請求。 */
+const orders = useOrdersStore()
+onMounted(() => {
+  wallet.loadLedger()
+  orders.load().catch(() => {})
+})
 
 function logout() {
   auth.logout()
@@ -39,6 +48,14 @@ function logout() {
    窄格子裡塞得下才有得看；語意由圖示與落地頁再補完。
    排序照使用頻率由高到低，最常回來看的錢包擺在左上第一格。 */
 const rows = [
+  /* 「我的訂單」排第一格。
+     這一頁之前是**全站唯一**連得到 /me/orders 的地方以外的空白 —— 訂單頁的入口
+     只有市場頁買完那一瞬間跳出來的按鈕，關掉就再也找不到了。買家付完錢之後
+     第一個問題是「我剛買的東西到哪了」，那個問題現在沒有地方回答。
+     擺第一格而不是接在錢包後面，理由跟「出貨與結算」排在開池後面同一條：
+     它是**有時限**的那一格 —— 驗收期過了會自動放款給賣家，錯過就要不回來。
+     錢包是隨時看都一樣的靜態數字，晚一格沒有代價。 */
+  { name: 'orders', t: '我的訂單', icon: 'receipt' },
   { name: 'wallet', t: '錢包', icon: 'wallet' },
   { name: 'topup', t: '儲值', icon: 'plus' },
   { name: 'offers', t: '交易邀約', icon: 'swap' },
@@ -72,7 +89,8 @@ const paths: Record<string, string> = {
   box: 'M4 8l8-4 8 4-8 4-8-4zM4 8v8l8 4 8-4V8M12 12v8',
   truck: 'M3 7h10v9H3zM13 10h4l3 3v3h-7zM7.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z',
   shield: 'M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-3z',
-  chat: 'M4 5h16v11H9l-5 4V5z'
+  chat: 'M4 5h16v11H9l-5 4V5z',
+  receipt: 'M6 3.5h12v17l-2.5-1.6-2.5 1.6-2.5-1.6L8 20.5l-2-1.4v-15.6zM9.5 8h5M9.5 12h5'
 }
 </script>
 
@@ -105,6 +123,9 @@ const paths: Record<string, string> = {
             </svg>
           </span>
           <strong>{{ r.t }}</strong>
+          <!-- 進行中的筆數。只在有東西的時候出現：常駐一顆「0」等於教使用者
+               忽略這個位置，之後真的有訂單時他也不會看見 -->
+          <span v-if="r.name === 'orders' && orders.openCount" class="badge">{{ orders.openCount }}</span>
         </RouterLink>
       </li>
       <!-- 後台自己佔一格，不再跟著 v-for 跑 —— 之前寫在迴圈裡，管理員會看到六顆一樣的後台入口 -->
@@ -243,6 +264,18 @@ h1 {
 @media (max-width: 720px) {
   .page { padding-top: 16px; }
   .hero { padding: 16px; }
+}
+
+/* 進行中的訂單筆數。貼在格子右上角而不是接在標題後面：
+   標題那一行在三分之一寬的格子裡本來就快滿了，後面再掛一顆數字會把它擠成兩行 */
+.cell { position: relative; }
+.badge {
+  position: absolute; top: 8px; right: 8px;
+  min-width: 20px; height: 20px; padding: 0 6px;
+  display: grid; place-items: center;
+  border-radius: var(--pill);
+  background: var(--accent); color: var(--on-accent);
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700; line-height: 1;
 }
 
 /* 後台列跟一般功能區隔開：它是平台營運用的，不是使用者功能 */

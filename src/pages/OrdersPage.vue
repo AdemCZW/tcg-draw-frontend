@@ -17,19 +17,32 @@
  *
  * 出貨照與必填單號整條移除。物流商與單號留著當選填線索，但畫面上要明說
  * 不填也能出貨，否則使用者會以為自己被擋住。
+ *
+ * ── 買家那半 ─────────────────────────────────────────────────────
+ * 上面那次改寫是為了賣家出貨，買家只剩兩句灰字。但**買家才是付了錢在等的那個人**：
+ * 他點進來要問的是「我的卡到哪了、我的錢在誰手上」。所以買家那側補齊四件事，
+ * 順序就是他心裡的順序：
+ *   1. 賣家是誰（名字不夠 —— 等級、出貨天數、爭議率才判斷得出要不要擔心）
+ *   2. 走到哪一步（三段進度，現在那一段標出來，並帶剩餘時間）
+ *   3. 我現在該做什麼、還是只要等
+ *   4. 我的點數鎖了多少、什麼時候會放給賣家或退回來
+ * 每一種狀態講的話都不一樣，所以文案按狀態分開寫（buyerViewOf），
+ * 不用一套通用句型帶過 —— 通用句型的結果就是每一種狀態都講得不清不楚。
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useOrdersStore, shipToOf, type ShipTo } from '@/stores/orders'
+import { useOrdersStore, shipToOf, isSelf, type ShipTo } from '@/stores/orders'
 import { useWalletStore } from '@/stores/wallet'
 import {
   actionsFor, deadlineOf, DAY, HOUR, isOpen, validateTracking, CARRIERS,
   remainText, STATUS_TEXT, SHIP_DEADLINE, DELIVER_DEADLINE, INSPECT_WINDOW,
   type Carrier, type Deadline
 } from '@/shared/escrow'
-import type { Order } from '@/types/models'
+import type { Order, Seller } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 import CopyLine from '@/components/CopyLine.vue'
+import SellerChip from '@/components/SellerChip.vue'
+import { api } from '@/lib/api'
 import { MOCK } from '@/lib/config'
 
 const store = useOrdersStore()
@@ -68,7 +81,16 @@ onUnmounted(() => { clearInterval(timer); clearInterval(tick); clearTimeout(allT
 const list = computed(() =>
   store.orders.filter(o => (tab.value === 'open' ? isOpen(o) : !isOpen(o)))
 )
-const roleOf = (o: Order) => (o.sellerId === 'me' ? 'seller' : 'buyer') as 'seller' | 'buyer'
+/**
+ * 我在這一筆訂單裡是誰。
+ *
+ * 原本是 `o.sellerId === 'me'`。'me' 是 mock 種子寫死的字串，正式環境的
+ * sellerId 是真的 user id（u-xxxx），**永遠不等於 'me'** —— 於是每一筆訂單
+ * 都被判成「我是買家」，賣家在正式站看自己的訂單會拿到買家視角：
+ * 看不到收件資訊、按不到「我已寄出」，最後在出貨期限到期時被判逾期、沒收保證金。
+ * 判準改成跟登入者的 id 比對（isSelf，兩種模式共用同一份，見 stores/orders.ts）。
+ */
+const roleOf = (o: Order) => (isSelf(o.sellerId) ? 'seller' : 'buyer') as 'seller' | 'buyer'
 
 /**
  * 收件資訊的畫面狀態。
@@ -108,15 +130,141 @@ function shipViewOf(o: Order): ShipView {
  * 倒數）都會把它們重算一遍，而且同一張卡會算好幾次。這裡集中算一次，
  * 樣板只讀結果。
  */
-interface Row { o: Order; role: 'seller' | 'buyer'; dl: Deadline | null; sv: ShipView }
+interface Row {
+  o: Order; role: 'seller' | 'buyer'; dl: Deadline | null; sv: ShipView
+  /** 買家視角的整包文案。賣家的訂單是 null，樣板就不會渲染那一塊 */
+  bv: BuyerView | null
+}
 const rows = computed<Row[]>(() =>
-  list.value.map(o => ({ o, role: roleOf(o), dl: deadlineOf(o), sv: shipViewOf(o) }))
+  list.value.map(o => {
+    const role = roleOf(o)
+    return {
+      o, role, dl: deadlineOf(o), sv: shipViewOf(o),
+      bv: role === 'buyer' ? buyerViewOf(o) : null
+    }
+  })
 )
 
 /** 時限規則的數字從常數推，不要在文案裡寫死 —— 規則改了文案要跟著改 */
 const SHIP_HOURS = Math.round(SHIP_DEADLINE / HOUR)
 const DELIVER_DAYS = Math.round(DELIVER_DEADLINE / DAY)
 const INSPECT_DAYS = Math.round(INSPECT_WINDOW / DAY)
+
+/* ==================================================================
+   買家那半
+   ================================================================== */
+
+/**
+ * 賣家檔案。
+ *
+ * 訂單上只有 sellerId 與 sellerName，而買家真正想知道的是「這個人可不可靠」——
+ * 等級、出貨天數、爭議率都掛在賣家檔案上，得另外抓一次。
+ *
+ * 抓不到不能讓整塊消失：一般使用者從保管庫上架的卡沒有賣家檔案，
+ * 舊訂單的賣家也可能已經下架。那時候退回「只有名字」的版本，
+ * 因為「這張卡是誰要寄給我」是買家最想確認的一件事，寧可少講幾項也不能空白。
+ *
+ * seen 是普通的 Set 不是 ref：它只用來擋重複請求，讓它有反應性的話
+ * 寫進去會再觸發一次 watch，變成自己餵自己。
+ */
+const sellerOf = ref<Record<string, Seller>>({})
+const seenSellers = new Set<string>()
+async function ensureSeller(id: string) {
+  if (!id || seenSellers.has(id)) return
+  seenSellers.add(id)
+  try {
+    const s = await api.getSeller(id)
+    if (s) sellerOf.value = { ...sellerOf.value, [id]: s }
+  } catch { /* 查不到就用退路版，不吵使用者 */ }
+}
+watch(rows, list => {
+  for (const r of list) if (r.role === 'buyer') ensureSeller(r.o.sellerId)
+}, { immediate: true })
+
+interface BuyerStep {
+  label: string
+  /** done 走過了、now 現在卡在這、todo 還沒輪到 */
+  state: 'done' | 'now' | 'todo'
+}
+interface BuyerView {
+  steps: BuyerStep[]
+  /** 我現在該做什麼、還是只要等 */
+  todo: string
+  /** 錢在哪：鎖了多少、什麼時候會動、動去哪一邊 */
+  money: string
+  /** 這筆點數還鎖著（決定顏色：鎖著是金色，結掉了是灰的） */
+  held: boolean
+}
+
+/**
+ * 買家看到的整包文案，按狀態各寫各的。
+ *
+ * 不做成一套通用句型：七種狀態裡「我該做什麼」的答案差很多 ——
+ * escrowed 是「什麼都不用做」、shipped 是「收到要按一個鈕」、
+ * delivered 是「不按也會自動放款，但要申訴就得趁現在」。
+ * 用一句話蓋過去的結果是每一種都講得不清不楚，而講不清楚的代價
+ * 是使用者錯過驗收期、錢自動放給了賣家。
+ *
+ * 時限的數字一律從 shared/escrow.ts 的常數推導（SHIP_HOURS / DELIVER_DAYS /
+ * INSPECT_DAYS），不寫死 —— 規則改了文案要自己跟上。
+ */
+function buyerViewOf(o: Order): BuyerView {
+  const pts = o.price.toLocaleString()
+  const S = (label: string, state: BuyerStep['state']): BuyerStep => ({ label, state })
+  const paid = S('付款・點數鎖住', 'done')
+
+  switch (o.status) {
+    case 'escrowed':
+      return {
+        steps: [paid, S('賣家寄出', 'now'), S('我確認收到', 'todo')],
+        todo: '現在不用做什麼，等賣家寄出就好。想問寄送方式或運費，用你們原本的聯絡方式直接找賣家，報上面的訂單編號最快。',
+        money: `${pts} 點鎖在託管裡，賣家還拿不到。賣家 ${SHIP_HOURS} 小時內沒按「我已寄出」，系統會自動取消並把這筆點數全額退回你的帳戶，同時沒收他的保證金。`,
+        held: true
+      }
+    case 'shipped':
+      return {
+        steps: [paid, S('賣家已寄出', 'done'), S('我確認收到', 'now')],
+        todo: '卡收到後按「我已收到」，款項才會放給賣家。沒收到、或東西跟描述不符，就按「我要申訴」—— 申訴要附完整未剪輯的開箱影片，所以拆封前先開始錄。',
+        money: `${pts} 點還鎖著。你按下「我已收到」的那一刻放款給賣家；你一直沒有動作的話，${DELIVER_DAYS} 天後視同送達，再過 ${INSPECT_DAYS} 天自動放款。`,
+        held: true
+      }
+    case 'delivered':
+      return {
+        steps: [paid, S('賣家已寄出', 'done'), S('驗收中', 'now')],
+        todo: `已經算送達了，現在是 ${INSPECT_DAYS} 天驗收期。卡沒問題就按「我已收到」提早結案；有問題一定要在驗收期內按「我要申訴」，期滿就來不及了。`,
+        money: `${pts} 點還鎖著。驗收期滿自動放款給賣家 —— 在那之前你都還可以申訴。`,
+        held: true
+      }
+    case 'disputed':
+      return {
+        steps: [paid, S('賣家已寄出', 'done'), S('爭議處理中', 'now')],
+        todo: '客服正在看這一筆。在補件期限內把證據補齊（開箱影片、外箱與卡況照片）會比較快；過了期限就依現有的證據裁決。',
+        money: `${pts} 點還鎖著，兩邊都拿不到。裁決判你就全額退回你的帳戶，判賣家就放款給他。`,
+        held: true
+      }
+    case 'completed':
+      return {
+        steps: [S('付款', 'done'), S('賣家已寄出', 'done'), S('已完成', 'done')],
+        todo: '這筆結束了，沒有要做的事。卡後來才發現有問題請開客服工單 —— 訂單本身已經不能再申訴。',
+        money: `${pts} 點已經放款給賣家，不再鎖在託管裡。`,
+        held: false
+      }
+    case 'refunded':
+      return {
+        steps: [S('付款', 'done'), S('爭議裁決', 'done'), S('已退款', 'done')],
+        todo: '爭議判你，這筆已經退款結案。沒有要做的事。',
+        money: `${pts} 點已全額退回你的帳戶，可以直接拿去買別的。`,
+        held: false
+      }
+    case 'cancelled':
+      return {
+        steps: [S('付款', 'done'), S('賣家逾期未寄出', 'done'), S('已取消・退款', 'done')],
+        todo: `賣家在 ${SHIP_HOURS} 小時內沒有寄出，系統自動取消了這筆。沒有要做的事，他的保證金已經被沒收。`,
+        money: `${pts} 點已全額退回你的帳戶。`,
+        held: false
+      }
+  }
+}
 
 /**
  * 「複製全部」給的是一整段可以直接貼進 LINE 的文字。
@@ -155,8 +303,7 @@ const DEMO_CARD = {
   id: 'demo', name: '噴火龍 ex UR', image: '', artId: 'SV4a-349',
   refPrice: 43680, rarity: 'UR', certNo: '82345671', grade: 10
 } as never
-function seedDemo(kind: 'full' | 'partial' | 'none' | 'long' | 'buyer') {
-  if (kind === 'buyer') return store.seedBuyerOrder(DEMO_CARD, 41000)
+function seedDemo(kind: 'full' | 'partial' | 'none' | 'long') {
   const ship: Record<string, ShipTo | undefined> = {
     full: { name: '王大明', phone: '0912345678', zip: '106', city: '台北市大安區', line1: '和平東路二段 76 巷 12 號 5 樓' },
     // 只填了姓名，電話與地址是空的 —— 會員資料的每個欄位都不強制
@@ -171,6 +318,27 @@ function seedDemo(kind: 'full' | 'partial' | 'none' | 'long' | 'buyer') {
     }
   }
   store.seedSellerOrder(DEMO_CARD, 41000, ship[kind])
+}
+
+/* 買家視角的種子。四種狀態各一顆按鈕，因為每一種狀態畫面上講的話都不同，
+   只造得出一種等於其餘三種沒有人看過。
+   long 那顆是爆版測試：超長卡名 ＋ 超長賣家名，兩個都是使用者填得出來的
+   自由字串，而它們就擺在同一列的左右兩邊。 */
+const LONG_CARD = {
+  ...(DEMO_CARD as object),
+  id: 'demo-long',
+  name: '噴火龍 ex 特別藝術稀有・大師球鏡面版（黑標鑑定・2026 世界賽紀念再版）SAR/UR 雙面壓紋'
+} as never
+function seedBuyer(status: 'escrowed' | 'shipped' | 'delivered' | 'disputed' | 'completed', long = false) {
+  store.seedBuyerOrder(
+    long ? LONG_CARD : DEMO_CARD, 41000, status,
+    /* 超長那筆刻意用一個查不到檔案的賣家 id：它同時測到「賣家名字很長」
+       與「賣家檔案查不到」的退路版，那兩件事在正式環境會一起發生
+       （一般使用者從保管庫上架，沒有賣家檔案） */
+    long
+      ? { id: 'u-LONG', name: '關東・橫濱本店 卡片鑑定與批發中心（週年慶特別營業所）' }
+      : { id: 's1', name: '保庫堂' }
+  )
 }
 
 const err = ref('')
@@ -287,12 +455,80 @@ async function doDispute(o: Order) {
           <strong class="nm">{{ r.o.card.name }}</strong>
           <p class="who">
             <span class="role" :class="r.role">{{ r.role === 'seller' ? '我是賣家' : '我是買家' }}</span>
-            {{ r.role === 'seller' ? r.o.buyerName : r.o.sellerName }}
+            <!-- 買家那側不在這裡重複賣家名字：下面那塊會完整顯示（頭像、等級、
+                 出貨天數、爭議率），同一個名字在 100px 內出現兩次只是噪音 -->
+            <template v-if="r.role === 'seller'">{{ r.o.buyerName }}</template>
           </p>
           <p class="amt mono">{{ r.o.price.toLocaleString() }} 點<span v-if="r.o.deposit"> · 保證金 {{ r.o.deposit.toLocaleString() }}</span></p>
         </div>
         <span class="st" :class="r.o.status">{{ STATUS_TEXT[r.o.status] }}</span>
       </div>
+
+      <!-- 買家那半。順序照買家心裡的順序：誰要寄給我 → 走到哪 → 我該做什麼 → 我的錢在哪。
+           擺在訂單編號之前，因為進度才是他點進來的理由，編號是要聯絡時才用得到的東西 -->
+      <section v-if="r.bv" class="mine">
+        <!-- 1. 賣家是誰。名字不夠：等級、出貨天數、爭議率才判斷得出要不要擔心 -->
+        <!-- 整列是連往賣家頁的連結，不是 SellerChip 自己那顆。
+             SellerChip 內建的連結只有 22px 高，手機上按不到，而那個元件是
+             市場頁與賣家頁共用的，不能為了這一頁改它的尺寸 ——
+             所以這裡把 link 關掉，改由外層這一列提供 44px 的觸控目標。 -->
+        <component
+          :is="sellerOf[r.o.sellerId] ? 'RouterLink' : 'div'"
+          :to="sellerOf[r.o.sellerId] ? `/sellers/${r.o.sellerId}` : undefined"
+          class="who2"
+        >
+          <span class="lb">賣家</span>
+          <SellerChip v-if="sellerOf[r.o.sellerId]" :seller="sellerOf[r.o.sellerId]!" size="sm" :link="false" />
+          <!-- 查不到賣家檔案的退路版。一般使用者從保管庫上架就沒有檔案，
+               那時候至少要有名字，不能整塊消失 -->
+          <span v-else class="fb">
+            <span class="fbAv" aria-hidden="true">{{ (r.o.sellerName || '?').slice(0, 1) }}</span>
+            <span class="fbNm">{{ r.o.sellerName || '未具名賣家' }}</span>
+          </span>
+          <svg v-if="sellerOf[r.o.sellerId]" class="whoGo" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="currentColor"
+                  stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </component>
+        <ul v-if="sellerOf[r.o.sellerId]" class="stats">
+          <li>
+            <b class="mono">{{ sellerOf[r.o.sellerId]!.stats.cardsShipped.toLocaleString() }}</b>
+            <span>已出貨</span>
+          </li>
+          <li>
+            <b class="mono">{{ sellerOf[r.o.sellerId]!.stats.avgShipDays }} 天</b>
+            <span>平均出貨</span>
+          </li>
+          <li>
+            <b class="mono">{{ sellerOf[r.o.sellerId]!.stats.disputeRate }}%</b>
+            <span>爭議率</span>
+          </li>
+        </ul>
+
+        <!-- 2. 走到哪一步。三段，現在那一段標出來並帶剩餘時間 ——
+             「等賣家寄出，剩 62 小時」一眼就講完了狀態與急迫性 -->
+        <ol class="steps">
+          <li v-for="(st, i) in r.bv.steps" :key="i" :class="st.state">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="sTx">{{ st.label }}</span>
+            <span v-if="st.state === 'now' && r.dl" class="sRe mono">{{ remainText(r.dl.at - now) }}</span>
+          </li>
+        </ol>
+
+        <!-- 3. 我現在能做什麼 / 該等什麼 -->
+        <p class="todo">{{ r.bv.todo }}</p>
+
+        <!-- 4. 錢的狀態。買家的錢被鎖著，這是他第二想知道的事 -->
+        <p class="money" :class="{ held: r.bv.held }">
+          <svg class="mIco" viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="2.2" y="6.4" width="11.6" height="7.4" rx="1.8"
+                  fill="none" stroke="currentColor" stroke-width="1.4" />
+            <path d="M5.2 6.4V4.6a2.8 2.8 0 0 1 5.6 0v1.8" fill="none"
+                  stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+          </svg>
+          <span>{{ r.bv.money }}</span>
+        </p>
+      </section>
 
       <!-- 訂單編號：雙方在 LINE 上對話時唯一的共同代號。兩邊都看得到、
            兩邊都複製得走 —— 少了它，「我那張噴火龍」在賣家那邊可能有三筆 -->
@@ -374,15 +610,6 @@ async function doDispute(o: Order) {
           <p class="askB">也可以用你們原本的聯絡方式問，報上面的訂單編號比較快。</p>
         </div>
       </section>
-
-      <!-- 買家那側：要知道卡是賣家直接寄來的，以及自己那一半的按鈕是什麼 -->
-      <p v-if="r.role === 'buyer' && r.o.status === 'escrowed'" class="buy">
-        賣家會照你在會員資料填的收件資訊<b>直接寄給你</b>。寄送細節請跟賣家用你們原本的
-        聯絡方式談，報上面的訂單編號最快。
-      </p>
-      <p v-if="r.role === 'buyer' && (r.o.status === 'shipped' || r.o.status === 'delivered')" class="buy">
-        卡收到之後按<b>「我已收到」</b>，款項才會放給賣家。沒收到、或東西跟描述不符，就按「我要申訴」。
-      </p>
 
       <p v-if="r.o.tracking" class="trk mono">單號 {{ r.o.tracking }}</p>
       <p v-if="r.o.disputeReason" class="dr">爭議：{{ r.o.disputeReason }}</p>
@@ -491,7 +718,13 @@ async function doDispute(o: Order) {
         <button type="button" class="btn sm ghost" @click="seedDemo('partial')">+ 賣家單・只填一半</button>
         <button type="button" class="btn sm ghost" @click="seedDemo('none')">+ 賣家單・完全沒填</button>
         <button type="button" class="btn sm ghost" @click="seedDemo('long')">+ 賣家單・超長地址</button>
-        <button type="button" class="btn sm ghost" @click="seedDemo('buyer')">+ 買家視角訂單</button>
+        <!-- 買家視角的四種狀態各一顆：每一種畫面上講的話都不一樣，
+             只造得出一種的話其餘三種永遠沒有人看過 -->
+        <button type="button" class="btn sm ghost" @click="seedBuyer('escrowed')">+ 買家單・等寄出</button>
+        <button type="button" class="btn sm ghost" @click="seedBuyer('shipped')">+ 買家單・已寄出</button>
+        <button type="button" class="btn sm ghost" @click="seedBuyer('completed')">+ 買家單・已完成</button>
+        <button type="button" class="btn sm ghost" @click="seedBuyer('disputed')">+ 買家單・爭議中</button>
+        <button type="button" class="btn sm ghost" @click="seedBuyer('shipped', true)">+ 買家單・超長名稱</button>
         <button type="button" class="btn sm ghost" @click="store.reset()">全部清除</button>
       </div>
     </section>
@@ -529,10 +762,13 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 .empty { padding: 28px 4px; font-size: 14px; line-height: 1.8; }
 
 .ord { background: var(--surface); border-radius: var(--radius-lg); padding: 14px; margin-bottom: 12px; }
-.top { display: grid; grid-template-columns: 52px 1fr auto; gap: 12px; align-items: start; }
+.top { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+/* grid 子元素的預設 min-width 是 auto —— 沒有這一行，長卡名（或沒有空白的
+   長字串）會把中間那欄撐到比容器寬，手機上整頁橫向捲 */
+.meta { min-width: 0; }
 .thumb { width: 52px; height: 73px; border-radius: 6px; overflow: hidden; }
 .thumb :deep(img) { width: 100%; height: 100%; object-fit: cover; }
-.nm { display: block; font-size: 14.5px; line-height: 1.4; margin-bottom: 4px; }
+.nm { display: block; font-size: 14.5px; line-height: 1.4; margin-bottom: 4px; overflow-wrap: anywhere; }
 .who { font-size: 12px; color: var(--muted); margin: 0 0 3px; }
 .role {
   display: inline-block; font-size: 10px; font-weight: 700;
@@ -646,13 +882,97 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 }
 .askBtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* ---- 買家那側的說明 ---- */
-.buy {
-  margin-top: 12px; padding: 10px 12px;
+/* ---- 買家那側：我的卡到哪了、我的錢在誰手上 ----
+   顏色刻意跟賣家那塊（.send，左緣是 accent）分開用 info，
+   兩種角色的畫面在同一頁交錯出現，色帶是最快分得出「這張是我買的還是我賣的」的線索 */
+.mine {
+  margin-top: 12px; padding: 12px;
   background: var(--surface-2); border-radius: var(--radius);
-  font-size: 12px; line-height: 1.8; color: var(--muted);
+  box-shadow: inset 2px 0 0 var(--info-ink);
 }
-.buy b { color: var(--ink); font-weight: 600; }
+
+/* 賣家那一列。auto + minmax(0,1fr)：標籤固定寬，名字那欄要縮得下去，
+   1fr 會被最小內容寬（長店名）撐爆整張卡 */
+.who2 {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px; align-items: center;
+  /* 44px：這一列是連往賣家頁的觸控目標。SellerChip 自己只有 22px 高 */
+  min-height: 44px;
+  border-radius: var(--radius);
+}
+a.who2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.whoGo { width: 15px; height: 15px; flex: none; color: var(--faint); }
+.lb { font-size: 11.5px; color: var(--muted); }
+/* 查不到賣家檔案時的退路版，長相跟 SellerChip 對齊，少的只是等級與統計 */
+.fb { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.fbAv {
+  display: grid; place-items: center;
+  width: 22px; height: 22px; flex: none;
+  border-radius: 50%; background: var(--surface-3);
+  font-size: 11px; font-weight: 600; color: var(--muted);
+}
+.fbNm {
+  min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.45; color: var(--ink);
+  /* 折行而不是截斷。名字被切掉等於買家看不到自己在跟誰交易，
+     而這一格存在的唯一理由就是回答「是誰」——寧可長高兩行 */
+  overflow-wrap: anywhere;
+}
+
+.stats {
+  list-style: none; margin: 10px 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+}
+.stats li { min-width: 0; display: grid; gap: 1px; }
+.stats b { font-size: 13px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.stats span { font-size: 10.5px; line-height: 1.4; color: var(--muted); }
+
+/* 三段進度。直排不橫排：橫排在 393px 上放不下「賣家寄出」＋「剩 62 小時」，
+   而那兩個東西必須擺在一起才回答得了「我在等什麼、還要等多久」 */
+.steps { list-style: none; margin: 12px 0 0; padding: 0; }
+.steps li {
+  position: relative;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px; align-items: center;
+  padding: 5px 0;
+}
+/* 連接線：讓三個點看起來是一條路，而不是三顆各自獨立的圓 */
+.steps li:not(:last-child)::before {
+  content: ''; position: absolute;
+  left: 4.5px; top: 22px; bottom: -2px; width: 1px;
+  background: var(--line);
+}
+.dot {
+  width: 10px; height: 10px; flex: none; border-radius: 50%;
+  background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--line);
+}
+.steps .done .dot { background: var(--ok); box-shadow: none; }
+.steps .now .dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+.sTx { min-width: 0; font-size: 12.5px; line-height: 1.5; color: var(--faint); overflow-wrap: anywhere; }
+.steps .done .sTx { color: var(--muted); }
+.steps .now .sTx { color: var(--ink); font-weight: 600; }
+.sRe {
+  flex: none; white-space: nowrap;
+  font-size: 12px; font-weight: 700;
+  padding: 3px 9px; border-radius: var(--pill);
+  background: var(--accent-wash); color: var(--accent);
+}
+
+.todo { font-size: 12.5px; line-height: 1.8; color: var(--ink); margin: 12px 0 0; }
+
+/* 錢的狀態自己一格。買家問完「卡到哪了」的下一句一定是「那我的錢呢」，
+   混在上面那段說明裡會被讀掉 */
+.money {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px;
+  align-items: start;
+  margin: 10px 0 0; padding: 9px 11px;
+  border-radius: var(--radius); background: var(--surface);
+  font-size: 11.5px; line-height: 1.75; color: var(--muted);
+}
+.money span { min-width: 0; overflow-wrap: anywhere; }
+.mIco { width: 15px; height: 15px; flex: none; margin-top: 2px; color: var(--faint); }
+/* 還鎖著的那些才上色。結案的訂單再標一次金色只會讓人以為錢還卡著 */
+.money.held { background: var(--warn-wash); }
+.money.held .mIco { color: var(--gold); }
 
 .lead {
   font-size: 12.5px; line-height: 1.8; color: var(--muted); margin: 0 0 10px;
@@ -662,8 +982,8 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 /* 桌機上把這幾塊的量測寬度收住。訂單卡是滿版的，不收的話複製鈕會離它要複製的
    那個值一千多像素遠 —— 兩個東西看起來不像同一組；長行的說明文字也不好讀。 */
 @media (min-width: 721px) {
-  .idBox, .send { max-width: 620px; }
-  .howL li, .howR li, .buy, .lead, .hint { max-width: 720px; }
+  .idBox, .send, .mine { max-width: 620px; }
+  .howL li, .howR li, .todo, .lead, .hint { max-width: 720px; }
 }
 
 .acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
