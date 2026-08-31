@@ -10,17 +10,26 @@
 #
 # 這支 hook 是那件事的機械式防線。它擋不住「我不小心多加了檔案」，
 # 但擋得住那件事真正的後果：**把一份建不起來的程式碼推出去**。
+# （已經擋下來過一次：漏暫存 src/lib/api.ts 的那筆。）
 #
-# ── 為什麼用 stash 而不是直接建置工作樹 ─────────────────────────────
-# 直接建置工作樹驗的是「工作樹能不能建」，那**不是**我們要問的問題 ——
-# 要問的是「**這個 commit 本身**能不能建」。兩者在有未暫存變更時會分岔：
-# 未暫存的檔案可能剛好補上了暫存區缺的東西，於是工作樹建得起來、
-# 推出去的 commit 卻建不起來。所以要先把未暫存的部分藏起來再建。
+# ── 要問的問題是「這個 commit 本身建不建得起來」 ────────────────────
+# 不是「工作樹建不建得起來」。兩者在有未暫存變更時會分岔：未暫存的檔案
+# 可能剛好補上了暫存區缺的東西，於是工作樹建得起來、推出去的 commit
+# 卻建不起來。所以一定要在「只有暫存區內容」的樹上建。
 #
-# `--keep-index` 保留暫存區、只藏起未暫存的變更；`-u` 連未追蹤檔案一起藏
-# （不然 agent 新寫的檔案還留在原地，等於沒藏）。
-# trap 確保任何離開路徑都會還原 —— 建置失敗、Ctrl+C、hook 自己出錯，
-# 都不能把使用者的工作留在 stash 裡。
+# ── 為什麼從暫存區導出，而不是 stash ────────────────────────────────
+# 前一版用 `git stash push --keep-index -u` 把未暫存的部分藏起來再建。
+# 那個作法會**動到工作樹**，而這個專案常常有好幾支背景 agent 同時在寫
+# 同一棵樹 —— 等於在別人打字的時候把檔案抽走。2026-08-31 就發生了：
+# agent 在 stash 期間又寫了一次同樣的檔案，pop 因此失敗，未暫存的變更
+# 被留在 stash list 裡（那次逐檔比對過，沒有東西遺失，但那是運氣）。
+#
+# `git checkout-index` 把暫存區的內容原樣倒進一個暫時目錄，在那裡建置。
+# 問的是同一個問題，卻一個位元組都不碰工作樹，agent 可以繼續寫。
+# 順帶還比較快（4.5 秒 vs stash 那套的來回）。
+#
+# node_modules 用 symlink 而不是複製：那是唯一體積大到會讓這件事變慢的
+# 東西，而且它不在版控裡、內容與 commit 無關。
 
 set -e
 
@@ -28,26 +37,22 @@ set -e
 git diff --cached --quiet && exit 0
 
 # 只有動到前端原始碼才需要建置。改的全是後端或文件時，
-# 跑一次 40 秒的前端建置只是懲罰。
+# 跑一次前端建置只是懲罰。
 if ! git diff --cached --name-only | grep -qE '^(src/|index\.html|vite\.config\.ts|package(-lock)?\.json)'; then
   exit 0
 fi
 
 echo "[pre-commit] 前端有改動，驗證這個 commit 本身建得起來…"
 
-STASHED=0
-restore() {
-  if [ "$STASHED" = "1" ]; then
-    git stash pop --quiet 2>/dev/null || echo "[pre-commit] ⚠ stash pop 失敗，你的未暫存變更還在 git stash list 裡"
-  fi
-}
-trap restore EXIT INT TERM
+ROOT=$(git rev-parse --show-toplevel)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/precommit-XXXXXX")
+# 任何離開路徑都要清掉暫時目錄：建置失敗、Ctrl+C、hook 自己出錯。
+trap 'rm -rf "$TMP"' EXIT INT TERM
 
-if git stash push --keep-index -u --quiet -m "pre-commit: 暫離未暫存變更" 2>/dev/null; then
-  STASHED=1
-fi
+git checkout-index -a --prefix="$TMP/"
+ln -s "$ROOT/node_modules" "$TMP/node_modules"
 
-if npm run build >/tmp/precommit-build.log 2>&1; then
+if (cd "$TMP" && npm run build) >/tmp/precommit-build.log 2>&1; then
   echo "[pre-commit] 建置通過"
 else
   echo ""
