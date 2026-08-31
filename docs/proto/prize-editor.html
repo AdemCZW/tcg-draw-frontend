@@ -1,0 +1,706 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>獎項配置 · 設計原型</title>
+<style>
+/* ------------------------------------------------------------------
+   色票抄自 src/styles/tokens.css（只抄這份原型用得到的那些）。
+   這份檔案刻意自包含：不連外、不載字體、不吃專案的 CSS。
+------------------------------------------------------------------- */
+:root{
+  --bg:#0d0c0f; --surface:#17161a; --surface-2:#1e1c22; --surface-3:#272430;
+  --line:#302d38; --line-soft:#222029;
+  --ink:#f4f1ee; --muted:#a49b96; --faint:#6f6862;
+  --accent:#f73b20; --on-accent:#fff; --accent-soft:#ff5236; --accent-wash:#2c1512;
+  --tier-a:#f2b544; --tier-b:#a98cff; --tier-c:#4fc9ef; --tier-d:#8f8880; --tier-last:#ff5638; --tier-bust:#8f8880;
+  --gold-deep:#ecc063;
+  --ok:#35c98a; --warn:#f0a13a; --danger:#ff5a4d;
+  --ok-wash:#11251c; --warn-wash:#2a2114; --danger-wash:#2c1614;
+  --ok-ink:#4fd8a0; --warn-ink:#f0a13a; --danger-ink:#ff5a4d;
+  --info-wash:#14203a; --info-ink:#6aa9f5;
+  --scrim:rgba(0,0,0,.67); --field:#0f1115;
+  --font-body:"Inter","Noto Sans TC",system-ui,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,monospace;
+  --radius:18px;
+}
+:root[data-theme="light"]{
+  --bg:#fdfbfa; --surface:#fff; --surface-2:#f6f2f0; --surface-3:#efe9e6;
+  --line:#e8e0dc; --line-soft:#f0eae7;
+  --ink:#1a1614; --muted:#7a706b; --faint:#a89f9a;
+  --accent:#f73b20; --accent-soft:#f84d35; --accent-wash:#fde8e4;
+  --tier-a:#e0961b; --tier-b:#8b6ff0; --tier-c:#3aa5c9; --tier-d:#a49a92; --tier-last:#f73b20; --tier-bust:#a49a92;
+  --gold-deep:#b9801c;
+  --ok:#23a06a; --warn:#d98324; --danger:#e0453a;
+  --ok-wash:#eaf7ee; --warn-wash:#fdf4e3; --danger-wash:#fdeceb;
+  --ok-ink:#1c7d68; --warn-ink:#8a5108; --danger-ink:#b3251c;
+  --info-wash:#e8effa; --info-ink:#1e4e8c;
+  --scrim:rgba(0,0,0,.45); --field:#f6f2f0;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.mono{font-family:var(--font-mono)}
+button{font:inherit;cursor:pointer}
+input,select{font:inherit}
+
+/* ---------- 控制台（原型自己的外殼，不是設計的一部分） ---------- */
+.lab{max-width:1180px;margin:0 auto;padding:22px 18px 60px}
+.lab h1{font-size:20px;margin:0 0 4px}
+.lab .sub{color:var(--muted);font-size:13px;margin:0 0 18px;max-width:70ch}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--surface);position:sticky;top:0;z-index:40}
+.bar .grp{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.bar .lbl{font-size:11.5px;font-weight:700;color:var(--muted);margin-right:2px}
+.tgl{min-height:44px;min-width:44px;padding:0 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);color:var(--ink);font-size:13px}
+.tgl.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:700}
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:14px 0 18px}
+.ro{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--surface)}
+.ro b{display:block;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.02em}
+.ro .v{font-family:var(--font-mono);font-size:19px;font-weight:600;margin-top:2px}
+.ro .d{font-size:11.5px;color:var(--muted);margin-top:1px}
+.ro .d.win{color:var(--ok-ink)}
+
+/* ---------- 兩具手機 ---------- */
+.stage{display:grid;grid-template-columns:repeat(auto-fit,minmax(393px,1fr));gap:22px;justify-items:center}
+.phoneWrap{width:393px;max-width:100%}
+.phoneCap{display:flex;align-items:baseline;gap:8px;margin:0 0 8px}
+.phoneCap h2{font-size:14px;margin:0}
+.phoneCap span{font-size:11.5px;color:var(--muted)}
+.phone{
+  position:relative;width:393px;max-width:100%;height:852px;
+  border:1px solid var(--line);border-radius:20px;overflow:hidden;background:var(--bg);
+}
+.scroll{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;padding:14px 14px 132px}
+/* 底部常駐機構：模擬站上的挑卡列（70）與底部導覽（57） */
+.chrome{position:absolute;left:0;right:0;bottom:0;pointer-events:none}
+.chromeBar{margin:0 12px 8px;height:70px;border-radius:16px;background:var(--surface-2);border:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-size:13px;color:var(--muted)}
+.chromeBar b{color:var(--ink)}
+.chromeNav{height:57px;background:var(--surface);border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-around;font-size:11px;color:var(--faint)}
+
+/* ---------- 共用的區塊外觀（抄自開池頁） ---------- */
+.card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--line-soft)}
+.block{padding:18px}
+.block+.block{margin-top:18px}
+.block-head{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.block-head h3{margin:0;font-size:16px}
+.chip{font-size:11.5px;padding:3px 9px;border-radius:999px;background:var(--surface-2);color:var(--muted)}
+.req{font-style:normal;font-size:10px;font-weight:700;margin-left:6px;padding:1px 5px;border-radius:5px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.hint{font-size:12px;line-height:1.55;color:var(--muted);margin:12px 0 0}
+.hint strong{color:var(--ink)}
+input,select{padding:8px 10px;font-size:14px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);min-width:0}
+input::placeholder{color:var(--faint)}
+
+/* ---------- A：現況（逐列表單） ---------- */
+.tierBuy{margin:0 0 16px;padding:14px;border:1px solid var(--line-soft);border-radius:12px;background:var(--surface-2)}
+.tierBuy h4{font-size:13.5px;margin:0 0 6px}
+.tbNote{font-size:12px;line-height:1.7;margin:0 0 12px;color:var(--muted)}
+.tbNote strong{color:var(--ink)}
+.tbGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px}
+.tbCell{display:grid;gap:4px;min-width:0}
+.tbLbl{font-size:11.5px;font-weight:600;color:var(--muted)}
+.tbCell input{width:100%}
+.tbLine{font-size:12.5px;line-height:1.7;margin:12px 0 0;color:var(--muted)}
+.tbLine strong{color:var(--ink)}
+
+.prize-row{
+  display:grid;grid-template-columns:34px minmax(0,1fr) minmax(0,1fr) 32px;
+  gap:8px;align-items:center;padding:10px;margin-bottom:10px;
+  border:1px solid var(--line-soft);border-radius:10px;min-width:0;
+}
+.prize-row>.art{grid-row:1;grid-column:1}
+.prize-row>.ident{grid-row:1;grid-column:2/4}
+.prize-row>.del{grid-row:1;grid-column:4}
+.prize-row>select{grid-row:2;grid-column:1/3}
+.prize-row>.f-qty{grid-row:2;grid-column:3/5}
+.prize-row>.f-ref{grid-row:3;grid-column:1/5}
+.prize-row>.f-buy{grid-row:4;grid-column:1/5}
+.art{display:block;width:34px;aspect-ratio:63/88;border-radius:4px;overflow:hidden;background:var(--surface-3)}
+.ident{display:grid;gap:1px;min-width:0}
+.idName{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.idMeta,.idCert{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.idCert{color:var(--accent)}
+.del{display:grid;place-items:center;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--muted);padding:8px 0}
+.del svg{width:15px;height:15px}
+.prize-row input,.prize-row select{width:100%}
+.twoCols{line-height:1.75}
+
+/* ---------- B：提案（賞別為主軸） ---------- */
+.tierGroup{border:1px solid var(--line);border-radius:14px;background:var(--surface-2);margin-bottom:10px;overflow:hidden}
+.tierGroup.empty{opacity:.55}
+.tgHead{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 12px}
+.tgDot{width:10px;height:10px;border-radius:3px}
+.tgName{font-size:14px;font-weight:700;min-width:0}
+.tgCount{font-size:11.5px;color:var(--muted);font-weight:500;margin-left:6px}
+.tgMoney{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:0 12px 10px}
+.tgMoney input{width:100%;min-height:44px;font-family:var(--font-mono)}
+.tgMoney .unit{font-size:11.5px;color:var(--muted);white-space:nowrap}
+.tgMoney .fieldWrap{display:grid;gap:3px;min-width:0}
+.tgMoney .fl{font-size:11px;font-weight:700;color:var(--muted)}
+.tgSum{font-size:11.5px;color:var(--muted);padding:0 12px 8px;line-height:1.6}
+.tgSum b{color:var(--ink);font-family:var(--font-mono)}
+.tgSum .ovr{color:var(--gold-deep)}
+.rail{display:flex;gap:8px;overflow-x:auto;padding:0 12px 12px;scroll-snap-type:x proximity;overscroll-behavior-x:contain}
+.rail::-webkit-scrollbar{height:5px}
+.rail::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+.tile{
+  flex:none;width:54px;padding:0;border:0;background:transparent;scroll-snap-align:start;
+  display:grid;gap:3px;min-height:44px;
+}
+.tileArt{position:relative;width:54px;aspect-ratio:63/88;border-radius:6px;overflow:hidden;background:var(--surface-3);border:2px solid transparent}
+.tile.sel .tileArt{border-color:var(--accent)}
+.tile.warn .tileArt{border-color:var(--danger)}
+.tileName{font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.tileTag{position:absolute;left:2px;bottom:2px;font-size:9px;font-weight:700;padding:0 3px;border-radius:3px;background:rgba(0,0,0,.66);color:#fff}
+.tileTag.ovr{background:var(--gold-deep);color:#1a1614}
+.tileTick{position:absolute;right:2px;top:2px;width:16px;height:16px;border-radius:50%;background:var(--accent);display:grid;place-items:center}
+.tileTick svg{width:10px;height:10px;stroke:#fff;stroke-width:3;fill:none}
+.tgList{list-style:none;margin:0;padding:0 12px 12px;display:grid;gap:6px}
+.tgLine{display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:10px;align-items:center;width:100%;min-height:48px;padding:4px 8px;border:1px solid var(--line-soft);border-radius:9px;background:var(--surface);color:var(--ink);text-align:left}
+.tgLineArt{width:26px;aspect-ratio:63/88;border-radius:3px}
+.tgLineName{font-size:12.5px;font-weight:600;min-width:0;display:grid;gap:0}
+.tgLineMeta{font-size:10.5px;font-weight:400;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tgLineNum{font-family:var(--font-mono);font-size:12px;color:var(--muted);white-space:nowrap}
+.tgLineNum .ovr{color:var(--gold-deep);font-weight:700}
+.railMore{flex:none;align-self:center;min-height:44px;min-width:44px;padding:0 10px;border:1px dashed var(--line);border-radius:8px;background:transparent;color:var(--muted);font-size:11.5px}
+.unassigned{border-color:var(--accent);background:var(--accent-wash)}
+.unassigned .tgName{color:var(--accent-soft)}
+.assignRow{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 12px}
+.assignBtn{min-height:44px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:13px;font-weight:600}
+.assignBtn:hover{border-color:var(--accent)}
+.selBar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 10px;padding:10px 12px;border-radius:12px;background:var(--surface-3);font-size:12.5px}
+.selBar .n{font-weight:700}
+.selBar button{min-height:44px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:12.5px}
+.miniNote{font-size:12px;line-height:1.7;color:var(--muted);margin:0 0 12px}
+.miniNote strong{color:var(--ink)}
+.why{margin:8px 0 0}
+.why summary{font-size:12px;color:var(--muted);cursor:pointer;min-height:44px;display:flex;align-items:center}
+.why p{font-size:12px;line-height:1.75;color:var(--muted);margin:0 0 8px}
+.why strong{color:var(--ink)}
+
+/* 貼底面板（抄 MyCardsPage 的 .sheetWrap/.sheet） */
+.sheetWrap{position:absolute;inset:0;z-index:60;display:flex;align-items:flex-end;justify-content:center;background:var(--scrim)}
+.sheet{width:100%;max-height:88%;overflow-y:auto;overscroll-behavior:contain;background:var(--surface);border-radius:18px 18px 0 0;padding:18px 16px 18px;position:relative}
+.sheet h4{font-size:16px;margin:0 0 2px}
+.sheetSub{font-size:11.5px;color:var(--muted);margin:0 0 14px}
+.sheetClose{position:absolute;right:10px;top:10px;width:44px;height:44px;display:grid;place-items:center;border:0;background:var(--surface-2);color:var(--muted);border-radius:50%}
+.sheetClose svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.sf{display:grid;gap:5px;margin-bottom:14px}
+.sf>span{font-size:11.5px;font-weight:700;color:var(--muted)}
+.sf input{min-height:44px;font-family:var(--font-mono)}
+.sf .fnote{font-size:11.5px;color:var(--muted);line-height:1.6}
+.locked{min-height:44px;display:flex;align-items:center;padding:0 10px;border:1px dashed var(--line);border-radius:8px;color:var(--muted);font-size:12.5px}
+.sheetTiers{display:flex;flex-wrap:wrap;gap:6px}
+.sheetTiers button{min-height:44px;min-width:56px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:13px}
+.sheetTiers button.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:700}
+.sheetDel{width:100%;min-height:44px;border-radius:10px;border:1px solid var(--danger);background:transparent;color:var(--danger);font-size:13px;font-weight:600}
+
+/* 試算條 */
+.econ{padding:12px 14px;border-radius:12px;margin-bottom:12px}
+.econ.ok{background:var(--ok-wash)}
+.econ.thin{background:var(--warn-wash)}
+.econ.bad{background:var(--danger-wash)}
+.econ .r{display:flex;align-items:baseline;gap:8px}
+.econ .big{font-family:var(--font-mono);font-size:26px;font-weight:600}
+.econ.ok .big{color:var(--ok)}.econ.thin .big{color:var(--warn)}.econ.bad .big{color:var(--danger)}
+.econ .lb{font-size:12px;font-weight:600;color:var(--muted)}
+.econ .msg{font-size:12px;margin:6px 0 0;line-height:1.55;color:var(--muted)}
+
+/* 文案對照 */
+.copy{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:26px}
+.copy .box{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--surface)}
+.copy h3{font-size:13px;margin:0 0 8px}
+.copy .old{color:var(--muted);font-size:12.5px;line-height:1.8}
+.copy .new{font-size:13px;line-height:1.85}
+.copy .new strong{color:var(--ink)}
+.copy .tagline{font-size:11px;color:var(--faint);margin:10px 0 0}
+</style>
+</head>
+<body>
+<div class="lab">
+  <h1>獎項配置 · 現況 vs 提案</h1>
+  <p class="sub">
+    兩具 393×852 的手機並排跑同一份資料。左邊是站上現在的逐列表單，右邊是提案的「賞別為主軸」。
+    上面的數字是即時量的，不是估的：切張數就看得到版面怎麼長。
+  </p>
+
+  <div class="bar">
+    <div class="grp"><span class="lbl">卡片張數</span>
+      <button class="tgl" data-n="1">1</button>
+      <button class="tgl" data-n="5">5</button>
+      <button class="tgl on" data-n="12">12</button>
+      <button class="tgl" data-n="30">30</button>
+      <button class="tgl" id="addFive">再挑 5 張（未分賞別）</button>
+    </div>
+    <div class="grp"><span class="lbl">主題</span>
+      <button class="tgl on" data-theme="dark">深色</button>
+      <button class="tgl" data-theme="light">淺色</button>
+    </div>
+  </div>
+
+  <div class="readout" id="readout"></div>
+
+  <div class="stage">
+    <div class="phoneWrap">
+      <div class="phoneCap"><h2>現況</h2><span>逐列表單</span></div>
+      <div class="phone">
+        <div class="scroll" id="scrollA"></div>
+        <div class="chrome">
+          <div class="chromeBar"><span>已選 <b id="chipA">12</b> 張　上限 60</span><span>查看清單</span></div>
+          <div class="chromeNav"><span>大廳</span><span>市場</span><span>抽選</span><span>卡冊</span><span>我的</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="phoneWrap">
+      <div class="phoneCap"><h2>提案</h2><span>賞別為主軸的分組指派</span></div>
+      <div class="phone" id="phoneB">
+        <div class="scroll" id="scrollB"></div>
+        <div class="chrome">
+          <div class="chromeBar"><span>已選 <b id="chipB">12</b> 張　上限 60</span><span>查看清單</span></div>
+          <div class="chromeNav"><span>大廳</span><span>市場</span><span>抽選</span><span>卡冊</span><span>我的</span></div>
+        </div>
+        <div id="sheetHost"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="copy">
+    <div class="box">
+      <h3>說明文字 · 改寫前（現況，103 字）</h3>
+      <p class="old">
+        你答應照這個價把卡買回來的金額，開賣前鎖死、開賣後改不了（它被寫進公平性承諾的雜湊裡）。
+        玩家按下接受時，這筆錢直接從你這個池的保留額出。同一個賞別的卡價值本來就相近，
+        所以填一個絕對金額就好，不需要任何基準。
+      </p>
+      <p class="tagline">四句話裡有三句在解釋機制，回答「我該填多少」的只有半句。</p>
+    </div>
+    <div class="box">
+      <h3>說明文字 · 改寫後（56 字 + 折疊）</h3>
+      <p class="new">
+        <strong>填 3,000，就是抽到 A 賞的人可以拿 3,000 點跟你換走那張卡</strong>，錢從這個池的池款出。<br>
+        填高比較好賣，但那是你真的要付的錢；填太低這個池開不了。<br>
+        <strong>開賣後改不了。</strong>
+      </p>
+      <p class="tagline">先給一個具體例子，再講兩個方向各會怎樣，最後才講不可逆。「為什麼不是比率」收進折疊。</p>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ==================================================================
+   資料。卡名／卡號抄自 src/mocks/data.ts，讓兩邊的字寬一致。
+================================================================== */
+const CARDS = [
+  ['噴火龍 ex UR','sv4a','349/190','82345671',42000,18],
+  ['奇樹 SAR','sv4a','350/190','82345672',28000,290],
+  ['太樂巴戈斯 ex UR','sv8a','237/187','82345673',19800,205],
+  ['牡丹 SAR','sv4a','354/190','0015678901',15600,335],
+  ['皮卡丘 ex SAR','sv8a','236/187','82345675',12800,48],
+  ['噴火龍 ex SAR','sv3','125/108','82345676',9800,12],
+  ['沙奈朵 ex UR','sv4a','348/190','82345677',7600,268],
+  ['夢幻 ex UR','sv4a','347/190',null,6400,318],
+  ['月亮伊布 ex SAR','sv8a','217/187',null,5400,232],
+  ['謎擬Ｑ SAR','sv4a','341/190',null,200,282],
+  ['多龍巴魯托 ex SAR','sv8a','221/187',null,4200,196],
+  ['伊布 ex SAR','sv8a','223/187',null,3800,32],
+  ['猛雷鼓 ex SAR','sv8a','222/187','82345680',3400,58],
+  ['太陽伊布 ex SAR','sv8a','211/187',null,2600,38],
+  ['大比鳥 ex SAR','sv3','128/108',null,2200,168],
+  ['派帕 SAR','sv4a','353/190',null,1800,346],
+  ['幸福蛋 ex SAR','sv6','121/101',null,1500,350],
+  ['八朔 SAR','sv6','124/101',null,1200,26],
+  ['多龍巴魯托 ex','sv6','120/101',null,980,190],
+  ['波琵 SAR','sv3','131/108',null,760,300],
+  ['仙子伊布 ex','sv8a','212/187',null,620,320],
+  ['雷伊布 ex','sv8a','209/187',null,520,52],
+  ['水伊布 ex','sv8a','205/187',null,460,200],
+  ['火伊布 ex','sv8a','202/187',null,420,14],
+  ['葉伊布 ex','sv8a','200/187',null,380,110],
+  ['冰伊布 ex','sv8a','206/187',null,340,186],
+  ['鐵臂膀 ex','sv8a','210/187',null,300,42],
+  ['差不多娃娃 ex','sv8a','215/187',null,240,88],
+  ['桃歹郎 ex','sv8a','219/187',null,180,340],
+  ['海豚俠 ex','sv8a','207/187',null,150,215],
+  ['砂鐵蜥 ex','sv8a','216/187',null,120,150]
+];
+
+const TIERS = ['A','B','C','D','LAST','BUST'];
+const tierLabel = t => t === 'BUST' ? '爆賞' : t === 'LAST' ? '最後賞' : t + ' 賞';
+const tierVar = t => 'var(--tier-' + t.toLowerCase() + ')';
+const BUYBACK_MIN = 10;      // src/shared/pool-settlement.ts
+const FLOOR_MINT = 100, FLOOR_THIN = 90, FLOOR_PREDATORY = 25;   // src/shared/economics.ts
+
+const state = {
+  n: 12,
+  ticketPrice: 300,
+  tierBuyback: { A:4800, B:1500, C:500, D:36, LAST:6000, BUST:36 },
+  rows: [],
+  selected: new Set(),
+  openSheet: null,
+  expanded: new Set()
+};
+
+function makeRow(i){
+  const [name,setCode,cardNo,certNo,ref,hue] = CARDS[i % CARDS.length];
+  return {
+    id: 'r' + i,
+    name, setCode, cardNo, hue,
+    certNo: i < CARDS.length ? certNo : null,   // 超過一輪之後當成目錄卡（沒有鑑定編號）
+    ref,
+    tier: null,          // 提案：一開始沒有賞別，落在「未指派」
+    legacyTier: i === 0 ? 'A' : i < 3 ? 'B' : i < 7 ? 'C' : 'D',   // 現況：挑進來就先猜一個
+    qty: 1,
+    buyback: null
+  };
+}
+/* 重設成 n 張。兩側都先套同一套「猜」的賞別（第一張 A、其餘依序），
+   這樣兩具手機比的是**版面**，不是資料差異。 */
+function setCount(n){
+  state.rows = [];
+  for (let i = 0; i < n; i++) { const r = makeRow(i); r.tier = r.legacyTier; state.rows.push(r); }
+  state.n = n;
+  state.selected.clear();
+  state.expanded.clear();
+  state.openSheet = null;
+  /* 票價跟著獎品組合走，讓示範一開始落在「過得了護欄」的區間（≈55%）。
+     這不是設計的一部分，只是原型的起始值 —— 改任何一格買回價就會看到比率跟著動。 */
+  const floor = state.rows.reduce((s,r) => s + (state.tierBuyback[r.tier] ?? 0) * r.qty, 0);
+  const seats = state.rows.reduce((s,r) => s + r.qty, 0) || 1;
+  state.ticketPrice = Math.max(50, Math.round(floor / seats / 0.55 / 50) * 50);
+  render();
+}
+/* 再挑幾張進來。新挑的卡**沒有賞別** —— 那是提案裡「未指派 → 批次設為某賞」那條路 */
+function addCards(k){
+  const cur = state.rows.length;
+  for (let i = cur; i < cur + k; i++) state.rows.push(makeRow(i));
+  state.n = state.rows.length;
+  render();
+}
+
+const artStyle = hue => `background:linear-gradient(140deg,hsl(${hue} 70% 46%),hsl(${(hue+52)%360} 72% 36%) 62%,hsl(${(hue+18)%360} 55% 22%))`;
+const fmt = n => (n ?? 0).toLocaleString('en-US');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* 解析買回價：逐項覆寫優先，否則吃該賞別的預設（跟 SellerNewPoolPage 的 resolved 同一條規則） */
+const resolvedOf = r => r.buyback ?? state.tierBuyback[r.tier] ?? 0;
+
+function econ(){
+  const seats = state.rows.reduce((s,r) => s + (r.qty||0), 0);
+  const revenue = seats * state.ticketPrice;
+  const floor = state.rows.reduce((s,r) => s + resolvedOf(r) * (r.qty||0), 0);
+  const ratio = revenue ? floor / revenue * 100 : 0;
+  let verdict = 'ok', msg = '保底回饋率落在合理區間。';
+  if (!seats) { verdict = 'thin'; msg = '還沒有獎項。'; }
+  else if (ratio >= FLOOR_MINT) { verdict = 'bad'; msg = '保底回饋 ≥ 票收：整池被收回時你要倒貼，開不了池。'; }
+  else if (ratio >= FLOOR_THIN) { verdict = 'thin'; msg = '保底幾乎吃掉整筆票收，扣掉運費很可能倒貼。'; }
+  else if (ratio < FLOOR_PREDATORY) { verdict = 'bad'; msg = '保底回饋率過低，開不了池。'; }
+  return { seats, revenue, floor, ratio, verdict, msg };
+}
+
+/* ==================================================================
+   A：現況 —— 逐列表單
+================================================================== */
+function renderLegacy(){
+  const used = [...new Set(state.rows.map(r => r.legacyTier))];
+  const e = econ();
+  const worst = Math.min(...state.rows.map(r => r.buyback ?? state.tierBuyback[r.legacyTier]).filter(v => v > 0));
+  const rows = state.rows.map(r => `
+    <div class="prize-row">
+      <span class="art" style="${artStyle(r.hue)}"></span>
+      <span class="ident">
+        <span class="idName">${esc(r.name)}</span>
+        <span class="idMeta">${esc(r.setCode)} · ${esc(r.cardNo)}</span>
+        ${r.certNo ? `<span class="idCert">PSA10 · #${esc(r.certNo)}</span>` : ''}
+      </span>
+      <button class="del" aria-label="移除這個獎項"><svg viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+      <select aria-label="賞別">${TIERS.map(t => `<option ${t===r.legacyTier?'selected':''}>${tierLabel(t)}</option>`).join('')}</select>
+      <input class="f-qty" type="number" value="${r.qty}" aria-label="數量" placeholder="數量">
+      <input class="f-ref" type="number" value="${r.ref ?? ''}" aria-label="參考價（選填）" placeholder="參考價（選填）">
+      <input class="f-buy" type="number" value="" aria-label="買回價（留空照賞別預設）" placeholder="${fmt(state.tierBuyback[r.legacyTier])}">
+    </div>`).join('');
+
+  return `
+  <section class="card block">
+    <div class="block-head"><h3>獎項配置</h3><span class="chip">共 ${e.seats} 籤</span></div>
+    <section class="tierBuy">
+      <h4>買回價（依賞別）<i class="req">必填</i></h4>
+      <p class="tbNote">
+        你答應照這個價把卡買回來的金額，<strong>開賣前鎖死、開賣後改不了</strong>（它被寫進公平性承諾的雜湊裡）。
+        玩家按下接受時，這筆錢直接從你這個池的保留額出。同一個賞別的卡價值本來就相近，
+        所以填一個絕對金額就好，<strong>不需要任何基準</strong>。
+      </p>
+      <div class="tbGrid">
+        ${used.map(t => `<label class="tbCell"><span class="tbLbl">${tierLabel(t)}</span><input type="number" value="${state.tierBuyback[t]}"></label>`).join('')}
+      </div>
+      <p class="tbLine">買家會看到：<strong class="mono">${fmt(state.ticketPrice)} 點一抽，最差的賞別保底買回 ${fmt(worst)} 點</strong></p>
+    </section>
+    ${rows}
+    <p class="hint twoCols">
+      <strong>參考價</strong>是你自己標示的市場行情，<strong>選填</strong>，只顯示給買家看、<strong>不構成承諾</strong>，
+      也不參與任何金額計算。空著的話買家看到的是「未標示」。<br>
+      <strong>買回價</strong>那一格是<strong>覆寫</strong>：空著就照上面該賞別的金額走，
+      只有某一張在同賞別裡特別貴的時候才需要單獨填。每張 ${BUYBACK_MIN} 點起跳。
+    </p>
+    <p class="hint"><strong>到期日</strong>不在這張表上：它由系統從開池的當下起算 30 天。</p>
+    <p class="hint">無敵賞的「最後賞」就是籤池裡的一張獎品，所有賞別的數量加總必須剛好等於總籤數。</p>
+  </section>`;
+}
+
+/* ==================================================================
+   B：提案 —— 賞別為主軸
+================================================================== */
+const RAIL_MAX = 8;   // 軌道上先畫幾張，其餘收成一顆「還有 N 張」
+
+function tileHTML(r){
+  const sel = state.selected.has(r.id);
+  const ovr = r.buyback != null;
+  return `
+  <button class="tile ${sel?'sel':''}" data-card="${r.id}">
+    <span class="tileArt" style="${artStyle(r.hue)}">
+      ${r.qty > 1 ? `<span class="tileTag">×${r.qty}</span>` : ''}
+      ${ovr ? `<span class="tileTag ovr" style="left:auto;right:2px">改</span>` : ''}
+      ${sel ? `<span class="tileTick"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>` : ''}
+    </span>
+    <span class="tileName">${esc(r.name)}</span>
+  </button>`;
+}
+
+function groupHTML(t){
+  const mine = state.rows.filter(r => r.tier === t);
+  const seats = mine.reduce((s,r) => s + (r.qty||0), 0);
+  const overrides = mine.filter(r => r.buyback != null).length;
+  const expanded = state.expanded.has(t);
+  const shown = mine.slice(0, RAIL_MAX);
+  const rest = mine.length - shown.length;
+  const bad = mine.length && !(state.tierBuyback[t] >= BUYBACK_MIN);
+  return `
+  <div class="tierGroup ${mine.length?'':'empty'}">
+    <div class="tgHead">
+      <span class="tgDot" style="background:${tierVar(t)}"></span>
+      <span class="tgName">${tierLabel(t)}<span class="tgCount">${mine.length} 張 · ${seats} 籤</span></span>
+      ${mine.length > 1 ? `<button class="railMore" data-expand="${t}">${expanded?'收合':'展開成清單'}</button>` : '<span></span>'}
+    </div>
+    ${mine.length ? `
+    <div class="tgMoney">
+      <label class="fieldWrap">
+        <span class="fl">這一賞的買回價</span>
+        <input type="number" value="${state.tierBuyback[t]}" data-tierbuy="${t}" style="${bad?'border-color:var(--danger)':''}">
+      </label>
+      <span class="unit">點 / 張</span>
+    </div>
+    <p class="tgSum">
+      抽到就能換 <b>${fmt(state.tierBuyback[t])}</b> 點 · 這一賞共承諾 <b>${fmt(mine.reduce((s,r)=>s+resolvedOf(r)*(r.qty||0),0))}</b> 點
+      ${overrides ? `<br><span class="ovr">其中 ${overrides} 張單獨改過金額</span>` : ''}
+    </p>
+    ${expanded ? `
+    <ul class="tgList">
+      ${mine.map(r => `
+      <li><button class="tgLine" data-card="${r.id}">
+        <span class="tgLineArt" style="${artStyle(r.hue)}"></span>
+        <span class="tgLineName">${esc(r.name)}<span class="tgLineMeta">${esc(r.setCode)} · ${esc(r.cardNo)}${r.certNo ? ' · #' + esc(r.certNo) : ''}</span></span>
+        <span class="tgLineNum">${r.qty > 1 ? r.qty + ' 籤 · ' : ''}${fmt(resolvedOf(r))}${r.buyback != null ? '<span class="ovr"> 改</span>' : ''}</span>
+      </button></li>`).join('')}
+    </ul>` : `
+    <div class="rail">
+      ${shown.map(tileHTML).join('')}
+      ${rest > 0 ? `<button class="railMore" data-expand="${t}">還有 ${rest} 張</button>` : ''}
+    </div>`}` : `<p class="tgSum" style="padding-bottom:12px">這一賞還沒有卡。</p>`}
+  </div>`;
+}
+
+function renderNext(){
+  const e = econ();
+  const unassigned = state.rows.filter(r => r.tier === null);
+  const used = TIERS.filter(t => state.rows.some(r => r.tier === t));
+  const selN = state.selected.size;
+  return `
+  <section class="card block">
+    <div class="block-head"><h3>獎項配置</h3><span class="chip">共 ${e.seats} 籤</span></div>
+
+    <div class="econ ${e.verdict}">
+      <div class="r"><span class="big">${e.ratio.toFixed(1)}%</span><span class="lb">保底回饋率</span></div>
+      <p class="msg">${e.msg}<br>每抽 ${fmt(state.ticketPrice)} 點 · 票收 ${fmt(e.revenue)} · 你承諾的保底 ${fmt(e.floor)}</p>
+    </div>
+
+    <p class="miniNote">
+      <strong>買回價一個賞別填一次</strong>：填多少，抽到那一賞的人就能拿多少點跟你換走那張卡，
+      錢從這個池的池款出。填高比較好賣，但那是你真的要付的錢。<strong>開賣後改不了。</strong><br>
+      某一張要單獨調整，點那張卡。
+    </p>
+
+    ${selN ? `
+    <div class="selBar">
+      <span class="n">已選 ${selN} 張</span>
+      <span style="color:var(--muted)">設為：</span>
+      ${TIERS.map(t => `<button data-assign="${t}">${tierLabel(t)}</button>`).join('')}
+      <button data-clearsel="1">取消選取</button>
+    </div>` : ''}
+
+    ${unassigned.length ? `
+    <div class="tierGroup unassigned">
+      <div class="tgHead">
+        <span class="tgDot" style="background:var(--accent)"></span>
+        <span class="tgName">還沒分賞別<span class="tgCount">${unassigned.length} 張</span></span>
+        <span></span>
+      </div>
+      <div class="rail">${unassigned.map(tileHTML).join('')}</div>
+      <div class="assignRow">${TIERS.map(t => `<button class="assignBtn" data-assignall="${t}">全部設為 ${tierLabel(t)}</button>`).join('')}</div>
+    </div>` : ''}
+
+    ${used.map(groupHTML).join('')}
+
+    <details class="why">
+      <summary>為什麼買回價是一個絕對金額，不是比率？</summary>
+      <p>比率要有基準，而唯一的基準是你自己填的參考價 —— 那是循環論證：你把參考價填高，回饋率就自己變漂亮。</p>
+      <p>金額則是你<strong>真的要付出去的錢</strong>。填高等於承諾多賠，所以這個數字不需要外部行情就是誠實的。</p>
+      <p><strong>爆賞也要填</strong>：爆賞發的是保底卡，那張卡一樣會被抽到、一樣可以換回點數。</p>
+    </details>
+  </section>`;
+}
+
+function sheetHTML(r){
+  const tdef = state.tierBuyback[r.tier] ?? 0;
+  return `
+  <div class="sheetWrap" data-closesheet="1">
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="編輯這一張">
+      <button class="sheetClose" aria-label="關閉" data-closesheet="1"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
+      <h4>${esc(r.name)}</h4>
+      <p class="sheetSub">${esc(r.setCode)} · ${esc(r.cardNo)}${r.certNo ? ' · PSA10 #' + esc(r.certNo) : ''}</p>
+
+      <div class="sf">
+        <span>賞別</span>
+        <div class="sheetTiers">${TIERS.map(t => `<button class="${t===r.tier?'on':''}" data-settier="${t}">${tierLabel(t)}</button>`).join('')}</div>
+      </div>
+
+      <div class="sf">
+        <span>籤數</span>
+        ${r.certNo
+          ? `<div class="locked">1 籤（固定）</div><span class="fnote">這張有鑑定編號 #${esc(r.certNo)}，一個編號只對應一張實體卡，開兩籤就會有兩個得主。</span>`
+          : `<input type="number" min="1" value="${r.qty}" data-qty="1"><span class="fnote">同一張卡面要放幾支籤。</span>`}
+      </div>
+
+      <div class="sf">
+        <span>這一張的買回價</span>
+        <input type="number" value="${r.buyback ?? ''}" placeholder="${fmt(tdef)}（照 ${tierLabel(r.tier)}）" data-buy="1">
+        <span class="fnote">空著就照 ${tierLabel(r.tier)} 的 ${fmt(tdef)} 點。只有這張在同一賞裡特別貴才要改。</span>
+      </div>
+
+      <div class="sf">
+        <span>參考價（選填，不參與計算）</span>
+        <input type="number" value="${r.ref ?? ''}" placeholder="未標示" data-ref="1">
+        <span class="fnote">只顯示給買家看，不構成承諾。空著就是「未標示」。</span>
+      </div>
+
+      <button class="sheetDel" data-del="1">從這個池移除</button>
+    </div>
+  </div>`;
+}
+
+/* ==================================================================
+   量測 + 繪製
+================================================================== */
+function render(){
+  document.getElementById('scrollA').innerHTML = renderLegacy();
+  document.getElementById('scrollB').innerHTML = renderNext();
+  document.getElementById('sheetHost').innerHTML = state.openSheet
+    ? sheetHTML(state.rows.find(r => r.id === state.openSheet)) : '';
+  document.getElementById('chipA').textContent = state.rows.length;
+  document.getElementById('chipB').textContent = state.rows.length;
+  document.querySelectorAll('.bar [data-n]').forEach(b => b.classList.toggle('on', +b.dataset.n === state.rows.length));
+  measure();
+}
+
+function measure(){
+  const a = document.getElementById('scrollA'), b = document.getElementById('scrollB');
+  const secA = a.querySelector('section.card.block'), secB = b.querySelector('section.card.block');
+  const hA = Math.round(secA.getBoundingClientRect().height), hB = Math.round(secB.getBoundingClientRect().height);
+  const cA = a.querySelectorAll('input,select,button').length, cB = b.querySelectorAll('input,select,button').length;
+  const screensA = (a.scrollHeight / 852), screensB = (b.scrollHeight / 852);
+  const cut = n => Math.round(n * 100) / 100;
+  const pct = (x, y) => y ? '−' + Math.round((1 - y / x) * 100) + '%' : '';
+  document.getElementById('readout').innerHTML = `
+    <div class="ro"><b>獎項配置區段高度</b><div class="v">${hA} → ${hB} px</div><div class="d win">${pct(hA,hB)}</div></div>
+    <div class="ro"><b>這一段要捲幾個螢幕</b><div class="v">${cut(hA/852)} → ${cut(hB/852)}</div><div class="d">393×852 一屏為 1</div></div>
+    <div class="ro"><b>可互動控制項</b><div class="v">${cA} → ${cB}</div><div class="d win">${pct(cA,cB)}</div></div>
+    <div class="ro"><b>整段捲動總長</b><div class="v">${a.scrollHeight} → ${b.scrollHeight} px</div><div class="d">${cut(screensA)} → ${cut(screensB)} 屏</div></div>`;
+}
+
+/* ---------- 事件 ---------- */
+document.querySelector('.bar').addEventListener('click', e => {
+  const t = e.target.closest('button'); if (!t) return;
+  if (t.dataset.n) setCount(+t.dataset.n);
+  if (t.id === 'addFive') addCards(5);
+  if (t.dataset.theme) {
+    document.documentElement.dataset.theme = t.dataset.theme;
+    document.querySelectorAll('.bar [data-theme]').forEach(x => x.classList.toggle('on', x === t));
+    measure();
+  }
+});
+
+document.getElementById('phoneB').addEventListener('click', e => {
+  const el = e.target.closest('[data-card],[data-assign],[data-assignall],[data-clearsel],[data-expand],[data-settier],[data-del],[data-closesheet]');
+  if (!el) return;
+
+  if (el.dataset.closesheet && (e.target === el || el.tagName === 'BUTTON')) { state.openSheet = null; return render(); }
+  if (el.dataset.card) {
+    const id = el.dataset.card;
+    // 有東西被選取時＝多選模式，點卡是加選；沒有時，點卡就是打開那一張
+    if (state.selected.size) { state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id); }
+    else state.openSheet = id;
+    return render();
+  }
+  if (el.dataset.assign) {
+    state.rows.forEach(r => { if (state.selected.has(r.id)) r.tier = el.dataset.assign; });
+    state.selected.clear(); return render();
+  }
+  if (el.dataset.assignall) {
+    state.rows.forEach(r => { if (r.tier === null) r.tier = el.dataset.assignall; });
+    return render();
+  }
+  if (el.dataset.clearsel) { state.selected.clear(); return render(); }
+  if (el.dataset.expand) {
+    const t = el.dataset.expand;
+    state.expanded.has(t) ? state.expanded.delete(t) : state.expanded.add(t);
+    return render();
+  }
+  if (el.dataset.settier) {
+    const r = state.rows.find(x => x.id === state.openSheet); if (r) r.tier = el.dataset.settier;
+    return render();
+  }
+  if (el.dataset.del) {
+    state.rows = state.rows.filter(x => x.id !== state.openSheet);
+    state.openSheet = null; state.n = state.rows.length; return render();
+  }
+});
+
+/* 長按縮圖＝進多選（手機上最順的「我要一次改好幾張」入口） */
+let pressTimer = null;
+document.getElementById('phoneB').addEventListener('pointerdown', e => {
+  const t = e.target.closest('[data-card]'); if (!t) return;
+  pressTimer = setTimeout(() => { state.selected.add(t.dataset.card); render(); }, 420);
+});
+['pointerup','pointerleave','pointercancel'].forEach(k =>
+  document.getElementById('phoneB').addEventListener(k, () => clearTimeout(pressTimer)));
+
+document.getElementById('phoneB').addEventListener('input', e => {
+  const el = e.target;
+  const r = state.rows.find(x => x.id === state.openSheet);
+  if (el.dataset.tierbuy) { state.tierBuyback[el.dataset.tierbuy] = el.value === '' ? 0 : +el.value; measureSoft(); return; }
+  if (!r) return;
+  if (el.dataset.qty) r.qty = el.value === '' ? 0 : +el.value;
+  if (el.dataset.buy) r.buyback = el.value === '' ? null : +el.value;
+  if (el.dataset.ref) r.ref = el.value === '' ? null : +el.value;
+  measureSoft();
+});
+/* 打字時不整塊重畫（會把焦點與游標弄丟），只更新看板上的數字。
+   放開／離開欄位（change）時才整塊重畫，摘要那一行才跟得上。 */
+function measureSoft(){ measure(); }
+document.getElementById('phoneB').addEventListener('change', e => {
+  if (e.target.dataset.tierbuy || e.target.dataset.qty || e.target.dataset.buy) render();
+});
+
+setCount(12);
+</script>
+</body>
+</html>
