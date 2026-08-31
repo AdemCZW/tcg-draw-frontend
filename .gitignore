@@ -8,3 +8,12 @@ tsconfig.app.tsbuildinfo
 tsconfig.node.tsbuildinfo
 *.zip
 .env.local
+
+# 驗收截圖不進版控。
+# 每一條工作線都會拍一批前後對照圖當證據，一輪下來累積到 223MB ——
+# 這是一個 GitHub Pages 的 repo，把它塞成那樣會讓每個人 clone 都付代價。
+# 圖留在本機當證據就好，真正該留下來的是「量到什麼數字」，
+# 而那些寫在 commit 訊息與 docs/*.md 裡。
+# 要刻意提交某一張的話：git add -f docs/shots/<路徑>
+docs/shots/*/
+docs/deck/preview/
