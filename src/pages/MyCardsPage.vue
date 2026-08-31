@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, type PrizeSummary } from '@/lib/api'
 import type { Tier, UserPrize } from '@/types/models'
@@ -138,7 +138,7 @@ const listRef = ref<HTMLElement | null>(null)
    一個比舊清單短得多的新清單的中間，看起來像「載不出來」。 */
 watch(tab, () => {
   openCard.value = null
-  confirming.value = null
+  confirmPrize.value = null
   list.reset()
   const top = listRef.value?.getBoundingClientRect().top ?? 0
   if (top < 0) listRef.value?.scrollIntoView({ block: 'start', behavior: 'smooth' })
@@ -182,10 +182,66 @@ function wonDay(iso: string) {
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
-function toggleCard(id: string) {
-  const next = openCard.value === id ? null : id
-  openCard.value = next
-  if (next !== id) confirming.value = null
+/* 觸發展開的那顆按鈕。關閉時焦點要回到它身上 ——
+   面板是 v-if，關掉的瞬間裡面那顆帶著焦點的按鈕會從 DOM 消失，
+   焦點掉回 <body>，鍵盤使用者的位置就整個丟了（要從頁首重新 Tab 一遍）。 */
+let popTrigger: HTMLElement | null = null
+
+function toggleCard(id: string, ev?: MouseEvent) {
+  if (openCard.value === id) { closeCard(true); return }
+  popTrigger = (ev?.currentTarget as HTMLElement) ?? null
+  openCard.value = id
+  confirmPrize.value = null
+  /* 面板要等下一輪才存在。焦點給面板本身（tabindex="-1"）而不是第一顆按鈕：
+     讀屏會先念出 aria-label（「⋯的操作」）再往下走，使用者知道自己進了哪裡；
+     直接落在「申請出貨」上則會像是憑空跳到一顆按鈕上。
+     接著 Tab 就會走進面板裡的按鈕（面板在 DOM 上緊接著觸發鈕之前，
+     所以順序是自然的）。
+     preventScroll 是必要的：focus() 預設會把元素捲進視野，而剛按下的觸發鈕
+     就在面板正下方 —— 按得到就代表面板看得到，那一下捲動只會讓整頁在
+     手指底下跳一段（這一頁要修的正是「展開會讓畫面跳」）。 */
+  void nextTick(() => document.getElementById(`cardpop-${id}`)?.focus({ preventScroll: true }))
+}
+
+/**
+ * 收起面板。
+ *
+ * restoreFocus：明確要求把焦點送回觸發鈕（按「收起」、按 Esc）。
+ * 沒明確要求時只有「焦點還在面板裡」才收回 —— 點畫面別處關閉時，
+ * 焦點應該留在使用者剛剛點的那個東西上，硬搶回來會把他彈回卡片。
+ */
+function closeCard(restoreFocus = false) {
+  if (!openCard.value) return
+  const pop = document.getElementById(`cardpop-${openCard.value}`)
+  const hadFocus = !!pop && pop.contains(document.activeElement)
+  openCard.value = null
+  confirmPrize.value = null
+  if ((restoreFocus || hadFocus) && popTrigger?.isConnected) {
+    const t = popTrigger
+    void nextTick(() => t.focus({ preventScroll: true }))
+  }
+}
+
+/* ---- 關掉面板的三條路：再按一次、點外面、Esc ----
+
+   點外面用 click 而不是 pointerdown，這在觸控上是關鍵：
+   捲動也是從 pointerdown 開始的，掛在 pointerdown 上等於「手指一碰螢幕想捲」
+   面板就關了 —— 在只有兩欄、一定要捲的卡冊裡這會一直誤觸。
+   捲動不會產生 click（瀏覽器判定成手勢就取消了），所以 click 只在
+   「真的點了某個東西」時才關。
+
+   不用整片透明遮罩擋第一下：那樣使用者點下一顆按鈕時第一下只是關面板、
+   要再點一次才按得到，觸控上很像壞掉。這裡讓那一下照常送到目的地。
+
+   兩個例外不關：
+   - [data-pop]：面板自己與觸發鈕（觸發鈕交給 toggleCard，兩邊都處理會關了又開）
+   - .sheetWrap：出貨／回收那些覆蓋層是從面板裡開出去的，
+     在覆蓋層裡點東西時把背後的面板關掉，等覆蓋層收掉焦點就沒有地方可回。 */
+function onDocPointer(e: MouseEvent) {
+  if (!openCard.value) return
+  const t = e.target as HTMLElement | null
+  if (t?.closest('[data-pop]') || t?.closest('.sheetWrap')) return
+  closeCard()
 }
 
 /* ---- 申請出貨 ----
@@ -321,7 +377,7 @@ function startSell() {
   selecting.value = true
   sellPicked.value = []
   openCard.value = null
-  confirming.value = null
+  confirmPrize.value = null
   /* 選取列跟出貨的提示訊息都貼在畫面底部同一個位置。
      剛送完出貨就進選取模式的話兩則會疊在一起，誰也讀不清楚 */
   toast.value = ''
@@ -380,20 +436,48 @@ function removeOne(g: PickGroup) {
    而它也不該在離開選取模式之後還留在畫面上 */
 watch(() => sellPicked.value.length, n => { if (!n) chosenOpen.value = false })
 
-/* Esc 關面板。面板是 Teleport 到 body 的，焦點不一定落在裡面，
-   所以監聽掛在 window 上而不是面板節點上 */
-function onChosenKey(e: KeyboardEvent) {
-  if (e.key === 'Escape' && chosenOpen.value) closeChosen()
-}
-onMounted(() => window.addEventListener('keydown', onChosenKey))
-onBeforeUnmount(() => window.removeEventListener('keydown', onChosenKey))
+/* Esc。面板是 Teleport 到 body 的，焦點不一定落在裡面，
+   所以監聽掛在 window 上而不是面板節點上。
 
-const confirming = ref<string | null>(null)
+   一次只關**最上面那一層**：從卡片上的操作面板可以再開出回收確認或出貨面板，
+   一按就全關的話，使用者只是想退出確認、卻連原本展開的那張卡也一起被收掉。 */
+function onChosenKey(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  if (shipOpen.value) { shipOpen.value = false; return }
+  if (confirmPrize.value) { closeConfirm(); return }
+  if (chosenOpen.value) { closeChosen(); return }
+  if (openCard.value) closeCard(true)
+}
+onMounted(() => {
+  window.addEventListener('keydown', onChosenKey)
+  /* capture：面板裡的按鈕自己會 stopPropagation 的話，冒泡階段就收不到了 */
+  document.addEventListener('click', onDocPointer, true)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onChosenKey)
+  document.removeEventListener('click', onDocPointer, true)
+})
+
+/* 存的是卡片本身而不是 id：確認改成覆蓋層之後，它已經不在那張卡的
+   v-for 裡面了，拿不到 p，只有 id 的話還要再回頭去清單裡找一次。 */
+const confirmPrize = ref<UserPrize | null>(null)
 const justRecycled = ref<{ id: string; points: number } | null>(null)
 
 function askRecycle(p: UserPrize) {
   track('click_recycle')
-  confirming.value = confirming.value === p.id ? null : p.id
+  confirmPrize.value = p
+  /* 覆蓋層是 aria-modal，焦點要進去，不然按 Tab 會走到它背後那些讀不到的東西 */
+  void nextTick(() => document.getElementById('recycleSheet')?.focus())
+}
+
+/* 關掉確認之後焦點回到卡片上的觸發鈕：面板還開著（覆蓋層只是疊在它上面），
+   使用者的位置沒有變，焦點也不該變 */
+function closeConfirm() {
+  confirmPrize.value = null
+  if (popTrigger?.isConnected) {
+    const t = popTrigger
+    void nextTick(() => t.focus())
+  }
 }
 
 /* 報價由那個池的賣家設定，比率隨卡片一起從 API 帶回來 ——
@@ -411,7 +495,9 @@ async function doRecycle(p: UserPrize) {
        所以失敗要照實顯示，不要事先把畫面改成已回收。 */
     const r = await api.recyclePrize(p.id, q.points, `回收 ${p.card.name}`)
     p.status = 'recycled'
-    confirming.value = null
+    confirmPrize.value = null
+    /* 卡已經不是寄存中了，操作面板連同它的觸發鈕都會消失 —— 一起收掉 */
+    openCard.value = null
     justRecycled.value = { id: p.id, points: r.points }
     setTimeout(() => { justRecycled.value = null }, 4000)
     /* 總覽的張數與總值由後端算，回收之後要重新問一次；卡片清單則不重抓 ——
@@ -658,36 +744,87 @@ async function copyLink() {
           fresh: justGot.has(p.id)
         }"
       >
-        <!-- 賞別、狀態、卡名、市值全部疊回卡圖上：卡圖本來就佔著這塊面積，
-             把字放上去等於不花額外高度。可讀性靠底部的漸層遮罩撐 -->
-        <Tilt3D :max="10" radius="12px">
-          <CardArt :image="p.card.image" :alt="p.card.name" :tier="p.tier" :cert-no="p.card.certNo" :art-id="p.card.artId" />
-          <div class="scrim">
-            <div class="sTags">
-              <TierBadge :tier="p.tier" />
-              <span class="sChip">{{ statusShort[p.status] }}</span>
+        <!-- 卡圖與疊在它上面的東西共用這一層定位容器。
+             展開的操作面板要用 absolute 貼在**卡圖**的下緣，定位基準就得是卡圖
+             自己那個框 —— 掛在 .item 上的話，基準會變成「卡圖 + 操作鈕」的總高，
+             面板會蓋到按鈕上去。
+             不放進 Tilt3D 裡面：.plane 有 transform + overflow: hidden，
+             面板會跟著傾斜、而且滑過面板就會觸發傾斜（面板上有按鈕，不該晃）。 -->
+        <div class="artBox">
+          <!-- 賞別、狀態、卡名、市值全部疊回卡圖上：卡圖本來就佔著這塊面積，
+               把字放上去等於不花額外高度。可讀性靠底部的漸層遮罩撐 -->
+          <Tilt3D :max="10" radius="12px">
+            <CardArt :image="p.card.image" :alt="p.card.name" :tier="p.tier" :cert-no="p.card.certNo" :art-id="p.card.artId" />
+            <div class="scrim">
+              <div class="sTags">
+                <TierBadge :tier="p.tier" />
+                <span class="sChip">{{ statusShort[p.status] }}</span>
+              </div>
+              <div class="sMain">
+                <strong class="sName">{{ p.card.name }}</strong>
+                <span class="sVal mono">{{ refPriceText(p.card.refPrice) }}</span>
+              </div>
             </div>
-            <div class="sMain">
-              <strong class="sName">{{ p.card.name }}</strong>
-              <span class="sVal mono">{{ refPriceText(p.card.refPrice) }}</span>
+
+            <!-- 選取模式的熱區疊在卡面上。.scrim 是 pointer-events: none，
+                 點擊會落到這顆按鈕，所以不必為了「可選取」再複製一份卡面出來。
+                 它是 absolute 不是 fixed —— Tilt3D 的 .plane 帶著 transform，
+                 裡面任何 fixed 的定位基準都會變成那張卡而不是視窗 -->
+            <button
+              v-if="selecting"
+              type="button" class="hit"
+              :disabled="!canSell(p)"
+              :aria-pressed="sellPick.includes(p.id)"
+              :aria-label="`選取 ${p.card.name}`"
+              @click="toggleSell(p)"
+            >
+              <span v-if="canSell(p)" class="tick" aria-hidden="true"></span>
+            </button>
+          </Tilt3D>
+
+          <!-- ---- 展開的操作面板 ----
+               疊在卡圖上，不是插在卡片裡。插在卡片裡的話那一格會變高，
+               格線的列高由最高的那一格決定，整列跟著長高、下面每一列都往下推 ——
+               使用者只是想看一張卡能做什麼，畫面上其他六張全部跳位。
+               實測 393×852 下展開會把下面的卡往下推 162.59px。
+
+               absolute 而不是 fixed：這一頁的祖先隨時可能有 transform
+               （換頁轉場會在 .page 上加、Tilt3D 的 .plane 本來就有），
+               fixed 的定位基準會變成那個祖先（見 docs/HANDOFF.md 2.2）。
+               absolute 沒有這個問題，而且面板會跟著卡片一起捲動 ——
+               它講的是「這一張卡」，本來就該黏在那張卡上。
+
+               貼下緣、高度由內容決定、上限是卡圖高度：內容少的時候卡圖露得多，
+               內容多也絕不會超出卡圖那個框（所以格線高度恆定）。
+               卡名放在面板第一行 —— 卡圖下半部的 .scrim（賞別／卡名／市值）
+               會被蓋掉，不補一行的話展開之後就認不出這是哪一張卡了。 -->
+          <div
+            v-if="openCard === p.id && p.status === 'stashed' && !selecting"
+            :id="`cardpop-${p.id}`"
+            data-pop="panel"
+            class="pop" role="group" :aria-label="`${p.card.name} 的操作`" tabindex="-1"
+          >
+            <p class="popName">{{ p.card.name }}</p>
+            <!-- 鑑定編號與寄存期限：決定要不要出貨／回收時才需要，所以收在這裡 -->
+            <CertTag :card="p.card" />
+            <span class="mono muted exp">寄存至 {{ p.stashExpiresAt }}</span>
+
+            <div class="acts">
+              <button type="button" class="btn primary sm" @click="openShip(p)">申請出貨</button>
+              <!-- 文案刻意不寫「回收 +N 點」：那句話讀起來像平台保證收購，
+                   而實際上這是**賣家掛出來的報價**，錢從賣家那個池的保留額出，
+                   接受之後卡片歸還賣家。不是保證成交 —— 賣家的保留額不足時
+                   會被擋下來，所以按鈕講的是「提出」不是「換到」。 -->
+              <button
+                v-if="quoteOf(p).eligible"
+                type="button" class="btn sm" @click="askRecycle(p)"
+              >
+                按宣告買回價換回 {{ quoteOf(p).points.toLocaleString() }} 點
+              </button>
+              <span v-else class="muted no-offer">{{ quoteOf(p).reason }}</span>
             </div>
           </div>
-
-          <!-- 選取模式的熱區疊在卡面上。.scrim 是 pointer-events: none，
-               點擊會落到這顆按鈕，所以不必為了「可選取」再複製一份卡面出來。
-               它是 absolute 不是 fixed —— Tilt3D 的 .plane 帶著 transform，
-               裡面任何 fixed 的定位基準都會變成那張卡而不是視窗 -->
-          <button
-            v-if="selecting"
-            type="button" class="hit"
-            :disabled="!canSell(p)"
-            :aria-pressed="sellPick.includes(p.id)"
-            :aria-label="`選取 ${p.card.name}`"
-            @click="toggleSell(p)"
-          >
-            <span v-if="canSell(p)" class="tick" aria-hidden="true"></span>
-          </button>
-        </Tilt3D>
+        </div>
 
         <p v-if="justGot.has(p.id)" class="fresh-tag" role="status">剛收進卡冊</p>
 
@@ -700,67 +837,16 @@ async function copyLink() {
         <button
           v-if="p.status === 'stashed' && !selecting"
           type="button" class="more" :class="{ on: openCard === p.id }"
-          :aria-expanded="openCard === p.id" :aria-label="`${p.card.name} 的操作`"
-          @click="toggleCard(p.id)"
+          data-pop="trigger"
+          :aria-expanded="openCard === p.id"
+          :aria-controls="`cardpop-${p.id}`"
+          :aria-label="`${p.card.name} 的操作`"
+          @click="toggleCard(p.id, $event)"
         >
           <span>{{ openCard === p.id ? '收起' : '操作' }}</span>
           <span class="chev" aria-hidden="true"></span>
         </button>
         <p v-else class="meta mono">取得 {{ wonDay(p.acquiredAt) }}</p>
-
-        <div v-if="openCard === p.id && p.status === 'stashed' && !selecting" class="body">
-          <!-- 鑑定編號與寄存期限：決定要不要出貨／回收時才需要，所以收在這裡 -->
-          <CertTag :card="p.card" />
-          <span class="mono muted exp">寄存至 {{ p.stashExpiresAt }}</span>
-
-          <div class="acts">
-            <button class="btn primary sm" @click="openShip(p)">申請出貨</button>
-            <!-- 文案刻意不寫「回收 +N 點」：那句話讀起來像平台保證收購，
-                 而實際上這是**賣家掛出來的報價**，錢從賣家那個池的保留額出，
-                 接受之後卡片歸還賣家。不是保證成交 —— 賣家的保留額不足時
-                 會被擋下來，所以按鈕講的是「提出」不是「換到」。 -->
-            <button
-              v-if="quoteOf(p).eligible"
-              class="btn sm" @click="askRecycle(p)"
-            >
-              按宣告買回價換回 {{ quoteOf(p).points.toLocaleString() }} 點
-            </button>
-            <span v-else class="muted no-offer">{{ quoteOf(p).reason }}</span>
-          </div>
-
-          <!-- 確認：不可逆，所以把「這是誰的報價、成不成得了」一次講完 -->
-          <div v-if="confirming === p.id" class="confirm">
-            <dl class="quote">
-              <!-- 參考價擺在上面只是對照。標籤要寫死「賣家標示」——
-                   不寫的話它讀起來像平台認證過的行情，而它只是賣家自己填的數字。 -->
-              <div>
-                <dt>賣家標示參考價</dt>
-                <dd class="mono">{{ refPriceText(p.card.refPrice) }}<span class="fyi">僅供參考</span></dd>
-              </div>
-              <div>
-                <dt>宣告買回價</dt>
-                <dd class="mono">{{ quoteOf(p).points.toLocaleString() }} 點</dd>
-              </div>
-              <div class="tot">
-                <dt>你會拿到</dt>
-                <dd class="mono">+{{ quoteOf(p).points.toLocaleString() }} 點</dd>
-              </div>
-            </dl>
-            <p class="warn">
-              上面那個參考價是<strong>賣家自己標示的，僅供參考、不構成承諾</strong>，
-              跟你拿得到的點數沒有任何關係。
-              你拿得到的是<strong>賣家在開賣前宣告、之後改不了的買回價</strong>。
-              接受之後卡片歸還賣家、點數由賣家支付，
-              <strong>成立與否以賣家當下的可付款額為準</strong>。
-              卡片還回去之後<strong>無法取回</strong>。
-              點數只能用於站內抽選，<strong>不可提領現金、不可轉讓他人</strong>。
-            </p>
-            <div class="acts">
-              <button class="btn primary sm" @click="doRecycle(p)">提出回收</button>
-              <button class="btn sm" @click="confirming = null">取消</button>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -876,6 +962,56 @@ async function copyLink() {
 
           <div class="acts">
             <button type="button" class="btn primary sm" @click="closeChosen">完成</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ---- 回收確認 ----
+         為什麼這一塊不跟操作面板一起疊在卡片上：它塞不下，而且不該塞。
+         兩欄格線下卡圖只有 157.5×220，這塊光是那段警語就要十幾行
+         （量過：157px 寬、11.5px 字，那段字約 230px 高），加上三列報價
+         與兩顆按鈕，再怎麼壓都超過卡圖的高度 —— 硬塞的結果是一個
+         141px 寬、要自己往下捲才讀得完的「不可逆操作說明」。
+         把卡還回去是不可逆的，說明被擠到看不完就等於沒有說。
+
+         所以改成覆蓋層，跟同一頁的出貨面板同一套（.sheetWrap / .sheet）。
+         一樣要 Teleport 到 body：祖先只要有 transform，position: fixed 的
+         定位基準就會變成那個祖先而不是視窗（docs/HANDOFF.md 2.2）。
+         關法三種：點遮罩、取消鍵、Esc。 -->
+    <Teleport to="body">
+      <div v-if="confirmPrize" class="sheetWrap" @click.self="closeConfirm">
+        <div id="recycleSheet" class="sheet card" role="dialog" aria-modal="true" aria-label="確認按買回價換回" tabindex="-1">
+          <h2>按宣告買回價換回</h2>
+          <p class="muted fine">{{ confirmPrize.card.name }}</p>
+          <dl class="quote">
+            <!-- 參考價擺在上面只是對照。標籤要寫死「賣家標示」——
+                 不寫的話它讀起來像平台認證過的行情，而它只是賣家自己填的數字。 -->
+            <div>
+              <dt>賣家標示參考價</dt>
+              <dd class="mono">{{ refPriceText(confirmPrize.card.refPrice) }}<span class="fyi">僅供參考</span></dd>
+            </div>
+            <div>
+              <dt>宣告買回價</dt>
+              <dd class="mono">{{ quoteOf(confirmPrize).points.toLocaleString() }} 點</dd>
+            </div>
+            <div class="tot">
+              <dt>你會拿到</dt>
+              <dd class="mono">+{{ quoteOf(confirmPrize).points.toLocaleString() }} 點</dd>
+            </div>
+          </dl>
+          <p class="warn">
+            上面那個參考價是<strong>賣家自己標示的，僅供參考、不構成承諾</strong>，
+            跟你拿得到的點數沒有任何關係。
+            你拿得到的是<strong>賣家在開賣前宣告、之後改不了的買回價</strong>。
+            接受之後卡片歸還賣家、點數由賣家支付，
+            <strong>成立與否以賣家當下的可付款額為準</strong>。
+            卡片還回去之後<strong>無法取回</strong>。
+            點數只能用於站內抽選，<strong>不可提領現金、不可轉讓他人</strong>。
+          </p>
+          <div class="acts">
+            <button type="button" class="btn primary sm" @click="doRecycle(confirmPrize)">提出回收</button>
+            <button type="button" class="btn sm" @click="closeConfirm">取消</button>
           </div>
         </div>
       </div>
@@ -1388,7 +1524,61 @@ h1 { font-size: 22px; margin: 0 0 6px; }
 /* 不能操作的卡沒有按鈕，改放取得日期 —— 剛好也是曲線圖上的橫軸 */
 .meta { margin: 0; min-height: 20px; display: flex; align-items: center; font-size: 11px; color: var(--faint); }
 
-.body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 2px 2px 4px; justify-items: start; }  /* 同 .item 的理由 */
+/* ---- 疊在卡圖上的操作面板 ----
+   .artBox 只做一件事：當這個面板的定位基準（見 template 的說明）。
+   overflow 不設 hidden —— 面板本來就完全在卡圖範圍內，設了只會在
+   內容真的超出時把它默默切掉，而不是讓下面的 max-height 去接。 */
+.artBox { position: relative; min-width: 0; }
+
+/* 貼卡圖下緣往上長。三個數字是這塊的全部：
+   left/right/bottom: 0 讓它跟卡圖切齊；height 由內容決定（內容少就露出多一點
+   卡圖）；max-height: 100% 是硬上限 —— 有了它，面板再怎麼長都不會超出卡圖，
+   .item 的高度就永遠不變，格線也就不會有任何一格被撐高。
+   overflow: auto 只是保險絲：真的塞爆時可以在面板裡捲，而不是被裁掉看不到。 */
+.pop {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  max-height: 100%; overflow-y: auto; overscroll-behavior: contain;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px;  /* 同 .item 的理由 */
+  justify-items: start;
+  padding: 9px 8px 8px;
+  border-radius: 12px;
+  /* 不透明背景：底下是滿版彩色卡圖，半透明會讓 12px 的說明文字在亮色卡上消失。
+     卡圖的辨識交給上緣露出的那一段與面板第一行的卡名，不靠「看穿面板」。 */
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 -8px 22px rgba(0, 0, 0, .45);
+}
+/* 淺色主題下那道深影會變成一塊灰污漬，跟 base.css 對 .card 的處理一致 */
+:root[data-theme="light"] .pop { box-shadow: var(--shadow-sm); }
+.pop:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (prefers-reduced-motion: no-preference) {
+  /* keyframes 而不是 transition：v-if 進場沒有起始幀可以過渡，
+     而這一頁的 Transition class 那條路在 rAF 被節流時會卡住（見 BottomActionBar） */
+  .pop { animation: popUp .16s cubic-bezier(.2, .85, .3, 1); }
+}
+@keyframes popUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+/* 卡名：卡圖下半部的 .scrim（賞別／卡名／市值）整段被蓋住了，這一行是
+   「我現在在操作哪一張」唯一的答案，所以給它兩行而不是卡圖上那種一行 ——
+   142px 寬一行只放得下 11 個字，「寶可夢中心 限定 皮卡丘…」這種名字
+   一行等於什麼都沒說。兩行是量過的上限：最擠的情況（兩行卡名 + 鑑定膠囊 +
+   寄存期限 + 兩顆按鈕）是 211.8px，仍在卡圖的 220px 裡面。
+   再長就 ellipsis，完整名稱在面板的 aria-label 裡讀得到。 */
+.popName {
+  margin: 0; min-width: 0; max-width: 100%;
+  font-size: 12px; font-weight: 700; line-height: 1.3; color: var(--ink);
+  overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  /* 標準屬性一起寫，別只留 -webkit- 前綴的那一份 */
+  line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+/* 面板寬度就是卡圖寬度（手機 157.5px），兩顆按鈕並排一定放不下 */
+.pop .acts { flex-direction: column; align-items: stretch; justify-self: stretch; width: 100%; margin-top: 2px; }
+/* 44px 是 touch.css 的觸控門檻。面板裡的按鈕是這張卡唯一要按的東西，寧可給滿 */
+.pop .acts .btn { width: 100%; min-height: 44px; }
 strong { font-size: 14px; }
 .exp { font-size: 11.5px; }
 .acts { display: flex; gap: 8px; margin-top: 4px; }
@@ -1433,6 +1623,15 @@ strong { font-size: 14px; }
 .quote .tot dd { color: var(--ok); }
 .fyi { margin-left: 6px; font-size: 10.5px; color: var(--faint); }
 .warn { margin: 0; font-size: 11.5px; line-height: 1.55; color: var(--muted); }
+/* 覆蓋層有整個視窗的寬度，警語不必再壓到 11.5px 才塞得下 —— 這段是
+   不可逆操作的全部說明，讀得完比省空間重要 */
+.sheet .warn { font-size: 12.5px; }
+/* 這兩顆是不可逆操作的最後一關，一定要吃滿觸控門檻（touch.css 的 44px）。
+   只給回收確認，不外溢到其他覆蓋層 —— 這一頁的 .acts .btn.sm 是共用的，
+   在這裡放寬會連選取列那幾顆一起變（那條列的高度是量過的）。 */
+#recycleSheet .acts .btn { min-height: 44px; }
+.sheet .quote { font-size: 13px; margin: 12px 0; }
+.sheet .quote + .warn { margin-bottom: 2px; }
 .warn strong { color: var(--danger); font-weight: 600; }
 .confirm .acts { margin-top: 0; }
 .confirm .acts .btn { flex: 1; }
@@ -1448,7 +1647,7 @@ strong { font-size: 14px; }
      實測曾經從各 172px 變成 290px + 62.5px。 */
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .item { padding: 6px; gap: 6px; }
-  .body { gap: 6px; padding: 2px 0 2px; }
+  .pop { gap: 6px; padding: 8px 7px 7px; }
   strong { font-size: 12.5px; line-height: 1.35; }
   /* 半寬卡片只剩約 145px，卡名要再降一階才不會每一張都被截成「桃夕…」 */
   .sName { font-size: 11.5px; }
@@ -1458,7 +1657,7 @@ strong { font-size: 14px; }
   /* 鑑定編號的膠囊是 white-space: nowrap，「PSA 10 #82345675」固有寬度
      129.5px，但 320px 兩欄格線下卡片的內容區只有 121px —— 膠囊會直接
      頂出卡片外緣。字級與左右內距各收一階就塞得下（實測 116px）。 */
-  .body :deep(.cert) { font-size: 10.5px; padding-inline: 8px; }
+  .pop :deep(.cert) { font-size: 10.5px; padding-inline: 8px; }
   /* 半寬放不下並排按鈕。grid 的水平拉伸要用 justify-self（align-self 是垂直軸） */
   .acts { flex-direction: column; justify-self: stretch; gap: 6px; }
   /* 只給卡片裡堆疊的那組動作鈕。原本寫成裸的 .btn.sm，於是 width: 100%
@@ -1466,12 +1665,9 @@ strong { font-size: 14px; }
      它們各吃掉一個 100%，把旁邊的資訊區壓成 0 寬，文字變成一個字一行。 */
   .acts .btn.sm, .confirm .btn.sm { width: 100%; padding: 9px 6px; font-size: 12px; }
 
-  /* 兩欄格線下每張卡內容區只剩約 115px，報價的標籤與數字並排會被折成四行。
-     改成標籤在上、數字在下，數字本身禁止換行。 */
+  /* 這裡以前有一組把報價折成「標籤在上、數字在下」的覆寫，是為了塞進
+     115px 寬的卡片。回收確認搬進覆蓋層（寬度 = 視窗）之後那個前提沒有了，
+     並排讀起來才對得上「標籤 ↔ 金額」。 */
   .confirm { padding: 10px; }
-  .quote div { flex-direction: column; align-items: flex-start; gap: 0; }
-  .quote dt { font-size: 11px; }
-  .quote dd { white-space: nowrap; font-size: 13px; }
-  .quote .tot dd { font-size: 15px; }
 }
 </style>
