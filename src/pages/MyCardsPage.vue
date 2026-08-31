@@ -722,10 +722,9 @@ async function copyLink() {
       <RouterLink :to="{ name: 'upload-card' }" class="btn">登記手上的卡</RouterLink>
     </div>
 
-    <!-- 上架入口與狀態分頁同一列：兩者都是「要看／要動哪一批卡」的控制項，
-         各佔一行會在手機上先吃掉兩列才看得到第一張卡。
-         上架在前、分頁在後 —— 分頁那條的右緣有漸隱遮罩表示還能往右捲，
-         按鈕擺在它後面會看起來像按鈕自己在淡出。
+    <!-- 上架入口與狀態分頁同一組：兩者都是「要看／要動哪一批卡」的控制項。
+         桌機併成一列；手機上分頁換到自己那一列（見 .listHead .tabs 的說明）——
+         擠在同一列時分頁只分得到 150px，後面三個分頁一個像素都看不到。
          沒有寄存中的卡就不出現上架鍵：按了也沒有東西可選。 -->
     <div v-if="total || stashedCount || tabs.length > 1" class="listHead">
       <button
@@ -1125,9 +1124,9 @@ async function copyLink() {
 /* ---- 上架入口 ----
    卡冊層級的一顆按鈕，選取模式開著時換成一行說明 ——
    兩者不會同時出現，這一列的高度才不會跳動。 */
-.listHead { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 4px 0 16px; }
+.listHead { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; margin: 4px 0 16px; }
 .sellCta { flex: none; min-height: 44px; padding: 9px 18px; font-size: 13.5px; }
-/* 這一列的寬度由分頁那條讓出來：它自己會橫向捲，按鈕不該被壓縮 */
+/* 桌機一列裝得下，分頁就跟兩顆按鈕併排，吃剩下的寬度 */
 .listHead .tabs { flex: 1 1 auto; min-width: 0; margin: 0; }
 .sellHint { margin: -8px 0 16px; min-width: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
 .sellHint strong { color: var(--ink); font-weight: 600; }
@@ -1443,14 +1442,23 @@ async function copyLink() {
 
 .ovCurve { padding-top: 10px; border-top: 1px solid var(--line-soft); }
 
-/* ---- 狀態分頁 ---- */
+/* ---- 狀態分頁 ----
+   換行，不橫向捲。
+
+   原本是 `overflow-x: auto` + 右緣漸隱遮罩，遮罩負責說「還能往右捲」。
+   那個提示只有在**下一個 chip 露出半截**的時候才成立，而這一列在手機上
+   跟「上架出售 / 登記卡片」擠同一行，捲軸窗口只剩 150px、內容 442px：
+   實測「在卡冊 / 待出貨 / 已出貨」三個 chip 的可見寬度都是 0px，
+   第一個被藏起來的 chip 起點在 x=395（視窗才 393 寬），連半截都露不出來。
+   使用者看到的是一列只有兩個分頁的控制項——他不知道有東西可以捲。
+
+   分頁最多 8 個、每個約 85px，換行最壞情況也只多兩列；
+   拿兩列高度換「每一個分頁都看得到」是划算的。
+   換行之後 scrollWidth 恆等於 clientWidth，這一列不可能再藏東西。 */
 .tabs {
-  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none;
-  margin: 4px 0 16px; padding-bottom: 2px;
-  -webkit-mask-image: linear-gradient(90deg, #000 0 calc(100% - 24px), transparent);
-  mask-image: linear-gradient(90deg, #000 0 calc(100% - 24px), transparent);
+  display: flex; flex-wrap: wrap; gap: 8px; min-width: 0;
+  margin: 4px 0 16px;
 }
-.tabs::-webkit-scrollbar { display: none; }
 .tab {
   flex: none; min-height: 44px;
   display: inline-flex; align-items: center; gap: 7px;
@@ -1466,6 +1474,13 @@ async function copyLink() {
 
 @media (max-width: 720px) {
   .overview { padding: 14px; gap: 11px; }
+
+  /* 手機上分頁自己佔滿一列。
+     跟兩顆按鈕併排的話，扣掉「上架出售 91px + 登記卡片 91px + 兩道 10px 的縫」
+     只剩 150px 給五個分頁——就算會換行，一列也只塞得下一個半，
+     整條會被撐成四五列。獨佔一列（353px）之後兩列就排得完。
+     省下來的那一列高度，換的是三個原本 0px 可見的分頁。 */
+  .listHead .tabs { flex: 1 0 100%; }
 }
 
 

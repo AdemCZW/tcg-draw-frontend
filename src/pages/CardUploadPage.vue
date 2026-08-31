@@ -204,7 +204,10 @@ async function submit() {
     <section class="panel card">
       <h2>這是哪一張卡</h2>
       <p class="hint muted">從目錄挑出正確的版本 —— 同一組卡號可能有價差極大的不同版本。</p>
-      <CardPicker v-model="picked" :max="1" default-source="catalog" />
+      <!-- on-upload-page：挑卡器空狀態的出路裡有一條「去登記一張卡」，
+           在這一頁上它指的就是這一頁（P9 的死連結）。告訴它自己在哪，
+           它會改成講「你已經在對的地方了，往上打字」 -->
+      <CardPicker v-model="picked" :max="1" default-source="catalog" on-upload-page />
 
       <!-- 挑好的那張。挑卡器的貼底列只報數字，這裡把完整身分攤開 ——
            登記寫進系統的就是這一行，送出前要看得到 -->

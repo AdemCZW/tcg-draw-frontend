@@ -533,7 +533,20 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 @media (hover: hover) { .cta.done:hover { background: var(--line); } }
 
 @media (max-width: 720px) {
-  .page { padding-top: 12px; padding-bottom: 20px; }
+  /* 下緣多留一段，讓頁尾整段確定落在摺線下面。
+     ── 為什麼 ──────────────────────────────────────────────────────
+     底部導覽是 fixed，永遠蓋著視窗最下面那 56px（+ 安全區）。頁尾自己
+     的 padding-bottom 已經讓出這一段，所以**捲到底**的時候法規連結一定
+     在導覽上方。問題出在這一頁原本的高度：390 寬下 docH 890、視窗 852，
+     只能捲 38px —— 剛好卡在「頁尾露出上半截、法規連結那一行落在
+     800–815 正對著導覽帶 795–852」的區間。實測 elementFromPoint 打到的
+     是導覽列的 <svg>，連結看得見但按不到；而只差 38px 的捲動量，
+     使用者根本不會意識到還能捲。
+     加 40px 之後（20 + 40 + 導覽 56 = 116px）頁尾整段退到摺線下，
+     「看得到卻碰不到」變成「還沒捲到」——跟站上其他頁一致。
+     不用 min-height 把整頁撐滿視窗：那是上面那段註解拿掉的東西，
+     會在下緣多出一整頁沒有內容的黑。 */
+  .page { padding-top: 12px; padding-bottom: calc(60px + var(--nav-total)); }
   h1 { font-size: 20px; }
   .sub { font-size: 12.5px; }
   .toggle { font-size: 12.5px; padding: 7px 13px; min-height: 44px; }

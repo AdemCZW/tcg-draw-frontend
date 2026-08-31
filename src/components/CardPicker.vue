@@ -36,7 +36,17 @@ const props = withDefaults(defineProps<{
   max?: number
   /** 一開始站在哪一個來源 */
   defaultSource?: 'cardbook' | 'catalog'
-}>(), { modelValue: () => [], max: 60, defaultSource: 'cardbook' })
+  /**
+   * 這顆挑卡器就長在「登記卡片」那一頁上嗎？
+   *
+   * 空狀態的出路裡有一條是「去登記一張卡」→ `/me/cards/upload`。
+   * 在登記頁上那條連結指的就是使用者正踩著的那一頁：按下去畫面不會變，
+   * 他只會以為連結壞了（open-pool-walkthrough P9）。
+   * 由呼叫端告知，不由元件自己讀 route —— 元件不該知道自己被掛在哪條路徑上，
+   * 而且同一頁未來也可能掛第二顆挑卡器。
+   */
+  onUploadPage?: boolean
+}>(), { modelValue: () => [], max: 60, defaultSource: 'cardbook', onUploadPage: false })
 
 const emit = defineEmits<{
   'update:modelValue': [PickedCard[]]
@@ -380,8 +390,10 @@ const hitPickedCount = (h: CatalogHit) =>
           能當獎品的是「閒置在卡冊」的卡。押在別的池裡、掛在市場上、
           在出貨流程中、或抽中後寄存在平台的卡都不能再承諾給第二個人。
         </span><br>
-        <!-- 空清單一定要接出路。沒有出路的空狀態就是一條死路 -->
-        <RouterLink class="emptyGo" :to="{ name: 'upload-card' }">去登記一張卡</RouterLink>
+        <!-- 空清單一定要接出路。沒有出路的空狀態就是一條死路。
+             但在登記頁上「去登記一張卡」指回這一頁本身，那不是出路，是原地打轉 ——
+             那時真正的下一步是右邊那個分頁（目錄），所以只留那一條。 -->
+        <RouterLink v-if="!onUploadPage" class="emptyGo" :to="{ name: 'upload-card' }">去登記一張卡</RouterLink>
         <button type="button" class="emptyGo" @click="chooseSource('catalog')">改用卡片目錄搜</button>
       </p>
 
@@ -467,10 +479,16 @@ const hitPickedCount = (h: CatalogHit) =>
           <template v-if="hiddenNoArt">（另有 {{ hiddenNoArt }} 張同名卡沒有卡圖，無法用挑的）</template>
         </span><br>
         <!-- 出路。**卡冊空的時候不能叫人切回卡冊** —— 那是一條已知走不通的路；
-             那時唯一有意義的下一步是先去登記一張卡。 -->
-        <RouterLink v-if="bookEmpty" class="emptyGo" :to="{ name: 'upload-card' }">
+             那時唯一有意義的下一步是先去登記一張卡。
+             但在登記頁上那條連結指回這一頁本身，等於一條連到自己的死連結。
+             那裡不需要連結：使用者要做的事就在同一個畫面上（上面那個搜尋框），
+             所以改成一句話講清楚「你已經在對的地方了，往上打字」。 -->
+        <RouterLink v-if="bookEmpty && !onUploadPage" class="emptyGo" :to="{ name: 'upload-card' }">
           去登記一張卡（登記完就會出現在卡冊）
         </RouterLink>
+        <span v-else-if="bookEmpty" class="emptyHere">
+          你已經在登記卡片的頁面上了 —— 在上面的搜尋框打卡號或卡名，挑到那張卡就能往下登記。
+        </span>
         <button v-else type="button" class="emptyGo" @click="chooseSource('cardbook')">
           改從我的卡冊挑<template v-if="book.ready.value">（{{ book.items.value.length }} 張）</template>
         </button>
@@ -483,10 +501,16 @@ const hitPickedCount = (h: CatalogHit) =>
         這裡是<b>整個日版卡片目錄</b>，要先搜才會有東西 —— 不打字是空的，不是壞掉。<br>
         <span class="muted">上面四種寫法任一種都可以，不一定要打日文。</span><br>
         <!-- 出路。**卡冊空的時候不能叫人切回卡冊** —— 那是一條已知走不通的路；
-             那時唯一有意義的下一步是先去登記一張卡。 -->
-        <RouterLink v-if="bookEmpty" class="emptyGo" :to="{ name: 'upload-card' }">
+             那時唯一有意義的下一步是先去登記一張卡。
+             但在登記頁上那條連結指回這一頁本身，等於一條連到自己的死連結。
+             那裡不需要連結：使用者要做的事就在同一個畫面上（上面那個搜尋框），
+             所以改成一句話講清楚「你已經在對的地方了，往上打字」。 -->
+        <RouterLink v-if="bookEmpty && !onUploadPage" class="emptyGo" :to="{ name: 'upload-card' }">
           去登記一張卡（登記完就會出現在卡冊）
         </RouterLink>
+        <span v-else-if="bookEmpty" class="emptyHere">
+          你已經在登記卡片的頁面上了 —— 在上面的搜尋框打卡號或卡名，挑到那張卡就能往下登記。
+        </span>
         <button v-else type="button" class="emptyGo" @click="chooseSource('cardbook')">
           改從我的卡冊挑<template v-if="book.ready.value">（{{ book.items.value.length }} 張）</template>
         </button>
@@ -812,6 +836,12 @@ const hitPickedCount = (h: CatalogHit) =>
   text-decoration: none; cursor: pointer;
 }
 .emptyGo:hover { border-color: var(--accent); color: var(--accent); }
+/* 「你已經在對的地方了」。刻意**不做成按鈕的樣子**：它不是出路、按不動，
+   長得像膠囊按鈕的東西按下去沒反應，比一條連到自己的連結還糟 */
+.emptyHere {
+  display: block; margin: 12px auto 0; max-width: 34em; min-width: 0;
+  font-size: 12.5px; line-height: 1.8; color: var(--muted);
+}
 .fail { min-width: 0; display: grid; justify-items: center; gap: 10px; padding: 22px 12px; text-align: center; }
 .failMsg { margin: 0; font-size: 13px; color: var(--danger-ink); }
 

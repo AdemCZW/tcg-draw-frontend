@@ -12,7 +12,7 @@
  * order-dispute 與 seller-doc 不在可選清單裡（labels.ts 有寫理由），
  * 但頁面上要**講出來**它們去哪了 —— 找不到「訂單爭議」的人會以為平台沒有這個管道。
  */
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTicketsStore } from '@/stores/tickets'
 import { ApiError } from '@/lib/http'
@@ -42,6 +42,11 @@ const uploading = ref(false)
 const busy = ref(false)
 const error = ref('')
 const attempted = ref(false)
+/* 每按一次送出就 +1，當成「收到了」那一行的 :key。
+   沒有它，第二次按下去畫面完全不動（清單早就長在那裡了），
+   使用者得到的結論是「這顆按鈕壞了」。開池表單同樣的理由、同樣的做法。 */
+const attemptSeq = ref(0)
+const todoRef = ref<HTMLElement | null>(null)
 
 /** 從哪裡被帶過來的。true 的時候版面要先講「你為什麼會在這裡」 */
 const fromBlocked = ref(false)
@@ -100,11 +105,36 @@ const problems = computed<{ anchor: string; msg: string }[]>(() => {
 })
 const valid = computed(() => problems.value.length === 0)
 
+/* 哪些欄位還缺。按過送出之後，**每一個**缺的欄位都要在自己那一格上說話 ——
+   原本只有被 goTo 聚焦的那一格看起來不一樣（而且那只是聚焦框，不是「這格有問題」），
+   第二個缺的「說明」從頭到尾沒有任何記號。 */
+const missText = (anchor: string) =>
+  attempted.value ? (problems.value.find(p => p.anchor === anchor)?.msg ?? '') : ''
+
+/** 使用者自己點清單上的某一項時才跳。那是他指名要去的地方，捲過去是應該的。 */
 function goTo(anchor: string) {
   const el = document.getElementById(anchor)
   if (!el) return
   el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) el.focus({ preventScroll: true })
+}
+
+/**
+ * 把「還差什麼」那份清單帶進視野 —— 但**只在它不在視野裡的時候**。
+ *
+ * 按鈕上寫的是「看看還差什麼」，承諾的是一份清單；清單現在就長在按鈕正下方，
+ * 而按鈕本來就在使用者眼前（他才剛按到它）。所以絕大多數情況這裡什麼都不做：
+ * 目標已經看得到，動畫面只會把人帶離他正在看的東西。
+ * 這正是原本那個 bug 的形狀 —— 原本按下去是 goTo(第一個問題的欄位)，
+ * 畫面往**上**跳 559px 回到頁首，而那份清單留在視窗下方 225px。
+ * （條件式捲動的做法同 MyCardsPage 換分頁時的 listRef。） */
+async function revealTodo() {
+  await nextTick()
+  const el = todoRef.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  if (r.top >= 0 && r.bottom <= window.innerHeight) return
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
 function pickKind(k: OpenKind) {
@@ -118,7 +148,9 @@ function pickKind(k: OpenKind) {
 
 async function submit() {
   attempted.value = true
-  if (!valid.value) { goTo(problems.value[0]!.anchor); return }
+  attemptSeq.value++
+  /* 不把人送去別的地方：回應就在按鈕正下方 */
+  if (!valid.value) { await revealTodo(); return }
   if (busy.value) return
   busy.value = true
   error.value = ''
@@ -187,7 +219,10 @@ async function submit() {
         <div class="snCertRow">
           <label class="snField snGrader">
             <span class="snFieldT">鑑定機構</span>
-            <select id="tk-grader" v-model="form.grader" class="snInput">
+            <select
+              id="tk-grader" v-model="form.grader" class="snInput"
+              :class="{ bad: !!missText('tk-grader') }"
+            >
               <option value="PSA">PSA</option>
               <option value="BGS">BGS</option>
               <option value="CGC">CGC</option>
@@ -198,10 +233,15 @@ async function submit() {
             <span class="snFieldT">鑑定編號</span>
             <input
               id="tk-cert" v-model="form.certNo" class="snInput mono"
+              :class="{ bad: !!missText('tk-cert') }"
+              :aria-invalid="!!missText('tk-cert') || undefined"
               type="text" inputmode="numeric" autocomplete="off" placeholder="例如 82345671"
             />
           </label>
         </div>
+        <p v-if="missText('tk-cert') || missText('tk-grader')" class="snMiss">
+          {{ missText('tk-cert') || missText('tk-grader') }}
+        </p>
         <p class="snHint">
           編號印在卡殼標籤上。我們會拿它去查目前登記在誰名下 ——
           查不到、或本來就登記在你自己名下的話，你其實可以直接上傳，不需要接管。
@@ -214,9 +254,13 @@ async function submit() {
           <span class="snLabel">主旨</span>
           <input
             id="tk-subject" v-model="form.subject" class="snInput"
+            :class="{ bad: !!missText('tk-subject') }"
+            :aria-invalid="!!missText('tk-subject') || undefined"
             type="text" :maxlength="SUBJECT_MAX" placeholder="一句話講重點"
           />
         </label>
+        <!-- 缺的欄位要自己說話。清單在頁面下方，捲到這一格的人看不到那份清單 -->
+        <p v-if="missText('tk-subject')" class="snMiss">{{ missText('tk-subject') }}</p>
         <p class="snCount mono" :class="{ near: form.subject.length > SUBJECT_MAX - 10 }">
           {{ form.subject.length }} / {{ SUBJECT_MAX }}
         </p>
@@ -228,12 +272,15 @@ async function submit() {
           <span class="snLabel">說明</span>
           <textarea
             id="tk-body" v-model="form.body" class="snInput snArea"
+            :class="{ bad: !!missText('tk-body') }"
+            :aria-invalid="!!missText('tk-body') || undefined"
             :maxlength="BODY_MAX" rows="7"
             :placeholder="isTakeover
               ? '你在哪裡買的、跟誰買的、什麼時候拿到的。有交易紀錄的話一起附上，處理會快很多。'
               : '把發生的事、你已經試過什麼、以及你希望怎麼處理寫清楚。'"
           ></textarea>
         </label>
+        <p v-if="missText('tk-body')" class="snMiss">{{ missText('tk-body') }}</p>
         <p class="snCount mono" :class="{ near: form.body.length > BODY_MAX - 100 }">
           {{ form.body.length }} / {{ BODY_MAX }}
         </p>
@@ -250,7 +297,24 @@ async function submit() {
         />
       </section>
 
-      <div v-if="problems.length && attempted" class="snTodo" role="alert">
+      <p v-if="error" class="snErr" role="alert">{{ error }}</p>
+
+      <!-- 刻意不禁用：按得下去、按下去會在**正下方**列出還差什麼（同開池表單的理由） -->
+      <button type="submit" class="btn primary snGo" :class="{ notyet: !valid }" :disabled="busy"
+              data-testid="ticket-submit">
+        {{ busy ? '送出中…' : valid ? '送出' : '看看還差什麼' }}
+      </button>
+
+      <!-- 「還差什麼」清單放在送出鈕**正下方**。
+           它原本在按鈕上面、而按下去又會把畫面捲到第一個有問題的欄位（頁首附近），
+           實測按鈕與清單會一起離開視窗（scrollY 593 → 34，清單掉到視窗下方 225px）。
+           按鈕在哪裡，答案就要在哪裡。 -->
+      <div v-if="problems.length && attempted" ref="todoRef" class="snTodo" role="alert">
+        <!-- 按下去的「收據」。:key 綁 attemptSeq，所以連按第二下也會重新掛載、
+             重播一次動畫 —— 沒有它，第二下一樣是零回饋。 -->
+        <p :key="attemptSeq" class="snTodoHit" data-testid="ticket-hitch" :data-attempt="attemptSeq">
+          收到了，但還送不出去。
+        </p>
         <p class="snTodoT">還差 {{ problems.length }} 項</p>
         <ul>
           <li v-for="p in problems" :key="p.anchor + p.msg">
@@ -264,14 +328,6 @@ async function submit() {
           </li>
         </ul>
       </div>
-
-      <p v-if="error" class="snErr" role="alert">{{ error }}</p>
-
-      <!-- 刻意不禁用：按得下去、按下去會指出第一個問題（同開池表單的理由） -->
-      <button type="submit" class="btn primary snGo" :class="{ notyet: !valid }" :disabled="busy"
-              data-testid="ticket-submit">
-        {{ busy ? '送出中…' : valid ? '送出' : '看看還差什麼' }}
-      </button>
       <p class="snNote">
         送出之後可以在這張單上繼續補充。客服回覆時你會在「我的問題」看到未讀標記。
       </p>
@@ -332,13 +388,27 @@ async function submit() {
   font: inherit; font-size: 15px;
 }
 .snInput:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 缺的欄位。邊框只負責「哪一格」，「缺什麼」由底下那行 .snMiss 用字說 ——
+   一圈紅框自己解釋不了自己 */
+.snInput.bad { border-color: var(--danger); }
+.snMiss { margin: 0; font-size: 12px; line-height: 1.6; color: var(--danger-ink); }
 .snArea { resize: vertical; line-height: 1.8; font-size: 14.5px; min-height: 132px; }
 
 .snCount { justify-self: end; font-size: 11px; color: var(--faint); margin: 0; }
 .snCount.near { color: var(--warn-ink); }
 
 .snTodo { padding: 12px 14px; background: var(--warn-wash); border-radius: var(--radius); min-width: 0; }
-.snTodoT { margin: 0 0 6px; font-size: 12.5px; font-weight: 700; color: var(--warn-ink); }
+/* 「收到了」那一行每按一次就重新掛載並淡入 —— 連按第二下也看得出畫面有反應 */
+.snTodoHit {
+  margin: 0 0 6px; font-size: 13px; font-weight: 700; color: var(--warn-ink);
+  animation: snHit .28s ease-out;
+}
+@keyframes snHit {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .snTodoHit { animation: none; } }
+.snTodoT { margin: 0 0 6px; font-size: 12.5px; font-weight: 600; color: var(--warn-ink); }
 .snTodo ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .snTodoItem {
   width: 100%; min-height: 44px; min-width: 0;
