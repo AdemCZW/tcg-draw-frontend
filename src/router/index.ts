@@ -308,6 +308,23 @@ export const router = createRouter({
       component: () => import('@/pages/TradeProtectionPage.vue'),
       meta: { depth: 1, title: '交易保護機制' }
     },
+    /* 會員條款與隱私權政策。
+       跟 /trade-protection 一樣不掛進導覽列（頁尾的連結就是唯一入口），
+       但**不能**跟它一樣走 chrome: 'none' —— 這兩頁是從頁尾點進來的，
+       讀完要能用底部導覽回到原本在做的事。
+
+       刻意不要 requiresAuth：條款與隱私政策要能貼給還沒註冊的人看，
+       而且形象頁的頁尾也連過來 —— 擋登入等於連結對未登入者永遠是死的。 */
+    {
+      path: '/terms', name: 'terms',
+      component: () => import('@/pages/TermsPage.vue'),
+      meta: { depth: 1, title: '會員條款' }
+    },
+    {
+      path: '/privacy', name: 'privacy',
+      component: () => import('@/pages/PrivacyPage.vue'),
+      meta: { depth: 1, title: '隱私權政策' }
+    },
     // 煙霧凝聚特效自己一頁：跟寶貝球示範擠在同一頁的話，
     // 量到的幀率不是這支 shader 的幀率，調不準
     {

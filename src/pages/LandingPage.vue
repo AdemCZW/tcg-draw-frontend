@@ -430,8 +430,8 @@ function goLine() {
       <template v-if="FAIRNESS_UI">
         <RouterLink :to="{ name: 'fairness' }">公平性</RouterLink> ·
       </template>
-      <a href="#">會員條款</a> ·
-      <a href="#">隱私權政策</a>
+      <RouterLink :to="{ name: 'terms' }">會員條款</RouterLink> ·
+      <RouterLink :to="{ name: 'privacy' }">隱私權政策</RouterLink>
       <span class="fine">
         點數僅可用於站內抽選與兌換商品，不可提領現金或轉讓。未滿 18 歲需監護人同意方可使用。
         卡面為示意圖，版權屬各自所有權人。
@@ -1042,7 +1042,12 @@ function goLine() {
 .demo { margin: 2px 0 0; font-size: 11px; letter-spacing: .06em; color: var(--faint); }
 
 .foot { position: relative; z-index: 8; padding: 20px var(--pad) 26px; text-align: center; font-size: 12.5px; }
-.foot a { color: var(--muted); text-decoration: none; }
+/* 觸控目標補到 44px，做法與 App.vue 的頁尾一致：內距長出可點範圍、
+   等量負外距把版面高度收回來。這一列本來只有 15px 高，手指點不準。 */
+.foot a {
+  color: var(--muted); text-decoration: none;
+  display: inline-block; padding: 15px 6px; margin: -15px 0;
+}
 @media (hover: hover) { .foot a:hover { color: #e8e2f4; } }
 /* 免責條款：11px 拉到 64ch 太密，一行太長眼睛會找不到下一行的開頭。
    收窄到 46ch 並把行高拉開，讀起來才不像一團字。 */

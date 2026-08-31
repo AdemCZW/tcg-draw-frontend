@@ -58,8 +58,8 @@ const showChrome = computed(() => chrome.value !== 'none')
         <template v-if="FAIRNESS_UI">
           <RouterLink :to="{ name: 'fairness' }">公平性</RouterLink> ·
         </template>
-        <a href="#">會員條款</a> ·
-        <a href="#">隱私權政策</a>
+        <RouterLink :to="{ name: 'terms' }">會員條款</RouterLink> ·
+        <RouterLink :to="{ name: 'privacy' }">隱私權政策</RouterLink>
       </span>
       <!-- 點數不可提現的聲明暫時拿掉（使用者要求）。
            那句話是對外的公開聲明，跟「點數只能在站內流通」這條產品底線是一組的，
@@ -71,7 +71,13 @@ const showChrome = computed(() => chrome.value !== 'none')
 <style scoped>
 .foot { border-top: 1px solid var(--line); margin-top: 40px; padding: 26px 0 40px; font-size: 12.5px; }
 .foot .container { display: grid; gap: 6px; }
-.links a { color: var(--muted); }
+/* 觸控目標補到 44px：12.5px 的字約 15px 高，上下各補 15px 的內距。
+   同時給等量的負外距抵銷掉，所以頁尾的視覺高度一個像素都沒變 ——
+   長出來的只有可以點的範圍。相鄰的兩列都不是互動元素，重疊無害。 */
+.links a {
+  color: var(--muted);
+  display: inline-block; padding: 15px 6px; margin: -15px 0;
+}
 .fine { font-size: 11.5px; color: var(--faint); }
 
 /* ------------------------------------------------------------------

@@ -159,7 +159,8 @@ const paths: Record<string, string> = {
 
     <p class="fine muted">
       點數僅可用於站內抽選與兌換商品，不可提領現金或轉讓。未滿 18 歲需監護人同意方可使用。
-      <a href="#">會員條款</a> · <a href="#">隱私權政策</a>
+      <RouterLink :to="{ name: 'terms' }">會員條款</RouterLink> ·
+      <RouterLink :to="{ name: 'privacy' }">隱私權政策</RouterLink>
     </p>
   </div>
 </template>
@@ -259,7 +260,12 @@ h1 {
 .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .logout { margin-top: 18px; width: 100%; }
 .fine { font-size: 11.5px; line-height: 1.6; margin: 18px 0 0; }
-.fine a { color: var(--muted); text-decoration: underline; }
+/* 觸控目標補到 44px，做法與 App.vue 的頁尾一致（內距長出可點範圍、
+   負外距把版面高度收回來）。這兩個連結緊鄰「登出」按鈕，更需要點得準。 */
+.fine a {
+  color: var(--muted); text-decoration: underline;
+  display: inline-block; padding: 15px 6px; margin: -15px 0;
+}
 
 @media (max-width: 720px) {
   .page { padding-top: 16px; }
