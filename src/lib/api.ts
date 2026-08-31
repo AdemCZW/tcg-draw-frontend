@@ -1110,10 +1110,29 @@ export interface UploadCardInput {
   variantId?: string | null
   /** 自己標的參考價。選填、只顯示，不參與任何計算 */
   refPrice?: number | null
+  /**
+   * 使用者看過 PSA 查到的卡片資訊之後，確認「就是同一張卡」。
+   *
+   * 只有在畫面已經把差異攤開給他看過之後才准送 true —— 這個旗標是
+   * 把系統的判斷讓給人，責任跟著轉移過去，所以他必須先看得到他在確認什麼。
+   * 卡號本來就對得上、或這張卡根本沒有編號時，後端會忽略它。
+   */
+  certConfirmed?: boolean
+}
+
+/** CERT_MISMATCH 的 409 body 裡那一組差異。畫面靠它並排「PSA 說的」與「你填的」 */
+export interface CertMismatch {
+  certNo: string
+  /** 使用者自己填的卡號（後端原樣回來） */
+  cardNo?: string | null
+  /** PSA 查到的卡號。PSA 沒給就是 null */
+  psaCardNumber: string | null
+  /** PSA 查到的卡片主體（英文，例如 "PIKACHU"） */
+  psaSubject: string | null
 }
 
 /* mock 專用：一個「登記在別人名下」的示範編號。
-   卡冊 mock 裡帶編號的卡全都在自己名下（登記它們會撞 CERT_ALREADY_YOURS，
+   卡冊 mock 裡帶編號的卡全都在自己名下（登記它們會撞 ALREADY_IN_BOOK，
    那是另一條分支），所以 CERT_ALREADY_LISTED 這條需要一個不在自己
    卡冊裡的編號才走得到 —— 沒有它，「申請接管」的入口在 mock 模式下
    永遠沒有人看得到。 */
@@ -1128,7 +1147,10 @@ export const cardbookApi = {
    * 失敗的四種都要分開呈現（呼叫端看 ApiError.code）：
    *   400 CERT_NOT_FOUND / CERT_INVALID  編號查不到／格式不對
    *   409 CERT_ALREADY_LISTED            登記在**別人**名下 → 引導申請接管
-   *   409 CERT_ALREADY_YOURS             已經在自己卡冊裡 → 說明現在的狀態
+   *   409 ALREADY_IN_BOOK                已經在自己卡冊裡 → 說明現在的狀態
+   *   409 CERT_MISMATCH                  PSA 查到的卡號跟填的對不上
+   *                                      → data.mismatches 攤開差異，
+   *                                        使用者確認後帶 certConfirmed 再送一次
    */
   async upload(input: UploadCardInput): Promise<{ prize: UserPrize }> {
     if (MOCK) {
@@ -1145,6 +1167,33 @@ export const cardbookApi = {
         if (cert.startsWith('9999')) {
           throw new ApiError('CERT_NOT_FOUND', '鑑定機構查不到這個編號。請確認號碼沒有抄錯；查證持續失敗的話，這張卡可能有問題。', 400)
         }
+        /* mock 的「查到了，但 PSA 說的卡號跟你填的對不上」。
+           照後端 stub 的同一個約定（server/src/psa.ts）：`STUB-OK-<卡號>`
+           表示「PSA 回的 CardNumber 是 <卡號>」。用同一個約定，同一組編號
+           在展示模式與真後端走的是同一條分支 —— 兩邊各編一套規則的話，
+           照著 mock 練出來的操作到了真後端就不成立。
+
+           比法也照後端（server/src/card-cert.ts）：只比斜線前面那一段。
+           PSA 給裸號（331）、目錄給「編號/總數」（331/190）是常態，
+           把總數也算進去比就會變成每一張日版卡都對不上。
+
+           順序在「已經在你卡冊裡」之前：真後端也是先查證再寫入，
+           查證沒過根本走不到唯一性那一關。 */
+        const stub = /^STUB-OK-([^-]+)/i.exec(cert)
+        if (stub && !input.certConfirmed) {
+          const localNo = (s: string) =>
+            (s.split('/')[0] ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^0+(?=\d)/, '')
+          const psaCardNumber = stub[1]!
+          if (localNo(psaCardNumber) !== localNo(input.cardNo)) {
+            throw new ApiError(
+              'CERT_MISMATCH',
+              'PSA 查到的卡片跟你填的卡號對不上（PSA 是英文、目錄是日文，卡名無法直接比對）。'
+              + '請對照下面 PSA 查到的資訊，確認是同一張卡再送出。',
+              409,
+              { mismatches: [{ certNo: cert, cardNo: input.cardNo, psaCardNumber, psaSubject: 'PIKACHU' }] }
+            )
+          }
+        }
         const mine = mock.userPrizes.find(p =>
           p.card.certNo === cert && p.status !== 'recycled' && p.status !== 'refunded')
         if (mine) {
@@ -1153,8 +1202,11 @@ export const cardbookApi = {
             listed: '在市場上販售中', ship_requested: '等待出貨', shipped: '已出貨',
             recycled: '已回收', refunded: '已退還'
           }
+          /* 代號照真後端（server/src/routes/cardbook.ts 的 ALREADY_IN_BOOK）。
+             mock 自己編一個字的話，照著展示模式寫的分支到了真後端就不成立 ——
+             那正是這條分支之前發生的事。 */
           throw new ApiError(
-            'CERT_ALREADY_YOURS',
+            'ALREADY_IN_BOOK',
             `這張卡已經在你的卡冊裡了（目前狀態：${statusText[mine.status]}），不用再登記一次。`,
             409, { prizeId: mine.id, status: mine.status }
           )
@@ -1213,7 +1265,11 @@ export const cardbookApi = {
         certNo: input.certNo || undefined,
         variantId: input.variantId || undefined,
         refPrice: input.refPrice ?? undefined
-      } }
+      },
+      /* 只有使用者**真的勾過**才送。送 false 跟不送對後端是同一件事，
+         但那會讓每一個請求都攜帶一個「我沒有確認」的宣告 ——
+         這個旗標的意義是責任轉移，不該在沒有發生轉移時出現在線上。 */
+      certConfirmed: input.certConfirmed || undefined }
     })
     return { prize: toPrize(r.prize) }
   }

@@ -8,6 +8,7 @@
  * 需要資料庫的部分（交易邊界、併發、帳本）不在這裡 —— 那要真的連 Postgres。
  */
 import { applyDeadlines, actionsFor, depositFor, looksLikeTracking, DAY, HOUR } from './shared/escrow.js'
+import { cardNumbersAgree } from './card-cert.js'
 import type { Order } from './shared/domain.js'
 
 const base: Order = {
@@ -202,6 +203,40 @@ for (let i = 0; i < 400; i++) {
 }
 const [mn, mx] = [Math.min(...hist), Math.max(...hist)]
 check(`LAST 位置分布沒有明顯偏斜（每格期望 40，實際 ${mn}–${mx}）`, mn >= 20 && mx <= 65)
+
+
+/* ------------------------------------------------------------------
+   卡號比對（card-cert.ts）
+
+   為什麼值得一組單元測試：這條規則決定「開池／登記鑑定卡時要不要
+   攔下來問人」，而它攔錯的代價是**一條走不完的路** —— 舊版把
+   "331" 與 "331/190" 判成不同的卡，於是每一張日版鑑定卡都要人手動
+   確認一次。一個幾乎每次都跳的確認框等於沒有確認框。
+   這一組把「該過的要過、該擋的要擋」兩邊都釘住。
+------------------------------------------------------------------ */
+console.log('\ncard-cert 的卡號比對：')
+/* 這一條是修的那個 bug 本身：PSA 對日版卡通常只給流水號，
+   我們的目錄給的是卡面印的「編號/總數」。 */
+check('PSA 的裸號 331 對得上目錄的 331/190（分母是總數，不是編號的一部分）',
+  cardNumbersAgree('331', '331/190'))
+check('反過來也一樣（PSA 給 331/190、目錄給 331）',
+  cardNumbersAgree('331/190', '331'))
+check('兩邊都寫了總數而且相同 → 對得上', cardNumbersAgree('331/190', '331/190'))
+check('編號不同就是不同的卡 → 擋', !cardNumbersAgree('332', '331/190'))
+check('編號相同但總數不同（不同套的同號卡）→ 擋', !cardNumbersAgree('331/190', '331/191'))
+check('前導零只是寫法（PSA 常寫 025）', cardNumbersAgree('025', '25/190'))
+check('空白、破折號、井號都只是寫法', cardNumbersAgree(' #025 ', '25'))
+check('英數混編的卡號整段比（TG 系列）', cardNumbersAgree('TG12', 'TG12/TG30'))
+check('TG12 不等於 12 —— 不靠猜前綴放行', !cardNumbersAgree('TG12', '12/190'))
+/* 舊版把數字全串起來，"331" vs "331190" 判成不同；順帶檢查串接不會
+   讓兩張不同的卡撞在一起（19/01 與 1/901 串起來都是 1901）。 */
+check('19/01 與 1/901 是不同的卡（串接比法會把它們判成同一張）',
+  !cardNumbersAgree('19/01', '1/901'))
+check('任一邊沒有值就不擋（沒有東西可以比）',
+  cardNumbersAgree(null, '331/190') && cardNumbersAgree('331', null))
+/* 一邊完全湊不出英數字（例如 PSA 回了一串符號）：沒有東西可以拆成
+   「編號／總數」，退回整串比對；比不出結論就放行，不硬擋。 */
+check('一邊湊不出英數字時退回整串比對', !cardNumbersAgree('--', '331') && cardNumbersAgree('--', '#'))
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

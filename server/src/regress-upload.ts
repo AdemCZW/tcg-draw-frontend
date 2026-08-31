@@ -99,11 +99,28 @@ const CERT = `STUB-OK-777-${RUN}`
   ck('custodian 是自己（卡在我手上）', mine?.custodian_id === 'u-seller', `custodian_id=${mine?.custodian_id}`)
   ck('origin 是 upload', mine?.origin === 'upload', `origin=${mine?.origin}`)
 
+  /* 開池挑選器打的就是這一支（?status=in_book）。
+     STATUSES 少了 in_book 的時候這裡會回 400，而畫面上的症狀是
+     「卡冊說持有 1 張、開池挑選器說 0 張」—— 使用者沒有任何辦法
+     從畫面上和好那兩個數字。所以這條要照挑選器的參數原樣打一次。 */
+  const filtered = await call(seller, '/v1/prizes?status=in_book&limit=100')
+  const fj = await json(filtered.clone())
+  ck('?status=in_book 查得動（不是 400）', filtered.ok, `${filtered.status} ${JSON.stringify(fj).slice(0, 160)}`)
+  ck('而且查得到剛上傳的那張', (fj.items ?? []).some((x: Any) => x.card?.certNo === CERT),
+    `${(fj.items ?? []).length} 筆`)
+  ck('回來的每一張都真的是 in_book',
+    (fj.items ?? []).every((x: Any) => x.status === 'in_book'),
+    JSON.stringify((fj.items ?? []).map((x: Any) => x.status)))
+
   const sum = await call(seller, '/v1/prizes/summary')
   const sj = await json(sum.clone())
   ck('summary 沒被 tier null 弄炸', sum.ok, `${sum.status}`)
   ck('賞別分佈不含 null 的格子', !(sj.tierMix ?? []).some((t: Any) => t.tier == null),
     JSON.stringify(sj.tierMix))
+  /* counts 的鍵是從 STATUSES 初始化的。少了 in_book 這一格永遠不會出現，
+     卡冊那排分頁上「在卡冊」就永遠不存在 —— 跟上面那條是同一個根因。 */
+  ck('summary 的 counts 有 in_book 這一格，而且算得到剛上傳的那張',
+    Number(sj.counts?.in_book ?? 0) >= 1, JSON.stringify(sj.counts))
 }
 
 head('同編號再傳 → 409，「自己的」與「別人的」訊息要分開')
@@ -138,6 +155,42 @@ head('假編號（stub 查無此卡）→ 400 講清楚')
   const b = await json(r.clone())
   ck('被擋成 400', r.status === 400, `${r.status}`)
   ck('錯誤是 CERT_NOT_FOUND', b.error === 'CERT_NOT_FOUND', JSON.stringify(b).slice(0, 160))
+}
+
+head('卡號比對：PSA 的裸號對得上「編號/總數」；真的對不上時走得完確認')
+{
+  /* 日版鑑定卡的常態：PSA 的 CardNumber 是流水號（331），
+     我們的目錄用的是卡面印的「編號/總數」（331/190）。
+     這一條**不能**要求 certConfirmed —— 它要是還要人確認，
+     等於每一張日版鑑定卡都要人手動放行一次，那個確認框就沒有意義了。 */
+  const CERT_OK = `STUB-OK-331-${RUN}`
+  const r = await call(seller, '/v1/cardbook/upload', { card: upCard(CERT_OK, '331/190') })
+  ck('PSA 的 331 對得上目錄的 331/190，不用任何確認就登記得進來',
+    r.ok, `${r.status} ${JSON.stringify(await json(r.clone())).slice(0, 200)}`)
+
+  /* 真的是另一張卡：PSA 說 999、使用者挑的是 25/190。 */
+  const CERT_BAD = `STUB-OK-999-${RUN}`
+  const m = await call(seller, '/v1/cardbook/upload', { card: upCard(CERT_BAD, '25/190') })
+  const mj = await json(m.clone())
+  ck('卡號真的不同 → 409 CERT_MISMATCH', m.status === 409 && mj.error === 'CERT_MISMATCH',
+    `${m.status} ${JSON.stringify(mj).slice(0, 200)}`)
+  /* 畫面要靠這三個值把差異攤開。少了它們，使用者只會看到一句
+     「請確認是不是同一張卡」而沒有任何可以拿來確認的東西。 */
+  const hit = (mj.mismatches ?? [])[0]
+  ck('409 帶得出 PSA 查到的卡號', hit?.psaCardNumber === '999', JSON.stringify(hit))
+  ck('409 也帶回使用者自己填的卡號（畫面要並排顯示）', hit?.cardNo === '25/190', JSON.stringify(hit))
+  ck('409 帶得出 PSA 登記的卡片主體', typeof hit?.psaSubject === 'string', JSON.stringify(hit))
+
+  const again = await call(seller, '/v1/cardbook/upload', { card: upCard(CERT_BAD, '25/190') })
+  ck('不帶確認再送一次還是同一個 409（所以畫面一定要有確認控制項）',
+    again.status === 409, `${again.status}`)
+
+  const ok = await call(seller, '/v1/cardbook/upload',
+    { card: upCard(CERT_BAD, '25/190'), certConfirmed: true })
+  const okj = await json(ok.clone())
+  ck('使用者確認之後同一張卡登記得進來', ok.ok, `${ok.status} ${JSON.stringify(okj).slice(0, 200)}`)
+  ck('而且照樣標成 verified（PSA 真的查得到這個編號）',
+    okj.prize?.psaStatus === 'verified', `psaStatus=${okj.prize?.psaStatus}`)
 }
 
 head('整條路：上傳 → 開池重用同一列（tier 被寫上）→ 抽走 → 過戶')

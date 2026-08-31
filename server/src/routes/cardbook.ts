@@ -105,9 +105,18 @@ cardbook.post('/upload', async c => {
       if (!cardNumbersAgree(v.cert.cardNumber, card.cardNo) && !certConfirmed) {
         return c.json({
           error: 'CERT_MISMATCH',
+          /* 訊息只講「怎麼往下走」，判斷的材料靠 mismatches 帶回去讓畫面攤開。
+             把「請確認」講成一句沒有指涉的話（舊版就是），使用者會照字面
+             再按一次送出，然後拿到一模一樣的 409 —— 那是一條死路。 */
           message: 'PSA 查到的卡片跟你填的卡號對不上（PSA 是英文、目錄是日文，卡名無法直接比對）。'
-            + '請確認是不是同一張卡，確認後再送出一次。',
-          mismatches: [{ certNo: certRaw, psaCardNumber: v.cert.cardNumber, psaSubject: v.cert.subject }]
+            + '請對照下面 PSA 查到的資訊，確認是同一張卡再送出。',
+          /* cardNo 是**使用者自己填的那個值**，一起回去讓畫面可以並排顯示
+             「PSA 說的」與「你填的」。不回這一欄的話，畫面只能自己猜是拿
+             哪一個欄位去比的 —— 猜錯就會把差異指到錯的地方。 */
+          mismatches: [{
+            certNo: certRaw, cardNo: card.cardNo,
+            psaCardNumber: v.cert.cardNumber, psaSubject: v.cert.subject
+          }]
         }, 409)
       }
       psaStatus = 'verified'
@@ -142,6 +151,12 @@ cardbook.post('/upload', async c => {
      psaStatus 記進 card jsonb，跟池裡獎品的擺法一致 —— 前端讀同一個位置。 */
   const cardJson = {
     ...card,
+    /* image 明確補一個空字串。CardIn 沒有這一欄（登記進來的卡沒有實拍圖，
+       卡圖從 artId 推導），但 shared/domain.ts 的 CardItem 宣告的是
+       `image: string` —— 少了這個鍵，前端拿到的是 undefined，
+       卡冊那顆 CardArt 每畫一次就吐一行 [Vue warn]（型別檢查失敗）。
+       池裡的獎品一直都帶著 image: ''，這裡對齊它。 */
+    image: '',
     artId: card.artId ?? null,
     language: card.language ?? null,
     grader: card.grader ?? null,

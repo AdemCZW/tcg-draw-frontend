@@ -777,7 +777,16 @@ export const userPrizes: UserPrize[] = [
   { id: 'up4', card: cards[16], tier: 'A', status: 'stashed', wonAt: '2026-08-09T18:40:00+08:00', acquiredAt: '2026-08-09T18:40:00+08:00', stashExpiresAt: '2026-11-07', buyback: 900 },
   { id: 'up5', card: cards[19], tier: 'D', status: 'ship_requested', wonAt: '2026-08-10T11:05:00+08:00', acquiredAt: '2026-08-10T11:05:00+08:00', stashExpiresAt: '2026-11-08', buyback: 456 },
   // 舊制的池抽到的卡：沒有宣告過買回價，所以回收不了。這條分支要看得到
-  { id: 'up6', card: cards[21], tier: 'C', status: 'stashed', wonAt: '2026-08-11T09:30:00+08:00', acquiredAt: '2026-08-11T09:30:00+08:00', stashExpiresAt: '2026-11-09', buyback: null }
+  { id: 'up6', card: cards[21], tier: 'C', status: 'stashed', wonAt: '2026-08-11T09:30:00+08:00', acquiredAt: '2026-08-11T09:30:00+08:00', stashExpiresAt: '2026-11-09', buyback: null },
+  /* 自己登記進卡冊的一張鑑定卡（in_book）。
+     tier 是 null（沒進過池就沒有賞別）、沒有寄存期限（卡在自己手上）、
+     沒有買回價（買回價是某個池的賣家宣告的，這張卡沒進過池）。
+
+     **這一列是 mock 模式下唯一挑得進池的卡。** 開池挑選器只列 in_book
+     （見 CardPicker.vue 的判準），而在它之前這份 mock 全是 stashed 與
+     shipped —— 少了這一列，「從我的卡冊挑」在展示模式下會是空的，
+     而那正是這次要修的那個症狀本身。 */
+  { id: 'up7', card: cards[12], tier: null, status: 'in_book', wonAt: '2026-08-14T10:00:00+08:00', acquiredAt: '2026-08-14T10:00:00+08:00', stashExpiresAt: '—', buyback: null }
 ]
 
 export const ledger: LedgerEntry[] = [

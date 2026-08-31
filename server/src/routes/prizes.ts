@@ -1,5 +1,5 @@
 /**
- * 使用者名下的卡：保管中、已上架、申請出貨、已出貨、已回收。
+ * 使用者名下的卡：在卡冊、押在池裡、保管中、已上架、申請出貨、已出貨、已回收、已退還。
  */
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -18,7 +18,30 @@ import { PageQuery, decodeCursor, encodeCursor, isNumeric, slicePage } from '../
 export const prizes = new Hono()
 prizes.use('*', requireAuth)
 
-const STATUSES = ['stashed', 'listed', 'ship_requested', 'shipped', 'recycled', 'refunded'] as const
+/**
+ * prizes.status 的完整值域。
+ *
+ * **這一串必須跟資料表的 check 約束逐字一致**，來源是
+ * migrations/021_inventory_first.sql:111 的 prizes_status_check：
+ *   stashed / listed / ship_requested / shipped / recycled / refunded / in_book / in_pool
+ * （002_core.sql 原本只有前五個，017 加了 refunded，021 加了 in_book 與 in_pool。）
+ *
+ * 為什麼一個字都不能少：這個陣列同時是兩件事的定義 ——
+ *   1. `?status=` 的 zod enum。少一個值，那個狀態就**查不到**：
+ *      前端送 `?status=in_book` 會被擋成 400，連「換個參數再試」都沒有用。
+ *   2. /summary 的 counts 初始化。少一個值，那一格永遠不會被建出來，
+ *      卡冊的分頁列上就永遠看不到那個狀態。
+ *
+ * 021 加了兩個狀態卻沒有回頭改這裡，代價是自己登記進卡冊的卡（in_book）
+ * 在開池的挑選器裡永遠是 0 —— 卡冊頁說「持有 1 張」，挑選器說「0 張」，
+ * 而使用者沒有任何辦法從畫面上和好這兩個數字。
+ *
+ * ⚠️ 之後任何一支遷移動到 prizes_status_check，這一行要一起改。
+ */
+const STATUSES = [
+  'stashed', 'listed', 'ship_requested', 'shipped', 'recycled', 'refunded',
+  'in_book', 'in_pool'
+] as const
 
 /**
  * 狀態過濾在這裡做，不在前端做。

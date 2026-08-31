@@ -1078,13 +1078,21 @@ async function run() {
     /* 卡冊來源的卡本來就帶著鑑定編號，那份資訊也要進得去。
        一個編號對應一張實體卡，所以只能開 1 籤 —— 這條規則反過來也要成立：
        帶了編號又開 2 籤要被擋（一卡多賣正是平台聲稱要防的事）。 */
-    /* 鑑定編號用 STUB-OK-349190：開池現在會向 PSA 查證（見 PSA 那一節），
-       stub 讓 PSA 回 CardNumber=349190，跟這張卡的 cardNo「349/190」的數字部分
-       對得上 → 查證通過、標 verified。用真的編號在 stub 下會被當成查無此卡擋掉，
+    /* 鑑定編號用 STUB-OK-349：stub 讓 PSA 回 CardNumber=349，
+       而這張卡的 cardNo 是卡面印的「349/190」（第 349 張／全套 190 張）——
+       **這正是真實日版鑑定卡的樣子**：PSA 給流水號，卡面給「編號／總數」。
+       對得上 → 查證通過、標 verified。
+
+       這一組值原本是 `STUB-OK-349190` 配 `349/190`，因為當時的比對規則
+       把兩邊的數字全部串起來比（"349190" vs "349190"）—— 也就是說，
+       這條測試當年是為了遷就一個壞掉的規則，才餵給 PSA 一個
+       **世界上任何一張卡都不會有的卡號**。規則修好之後（card-cert.ts
+       的 cardNumbersAgree 改成分開比「編號」與「總數」），這裡才餵得起
+       真實的資料。用真的編號在 stub 下會被當成查無此卡擋掉，
        那是 stub 的安全預設，不是這條測試要驗的東西。 */
     const graded = {
       id: 'cg-smoke-pick', name: '噴火龍 ex UR', setCode: 'sv4a', cardNo: '349/190',
-      language: 'JP', grader: 'PSA', grade: 10, certNo: 'STUB-OK-349190', image: '',
+      language: 'JP', grader: 'PSA', grade: 10, certNo: 'STUB-OK-349', image: '',
       artId: 'SV4a-349', variantId: null, refPrice: 42000
     }
     const g = await call(seller, '/v1/pools', {
@@ -1101,7 +1109,7 @@ async function run() {
       const snap = await json(await fetch(`${base}/v1/pools/${gj.poolId}`))
       const a = (snap.pool?.prizes ?? []).find((x: Any) => x.tier === 'A')?.card
       check('鑑定資訊（grader / grade / certNo）完整保留',
-        a?.grader === 'PSA' && a?.grade === 10 && a?.certNo === 'STUB-OK-349190', JSON.stringify(a))
+        a?.grader === 'PSA' && a?.grade === 10 && a?.certNo === 'STUB-OK-349', JSON.stringify(a))
       check('卡冊挑的鑑定卡查證通過後標記為 verified', a?.psaStatus === 'verified', JSON.stringify(a?.psaStatus))
     }
 

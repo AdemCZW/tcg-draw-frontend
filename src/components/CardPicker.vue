@@ -87,8 +87,35 @@ function chooseSource(s: 'cardbook' | 'catalog') {
 /* 分頁交給既有的 useInfiniteList —— 卡冊本來就是游標分頁的，
    在這裡自己再寫一份捲動載入等於把「請求競態、重複觸發、卸載要斷開」
    那三個坑再踩一次。 */
+/**
+ * 挑得到的是 **in_book，而且只有 in_book**。
+ *
+ * 判準只有一條：**這張實體卡現在有沒有被別的承諾綁著。**
+ * 押進池等於對外宣告「這張卡會照抽選結果交出去」，所以它必須是一張
+ * 現在沒有欠任何人任何事的卡。八個狀態逐一對這一條：
+ *
+ *   in_book        ✔ 自己登記的、接管來的、或上一個池結束解押回來的。
+ *                    沒有未結的義務，實體也在自己手上 —— 唯一過關的。
+ *   in_pool        ✘ 已經押在另一個池裡。押第二次就是一卡兩賣。
+ *   listed         ✘ 掛在市場上等買家。成交與開池同時發生就是一卡兩賣。
+ *   stashed        ✘ 「抽中後寄存在平台」。它背著一個還沒結的結算：
+ *                    買家隨時可以按買回、也可以申請出貨，那筆保留額還在。
+ *                    拿它當新池的獎品等於把同一張卡承諾給兩個人。
+ *                    （**這正是原本寫死的那個值** —— 而且新賣家根本不會有。）
+ *   ship_requested ✘ 出貨流程進行中，實體正要離開。
+ *   shipped        ✘ 已經寄到擁有者手上。卡是他的、實體也在他手上，
+ *                    但那一列的結算已經結案，系統再也追蹤不到它的去向；
+ *                    要拿它開池的正確做法是重新登記（或接管）成 in_book。
+ *   recycled       ✘ 已經賣回平台，不是自己的卡了。
+ *   refunded       ✘ 賣家違約退款，卡從來沒有離開賣家。
+ *
+ * 這條判準跟後端是**同一條**，不是各寫一份：routes/pools.ts 的建池押記
+ * 只重用 `user_id = 我 且 status = 'in_book'` 的那一列，其餘一律回
+ * CARD_BUSY / CERT_ALREADY_LISTED。挑選器列出 in_book 以外的卡，
+ * 等於讓人挑一張**送出去必定被擋**的卡。
+ */
 const book = useInfiniteList<UserPrize>((cursor, signal) =>
-  api.myPrizes({ cursor, signal, status: 'stashed' }))
+  api.myPrizes({ cursor, signal, status: 'in_book' }))
 /* 模板的字串 ref 要綁到 setup 的頂層 binding；巢狀在物件裡的 ref 綁不到 */
 const bookSentinel = book.sentinel
 
@@ -346,7 +373,13 @@ const hitPickedCount = (h: CatalogHit) =>
 
       <p v-else-if="!book.items.value.length && !book.error.value" class="empty">
         卡冊裡沒有可以開池的卡。<br>
-        <span class="muted">只有寄存中的卡能當獎品 —— 已上架或已出貨的卡不在這裡。</span><br>
+        <!-- 空狀態要說的是**真正的判準**。原本這裡寫「只有寄存中的卡能當獎品」，
+             而寄存中指的是「從別人的池抽中、寄放在平台」——
+             一個剛登記完自己的卡的人看到這句話，只會覺得系統在說謊。 -->
+        <span class="muted">
+          能當獎品的是「閒置在卡冊」的卡。押在別的池裡、掛在市場上、
+          在出貨流程中、或抽中後寄存在平台的卡都不能再承諾給第二個人。
+        </span><br>
         <!-- 空清單一定要接出路。沒有出路的空狀態就是一條死路 -->
         <RouterLink class="emptyGo" :to="{ name: 'upload-card' }">去登記一張卡</RouterLink>
         <button type="button" class="emptyGo" @click="chooseSource('catalog')">改用卡片目錄搜</button>

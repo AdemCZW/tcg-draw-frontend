@@ -37,6 +37,11 @@ type GaEvent =
   /* 卡片上傳入庫（登記實體卡進卡冊） */
   | 'cardbook_upload_submit'
   | 'cardbook_upload_success'
+  /* 鑑定機構查到的卡號跟使用者挑的對不上，畫面要他確認。
+     這一個要單獨記：它的次數如果接近 submit 的次數，代表比對規則
+     （server/src/card-cert.ts 的 cardNumbersAgree）又太嚴了 ——
+     那正是這條路上次壞掉的方式。 */
+  | 'cardbook_upload_cert_mismatch'
 
 declare global {
   interface Window { gtag?: (...args: unknown[]) => void }
