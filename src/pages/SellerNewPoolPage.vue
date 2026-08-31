@@ -34,7 +34,7 @@
  * 「參考價」是選填：它不參與任何計算，強迫賣家填一個沒有外部依據的數字
  * 只會製造一個看起來像官方行情的假資料。
  */
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSellerStore } from '@/stores/sellers'
 import { api } from '@/lib/api'
@@ -51,10 +51,16 @@ import {
   FIRST_POOL_TICKET_CAP, FIRST_POOL_VALUE_CAP, FIRST_POOL_DONE_MEANING, firstPoolCapCheck
 } from '@/shared/pool-settlement'
 import { artUrlOf } from '@/lib/tcgdex-catalog'
+import { useKeyboardInset } from '@/composables/useKeyboardInset'
 import type { PickedCard } from '@/lib/card-pick'
 import type { Pool, PoolMode, PoolPrize, Tier } from '@/types/models'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import CardPicker from '@/components/CardPicker.vue'
+
+/* 逐張的例外設定住在貼底面板裡，而那張面板有四個要打字的欄位 ——
+   鍵盤一升起來，面板下緣連同「從這個池移除」就躲到鍵盤底下。
+   讓位的算法只有一份，見 composables/useKeyboardInset.ts。 */
+useKeyboardInset()
 
 const route = useRoute()
 const sellers = useSellerStore()
@@ -258,12 +264,159 @@ function removePrize(i: number) {
   form.prizes.splice(i, 1)
 }
 
-/** 這個池實際用到哪幾個賞別。沒用到的賞別不必填買回價，也不該擋住送出 */
-const tiersUsed = computed(() => [...new Set(form.prizes.map(p => p.tier))])
+/**
+ * 這個池實際用到哪幾個賞別。沒用到的賞別不必填買回價，也不該擋住送出。
+ *
+ * 照 TIERS 的順序排，**不是挑卡的順序** —— 這一份現在同時是分頁列的順序，
+ * 而分頁的位置一旦會隨著挑卡順序跳動，使用者剛學會「D 賞在最右邊」
+ * 就會在下一次挑卡之後失效。
+ */
+const tiersUsed = computed(() => TIERS.filter(t => form.prizes.some(p => p.tier === t)))
 
 /** 解析成每個獎品的絕對金額：個別覆寫優先，否則吃該賞別的預設 */
 const resolved = computed(() =>
   form.prizes.map(p => p.buyback ?? form.tierBuyback[p.tier] ?? 0))
+
+/** 同一條規則的單列版本。畫面上要一張一張顯示金額，用不到索引 */
+const resolvedOf = (p: PrizeRow) => p.buyback ?? form.tierBuyback[p.tier] ?? 0
+
+/* ---- 獎項配置的主軸：賞別，不是卡 ----
+
+   這一段在 2026-08 從「一列一張卡」換成「一排賞別分頁，一次顯示一個賞別」。
+   換掉的是**呈現**，業務規則一條都沒動（買回價仍然按賞別填、覆寫仍然是例外、
+   參考價仍然不參與計算、鑑定卡仍然只能開 1 籤）。
+
+   為什麼換：舊版一列有五個控制項，30 張卡就是 154 個控制項、6,732px 的列陣，
+   而且手機上表頭是 display:none —— 三個數字框（數量／參考價／買回價覆寫）
+   在填好值的常態下沒有任何可見標籤，長得一模一樣。詳細的量測見
+   docs/prize-editor-proposal.md。
+
+   分頁的代價是**沒被選到的賞別連同它們的錯誤一起離開 DOM**。原型量過：
+   30 張、清空兩處買回價、停在沒問題的那一頁時，不點不捲看得到 0 個問題、
+   看到第一個問題要 3 次點擊。所以這裡有三件事不是裝飾，是這個版面能不能用的前提：
+     1. 分頁列**永遠列出全部用到的賞別**，缺東西的那一頁掛紅點（3 次 → 1 次）
+     2. 被收起來的賞別缺什麼，缺的**內容**印在分頁列底下（1 次 → 0 次）
+     3. 按送出時**自動切到出問題的那一頁並明說切了**，「還差什麼」的每一項
+        也各自跳得到自己的分頁與欄位
+   第 3 條不是偏好是正確性：沒有它，送出鈕會說「還差什麼」然後指向一個
+   看不見的東西 —— 那正是這一頁修過兩次的「按了沒反應」。 */
+
+/** 賞別的顏色。跟 DrawResultPage 同一份對應（爆賞沒有自己的色票，用 --ink） */
+const TIER_VAR: Record<Tier, string> = {
+  A: 'var(--tier-a)', B: 'var(--tier-b)', C: 'var(--tier-c)',
+  D: 'var(--tier-d)', LAST: 'var(--tier-last)', BUST: 'var(--ink)'
+}
+
+/** 現在停在哪一個賞別分頁 */
+const activeTier = ref<Tier>('A')
+
+/**
+ * 真正畫出來的那一頁。
+ *
+ * 不直接用 activeTier：卡片被移除或改賞別之後，原本停著的賞別可能整個消失，
+ * 那時候要退回第一個還在的賞別，而不是畫一個空白的分頁。
+ */
+const curTier = computed<Tier | null>(() => {
+  const u = tiersUsed.value
+  if (!u.length) return null
+  return u.includes(activeTier.value) ? activeTier.value : u[0]!
+})
+
+/** 這一賞有哪幾張卡 */
+const cardsOf = (t: Tier) => form.prizes.filter(p => p.tier === t)
+
+/**
+ * 軌道上先畫幾張，其餘收成一顆「還有 N 張」。
+ *
+ * 為什麼要有上界：軌道是橫捲的，60 張卡就是一條 3,800px 的縮圖帶，
+ * 使用者看到的是一條沒有盡頭的東西。收起來之後那顆鈕是**唯一**講得出
+ * 「還有多少張」的地方，所以它是 sticky 的（見 CSS 那一段）。
+ */
+const RAIL_MAX = 8
+
+/** 攤成垂直清單的賞別。一次只有一個 —— 分頁本來就一次只顯示一個賞別 */
+const expandedTier = ref<Tier | null>(null)
+
+/** 這一賞的摘要行。只印「只有這裡講得出來」的東西，重複的一律不印 */
+function tierMeta(t: Tier): string {
+  const mine = cardsOf(t)
+  const seats = mine.reduce((s, p) => s + (Number.isInteger(p.qty) ? p.qty : 0), 0)
+  const overrides = mine.filter(p => p.buyback != null).length
+  const total = mine.reduce((s, p) => s + resolvedOf(p) * (Number.isInteger(p.qty) ? p.qty : 0), 0)
+  /* 「抽到就能換 X 點」不印：X 就是同一列右邊那格輸入框裡的數字。
+     「N 籤」只有跟張數不同時才是新資訊；「共承諾」只有在超過一籤時
+     才不等於買回價本身。同一個數字寫兩次，刪掉的是重複不是資訊。 */
+  return `${mine.length} 張`
+    + (seats !== mine.length ? ` · ${seats} 籤` : '')
+    + (seats > 1 && buybackValid(form.tierBuyback[t] ?? 0) ? ` · 共承諾 ${total.toLocaleString()} 點` : '')
+    + (overrides ? ` · ${overrides} 張改過` : '')
+}
+
+/** 切分頁。順手收合攤開的清單 —— 展開是「我要逐張看這一賞」，換賞別就不成立了 */
+function selectTier(t: Tier) {
+  activeTier.value = t
+  expandedTier.value = null
+}
+
+/* 分頁列的方向鍵。role="tablist" 一旦掛上去，鍵盤使用者就會用左右鍵找下一頁 ——
+   掛了角色卻不接鍵，比不掛角色更糟：他按了沒反應，而畫面上明明有六個分頁。 */
+function onTabKey(e: KeyboardEvent) {
+  const u = tiersUsed.value
+  if (!u.length) return
+  const i = Math.max(0, u.indexOf(curTier.value as Tier))
+  const j = e.key === 'ArrowRight' ? (i + 1) % u.length
+    : e.key === 'ArrowLeft' ? (i - 1 + u.length) % u.length
+    : e.key === 'Home' ? 0
+    : e.key === 'End' ? u.length - 1
+    : -1
+  if (j < 0) return
+  e.preventDefault()
+  selectTier(u[j]!)
+  nextTick(() => document.getElementById(`f-tab-${u[j]}`)?.focus())
+}
+
+/* ---- 逐張的例外：貼底面板 ----
+   賞別、籤數、這一張的買回價、參考價、移除，全部收在這裡。
+   常態下每張卡在畫面上是「縮圖 + 卡名 + 角標」，可互動控制項 0 個。 */
+const sheetKey = ref<string | null>(null)
+const sheetRow = computed(() => form.prizes.find(p => p.pick.key === sheetKey.value) ?? null)
+function openCard(key: string) { sheetKey.value = key }
+function closeSheet() { normalizeSheetNumbers(); sheetKey.value = null }
+
+/**
+ * `type=number` 清空的時候，`v-model.number` 交回來的是**空字串**不是 null。
+ *
+ * 對這兩格來說空值有意義：買回價空著＝沒有覆寫、參考價空著＝未標示。
+ * 不收斂的話，清掉買回價那一格會被讀成「覆寫成一個不合法的金額」，
+ * 賣家看到的是一句他做不出對應動作的錯誤；參考價則會把 `''` 送給後端。
+ * 綁在 change（離開欄位）而不是 input：打字打到一半的空值不該當場報錯。
+ */
+function normalizeSheetNumbers() {
+  const r = sheetRow.value
+  if (!r) return
+  if ((r.buyback as unknown) === '') r.buyback = null
+  if ((r.unitValue as unknown) === '') r.unitValue = null
+}
+/** 面板裡改賞別：畫面跟著那張卡走，不然關掉面板之後它「不見了」 */
+function setSheetTier(t: Tier) {
+  const r = sheetRow.value
+  if (!r) return
+  r.tier = t
+  selectTier(t)
+}
+/* Esc 關面板。監聽掛在 window 上而不是面板節點上 —— 面板是 Teleport 到 body 的，
+   焦點不一定落在裡面（例如使用者剛從縮圖點開，焦點還在那顆縮圖上）。 */
+function onSheetKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && sheetKey.value) closeSheet()
+}
+onMounted(() => window.addEventListener('keydown', onSheetKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onSheetKey))
+
+function removeSheetCard() {
+  const i = form.prizes.findIndex(p => p.pick.key === sheetKey.value)
+  if (i >= 0) removePrize(i)
+  closeSheet()
+}
 
 /** 這個池最差的賞別保底買回多少。池頁那句人話文案就是這個數字 */
 const worstBuyback = computed(() => {
@@ -390,37 +543,86 @@ interface Problem {
   /** 對應的欄位。點清單那一項會捲過去並聚焦 */
   anchor: string
   msg: string
+  /**
+   * 這一項落在哪一個賞別分頁上。
+   *
+   * 分頁把沒被選到的賞別整個換出 DOM，所以「跳過去」的第一步是**切分頁**，
+   * 不是捲動 —— 少了這個欄位，goTo() 會在 DOM 裡找一個還沒被畫出來的 id，
+   * 然後留下一句「找不到那一格」。那就是又一次「按了沒反應」。
+   */
+  tier?: Tier
+  /**
+   * 這一項屬於哪一張卡。逐張的欄位（籤數、覆寫的買回價）住在貼底面板裡，
+   * 「跳過去」＝切到那張卡的分頁 ＋ 打開那張卡的面板。
+   */
+  cardKey?: string
 }
 
-/** 數量欄可以被清空成 NaN（type=number 清掉不是 0 而是空值），那會讓籤數變成 0 */
-const qtyBad = computed(() =>
-  form.prizes.some(p => !Number.isInteger(p.qty) || p.qty < 1))
+/**
+ * 買回價不合法的賞別 —— 指的是**該賞別自己填的那一格**。
+ *
+ * 只有在「這一賞真的有卡在吃預設值」的時候才算數：整賞的卡都單獨覆寫過的話，
+ * 那一格填什麼都不影響任何金額，拿它擋住送出等於要人去修一個不存在的問題。
+ * （這條判斷跟舊版「解析後的值不合法」在結果上完全一樣，只是分得出是哪一格。）
+ */
+const badTiersDefault = computed(() => tiersUsed.value.filter(t =>
+  form.prizes.some(p => p.tier === t && p.buyback == null) &&
+  !buybackValid(form.tierBuyback[t] ?? 0)))
+
+/** 單獨覆寫成不合法金額的那幾張卡。那一格住在面板裡，所以問題要指得到卡 */
+const badOverrideRows = computed(() =>
+  form.prizes.filter(p => p.buyback != null && !buybackValid(p.buyback)))
 
 const problems = computed<Problem[]>(() => {
   const out: Problem[] = []
   if (!form.title.trim()) out.push({ anchor: 'f-title', msg: '池名稱還沒填' })
   if (!(form.ticketPrice > 0)) out.push({ anchor: 'f-price', msg: '每抽價格要大於 0' })
   if (!form.prizes.length) out.push({ anchor: 'f-picker', msg: '還沒有獎項 —— 先挑幾張卡' })
-  if (qtyBad.value) out.push({ anchor: 'f-prizes', msg: '有獎項的數量是空的或小於 1' })
+  /* 逐張的三條問題各自帶著**第一張出問題的卡**：訊息維持原本的聚合寫法
+     （「有獎項的數量是空的」），但跳過去的時候要有一個具體的目標 ——
+     籤數這一格現在住在那張卡的面板裡，指著整段獎項配置等於指著一個
+     打不開的東西。修好第一張之後這一項會自動指向下一張。 */
+  const badQty = form.prizes.find(p => !Number.isInteger(p.qty) || p.qty < 1)
+  if (badQty) {
+    out.push({ anchor: 'f-sheet-qty', msg: '有獎項的數量是空的或小於 1', tier: badQty.tier, cardKey: badQty.pick.key })
+  }
   /* 有鑑定編號的卡只能開 1 籤 —— 一個編號對應一張實體卡。後端也擋（見
      routes/pools.ts 的 PrizeIn.refine），但那個錯誤要送出才看得到，
-     而這裡挑完卡調數量的當下就該講。 */
-  if (form.prizes.some(p => p.pick.card.certNo && p.qty > 1)) {
-    out.push({ anchor: 'f-prizes', msg: '有鑑定編號的卡只能開 1 籤（一個編號對應一張實體卡）' })
+     而這裡挑完卡調數量的當下就該講。
+     面板裡那一格已經改成不可輸入的「1 籤（固定）」，所以正常操作進不來 ——
+     但範本複製與後端回來的資料仍可能帶 qty > 1，這條檢查是最後一道網。 */
+  const badCert = form.prizes.find(p => p.pick.card.certNo && p.qty > 1)
+  if (badCert) {
+    out.push({
+      anchor: 'f-sheet-qty', msg: '有鑑定編號的卡只能開 1 籤（一個編號對應一張實體卡）',
+      tier: badCert.tier, cardKey: badCert.pick.key
+    })
   }
-  if (form.prizes.some(p => p.needsRepick)) {
-    out.push({ anchor: 'f-prizes', msg: '範本裡的鑑定卡要重挑（鑑定編號不能複製）' })
+  const badRepick = form.prizes.find(p => p.needsRepick)
+  if (badRepick) {
+    out.push({
+      anchor: 'f-sheet', msg: '範本裡的鑑定卡要重挑（鑑定編號不能複製）',
+      tier: badRepick.tier, cardKey: badRepick.pick.key
+    })
   }
   /* 解析後每一項都要落在上下限內。爆賞也要 —— 爆賞發的是保底卡，
      那張卡一樣會被抽到、一樣可以被買回，沒有理由把它排除在承諾之外。
      檢查解析後的值而不是輸入格：漏填的賞別預設會解析成 0，一樣被這裡擋下。
      講得出是**哪一個賞別**缺 —— 只說「有賞別沒填」等於要使用者自己找。 */
-  const badTiers = tiersUsed.value.filter(t =>
-    form.prizes.some((p, i) => p.tier === t && !buybackValid(resolved.value[i] ?? 0)))
-  if (badTiers.length) {
+  /* 一個賞別一項，不再把六個賞別擠成一句話：分頁版的每一項都必須跳得到
+     **一個**看得見的東西，而「A 賞、D 賞的買回價…」這種合併訊息只跳得到其中一個。
+     兩條檢查加起來跟原本那一條完全等價（覆寫的走下面那條、沒覆寫的走這條）。 */
+  for (const t of badTiersDefault.value) {
     out.push({
-      anchor: 'f-tierbuy',
-      msg: `${badTiers.map(tierLabel).join('、')}的買回價要落在 ` +
+      anchor: `f-tier-${t}`, tier: t,
+      msg: `${tierLabel(t)}的買回價要落在 ` +
+        `${BUYBACK_MIN.toLocaleString()} – ${BUYBACK_MAX.toLocaleString()} 點之間`
+    })
+  }
+  for (const p of badOverrideRows.value) {
+    out.push({
+      anchor: 'f-sheet-buy', tier: p.tier, cardKey: p.pick.key,
+      msg: `${p.pick.card.name} 單獨改過的買回價要落在 ` +
         `${BUYBACK_MIN.toLocaleString()} – ${BUYBACK_MAX.toLocaleString()} 點之間`
     })
   }
@@ -442,6 +644,34 @@ const problems = computed<Problem[]>(() => {
   return out
 })
 const valid = computed(() => problems.value.length === 0)
+
+/** 這一個賞別的分頁上有沒有缺漏。分頁列上那顆紅點就是它 */
+const tierHasProblem = (t: Tier) => problems.value.some(p => p.tier === t)
+
+/**
+ * 缺漏落在**別的分頁**上的那幾項。
+ *
+ * 這一份會被原封不動印在分頁列底下 —— 不是一句「其他分頁有問題」，是缺的內容本身。
+ * 紅點只說「那一頁有事」，還是要按過去才知道是什麼事（原型量到 1 次點擊）；
+ * 把內容留在畫面上才是 0 次。這一行是分頁版**唯一**能追平分組版的地方，
+ * 不能為了版面好看拿掉。
+ */
+const offTabProblems = computed(() =>
+  problems.value.filter(p => p.tier && p.tier !== curTier.value))
+
+/**
+ * 後端說「PSA 查到的卡跟你挑的對不上」的那幾張。
+ *
+ * 那個確認勾選現在住在單卡面板裡（它是例外中的例外），所以被擋住的當下
+ * 錯誤訊息旁邊要有一條路開得到它 —— 否則賣家讀完錯誤，找不到勾選在哪。
+ */
+const mismatchRows = computed(() => form.prizes.filter(p => p.certMismatch))
+
+/** 從清單直接開一張卡：切到它的分頁再開面板（順序跟 jumpToProblem 一樣） */
+function openCardRow(p: PrizeRow) {
+  selectTier(p.tier)
+  sheetKey.value = p.pick.key
+}
 
 /* 找不到那一格時留下的話。**不能是空的**：goTo() 原本查無元素就直接
    return，畫面上一個字都不會變 —— 那正是使用者說的「按了沒反應」。
@@ -474,6 +704,25 @@ function goTo(anchor: string, msg?: string): boolean {
   const focusable = el.matches('input, select') ? el : el.querySelector('input, select')
   ;(focusable as HTMLElement | null)?.focus({ preventScroll: true })
   return true
+}
+
+/**
+ * 「還差什麼」清單上的一項 → 那一格。
+ *
+ * 分頁把 DOM 換掉了，所以順序是**先切分頁、（必要時）打開那張卡的面板、
+ * 等重畫完，才輪得到 goTo() 去找節點**。反過來做的話 getElementById 會
+ * 查無元素，畫面上只會多一句「找不到那一格」——「按了沒反應」的第三次。
+ *
+ * goTo() 自己不變（捲動 + 聚焦 + 查無元素時出聲），這裡只負責把它要找的
+ * 那個節點先弄到 DOM 裡。
+ */
+async function jumpToProblem(p: Problem) {
+  if (p.tier && tiersUsed.value.includes(p.tier)) selectTier(p.tier)
+  /* cardKey 有值＝那一格在貼底面板裡。沒值的話要把面板關掉，
+     不然使用者跳到「池名稱」，眼前卻還蓋著一張卡的面板。 */
+  sheetKey.value = p.cardKey ?? null
+  await nextTick()
+  goTo(p.anchor, p.msg)
 }
 
 /* ---- 以這個池為範本再開一個 ----
@@ -581,6 +830,20 @@ const attempted = ref(false)
 const attemptSeq = ref(0)
 
 /**
+ * 按送出時自動切到了哪一個賞別分頁（空字串＝沒有切）。
+ *
+ * 為什麼一定要切：「還差什麼」清單裡的第一項可能落在別的分頁上，
+ * 而那一頁的內容此刻不在 DOM 裡 —— 一份指著看不見的東西的清單，
+ * 跟一顆禁用的按鈕一樣沒有辦法解釋自己。
+ *
+ * 為什麼一定要**明說**切了：畫面自己動了卻不講，下一秒使用者就會以為
+ * 分頁壞掉（他記得剛才停在 A 賞）。這一行跟切分頁是同一件事的兩半。
+ * 位置在按鈕正下方那塊「還差什麼」裡 —— 按鈕在哪裡，回應就在哪裡，
+ * **仍然不自動捲動**（那條決定沒有變）。
+ */
+const tabJumped = ref('')
+
+/**
  * 送出。
  *
  * 外層再包一次 try：runSubmit 內部已經接住 API 的錯，走到這裡的只剩
@@ -609,10 +872,20 @@ async function runSubmit() {
   jumpMiss.value = ''
   error.value = ''
   takeoverCerts.value = []
+  tabJumped.value = ''
   /* 不 return 就算了：按鈕按得下去，按下去一定要有回應。回應在按鈕底下
      那塊 .todo（v-if 在 attempted 之後會多出一行 data-testid="submit-hitch"），
-     不是把人送去別的地方。 */
-  if (!valid.value) return
+     不是把人送去別的地方。
+     但獎項配置那一段現在是分頁的：缺漏可能落在一個沒被畫出來的賞別上。
+     所以在留下回應之前先把那一頁切過來，並在回應裡明說切了。 */
+  if (!valid.value) {
+    const first = problems.value.find(p => p.tier)
+    if (first?.tier && first.tier !== curTier.value) {
+      selectTier(first.tier)
+      tabJumped.value = tierLabel(first.tier)
+    }
+    return
+  }
 
   /* 身分拿不到就**講出來**，不要靜靜 return（那正是這次的 bug）。
      走到這裡代表閘門放行了（canList 為真）卻拿不到 id，那是資料出了問題，
@@ -943,118 +1216,190 @@ function bottomOccluded(): number {
           </div>
         </section>
 
-        <!-- ---------- 獎項配置 ---------- -->
-        <section class="card block">
+        <!-- ---------- 獎項配置 ----------
+             主軸是**賞別**不是卡：上面一排賞別分頁，一次顯示一個賞別，
+             買回價一個賞別填一次，逐張的例外收進點一下才開的貼底面板。
+             換掉的只有呈現，業務規則一條都沒動（見 script 裡那一段長註解）。
+
+             id 掛在 section 上而不是裡面某個 div：`f-prizes` 是「獎項配置這一段」的
+             錨點，而它以前是一個被 v-if 掉的空 div —— 還沒挑卡的時候那個 id
+             根本不存在，指著它的問題跳過去只會得到一句「找不到那一格」。 -->
+        <section id="f-prizes" class="card block">
           <div class="block-head">
             <h2>獎項配置</h2>
             <span class="chip">共 {{ econ.seatCount }} 籤</span>
           </div>
 
-          <!-- 買回價：一個賞別一個絕對金額。
-               這一塊放在獎項表**之前** —— 它是主要的填法，逐項覆寫才是例外。 -->
-          <section v-if="tiersUsed.length" id="f-tierbuy" class="tierBuy">
-            <h3>買回價（依賞別）<i class="req">必填</i></h3>
-            <p class="tbNote muted">
-              你答應照這個價把卡買回來的金額，<strong>開賣前鎖死、開賣後改不了</strong>
-              （它被寫進公平性承諾的雜湊裡）。玩家按下接受時，這筆錢直接從你這個池的保留額出。
-              同一個賞別的卡價值本來就相近，所以填一個絕對金額就好，<strong>不需要任何基準</strong>。
-            </p>
-            <div class="tbGrid">
-              <label v-for="t in tiersUsed" :key="t" class="tbCell">
-                <span class="tbLbl">{{ tierLabel(t) }}</span>
-                <input
-                  v-model.number="form.tierBuyback[t]" type="number"
-                  :min="BUYBACK_MIN" :max="BUYBACK_MAX" step="1"
-                  :class="{ missing: !buybackValid(form.tierBuyback[t] ?? 0) }"
-                />
-              </label>
-            </div>
-            <p class="tbLine">
-              買家會看到：<strong class="mono">{{ form.ticketPrice.toLocaleString() }} 點一抽，最差的賞別保底買回 {{ worstBuyback.toLocaleString() }} 點</strong>
-            </p>
-          </section>
-
           <p v-if="!form.prizes.length" class="empty">
-            還沒挑卡。上面挑幾張，這裡就會列出來讓你設賞別與數量。
+            還沒挑卡。上面挑幾張，這裡就會照賞別分頁列出來讓你設買回價與數量。
           </p>
 
           <template v-else>
-            <div id="f-prizes"></div>
-            <div class="prize-head">
-              <span></span><span>卡片</span><span>賞別</span><span>數量</span><span>參考價/張</span><span>買回價/張</span><span></span>
-            </div>
-            <div v-for="(p, i) in form.prizes" :key="p.pick.key" class="prize-row" :class="{ bad: p.needsRepick }">
-              <span class="art">
-                <img v-if="p.pick.artUrl" :src="p.pick.artUrl" :alt="''" loading="lazy" decoding="async">
-                <span v-else class="ph" aria-hidden="true"></span>
-              </span>
-
-              <span class="ident">
-                <span class="idName">{{ p.pick.card.name }}</span>
-                <span class="idMeta">
-                  {{ p.pick.card.setCode || '—' }} · {{ p.pick.card.cardNo || '—' }}
-                  <template v-if="p.pick.variant"> · {{ p.pick.variant.label }}</template>
-                </span>
-                <span v-if="p.pick.card.certNo" class="idCert">
-                  {{ p.pick.card.grader }}<template v-if="p.pick.card.grade"> {{ p.pick.card.grade }}</template>
-                  · #{{ p.pick.card.certNo }}
-                </span>
-                <span v-else-if="p.needsRepick" class="idWarn">
-                  範本裡這一張是鑑定卡。一個鑑定編號只對應一張實體卡，不能複製——請從卡冊重挑一張。
-                </span>
-                <!-- PSA 查到的卡跟這一張的卡號對不上。PSA 是英文、目錄是日文，
-                     卡名沒辦法直接比對，所以不硬擋 —— 讓賣家看過 PSA 查到的卡號後
-                     自己確認是不是同一張，勾了才會放行。 -->
-                <label v-if="p.certMismatch" class="certConfirm">
-                  <input type="checkbox" v-model="p.certConfirmed" />
-                  <span>
-                    PSA 查到的卡號是「{{ p.certMismatch.psaCardNumber || '未提供' }}」<template
-                      v-if="p.certMismatch.psaSubject">（{{ p.certMismatch.psaSubject }}）</template>，
-                    跟你挑的「{{ p.pick.card.cardNo || '—' }}」對不上。確認是同一張卡再勾選並重新送出。
-                  </span>
-                </label>
-              </span>
-
-              <select v-model="p.tier" aria-label="賞別">
-                <option v-for="t in TIERS" :key="t" :value="t">{{ tierLabel(t) }}</option>
-              </select>
-              <!-- 手機把表頭藏起來了（欄寬不夠），所以每一格自己要說得出自己是什麼。
-                   少了 placeholder 的話手機上是三個一模一樣的數字框。 -->
-              <input
-                v-model.number="p.qty" type="number" min="1" aria-label="數量" placeholder="數量"
-                :class="{ missing: p.pick.card.certNo && p.qty > 1 }"
-              />
-              <!-- 參考價選填：空著就是「賣家沒有標示」，畫面上顯示「未標示」。
-                   不要退回成 0 —— 0 讀起來是「這張卡不值錢」。 -->
-              <input
-                v-model.number="p.unitValue" type="number" min="0" step="1"
-                aria-label="參考價（選填）" placeholder="參考價（選填）"
-              />
-              <!-- 這一格是**覆寫**，不是必填：空著就照該賞別的預設走。
-                   placeholder 直接顯示會套用的金額，讓「空著會發生什麼」看得見。 -->
-              <input
-                v-model.number="p.buyback" type="number" :min="BUYBACK_MIN" :max="BUYBACK_MAX" step="1"
-                aria-label="買回價（留空照賞別預設）"
-                :placeholder="(form.tierBuyback[p.tier] ?? 0).toLocaleString()"
-                :class="{ missing: !buybackValid(resolved[i] ?? 0), over: p.buyback != null }"
-              />
-              <button type="button" class="del" @click="removePrize(i)" aria-label="移除這個獎項">
-                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-                </svg>
+            <!-- 分頁列。**永遠列出全部用到的賞別**，不隨當前分頁增減：
+                 分頁收起來的是內容，不是索引。缺東西的那一頁掛紅點 ——
+                 原型量過，只做這一條就把「看到第一個問題」從 3 次點擊降到 1 次。
+                 換行不橫捲：橫捲會把最右邊那顆分頁連同它的紅點推出畫面，
+                 而「錯誤不會被藏起來」正是這個版面唯一撐得住的理由。 -->
+            <div class="tabs" role="tablist" aria-label="賞別" @keydown="onTabKey">
+              <button
+                v-for="t in tiersUsed" :key="t" type="button" role="tab"
+                :id="`f-tab-${t}`" :aria-controls="`f-tier-${t}`"
+                class="tab" :class="{ on: curTier === t, bad: tierHasProblem(t) }"
+                :aria-selected="curTier === t"
+                @click="selectTier(t)"
+              >
+                <span class="tmark" :style="{ background: TIER_VAR[t] }" aria-hidden="true"></span>
+                <span class="tabName">{{ tierLabel(t) }}</span>
+                <span class="pn mono">{{ cardsOf(t).length }}</span>
+                <span v-if="tierHasProblem(t)" class="tabWarn" aria-hidden="true"></span>
+                <span v-if="tierHasProblem(t)" class="sr">這一頁有缺漏</span>
               </button>
             </div>
-          </template>
 
-          <!-- 兩欄的意義完全不同，而且很容易被當成同一件事。講清楚 -->
-          <p class="hint muted twoCols">
-            <strong>參考價</strong>是你自己標示的市場行情，<strong>選填</strong>，
-            只顯示給買家看、<strong>不構成承諾</strong>，也不參與任何金額計算。
-            空著的話買家看到的是「未標示」。<br>
-            <strong>買回價</strong>那一格是<strong>覆寫</strong>：空著就照上面該賞別的金額走，
-            只有某一張在同賞別裡特別貴的時候才需要單獨填。
-            每張 {{ BUYBACK_MIN.toLocaleString() }} 點起跳。
-          </p>
+            <!-- 被收起來的賞別缺什麼 —— 印的是缺的**內容**，不是「有問題」四個字。
+                 紅點只說「那一頁有事」，還是要按過去才知道是什麼事；
+                 這一塊才是把「看到問題要幾次點擊」壓到 0 的那一條。
+                 每一項也點得動，點下去就是切到那一頁並聚焦。 -->
+            <div v-if="offTabProblems.length" class="offTab" data-testid="off-tab-problems">
+              <p class="offTabCap">其他分頁還有 {{ offTabProblems.length }} 項缺漏：</p>
+              <ul>
+                <li v-for="p in offTabProblems" :key="p.anchor + p.msg">
+                  <button type="button" class="offTabItem" @click="jumpToProblem(p)">
+                    <span>{{ p.msg }}</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                  </button>
+                </li>
+              </ul>
+            </div>
+
+            <!-- 買回價的說明。回答的是「填了會怎樣」與「我該填多少」，
+                 機制（雜湊、保留額、為什麼不是比率）收進底下的折疊 ——
+                 賣家在填第一格的當下不會問那些，公平性那一塊也已經講過一次。 -->
+            <p class="tbNote muted">
+              <strong>買回價一個賞別填一次</strong>：填多少，抽到那一賞的人就能拿多少點跟你換走那張卡，
+              錢從這個池的池款出。填高比較好賣，但那是你真的要付的錢。<strong>開賣後改不了。</strong>
+              某一張要單獨調整，點那張卡。
+            </p>
+            <details class="whyAbs">
+              <summary>為什麼買回價是一個絕對金額，不是比率？</summary>
+              <p>
+                比率要有基準，而唯一的基準是你自己填的參考價——那是循環論證：你把參考價填高，
+                回饋率就自己變漂亮。金額則是你真的要付出去的錢，填高等於承諾多賠，
+                所以這個數字不需要外部行情就是誠實的。<br>
+                <strong>爆賞也要填</strong>：爆賞發的是保底卡，那張卡一樣會被抽到、一樣可以換回點數。
+                每張 {{ BUYBACK_MIN.toLocaleString() }} – {{ BUYBACK_MAX.toLocaleString() }} 點。
+              </p>
+            </details>
+
+            <!-- 當前這一個賞別。
+                 標題列是三格：色標 ／ 名稱＋摘要 ／ 買回價。
+                 買回價的標籤與輸入框**併進標題列**（原本各自佔一列，白拿兩列）；
+                 輸入框收到 72px（四位數的金額不需要滿寬，滿寬是在說「這裡要填很多」，
+                 那是假的），但高度維持 44px 的觸控下限。
+                 「買回」兩個字不能省 —— 這一頁的整個論點就是「欄位在常態下
+                 沒有可見標籤」，標籤可以縮、可以搬，不可以消失。 -->
+            <section
+              v-if="curTier" :id="`f-tier-${curTier}`" class="tierGroup"
+              role="tabpanel" :aria-labelledby="`f-tab-${curTier}`"
+              :class="{ bad: tierHasProblem(curTier) }"
+            >
+              <div class="tgHead">
+                <span class="tmark lg" :style="{ background: TIER_VAR[curTier] }" aria-hidden="true"></span>
+                <span class="tgName">
+                  {{ tierLabel(curTier) }}
+                  <span class="tgMeta">{{ tierMeta(curTier) }}</span>
+                </span>
+                <span class="tgBuy">
+                  <label class="tgBuyLbl" :for="`f-buy-${curTier}`">買回</label>
+                  <input
+                    :id="`f-buy-${curTier}`" v-model.number="form.tierBuyback[curTier]"
+                    type="number" :min="BUYBACK_MIN" :max="BUYBACK_MAX" step="1"
+                    inputmode="numeric" placeholder="必填"
+                    :aria-label="`${tierLabel(curTier)}的買回價，點每張`"
+                    :class="{ missing: badTiersDefault.includes(curTier) }"
+                  />
+                  <span class="tgUnit">點/張</span>
+                </span>
+              </div>
+
+              <p v-if="badTiersDefault.includes(curTier)" class="tgErr">
+                這一賞的買回價要落在 {{ BUYBACK_MIN.toLocaleString() }} – {{ BUYBACK_MAX.toLocaleString() }} 點之間，
+                {{ cardsOf(curTier).filter(p => p.buyback == null).length }} 張卡都受影響。
+              </p>
+
+              <!-- 攤成垂直清單。一次只攤一個賞別（分頁本來就一次一個），
+                   而且展開之後沒有軌道，所以收合的路要另外給一條。 -->
+              <template v-if="expandedTier === curTier">
+                <ul class="tgList">
+                  <li v-for="p in cardsOf(curTier)" :key="p.pick.key">
+                    <button type="button" class="tgLine" :class="{ bad: p.needsRepick }" @click="openCard(p.pick.key)">
+                      <span class="tgLineArt">
+                        <img v-if="p.pick.artUrl" :src="p.pick.artUrl" :alt="''" loading="lazy" decoding="async">
+                      </span>
+                      <span class="tgLineName">
+                        {{ p.pick.card.name }}
+                        <span class="tgLineMeta">
+                          {{ p.pick.card.setCode || '—' }} · {{ p.pick.card.cardNo || '—' }}
+                          <template v-if="p.pick.card.certNo"> · #{{ p.pick.card.certNo }}</template>
+                        </span>
+                      </span>
+                      <span class="tgLineNum mono">
+                        <template v-if="p.qty > 1">{{ p.qty }} 籤 · </template>
+                        {{ resolvedOf(p).toLocaleString() }}
+                        <span v-if="p.buyback != null" class="ovr">改</span>
+                      </span>
+                    </button>
+                  </li>
+                </ul>
+                <button type="button" class="tgFoot" @click="expandedTier = null">收合成縮圖</button>
+              </template>
+
+              <!-- 縮圖軌。RAIL_MAX 之後收成「還有 N 張」，而那顆鈕是 sticky 的：
+                   不 sticky 的話它會被橫捲推出畫面，使用者看到的是一條
+                   沒有盡頭的縮圖 —— 而它是唯一講得出「還有多少張」的東西。 -->
+              <div v-else class="rail">
+                <button
+                  v-for="p in cardsOf(curTier).slice(0, RAIL_MAX)" :key="p.pick.key"
+                  type="button" class="tile"
+                  :class="{ wide: cardsOf(curTier).length === 1, bad: p.needsRepick }"
+                  @click="openCard(p.pick.key)"
+                >
+                  <span class="tileArt">
+                    <img v-if="p.pick.artUrl" :src="p.pick.artUrl" :alt="''" loading="lazy" decoding="async">
+                    <span v-else class="ph" aria-hidden="true"></span>
+                    <span v-if="p.qty > 1" class="tileTag">x{{ p.qty }}</span>
+                    <span v-if="p.buyback != null" class="tileTag ovr">改</span>
+                    <span v-if="p.pick.card.certNo" class="tileTag cert">{{ p.pick.card.grader }}</span>
+                  </span>
+                  <span class="tileName">{{ p.pick.card.name }}</span>
+                  <!-- 只有一張卡的時候軌道沒有東西可以捲，八成的寬度是空的。
+                       攤成一列，右邊那片空白改放卡名與卡號（本來要點開面板才看得到）。 -->
+                  <span v-if="cardsOf(curTier).length === 1" class="tileWide">
+                    <span class="tileWideName">{{ p.pick.card.name }}</span>
+                    <span class="tileWideMeta">
+                      {{ p.pick.card.setCode || '—' }} · {{ p.pick.card.cardNo || '—' }}
+                      <template v-if="p.pick.variant"> · {{ p.pick.variant.label }}</template>
+                      <template v-if="p.pick.card.certNo"> · #{{ p.pick.card.certNo }}</template>
+                    </span>
+                  </span>
+                </button>
+                <button
+                  v-if="cardsOf(curTier).length > 1" type="button" class="railMore"
+                  @click="expandedTier = curTier"
+                >
+                  {{ cardsOf(curTier).length > RAIL_MAX
+                     ? `還有 ${cardsOf(curTier).length - RAIL_MAX} 張`
+                     : '展開成清單' }}
+                </button>
+              </div>
+            </section>
+
+            <p class="tbLine">
+              買家會看到：<strong class="mono">{{ form.ticketPrice.toLocaleString() }} 點一抽，最差的賞別保底買回 {{ worstBuyback.toLocaleString() }} 點</strong>
+            </p>
+          </template>
 
           <p class="hint muted">
             <strong>到期日</strong>不在這張表上：它由系統從開池的當下起算
@@ -1242,10 +1587,16 @@ function bottomOccluded(): number {
             </svg>
             <span>收到了，但還開不了池：<strong>{{ problems[0]!.msg }}</strong></span>
           </p>
+          <!-- 畫面自己動了就要講。缺漏落在別的賞別分頁上時，送出會把那一頁切過來
+               （不切的話清單第一項指著一個不在 DOM 裡的東西），而不講的話
+               使用者只會發現分頁莫名其妙換了，以為是壞掉。 -->
+          <p v-if="attempted && tabJumped" class="todoTab" data-testid="tab-jumped">
+            已幫你切到「{{ tabJumped }}」那一頁 —— 缺漏在那裡。
+          </p>
           <p class="todoHead">還差 {{ problems.length }} 項才能開池</p>
           <ul>
             <li v-for="p in problems" :key="p.anchor + p.msg">
-              <button type="button" class="todoItem" @click="goTo(p.anchor, p.msg)">
+              <button type="button" class="todoItem" @click="jumpToProblem(p)">
                 <span>{{ p.msg }}</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
@@ -1261,6 +1612,19 @@ function bottomOccluded(): number {
         <!-- API 的錯誤。位置同樣在按鈕正下方：它原本在按鈕**上面**，
              而使用者按完按鈕視線就在按鈕與底下，看不到就等於沒發生。 -->
         <p v-if="error" ref="errBox" class="err" data-testid="submit-error" role="alert">{{ error }}</p>
+
+        <!-- PSA 查到的卡跟賣家挑的對不上：那個「確認是同一張卡」的勾選住在
+             單卡面板裡（它是例外中的例外）。錯誤訊息旁邊要有一條開得到它的路，
+             否則賣家讀完錯誤之後找不到勾選在哪 —— 面板不點縮圖是不會出現的。 -->
+        <div v-if="mismatchRows.length" class="mismatch" data-testid="mismatch-jump">
+          <p class="mismatchT">要你確認的卡在這裡：</p>
+          <button
+            v-for="p in mismatchRows" :key="p.pick.key" type="button"
+            class="mismatchGo" @click="openCardRow(p)"
+          >
+            {{ p.pick.card.name }}<span class="muted"> · {{ tierLabel(p.tier) }}</span>
+          </button>
+        </div>
 
         <!-- 編號已被登記：把出路接在錯誤訊息旁邊。
              使用者被擋住的當下就看得到下一步，而不是自己去找客服頁。 -->
@@ -1282,6 +1646,129 @@ function bottomOccluded(): number {
         </div>
       </aside>
     </form>
+
+    <!-- ---------- 單卡面板 ----------
+         逐張的例外全部收在這裡：賞別、籤數、這一張的買回價、參考價、移除。
+         沿用站上既有的 .sheetWrap / .sheet.hasFoot / .sheetFoot（MyCardsPage、
+         LoginMethods 同一套），不是第六種面板。
+
+         Teleport 到 body 的理由跟 MyCardsPage 一樣：position: fixed 的定位基準
+         會被任何一個有 transform / filter / contain 的祖先搶走，那時候面板會被
+         推出畫面外並被裁掉。這一頁的 .layout 之後隨時可能長出那種祖先。 -->
+    <Teleport to="body">
+      <div v-if="sheetRow" class="sheetWrap" @click.self="closeSheet">
+        <div id="f-sheet" class="sheet card hasFoot" role="dialog" aria-modal="true" aria-label="編輯這一張卡">
+          <button type="button" class="sheetClose" aria-label="關閉" @click="closeSheet">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3l10 10M13 3L3 13" /></svg>
+          </button>
+          <h2>{{ sheetRow.pick.card.name }}</h2>
+          <p class="sheetSub muted">
+            {{ sheetRow.pick.card.setCode || '—' }} · {{ sheetRow.pick.card.cardNo || '—' }}
+            <template v-if="sheetRow.pick.variant"> · {{ sheetRow.pick.variant.label }}</template>
+            <template v-if="sheetRow.pick.card.certNo">
+              · {{ sheetRow.pick.card.grader }}<template v-if="sheetRow.pick.card.grade"> {{ sheetRow.pick.card.grade }}</template>
+              #{{ sheetRow.pick.card.certNo }}
+            </template>
+          </p>
+
+          <p v-if="sheetRow.needsRepick" class="sheetWarn">
+            範本裡這一張是鑑定卡。一個鑑定編號只對應一張實體卡，不能複製——
+            請從這個池移除，再從卡冊重挑一張。
+          </p>
+
+          <div class="sf">
+            <span>賞別</span>
+            <div class="sheetTiers">
+              <button
+                v-for="t in TIERS" :key="t" type="button"
+                :class="{ on: sheetRow.tier === t }" @click="setSheetTier(t)"
+              >{{ tierLabel(t) }}</button>
+            </div>
+            <span class="fnote">改了之後畫面會跟著這張卡切到那一頁。</span>
+          </div>
+
+          <!-- id 掛在整格上而不是輸入框上：鑑定卡那一格根本沒有輸入框，
+               而「有鑑定編號的卡只能開 1 籤」這條問題就是指著這裡。
+               掛在輸入框上的話，那條問題跳過來會查無元素。 -->
+          <div id="f-sheet-qty" class="sf">
+            <span>籤數</span>
+            <!-- 鑑定卡固定 1 籤：規則沒變，只是從「輸錯再報錯」改成「不可能輸錯」。
+                 但範本複製與後端回來的資料仍可能帶 qty > 1，那時候要修得回來，
+                 所以不是只畫一格死的文字，而是給一顆把它改對的鈕。 -->
+            <template v-if="sheetRow.pick.card.certNo">
+              <div class="locked" :class="{ bad: sheetRow.qty > 1 }">
+                {{ sheetRow.qty > 1 ? `目前是 ${sheetRow.qty} 籤，只能是 1 籤` : '1 籤（固定）' }}
+              </div>
+              <button v-if="sheetRow.qty > 1" type="button" class="fixQty" @click="sheetRow.qty = 1">
+                改成 1 籤
+              </button>
+              <span class="fnote">
+                這張有鑑定編號 #{{ sheetRow.pick.card.certNo }}，一個編號只對應一張實體卡，
+                開兩籤就會有兩個得主。
+              </span>
+            </template>
+            <template v-else>
+              <input
+                v-model.number="sheetRow.qty" type="number" min="1" step="1"
+                inputmode="numeric" aria-label="數量"
+                :class="{ missing: !Number.isInteger(sheetRow.qty) || sheetRow.qty < 1 }"
+              />
+              <span class="fnote">同一張卡面要放幾支籤。</span>
+            </template>
+          </div>
+
+          <div class="sf">
+            <span>這一張的買回價</span>
+            <input
+              id="f-sheet-buy" v-model.number="sheetRow.buyback" type="number"
+              :min="BUYBACK_MIN" :max="BUYBACK_MAX" step="1" inputmode="numeric"
+              :placeholder="buybackValid(form.tierBuyback[sheetRow.tier] ?? 0)
+                ? (form.tierBuyback[sheetRow.tier] ?? 0).toLocaleString()
+                : '這一賞還沒填'"
+              aria-label="這一張的買回價（留空照賞別預設）"
+              :class="{ missing: sheetRow.buyback != null && !buybackValid(sheetRow.buyback), over: sheetRow.buyback != null }"
+              @change="normalizeSheetNumbers"
+            />
+            <span class="fnote">
+              <template v-if="buybackValid(form.tierBuyback[sheetRow.tier] ?? 0)">
+                空著就照 {{ tierLabel(sheetRow.tier) }}的 {{ (form.tierBuyback[sheetRow.tier] ?? 0).toLocaleString() }} 點。
+                只有這張在同一賞裡特別貴才要改。
+              </template>
+              <template v-else>
+                {{ tierLabel(sheetRow.tier) }}本身還沒填買回價，這張也就沒有可以照的預設。
+              </template>
+            </span>
+          </div>
+
+          <div class="sf">
+            <span>參考價（選填）</span>
+            <input
+              id="f-sheet-ref" v-model.number="sheetRow.unitValue" type="number" min="0" step="1"
+              inputmode="numeric" placeholder="未標示" aria-label="參考價（選填）"
+              @change="normalizeSheetNumbers"
+            />
+            <span class="fnote">只顯示給買家看，不構成承諾、不參與任何計算。空著就是「未標示」。</span>
+          </div>
+
+          <!-- PSA 查到的卡跟這一張的卡號對不上。PSA 是英文、目錄是日文，
+               卡名沒辦法直接比對，所以不硬擋 —— 讓賣家看過 PSA 查到的卡號後
+               自己確認是不是同一張，勾了才會放行。 -->
+          <label v-if="sheetRow.certMismatch" class="certConfirm">
+            <input type="checkbox" v-model="sheetRow.certConfirmed" />
+            <span>
+              PSA 查到的卡號是「{{ sheetRow.certMismatch.psaCardNumber || '未提供' }}」<template
+                v-if="sheetRow.certMismatch.psaSubject">（{{ sheetRow.certMismatch.psaSubject }}）</template>，
+              跟你挑的「{{ sheetRow.pick.card.cardNo || '—' }}」對不上。確認是同一張卡再勾選並重新送出。
+            </span>
+          </label>
+
+          <div class="sheetFoot">
+            <button type="button" class="btn primary sheetDone" @click="closeSheet">完成</button>
+            <button type="button" class="sheetDel" @click="removeSheetCard">從這個池移除</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -1389,75 +1876,317 @@ input.missing { border-color: var(--danger); }
 
 .pickNote { margin: 0 0 14px; }
 
-/* ---- 獎項列 ---- */
+/* ---- 獎項配置：賞別分頁 ---- */
 .empty {
   margin: 0; padding: 22px 14px; text-align: center;
   font-size: 13px; line-height: 1.7; color: var(--muted);
   border: 1px dashed var(--line); border-radius: 12px;
 }
-.prize-head, .prize-row {
-  /* minmax(0, …) 不是 1fr：grid 子元素預設 min-width: auto，
-     長卡名會把整列撐爆（見 docs/HANDOFF.md 2.1） */
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 88px 60px 84px 84px 32px;
-  gap: 8px; align-items: center;
+
+/* 分頁列。**換行不橫捲**：橫捲會讓最右邊那顆分頁連同它的紅點被推出畫面，
+   而「錯誤不會被藏起來」是這個版面唯一撐得住的理由 ——
+   紅點捲得掉，整個主張就垮了。代價是多佔一到兩行高度，這筆換得值。 */
+.tabs {
+  display: flex; flex-wrap: wrap; gap: 4px; min-width: 0;
+  margin: 0 0 10px; padding: 2px 0 0;
+  border-bottom: 1px solid var(--line);
 }
-.prize-head { font-size: 11.5px; color: var(--muted); font-weight: 600; margin-bottom: 6px; }
-.prize-row { margin-bottom: 8px; min-width: 0; }
-.prize-row.bad { outline: 1px solid var(--danger); outline-offset: 4px; border-radius: 8px; }
-.art {
-  display: block; width: 34px; aspect-ratio: 63 / 88;
-  border-radius: 4px; overflow: hidden; background: var(--surface-3);
+.tab {
+  position: relative; flex: none; min-width: 0;
+  /* 44px 是可點目標的下限。分頁是這一段最常被按的東西 */
+  display: flex; align-items: center; gap: 5px; min-height: 44px;
+  padding: 0 12px; border: 0; border-bottom: 2px solid transparent;
+  background: transparent; color: var(--muted);
+  font: inherit; font-size: 12.5px; font-weight: 600; line-height: 1.3;
+  white-space: nowrap; cursor: pointer;
 }
-.art img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.art .ph { display: block; width: 100%; height: 100%; }
-.ident { display: grid; gap: 1px; min-width: 0; }
-.idName {
-  font-size: 13px; font-weight: 600; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.tab.on { color: var(--ink); border-bottom-color: var(--accent); }
+.tab .pn { font-size: 11.5px; font-weight: 500; opacity: .8; }
+.tmark { width: 9px; height: 9px; border-radius: 3px; flex: none; display: block; }
+.tmark.lg { width: 12px; height: 12px; }
+/* 缺東西的那一頁掛紅點。紅點**不隨分頁切換消失** ——
+   分頁收起來的是內容，不是索引 */
+.tabWarn { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); flex: none; }
+.sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
-.idMeta, .idCert { font-size: 11px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.idCert { color: var(--accent); }
-.idWarn { font-size: 11px; line-height: 1.55; color: var(--danger); }
-/* PSA 卡號對不上時的確認勾選。用 grid 讓勾選框與文字對齊，
+
+/* 被收起來的賞別缺什麼。紅點只說「那一頁有事」，這一塊說「是什麼事」 */
+.offTab {
+  margin: 0 0 12px; padding: 9px 10px; min-width: 0;
+  border: 1px solid var(--danger); border-radius: 10px;
+  background: var(--danger-wash);
+}
+.offTabCap { margin: 0 0 6px; font-size: 11.5px; font-weight: 700; color: var(--danger-ink); }
+.offTab ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.offTabItem {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; min-height: 44px;
+  padding: 6px 10px; font: inherit; font-size: 12px; line-height: 1.5; text-align: left;
+  border: 1px solid var(--line-soft); border-radius: 9px;
+  background: var(--surface); color: var(--ink); cursor: pointer;
+}
+.offTabItem span { min-width: 0; flex: 1; }
+.offTabItem svg { width: 14px; height: 14px; flex: none; color: var(--muted); }
+.offTabItem:hover { border-color: var(--accent); }
+
+.tbNote { font-size: 12px; line-height: 1.7; margin: 0 0 8px; }
+.tbNote strong { color: var(--ink); }
+/* 機制（為什麼不是比率、爆賞為什麼也要填）收進折疊：賣家在填第一格的
+   當下問的是「填了會怎樣、我該填多少」，機制是他問了才要出現的東西 */
+.whyAbs { margin: 0 0 12px; font-size: 12px; color: var(--muted); }
+.whyAbs summary {
+  display: flex; align-items: center; min-height: 44px;
+  font-weight: 600; color: var(--ink); cursor: pointer;
+}
+/* display: flex 會把 <summary> 原生的三角形吃掉，而沒有三角形的摘要行
+   讀起來就是一行普通的粗體字 —— 沒有人會去點它。自己畫一個。 */
+.whyAbs summary::after {
+  content: ''; flex: none; width: 7px; height: 7px; margin-left: 8px;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg) translate(-2px, -2px);
+}
+.whyAbs[open] summary::after { transform: rotate(-135deg) translate(-2px, -2px); }
+.whyAbs summary::-webkit-details-marker { display: none; }
+.whyAbs p { margin: 0 0 4px; line-height: 1.75; }
+.whyAbs strong { color: var(--ink); }
+
+/* ---- 一個賞別 ----
+   標題列三格：色標 ／ 名稱＋摘要 ／ 買回價。
+   買回價原本是「標籤一列＋輸入框一列」自己佔兩列，併進來之後這一列的高度
+   由 44px 的輸入框決定，名稱與摘要塞在同一列的剩餘空間裡 —— 白拿兩列。 */
+.tierGroup {
+  border: 1px solid var(--line); border-radius: 14px;
+  background: var(--surface-2); overflow: hidden; min-width: 0;
+  scroll-margin-top: 76px;
+}
+.tierGroup.bad { border-color: var(--danger); }
+.tgHead {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px; align-items: center; padding: 8px 12px;
+}
+.tgName { font-size: 14px; font-weight: 700; min-width: 0; line-height: 1.35; }
+/* 摘要併進標題底下那半行。「抽到就能換 X 點」不印 ——
+   X 就是同一列右邊三公分處那格輸入框裡的數字，同一個數字寫兩次。 */
+.tgMeta {
+  display: block; font-size: 11px; font-weight: 500; color: var(--muted); line-height: 1.45;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tgBuy { display: flex; align-items: center; gap: 5px; min-width: 0; }
+/* 「買回」這兩個字不可以拿掉。這一頁的整個論點就是「欄位在常態下沒有
+   可見標籤」—— 標籤可以縮、可以搬，不可以消失。 */
+.tgBuyLbl { font-size: 11px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+/* 寬度收到 72px：四位數的金額不需要一個滿寬的框，框寬本來在說
+   「這裡要填很多」，那是假的。**高度維持 44px**，那是觸控下限。 */
+.tgBuy input {
+  width: 72px; min-width: 0; min-height: 44px; padding: 8px;
+  text-align: right; font-size: 14px;
+}
+.tgUnit { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.tgErr {
+  margin: 0; padding: 0 12px 8px;
+  font-size: 11.5px; font-weight: 600; line-height: 1.6; color: var(--danger-ink);
+}
+
+/* 縮圖軌 */
+.rail {
+  display: flex; gap: 8px; min-width: 0;
+  overflow-x: auto; padding: 0 12px 10px;
+  scroll-snap-type: x proximity; overscroll-behavior-x: contain;
+}
+.rail::-webkit-scrollbar { height: 5px; }
+.rail::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.tile {
+  flex: none; width: 54px; min-width: 0; min-height: 44px; padding: 0;
+  display: grid; gap: 3px; border: 0; background: transparent; color: var(--ink);
+  font: inherit; scroll-snap-align: start; cursor: pointer;
+}
+.tileArt {
+  position: relative; display: block; width: 54px; aspect-ratio: 63 / 88;
+  border-radius: 6px; overflow: hidden; background: var(--surface-3);
+  border: 2px solid transparent;
+}
+.tile.bad .tileArt { border-color: var(--danger); }
+.tileArt img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tileArt .ph { display: block; width: 100%; height: 100%; }
+.tileName {
+  font-size: 10px; line-height: 1.3; color: var(--muted); text-align: left;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tileTag {
+  position: absolute; left: 2px; bottom: 2px;
+  padding: 0 3px; border-radius: 3px;
+  background: rgba(0, 0, 0, .66); color: #fff;
+  font-size: 9px; font-weight: 700; line-height: 1.6;
+}
+/* 有覆寫的卡要看得出來 —— 否則「例外」跟「照賞別走」長得一模一樣 */
+.tileTag.ovr { left: auto; right: 2px; background: var(--gold-deep); color: #1a1614; }
+.tileTag.cert { top: 2px; bottom: auto; }
+/* 只有一張卡的時候軌道退化：沒有東西可以捲，八成的寬度是空的，
+   卡名還被壓成 10px 擠在縮圖底下。攤成一列，右邊那片空白改放
+   卡名與卡號（本來要點開面板才看得到），高度反而少一列。 */
+.tile.wide {
+  width: 100%; grid-template-columns: 54px minmax(0, 1fr);
+  gap: 10px; align-items: center; text-align: left;
+}
+.tile.wide .tileName { display: none; }
+.tileWide { display: grid; gap: 1px; min-width: 0; }
+.tileWideName {
+  font-size: 12.5px; font-weight: 600; color: var(--ink);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tileWideMeta {
+  font-size: 11px; color: var(--muted);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 軌道尾巴那顆鈕**黏在右邊**。踩過的坑：軌道一橫捲，「還有 N 張」連同
+   它的張數就被推出畫面，使用者看到的是一條沒有盡頭的縮圖 ——
+   而它是唯一講得出「還有多少張」的東西。sticky 讓它捲不掉；
+   代價是它會壓在中間某一張縮圖上，所以左邊給一道陰影表示「底下還有東西」。 */
+.railMore {
+  position: sticky; right: 0; flex: none; align-self: center;
+  min-height: 44px; min-width: 44px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-2); color: var(--ink);
+  font: inherit; font-size: 11.5px; font-weight: 600; white-space: nowrap; cursor: pointer;
+  box-shadow: -16px 0 14px -5px var(--surface-2);
+}
+
+/* 攤成垂直清單 */
+.tgList { list-style: none; margin: 0; padding: 0 12px 10px; display: grid; gap: 6px; }
+.tgLine {
+  display: grid; grid-template-columns: 26px minmax(0, 1fr) auto;
+  gap: 10px; align-items: center; width: 100%; min-width: 0; min-height: 48px;
+  padding: 4px 8px; font: inherit; text-align: left;
+  border: 1px solid var(--line-soft); border-radius: 9px;
+  background: var(--surface); color: var(--ink); cursor: pointer;
+}
+.tgLine.bad { border-color: var(--danger); }
+.tgLineArt {
+  display: block; width: 26px; aspect-ratio: 63 / 88;
+  border-radius: 3px; overflow: hidden; background: var(--surface-3);
+}
+.tgLineArt img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tgLineName { font-size: 12.5px; font-weight: 600; min-width: 0; display: grid; gap: 0; }
+.tgLineMeta {
+  font-size: 10.5px; font-weight: 400; color: var(--muted);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tgLineNum { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.tgLineNum .ovr { color: var(--gold-deep); font-weight: 700; }
+/* 展開之後沒有軌道，收合的路要另外給一條 */
+.tgFoot {
+  display: block; margin: 0 12px 10px; width: calc(100% - 24px); min-height: 44px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface); color: var(--ink);
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+
+.tbLine { font-size: 12.5px; line-height: 1.7; margin: 12px 0 0; color: var(--muted); }
+.tbLine strong { color: var(--ink); }
+
+/* PSA 卡號對不上時的確認勾選（住在單卡面板裡）。用 grid 讓勾選框與文字對齊，
    文字自己會換行（min-width: 0 讓它縮得下，見 docs/HANDOFF.md 2.1）。 */
 .certConfirm {
   display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px;
-  align-items: start; font-size: 11px; line-height: 1.55; color: var(--gold-deep);
-  margin-top: 3px; cursor: pointer;
+  align-items: start; font-size: 11.5px; line-height: 1.6; color: var(--gold-deep);
+  margin: 0 0 14px; cursor: pointer;
 }
 .certConfirm input { margin-top: 2px; }
-.del {
-  display: grid; place-items: center;
-  border: 1px solid var(--line); border-radius: 8px;
-  background: var(--surface); color: var(--muted);
-  padding: 8px 0;
-}
-.del svg { width: 15px; height: 15px; }
-.del:hover { color: var(--danger); border-color: var(--danger); }
 
-.tierBuy {
-  margin: 0 0 16px; padding: 14px;
-  border: 1px solid var(--line-soft); border-radius: 12px;
-  background: var(--surface-2);
+/* ---- 單卡面板 ----
+   .sheetWrap / .sheet / .sheetFoot 的形狀跟 MyCardsPage 的出貨面板同一套，
+   只是這一頁沒有 BottomActionBar，所以自己寫一份 scoped 的。 */
+.sheetWrap {
+  position: fixed; inset: 0; z-index: 80;
+  display: flex; align-items: flex-end; justify-content: center;
+  background: var(--scrim);
+  /* 下緣讓給軟鍵盤（--kb 由 useKeyboardInset 寫進根節點，預設 0） */
+  bottom: var(--kb, 0px);
 }
-.tierBuy h3 { font-size: 13.5px; margin: 0 0 6px; }
-.tbNote { font-size: 12px; line-height: 1.7; margin: 0 0 12px; }
-.tbNote strong { color: var(--ink); }
-/* auto-fit + minmax(0, …)：賞別數量會變，而 grid 子元素預設 min-width: auto
-   會讓輸入框撐破容器（見 docs/HANDOFF.md 2.1） */
-.tbGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
-.tbCell { display: grid; gap: 4px; min-width: 0; }
-.tbLbl { font-size: 11.5px; font-weight: 600; color: var(--muted); }
-.tbCell input { width: 100%; min-width: 0; }
-.tbLine { font-size: 12.5px; line-height: 1.7; margin: 12px 0 0; color: var(--muted); }
-.tbLine strong { color: var(--ink); }
+.sheet {
+  position: relative; width: 100%; max-width: min(520px, 100vw); min-width: 0;
+  overflow-x: hidden;
+  /* 88% 而不是 88dvh：.sheetWrap 的高度已經扣掉鍵盤了 */
+  max-height: min(88%, 720px); overflow-y: auto; overscroll-behavior: contain;
+  border-radius: 18px 18px 0 0;
+  padding: 18px 16px calc(18px + var(--safe-b, 0px));
+}
+.sheet h2 { font-size: 17px; margin: 0 6px 4px 0; padding-right: 42px; overflow-wrap: anywhere; }
+.sheetSub { font-size: 11.5px; line-height: 1.6; margin: 0 0 14px; padding-right: 42px; }
+.sheetClose {
+  position: absolute; right: 10px; top: 10px;
+  width: 44px; height: 44px; display: grid; place-items: center;
+  border: 0; background: var(--surface-2); color: var(--muted);
+  border-radius: 50%; cursor: pointer;
+}
+.sheetClose svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.sheetWarn {
+  margin: 0 0 14px; padding: 9px 11px; min-width: 0;
+  border-radius: 10px; background: var(--danger-wash); color: var(--danger-ink);
+  font-size: 12px; line-height: 1.7; font-weight: 600;
+}
+.sf { display: grid; gap: 5px; margin-bottom: 14px; min-width: 0; }
+.sf > span { font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.sf input { min-height: 44px; min-width: 0; font-size: 16px; }
+.sf .fnote { font-size: 11.5px; font-weight: 400; color: var(--muted); line-height: 1.6; }
+.sheetTiers { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.sheetTiers button {
+  min-height: 44px; min-width: 56px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface-2); color: var(--ink);
+  font: inherit; font-size: 13px; cursor: pointer;
+}
+.sheetTiers button.on {
+  background: var(--accent); border-color: var(--accent);
+  color: var(--on-accent); font-weight: 700;
+}
+.locked {
+  display: flex; align-items: center; min-height: 44px; padding: 0 10px; min-width: 0;
+  border: 1px dashed var(--line); border-radius: 8px;
+  color: var(--muted); font-size: 12.5px;
+}
+.locked.bad { border-color: var(--danger); color: var(--danger-ink); }
+.fixQty {
+  min-height: 44px; padding: 0 14px; align-self: start;
+  border: 1px solid var(--danger); border-radius: 10px;
+  background: transparent; color: var(--danger-ink);
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
 /* 有覆寫的那一格標出來 —— 否則它跟「空著吃預設」長得一模一樣 */
-.prize-row input.over { border-color: var(--accent); }
+.sf input.over { border-color: var(--accent); }
+.sheet.hasFoot { padding-bottom: 0; }
+.sheetFoot {
+  position: sticky; bottom: 0; z-index: 1;
+  margin: 12px -16px 0; padding: 10px 16px calc(12px + var(--safe-b, 0px));
+  border-top: 1px solid var(--line); background: var(--surface);
+  display: grid; gap: 8px; min-width: 0;
+}
+.sheetDone { width: 100%; min-height: 44px; }
+.sheetDel {
+  width: 100%; min-height: 44px;
+  border: 1px solid var(--danger); border-radius: 10px;
+  background: transparent; color: var(--danger-ink);
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+
+/* 要賣家確認的那幾張卡，接在錯誤訊息底下 */
+.mismatch {
+  margin: 10px 0 0; padding: 11px 13px; min-width: 0;
+  border-radius: 12px; background: var(--surface-2);
+  display: grid; gap: 8px;
+}
+.mismatchT { margin: 0; font-size: 12px; font-weight: 700; color: var(--ink); }
+.mismatchGo {
+  width: 100%; min-height: 44px; min-width: 0; padding: 8px 11px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); color: var(--ink);
+  font: inherit; font-size: 12.5px; line-height: 1.5; text-align: left;
+  overflow-wrap: anywhere; cursor: pointer;
+}
+.mismatchGo:hover { border-color: var(--accent); }
 
 .hint { font-size: 12px; margin: 12px 0 0; line-height: 1.55; }
-.twoCols { line-height: 1.75; }
-.twoCols strong { color: var(--ink); }
 
 .side { position: sticky; top: 76px; display: grid; gap: 14px; min-width: 0; }
 .econ { padding: 16px; }
@@ -1609,6 +2338,13 @@ dd { margin: 0; font-weight: 600; }
 }
 /* 按過送出之後才轉紅。一打開表單就滿江紅是在罵人，不是在幫忙 */
 .todo.hot { border-color: var(--danger); background: var(--danger-wash); }
+/* 「已幫你切到 X 那一頁」。用中性底色不用紅：它不是又一則錯誤，
+   它是在解釋畫面剛剛為什麼自己動了 */
+.todoTab {
+  margin: 0 0 10px; padding: 8px 11px; min-width: 0;
+  border-radius: 10px; background: var(--surface-2);
+  font-size: 12px; line-height: 1.6; font-weight: 600; color: var(--muted);
+}
 .todoHead { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .todo.hot .todoHead { color: var(--danger); }
 .todo ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
@@ -1675,27 +2411,9 @@ dd { margin: 0; font-weight: 600; }
   .page { padding-top: 20px; padding-bottom: 40px; }
   h1 { font-size: 21px; }
   .row2 { grid-template-columns: minmax(0, 1fr); }
-  .prize-head { display: none; }
-  /* 手機一列變四行：
-       1  卡圖 ｜ 卡片身分（跨兩欄）  ｜ ✕
-       2  賞別 ｜ 數量
-       3  參考價（整行）
-       4  買回價（整行，它是這一列最重要的數字，不跟別的擠） */
-  /* 四欄不是三欄：三欄時「數量」只分得到刪除鈕那一格（32px），
-     實測輸入框的內容寬 36–47px 撐破 30px 的可視寬。中間兩欄各 1fr，
-     賞別與數量才各拿得到約一半的寬度。 */
-  .prize-row {
-    grid-template-columns: 34px minmax(0, 1fr) minmax(0, 1fr) 32px;
-    gap: 8px; padding: 10px; margin-bottom: 10px;
-    border: 1px solid var(--line-soft); border-radius: 10px;
-  }
-  .prize-row > .art { grid-row: 1; grid-column: 1; }
-  .prize-row > .ident { grid-row: 1; grid-column: 2 / 4; }
-  .prize-row > .del { grid-row: 1; grid-column: 4; }
-  .prize-row > select { grid-row: 2; grid-column: 1 / 3; }
-  .prize-row > input:nth-of-type(1) { grid-row: 2; grid-column: 3 / 5; } /* 數量 */
-  .prize-row > input:nth-of-type(2) { grid-row: 3; grid-column: 1 / 5; } /* 參考價 */
-  .prize-row > input:nth-of-type(3) { grid-row: 4; grid-column: 1 / 5; } /* 買回價 */
+  /* 分頁列在窄螢幕上收一點左右內距：六個賞別要放得下，而分頁一旦橫捲，
+     最右邊那顆連同它的紅點就會被推出畫面（見 .tabs 那一段） */
+  .tab { padding: 0 9px; gap: 4px; }
   .tplHead { flex-direction: column; align-items: stretch; }
 }
 </style>
