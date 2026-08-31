@@ -1943,7 +1943,175 @@ async function run() {
         } else check('（跳過出貨單兩段通知：抽不到卡）', false)
       }
 
-      /* ---- 8. 每一則通知的 link 都要指到存在的路由 ----
+      /* ---- 8. 市場託管訂單的整條時間線 ----
+         這一組是稽核裡 ⛔ 的六則。它們全部寫在 orders-service.ts 的
+         settle() 裡，因為那是「人按的」（act）與「時限掃描的」（sweep）
+         兩條路的共同必經點 —— 寫在路由層的話，逾期那條（沒有人在場、
+         正是最該通知的一條）永遠會漏。
+
+         測試自己造標的：買家抽一張卡 → 申請出貨 → 拿到實體卡 → 掛上市場，
+         再由 shop 買下。不用種子的掛單，因為那幾張前面的測試已經吃掉了，
+         而且數量不夠這裡的四種結局。
+         **角色會反過來**：buyer 是這幾筆的賣家，shop 是買家。 */
+      {
+        let trackSeq = 0
+        const track = () => `SMK${Date.now().toString(36).toUpperCase()}${trackSeq++}`
+
+        /** 造一張「需寄送」的市場訂單，回 { order }；抽不到卡就回 null */
+        const mkShipOrder = async (price: number): Promise<Any | null> => {
+          const g = await drawOne(buyer, genId('p-seed-1'))
+          if (!g) return null
+          await call(buyer, '/v1/prizes/ship', { prizeIds: [g.stashId], address: ADDR })
+          const st = await settlementOf(seller, g.stashId)
+          if (st) await call(seller, `/v1/seller/settlements/${st.id}/ship`, {})
+          await call(buyer, `/v1/prizes/${g.stashId}/confirm`, {})
+          const l = await json(await call(buyer, '/v1/listings', { prizeId: g.stashId, price }))
+          if (!l.listing?.id) return null
+          const o = await json(await call(shop, '/v1/orders',
+            { listingId: l.listing.id, idempotencyKey: `smoke-notif-${l.listing.id}` }))
+          return o.order ?? null
+        }
+        const rewindOrder = (id: string, ms: number) =>
+          fetch(`${base}/v1/dev/rewind-order`, {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ orderId: id, ms })
+          })
+
+        /* ── 沉默那條路：出貨 → 14 天視同送達 → 7 天驗收期滿放款 ── */
+        const o1 = await mkShipOrder(2000)
+        if (o1) {
+          check('賣家出貨（沉默路徑）',
+            (await call(buyer, `/v1/orders/${o1.id}/ship`, { carrier: 'other', tracking: track() })).ok)
+
+          /* 這一則是整條線上最重要的：買家的鐘從這一刻開始跑，而**沉默＝視同送達**。
+             不通知等於讓人在不知道自己被計時的情況下被計時。 */
+          const b4 = withRef(await notifs(shop), 'order-shipped:' + o1.id)
+          check('賣家出貨後，買家收到「賣家已寄出」', b4.length === 1, `${b4.length} 則`)
+          check('那一則把兩段時限都講出來（14 天視同送達、再 7 天放款）',
+            String(b4[0]?.body ?? '').includes('14 天') && String(b4[0]?.body ?? '').includes('7 天'),
+            `${b4[0]?.body}`)
+          check('指到買家看得到訂單的地方', b4[0]?.link === '/me/orders', `${b4[0]?.link}`)
+
+          await rewindOrder(o1.id, 15 * 86_400_000)
+          await call(shop, '/v1/orders')
+          /* 14 天到了。這是買家的最後警告 —— 只剩 7 天可以開爭議，
+             而「賣家已寄出」那則是 14 天前發的，早就被洗掉了。 */
+          const bd = withRef(await notifs(shop), 'order-delivered:' + o1.id)
+          check('沉默 14 天後，買家收到「已視同送達」的最後提醒', bd.length === 1, `${bd.length} 則`)
+          check('那一則說得出剩幾天與過期的後果',
+            String(bd[0]?.body ?? '').includes('7 天') && String(bd[0]?.body ?? '').includes('不能再開爭議'),
+            `${bd[0]?.body}`)
+
+          await rewindOrder(o1.id, 8 * 86_400_000)
+          await call(shop, '/v1/orders')
+          const cs = withRef(await notifs(buyer), 'order-completed:' + o1.id)
+          const cb = withRef(await notifs(shop), 'order-completed:' + o1.id)
+          check('驗收期滿：賣家收到「貨款入帳」', cs.length === 1, `${cs.length} 則`)
+          check('驗收期滿：買家也收到（他的爭議窗口從此關閉）', cb.length === 1, `${cb.length} 則`)
+          check('賣家那一則指到出貨與結算', cs[0]?.link === '/seller/shipping', `${cs[0]?.link}`)
+
+          /* sweep 掛在每一次讀取上，一天會跑很多次 —— 冪等只能靠 refId */
+          await call(shop, '/v1/orders'); await call(buyer, '/v1/orders')
+          check('掃描重跑不會再發一次（refId 綁 orderId）',
+            withRef(await notifs(shop), 'order-completed:' + o1.id).length === 1)
+        } else check('（跳過沉默路徑的通知：造不出訂單）', false)
+
+        /* ── 買家自己按確認：只有賣家不在場 ── */
+        const o2 = await mkShipOrder(2100)
+        if (o2) {
+          await call(buyer, `/v1/orders/${o2.id}/ship`, { carrier: 'other', tracking: track() })
+          check('買家確認收貨', (await call(shop, `/v1/orders/${o2.id}/confirm`, {})).ok)
+          const n = withRef(await notifs(buyer), 'order-completed:' + o2.id)
+          check('買家確認收貨後，賣家收到「貨款入帳」', n.length === 1, `${n.length} 則`)
+          check('金額寫在通知裡（賣家不必自己去對帳本）',
+            String(n[0]?.body ?? '').includes('2,100'), `${n[0]?.body}`)
+          check('買家自己按的，他不該再收到一則',
+            withRef(await notifs(shop), 'order-completed:' + o2.id).length === 0)
+        } else check('（跳過確認收貨的通知：造不出訂單）', false)
+
+        /* ── 買家開爭議：賣家的貨款被別人的動作凍住 ── */
+        const o3 = await mkShipOrder(2200)
+        if (o3) {
+          await call(buyer, `/v1/orders/${o3.id}/ship`, { carrier: 'other', tracking: track() })
+          check('買家開爭議', (await call(shop, `/v1/orders/${o3.id}/dispute`,
+            { reason: '卡況與描述不符', videoUrl: 'https://example.com/unbox.mp4' })).ok)
+          const n = withRef(await notifs(buyer), 'order-disputed:' + o3.id)
+          check('買家開爭議後，賣家收到通知（他的錢被凍住了）', n.length === 1, `${n.length} 則`)
+          check('而且告訴他該去哪講話',
+            String(n[0]?.body ?? '').includes('客服'), `${n[0]?.body}`)
+        } else check('（跳過爭議通知：造不出訂單）', false)
+
+        /* ── 逾期未出貨：兩邊都不在場，而且賣家的保證金被沒收 ── */
+        const o4 = await mkShipOrder(2300)
+        if (o4) {
+          await rewindOrder(o4.id, 4 * 86_400_000)
+          await call(shop, '/v1/orders')
+          const nb = withRef(await notifs(shop), 'order-forfeit:' + o4.id)
+          const ns = withRef(await notifs(buyer), 'order-forfeit:' + o4.id)
+          check('逾期未出貨：買家收到「已自動退款」', nb.length === 1, `${nb.length} 則`)
+          check('逾期未出貨：賣家收到「保證金已沒收」', ns.length === 1, `${ns.length} 則`)
+          check('賣家那一則把沒收金額講出來（不然他只能自己打開錢包才發現）',
+            /\d/.test(String(ns[0]?.body ?? '')) && String(ns[0]?.body ?? '').includes('保證金'),
+            `${ns[0]?.body}`)
+        } else check('（跳過逾期未出貨的通知：造不出訂單）', false)
+
+        /* ── 撞號要講人話。唯一索引擋下來時原本是一個沒有內容的 500，
+             賣家不會知道是單號的問題，只會以為系統壞了然後一直重按。 ── */
+        const o5 = await mkShipOrder(2400)
+        const o6 = await mkShipOrder(2500)
+        if (o5 && o6) {
+          const t = track()
+          check('第一筆用這組單號出得了貨',
+            (await call(buyer, `/v1/orders/${o5.id}/ship`, { carrier: 'other', tracking: t })).ok)
+          const dup = await call(buyer, `/v1/orders/${o6.id}/ship`, { carrier: 'other', tracking: t })
+          check('第二筆用同一組單號被擋下，而且不是 500',
+            dup.status === 409, `${dup.status}`)
+          const dj = await json(dup)
+          check('而且說得出是單號的問題、也給得出出路',
+            dj.error === 'TRACKING_TAKEN' && String(dj.message).includes('單號'), `${dj.message}`)
+        } else check('（跳過撞號測試：造不出訂單）', false)
+      }
+
+      /* ---- 9. 池揭曉：沒抽走的卡解押回賣家卡冊 ----
+         解押只發生在揭曉那一刻，而揭曉是掃描觸發的 —— 賣家不在場，
+         但這件事改變了他手上的資源：那幾張卡從「鎖在一個結束的池上」
+         變回可以再開池、可以上架。 */
+      {
+        const cert = 'STUB-OK-' + Math.floor(Math.random() * 900_000 + 100_000)
+        const r = await json(await call(seller, '/v1/pools', {
+          mode: 'muteki', title: '解押通知測試池', ticketPrice: 100, totalTickets: 2,
+          prizes: [
+            { tier: 'A', total: 1, buyback: 50, certConfirmed: true,
+              card: { id: 'c-rel-a', name: 'テストカード', setCode: 'SV8a', cardNo: '025',
+                language: 'JP', grader: 'PSA', grade: 10, certNo: cert,
+                image: '', variantId: null, refPrice: null } },
+            { tier: 'D', total: 1, buyback: 50,
+              card: { id: 'c-rel-d', name: '生卡', setCode: 'SV8a', cardNo: '001',
+                language: 'JP', grader: 'RAW', grade: null, certNo: null,
+                image: '', variantId: null, refPrice: null } }
+          ]
+        }))
+        const pid = r.poolId
+        check('建得起帶鑑定編號的池（解押測試的前提）', !!pid, JSON.stringify(r).slice(0, 120))
+        if (pid) {
+          // 一張都不抽就收攤：質押的那張應該原封不動回到卡冊
+          await fetch(`${base}/v1/dev/expire-pool`, {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ poolId: pid })
+          })
+          await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST' })
+          const n = withRef(await notifs(seller), 'pool-released:' + pid)
+          check('池揭曉後，賣家收到「沒抽走的卡已回到卡冊」', n.length === 1, `${n.length} 則`)
+          check('通知說得出張數，而且指到卡冊',
+            String(n[0]?.title ?? '').includes('1 張') && n[0]?.link === '/me/cards',
+            `${n[0]?.title} link=${n[0]?.link}`)
+          await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST' })
+          check('重掃不會再發一次（refId 綁 poolId）',
+            withRef(await notifs(seller), 'pool-released:' + pid).length === 1)
+        }
+      }
+
+      /* ---- 10. 每一則通知的 link 都要指到存在的路由 ----
          這條是整段的安全網：上面漏驗的那些也逃不掉。 */
       for (const [who, tok] of [['買家', buyer], ['賣家', seller], ['賣場', shop]] as const) {
         const bad = (await notifs(tok)).filter((n: Any) => !linkOk(n.link))
@@ -2149,9 +2317,19 @@ async function run() {
               { reason: '卡片有摺痕，與描述不符', videoUrl: 'https://example.com/unbox.mp4' })
             check('買家開爭議', dis.ok, `${dis.status} ${(await dis.clone().text()).slice(0, 150)}`)
 
+            /* 用 orderId 認自己那一張，不是「佇列裡第一張爭議單」——
+               這支測試跑到這裡時站上已經有別的爭議（通知那一節造的），
+               照順序抓會抓到別人的單，然後在下面的斷言裡以各種
+               看不出原因的方式失敗。佇列摘要沒有 orderId，所以要逐張讀詳情。 */
             const dq = await json(await call(platform, '/v1/admin/tickets?kind=order-dispute'))
-            const dtk = (dq.items ?? []).find((x: Any) => String(x.subject).startsWith('訂單爭議'))
-            check('爭議成立後自動長出一張 order-dispute 單', !!dtk, JSON.stringify(dq).slice(0, 250))
+            const cands = (dq.items ?? []).filter((x: Any) => String(x.subject).startsWith('訂單爭議'))
+            let dtk: Any = null
+            for (const cand of cands) {
+              const d = await json(await call(platform, `/v1/admin/tickets/${cand.id}`))
+              if (d.ticket?.orderId === oid) { dtk = cand; break }
+            }
+            check('爭議成立後自動長出一張 order-dispute 單', !!dtk,
+              `${cands.length} 張候選，沒有一張的 orderId 是 ${oid}`)
 
             /* 既有的端點**保留不動**：工單那層萬一有問題還有退路。
                這一條就是在守那個承諾 —— 自動開單不能把舊佇列弄不見。 */

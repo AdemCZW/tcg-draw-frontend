@@ -567,11 +567,28 @@ export async function sweepStashExpiry(): Promise<{ warned: number; expired: num
 
 /** sold_out → revealed。從此 server_seed 可以公開 */
 export async function revealPool(tx: Tx, poolId: string) {
-  const [p] = await tx`select status from pools where id = ${poolId} for update`
+  const [p] = await tx`select status, seller_id, title from pools where id = ${poolId} for update`
   if (!p) throw new Error('pool not found')
   if (p.status !== 'sold_out' && p.status !== 'cancelled') throw new Error(`pool is ${p.status}`)
   await tx`update pools set status = 'revealed', revealed_at = now() where id = ${poolId}`
   /* 揭曉是所有結束路徑（抽完、到期、提前關）的共同終點，所以解押掛在這裡
      只會發生一次。掛在「到期」那條的話，抽完售罄的池就漏掉了。 */
-  await releasePledgedCards(tx, poolId)
+  const released = await releasePledgedCards(tx, poolId)
+
+  /* 解押完要通知賣家。揭曉是掃描觸發的（見 sweepPools），賣家不在場，
+     而這件事改變了他手上的資源：那幾張卡從「鎖在一個已結束的池上」
+     變回可以再開池、可以上架。不講的話他要自己某天打開卡冊才發現。
+
+     只在真的有卡回來時發：一張都沒剩（全部抽走）的池發一則
+     「0 張已解押」只是噪音。
+     refId 綁 poolId —— 一個池只揭曉一次，是一次性的事實。 */
+  if (released > 0) {
+    await notify({
+      userId: p.seller_id as string, kind: 'system',
+      title: `沒抽走的 ${released} 張卡已回到你的卡冊`,
+      body: `「${p.title as string}」已開獎結束。沒有被抽走的卡解除質押，`
+        + '可以再開新池或上架販售。',
+      link: '/me/cards', refId: 'pool-released:' + poolId
+    }, tx)
+  }
 }

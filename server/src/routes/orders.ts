@@ -253,20 +253,38 @@ orders.post('/:id/ship', async c => {
     }
   }
 
-  const r = await act(me, c.req.param('id'), 'seller', 'ship',
-    /* 沒填單號就不寫 tracking —— 寫成空字串會撞 orders_tracking_uniq
-       （唯一索引的條件是 tracking is not null，空字串不是 null，
-       於是第二筆沒填單號的訂單會被擋下來，錯得毫無道理）。 */
-    o => ({
-      ...o, status: 'shipped', shippedAt: Date.now(),
-      ...(tracking ? { tracking: tracking.trim().toUpperCase() } : {})
-    }),
-    async (tx, o) => {
-      /* carrier 可能是 undefined（現在是選填）—— postgres.js 不收 undefined，
-         要明確轉成 null。少了這一步會在賣家不選物流商時整筆 throw。 */
-      await tx`update orders set carrier = ${carrier ?? null}, ship_photos = ${photoFileIds as never}
-               where id = ${o.id}`
-    })
+  /* 單號撞號要講人話。唯一索引擋下來時 postgres.js 丟的是 23505，
+     沒有接的話賣家拿到的是一個**沒有內容的 500** —— 他不會知道是單號
+     的問題，只會以為系統壞了，然後一直重按。
+
+     用 catch 而不是先 select 檢查：先查再寫是有競態的（兩個人同時送
+     同一組單號，兩邊都查到沒人用過），而且多一次查詢。
+     唯一索引本來就是權威，這裡只是把它的話翻譯出來。 */
+  let r
+  try {
+    r = await act(me, c.req.param('id'), 'seller', 'ship',
+      /* 沒填單號就不寫 tracking —— 寫成空字串會撞 orders_tracking_uniq
+         （唯一索引的條件是 tracking is not null，空字串不是 null，
+         於是第二筆沒填單號的訂單會被擋下來，錯得毫無道理）。 */
+      o => ({
+        ...o, status: 'shipped', shippedAt: Date.now(),
+        ...(tracking ? { tracking: tracking.trim().toUpperCase() } : {})
+      }),
+      async (tx, o) => {
+        /* carrier 可能是 undefined（現在是選填）—— postgres.js 不收 undefined，
+           要明確轉成 null。少了這一步會在賣家不選物流商時整筆 throw。 */
+        await tx`update orders set carrier = ${carrier ?? null}, ship_photos = ${photoFileIds as never}
+                 where id = ${o.id}`
+      })
+  } catch (e) {
+    const err = e as { code?: string; constraint_name?: string }
+    if (err.code === '23505' && err.constraint_name === 'orders_tracking_uniq') {
+      return c.json(fail('TRACKING_TAKEN',
+        '這組單號已經登記在另一筆訂單上。確認一下是不是複製到別筆的單號；'
+        + '真的沒填錯的話可以先不填，出貨照樣成立。', 409), 409)
+    }
+    throw e
+  }
   if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
   return c.json({ ...r, wallet: await walletOf(me) })
 })

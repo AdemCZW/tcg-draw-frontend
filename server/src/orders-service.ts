@@ -8,6 +8,7 @@ import type { Order } from './shared/domain.js'
 import { applyDeadlines, depositFor } from './shared/escrow.js'
 import type { Tx } from './db.js'
 import { credit, OPEN } from './money.js'
+import { notify } from './notify.js'
 
 /** 沒收的保證金進這個帳戶 */
 export const PLATFORM_ID = 'u-platform'
@@ -64,6 +65,18 @@ export { depositFor }
  *
  * 每一筆分錄都帶 orderId，靠 ledger_once 唯一索引擋重複：
  * 逾期掃描可能同時被多個請求觸發，重試必須是安全的。
+ *
+ * ── 為什麼通知也寫在這裡 ────────────────────────────────────────────
+ * 這支不只在「結案」時被呼叫 —— act()（人按的）與 sweep()（時限掃描）
+ * 每一次狀態真的改變都會走到它，而且**只有這兩條路**改得動訂單狀態。
+ * 把通知放在這裡，兩條路各自的入口就不需要「記得也發一則」；
+ * 放在路由層的話，逾期那條（沒有人在場、正是最該通知的一條）永遠會漏。
+ *
+ * 通知用 notify(..., tx) 寫在同一筆交易裡，而且**不吞例外**：
+ * Postgres 的交易一旦 abort，後面的語句都會失敗，吞掉只會讓錯誤
+ * 變成一堆看不懂的後續失敗。冪等交給 notifications 的唯一索引
+ * （user_id, kind, ref_id），不能靠「這支被呼叫幾次」——
+ * sweep 每一次讀取都可能觸發。
  */
 export async function settle(tx: Tx, o: Order) {
   if (o.status === 'completed') {
@@ -77,6 +90,116 @@ export async function settle(tx: Tx, o: Order) {
     await credit(tx, PLATFORM_ID, o.deposit, 'deposit-collect', o.id)
   }
   await releasePrize(tx, o)
+  await notifyTransition(tx, o)
+}
+
+const pts = (n: number) => `${n.toLocaleString('zh-TW')} 點`
+
+/**
+ * 這次狀態轉換要通知誰。
+ *
+ * 進來的 o 一定是**剛剛才變成這個狀態**的：act() 只在動作合法時呼叫，
+ * sweep() 在 applyDeadlines 回傳同一個物件時就 continue 了。
+ * 所以這裡用 status 判斷「剛發生什麼事」是安全的。
+ *
+ * 爭議裁決（closedBy = dispute-*）刻意不在這裡發：routes/admin.ts 已經
+ * 發過買賣雙方各一則，在這裡再發一次會變成同一件事兩則不同的文案。
+ */
+async function notifyTransition(tx: Tx, o: Order) {
+  const name = o.card?.name ?? '卡片'
+
+  /* 賣家剛按下出貨。買家的鐘從這一刻開始跑，而**沉默＝視同送達** ——
+     這是整條時間線裡唯一一個「你什麼都不做，錢就會過去」的規則，
+     不通知等於讓人在不知道自己被計時的情況下被計時。
+     兩段時限都寫出來：14 天視同送達、再 7 天驗收期滿放款，總共 21 天。 */
+  if (o.status === 'shipped') {
+    await notify({
+      userId: o.buyerId, kind: 'order',
+      title: '賣家已寄出，收到請確認',
+      body: `「${name}」${o.tracking ? `，單號 ${o.tracking}` : ''}。`
+        + '收到後請按「我已收到」放款。14 天內沒有回報會視同送達，'
+        + '再過 7 天驗收期就自動放款給賣家。',
+      link: '/me/orders', refId: 'order-shipped:' + o.id
+    }, tx)
+    return
+  }
+
+  /* 14 天到了，系統視同送達。這是買家的**最後警告** ——
+     從這一刻起只剩 7 天可以開爭議，過了錢就是賣家的。
+     稽核清單沒有列這一則，但它是那條規則真正咬人的時刻：
+     「賣家已寄出」那則是 14 天前發的，早就被其他通知洗掉了。 */
+  if (o.status === 'delivered') {
+    await notify({
+      userId: o.buyerId, kind: 'order',
+      title: '已視同送達，7 天內可以反映問題',
+      body: `「${name}」超過 14 天沒有回報，系統視同你已收到。`
+        + `7 天驗收期滿後 ${pts(o.price)}會放款給賣家，之後就不能再開爭議了。`
+        + '沒收到貨請盡快申訴。',
+      link: '/me/orders', refId: 'order-delivered:' + o.id
+    }, tx)
+    return
+  }
+
+  /* 買家開了爭議。賣家的貨款被凍住，而且他需要去說明 ——
+     這是少數「別人的動作直接凍結你的錢」的情況。 */
+  if (o.status === 'disputed') {
+    await notify({
+      userId: o.sellerId, kind: 'order',
+      title: '買家對這筆交易提出爭議',
+      body: `「${name}」的 ${pts(o.price)}已暫時凍結，等客服處理。`
+        + '請到客服工單補充你這邊的說明。',
+      link: '/seller/shipping', refId: 'order-disputed:' + o.id
+    }, tx)
+    return
+  }
+
+  if (o.status === 'completed' && o.closedBy === 'buyer-confirm') {
+    // 買家自己按的，他當場看得到結果；只有賣家不在場
+    await notify({
+      userId: o.sellerId, kind: 'order',
+      title: '買家已確認收貨，貨款入帳',
+      body: `「${name}」的 ${pts(o.price)}已進到你的可動用點數。`,
+      link: '/seller/shipping', refId: 'order-completed:' + o.id
+    }, tx)
+    return
+  }
+
+  /* 驗收期滿自動完成。兩邊都不在場（掃描觸發），而且對兩邊的意義不同：
+     賣家是收款，買家是「爭議窗口從此關閉」。 */
+  if (o.status === 'completed' && o.closedBy === 'auto-release') {
+    await notify({
+      userId: o.sellerId, kind: 'order',
+      title: '驗收期已滿，貨款入帳',
+      body: `「${name}」的 ${pts(o.price)}已進到你的可動用點數。`,
+      link: '/seller/shipping', refId: 'order-completed:' + o.id
+    }, tx)
+    await notify({
+      userId: o.buyerId, kind: 'order',
+      title: '訂單已完成',
+      body: `「${name}」的 7 天驗收期已滿，${pts(o.price)}已放款給賣家，`
+        + '這筆交易結案。之後有問題請開客服單。',
+      link: '/me/orders', refId: 'order-completed:' + o.id
+    }, tx)
+    return
+  }
+
+  /* 賣家逾期未出貨，系統自動取消。買家退款、**賣家的保證金被沒收** ——
+     沒收那件事賣家完全不在場，不通知的話他只能自己某天打開錢包才發現。 */
+  if (o.status === 'cancelled' && o.closedBy === 'ship-timeout') {
+    await notify({
+      userId: o.buyerId, kind: 'order',
+      title: '賣家逾期未出貨，已自動退款',
+      body: `「${name}」的 ${pts(o.price)}已解除凍結，回到你的可動用點數。`,
+      link: '/me/orders', refId: 'order-forfeit:' + o.id
+    }, tx)
+    await notify({
+      userId: o.sellerId, kind: 'order',
+      title: '逾期未出貨，保證金已沒收',
+      body: `「${name}」超過期限沒有出貨，訂單已取消、貨款退還買家，`
+        + `保證金 ${pts(o.deposit)}一併沒收。`,
+      link: '/seller/shipping', refId: 'order-forfeit:' + o.id
+    }, tx)
+  }
 }
 
 /**
