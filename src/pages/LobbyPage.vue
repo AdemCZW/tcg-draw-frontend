@@ -524,6 +524,7 @@ const bestDeal = computed(() => {
    卡片略微側傾、帶全像掃光、邊緣一圈球階色的光，底下有倒影。
    目標是讓它看起來像「放在展示檯上的一張實體卡」，不是一張貼圖。 */
 .prizeStage {
+  --refl-h: 92px;
   display: grid; justify-items: center; gap: 0;
   perspective: 1100px;
   padding-top: 6px;
@@ -596,9 +597,13 @@ const bestDeal = computed(() => {
 /* 倒影：同一張卡翻轉後往下淡出。有倒影才像放在檯面上。
    高度只留實際看得到的那一段（遮罩之外全是透明），
    給滿版高度會多佔 190px 的空白，把主 CTA 推到摺線以下。 */
+/* 倒影高度用變數，因為**說明行的位移跟它是耦合的**：說明行排在倒影後面，
+   要貼回卡片下緣就得把倒影的高度整個扣掉。兩邊各寫一個常數的話，
+   改其中一個（例如手機把倒影收短）另一個就會漂掉 —— 這件事真的發生過：
+   桌機的說明行曾經掉到倒影下面，跟它說明的那張卡隔了 90px。 */
 .reflection {
   width: min(100%, 74vw, 268px);  /* 跟 .prizeCard 同寬，理由見上面 */
-  height: 92px;
+  height: var(--refl-h);
   overflow: hidden;
   margin-top: 4px;
   opacity: .18;
@@ -613,41 +618,46 @@ const bestDeal = computed(() => {
   transform-origin: top center;
 }
 
-/* 賞別 · 卡名 · 未出：壓在卡片下緣，主視覺自己把話講完。
-   三段擠在同一顆膠囊裡是刻意的 —— 它們是一句話的三個詞，
-   拆成兩個視覺物件（一個貼在卡上、一個在資訊欄）就是原本的問題。
-   flex-wrap + max-width 是給極端卡名的保險絲：名字很長時整條會往下長，
+/* 賞別 · 卡名 · 未出：卡片下方的一行說明，**沒有外框**。
+   三段是一句話的三個詞（拆成兩個視覺物件就是更早之前的問題），
+   這點沒變；改的是它的外殼。
+
+   原本是一顆帶邊框、毛玻璃、再包一顆綠色小膠囊的深色膠囊，實測
+   193px 寬 —— 而它說明的那張卡只有 134px。**說明文字比它說明的東西
+   還大 43%**，於是進到這一屏第一個抓住視線的是一個框，不是那張卡。
+   外框原本是為了在卡圖上壓字時保證對比，但它現在坐在卡片下方的頁面
+   底色上，底色本來就夠暗，那層外殼沒有在解決任何問題。
+
+   「未出」也從綠底小膠囊改成綠點加綠字：同一屏裡每多一種膠囊形狀，
+   讀者就要多分辨一次「這是同一類東西嗎」。這一屏原本有六種。
+
+   flex-wrap + max-width 保留：名字很長時整條往下長，
    而不是超出卡片寬度或被切掉半個字（資訊不可以消失，寧可多一行）。 */
 .prizeTag {
-  display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 9px;
+  display: inline-flex; align-items: baseline; flex-wrap: wrap;
+  justify-content: center; gap: 2px 8px;
   max-width: 100%;
-  margin-top: -58px;
-  padding: 7px 15px;
-  border-radius: var(--pill);
-  background: rgba(8, 6, 14, .82);
-  backdrop-filter: blur(8px);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hue) 40%, transparent);
+  /* 扣掉倒影佔的高度（含它的 4px margin-top），再往下留 14px ——
+     說明行要讀成「這張卡的說明」，就得看起來屬於那張卡。 */
+  margin-top: calc(14px - 4px - var(--refl-h));
   position: relative; z-index: 2;
 }
 .ptTier {
   flex: none;
-  font-size: 11.5px; font-weight: 800; letter-spacing: .06em;
+  font-size: 11.5px; font-weight: 700; letter-spacing: .06em;
   color: var(--hue);
 }
 /* overflow-wrap: anywhere —— 卡名可能是一長串沒有空白的英數（鑑定編號式的名字），
    不允許斷字的話那一串會直接頂破膠囊。 */
-.ptName { min-width: 0; font-size: 14px; font-weight: 650; color: #fff; overflow-wrap: anywhere; }
+.ptName { min-width: 0; font-size: 14px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
 /* 「未出」接在卡名後面，用綠點 + 綠字講「這張還在池裡」。
    點是 CSS 畫的，不是 emoji —— 手機 UI 一律不放 emoji。
    膠囊底是固定的深色（見 .prizeTag），所以這裡兩套主題共用 --ok 就夠亮。 */
 .ptState {
   flex: none;
   display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11.5px; font-weight: 700; letter-spacing: .04em;
-  padding: 2px 8px;
-  border-radius: var(--pill);
+  font-size: 11.5px; font-weight: 500; letter-spacing: .04em;
   color: var(--ok);
-  background: color-mix(in srgb, var(--ok) 18%, transparent);
 }
 .ptState::before {
   content: '';
@@ -670,13 +680,19 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
 .gauge { display: grid; gap: 6px; width: 100%; max-width: 420px; }
 /* flex-wrap：四位數以上的價格 + 「剩 nnn / nnnn 籤」在窄螢幕上塞不下時，
    讓後者自己掉到第二行 —— 兩個都 nowrap 的東西擺同一條 flex 上會直接溢出。 */
-.gaugeHead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; }
+/* 價格與籤數靠左並排。原本是 space-between，在 420px 的量表寬度下
+   中間會留一個兩百多像素的洞 —— 籤數是價格的補語，緊接著讀才是一句話，
+   推到另一端只會讓人以為那是另一件事。 */
+.gaugeHead { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-start; gap: 2px 12px; }
 .meter { height: 7px; border-radius: var(--pill); background: var(--surface-2); overflow: hidden; }
 .fill { height: 100%; border-radius: var(--pill); background: linear-gradient(90deg, var(--accent), var(--accent-soft)); }
 .meterLbl { flex: none; font-size: 12.5px; color: var(--muted); }
 .price { font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
 .per { font-size: 13px; font-weight: 400; }
 .ctas { display: flex; gap: 12px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+/* 次要動作不用強調色：兩個紅色的動作並排時誰都不是主要動作，
+   而主鈕還帶著呼吸動畫，等於兩個東西同時在喊。 */
+.ctas .ghost { color: var(--muted); }
 .go { padding: 14px 30px; font-size: 16px; }
 @media (prefers-reduced-motion: no-preference) {
   .go { animation: breathe 2.6s ease-in-out infinite; }
@@ -894,25 +910,51 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
      寬度寫在 .prizeStage 上之後，籤再長也只會自己換行，主視覺不動。
      134px 是原本實際算出來的寬度，這裡沿用，不趁機改主視覺大小。
      .prizeStage 比卡片寬一截，是留給那條籤的橫向空間（它可以比卡片寬）。 */
-  .prizeStage { width: min(100%, 264px); }
-  .prizeCard, .reflection { width: min(100%, 134px); }
-  .reflection { height: 40px; }
-  .prizeTag { margin-top: -44px; }
+  /* 主視覺放大到 168px。
+     原本的 134px **不是設計決定，是 bug 的遺留** —— 見上面那段註解：
+     那個數字是「膠囊裡的文字有多長」意外算出來的，寬度寫死之後就一直
+     沿用下來。375px 的螢幕上，整池最想讓人看見的那張卡只佔 36% 寬，
+     而它周圍的框、膠囊、徽章加起來比它還大。
 
-  /* 手機上改成靠左＋每一列撐滿寬度。
-     原本整欄置中，短元素（徽章、價格、賣家）只佔內容寬度，
-     左右各留一大塊空白，看起來很稀疏 —— 資訊沒有變多，只是沒在用版面。
-     卡片維持置中（它是主視覺），底下的資訊列靠左，是常見的
-     「主視覺置中、細節左對齊」寫法，不會顯得不協調。 */
-  .info { justify-items: stretch; text-align: left; gap: 9px; width: 100%; }
-  h1 { font-size: 21px; }
-  /* 玩法靠左、賣家靠右，把整條寬度用掉。
-     換行時第二行的那顆自己靠左，不會被 space-between 推到奇怪的位置。 */
-  .meta { justify-content: space-between; width: 100%; }
+     放大要付高度（189 → 236，+47px），而這一屏的高度是有預算的：
+     底下那條紅色底帶的標題必須露在底部導覽上方，使用者才知道再滑會
+     換到另一種東西。預算從別處省回來 —— 拿掉膠囊的外框與內距、
+     三列的空洞收掉、資訊列間距重新分組。改完實測底帶仍然露得出來。 */
+  .prizeStage { width: min(100%, 288px); }
+  .prizeCard, .reflection { width: min(100%, 168px); }
+  /* 倒影收短一階。只改這一個值，說明行的位移會自己跟上（見 .prizeTag 的 calc） */
+  .prizeStage { --refl-h: 40px; }
+
+  /* 資訊列靠左，卡片維持置中（主視覺置中、細節左對齊）。
+
+     間距改成**分組**而不是等距。原本整欄一律 9px，於是標題、徽章、
+     價格、按鈕四件事看起來一樣近 —— 沒有任何一組被讀成一組。
+     現在是：標題與它的徽章貼在一起（6px），這一組跟價格那一組
+     隔開（16px），量表與按鈕再隔開（14px）。
+     分組靠間距講完，不必再加分隔線或底色。 */
+  .info { justify-items: stretch; text-align: left; gap: 16px; width: 100%; }
+
+  /* 標題 21 → 25px。原本標題與價格都是 21px/700 —— **字級與字重完全一樣**，
+     所以這一屏的頂部沒有主從：眼睛不知道要先讀哪一個。
+     這一池叫什麼是它的身分，先讀；多少錢是條件，後讀。 */
+  h1 { font-size: 25px; line-height: 1.18; }
+
+  /* 玩法 + 賣家靠左並排，**不再 space-between**。
+     推到兩端是上一輪為了「別那麼稀疏」開的藥，但那味藥治不了稀疏 ——
+     它只是把空白從兩側搬到中間（實測那個洞 131px），順便把一句話
+     切成互不相干的兩段。真正的解法是讓它們挨在一起，
+     版面的寬度由左側那條閱讀線用掉，不是由空白用掉。 */
+  .meta { justify-content: flex-start; width: 100%; gap: 8px 12px; margin-top: -10px; }
+
   .gauge { max-width: none; }
-  .price { font-size: 21px; }
-  /* 主鈕吃掉剩餘寬度，次要連結靠右 */
+  .gaugeHead { gap: 4px 12px; }
+  /* 價格降到 20px 但保留 700：它讓出的是**尺寸**上的主導權，不是重量。
+     tabular-nums 讓不同池的價格位數不同時，小數點對得起來、不會跳。 */
+  .price { font-size: 20px; font-variant-numeric: tabular-nums; }
+
+  /* 主鈕吃掉剩餘寬度（弱色的次要連結見基礎規則） */
   .ctas { justify-content: space-between; width: 100%; gap: 10px; flex-wrap: nowrap; }
+  .go { flex: 1; }
   .go { flex: 1 1 auto; max-width: none; padding: 13px 16px; font-size: 15px; }
   .ctas .btn.ghost { flex: none; padding: 13px 4px; font-size: 13.5px; }
   .tickerTop { margin: 0 0 8px; }
