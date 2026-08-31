@@ -25,6 +25,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useOrdersStore } from '@/stores/orders'
 import CardArt from '@/components/CardArt.vue'
 import CertTag from '@/components/CertTag.vue'
+import OwnerTag from '@/components/OwnerTag.vue'
 import SellerChip from '@/components/SellerChip.vue'
 import TradeGuard from '@/components/TradeGuard.vue'
 import BottomActionBar from '@/components/BottomActionBar.vue'
@@ -80,7 +81,16 @@ const done = ref<'vault' | 'ship' | null>(null)
 const price = computed(() => listing.value?.price ?? 0)
 const canAfford = computed(() => wallet.available >= price.value)
 const sold = computed(() => !!listing.value && listing.value.status !== 'live')
-const buyable = computed(() => !!listing.value && !sold.value && auth.isLoggedIn && canAfford.value)
+/* 自己的掛單。後端本來就擋（orders.ts：「不能買自己的掛單」），
+   但那是在使用者已經看完價格、按下購買、等了一個往返之後才擋 ——
+   前端知道賣家是誰，就該在他按之前講。
+   比對 sellerId 不比對名字（名字會重複、會被改）；未登入時 auth.user 是 null，
+   訪客不會踩到任何個人化分支。 */
+const isMine = computed(() => !!auth.user && !!listing.value && listing.value.sellerId === auth.user.id)
+/* isMine 進 buyable：這樣「買下」那顆鍵在自己的掛單上根本不會被渲染出來，
+   而不是渲染一顆按了沒反應的灰鍵 —— 灰鍵仍然是在說「這裡本來可以買」。 */
+const buyable = computed(() =>
+  !!listing.value && !sold.value && !isMine.value && auth.isLoggedIn && canAfford.value)
 
 /* 721 是底部導覽消失的斷點（見 tokens.css 的 --nav-total）。
    窄螢幕的確認列從畫面下緣滑出，寬螢幕就地當 sticky 列 —— 桌機沒有
@@ -142,6 +152,46 @@ async function buy() {
     busy.value = false
   }
 }
+
+/* ---- 賣家自己來的時候：下架 ----
+   接的是既有的後端能力 POST /v1/listings/:id/delist（server/src/routes/public.ts），
+   不是為了這個畫面新造的。那支會把掛單改成 delisted，並把卡的狀態放回
+   上架前的樣子（庫內的回 stashed、需寄送的回 shipped），卡才不會一直鎖在
+   prizes.status = 'listed' 而出不了貨也回收不了。
+
+   改價沒有對應的端點（後端只有 GET / POST / delist 三支），所以畫面上
+   不假裝有一顆「改價」——寧可誠實地說「先下架再重新上架」，那是真的走得通的路。 */
+const delistAsking = ref(false)
+const delisted = ref(false)
+/** 待命列與確認列不能同時在畫面上（同一個位置會疊出兩條），兩種確認共用一個判斷 */
+const asking = computed(() => confirming.value || delistAsking.value)
+
+function askDelist() {
+  if (!isMine.value || sold.value || delisted.value) return
+  error.value = ''
+  delistAsking.value = true
+  haptic('tap')
+}
+
+async function delist() {
+  const l = listing.value
+  if (!l || busy.value) return
+  busy.value = true
+  error.value = ''
+  try {
+    await api.delistListing(l.id)
+    delisted.value = true
+    delistAsking.value = false
+    haptic('success')
+    /* 沒有 track()：GaEvent 的白名單住在 lib/ga.ts，那支不在這次的改動範圍內，
+       為了埋一個點去動共用型別不值得 —— 之後要埋再一起加。 */
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '下架失敗'
+    delistAsking.value = false
+  } finally {
+    busy.value = false
+  }
+}
 </script>
 
 <template>
@@ -170,6 +220,9 @@ async function buy() {
           :cert-no="listing.card.certNo" :art-id="listing.card.artId"
         />
         <span class="lane" :class="lane">{{ lane === 'vault' ? '庫內轉移' : '需寄送' }}</span>
+        <!-- 跟列表上同一顆標記、同一個位置（左上通道、右上自己的）——
+             從列表點進來的人不用重新辨認一次 -->
+        <OwnerTag v-if="isMine" class="heroMine" label="我的掛單" />
       </div>
 
       <!-- 一張連續的面板，內部用細分隔線分段。
@@ -179,6 +232,17 @@ async function buy() {
            面板是實心底：站上的環狀底紋是畫在 body 上的，
            低對比的小字（市值那一行）直接壓在上面會被紋路吃掉。 -->
       <section class="panel">
+        <!-- 擺在面板的第一段而不是頁尾：使用者的閱讀順序是「卡圖 → 這是什麼 → 多少錢」，
+             「這張是你自己掛的」必須在他開始評估價格之前就到位，否則他會先在心裡
+             把這筆當成一筆可以買的交易，再被推翻。 -->
+        <div v-if="isMine" class="seg mineSeg">
+          <strong class="mineTitle">這是你上架的卡</strong>
+          <p class="mineNote">
+            自己的掛單不能自己買。想把卡收回來就按下面的「下架」——
+            卡會回到你的卡冊，可以出貨、回收，或重新用別的價格上架。
+          </p>
+        </div>
+
         <div class="seg lead">
           <h1 class="name">{{ listing.card.name }}</h1>
           <div class="priceRow">
@@ -224,7 +288,12 @@ async function buy() {
           <div class="fact">
             <dt>賣家</dt>
             <dd>
-              <SellerChip v-if="seller" :seller="seller" />
+              <!-- 自己的掛單就直說是自己，不要讓他對著自己的代號想「這人是誰」 -->
+              <span v-if="isMine" class="who">
+                <strong>{{ listing.sellerName }}</strong>
+                <span class="who-me">你</span>
+              </span>
+              <SellerChip v-else-if="seller" :seller="seller" />
               <!-- 玩家掛的卡沒有賣家審核等級可查，就只講事實：這是個人賣家 -->
               <span v-else class="who">
                 <strong>{{ listing.sellerName }}</strong>
@@ -253,6 +322,15 @@ async function buy() {
         <RouterLink :to="{ name: 'orders' }" class="btn primary">看這筆訂單</RouterLink>
       </div>
 
+      <div v-if="delisted" class="result ok" role="status">
+        <strong>已下架 {{ listing.card.name }}</strong>
+        <p>
+          這張卡已經從市場收回，回到你的卡冊了。想重新賣就再上架一次，
+          價格可以重新設定。
+        </p>
+        <RouterLink :to="{ name: 'cards' }" class="btn primary">去我的卡冊</RouterLink>
+      </div>
+
       <p v-if="error" class="err" role="alert">{{ error }}</p>
 
       <!-- 結帳列只有一條，兩種狀態：待命（餘額＋買下）與確認（金額＋取消／確定）。
@@ -261,11 +339,21 @@ async function buy() {
            版面高度，直接移除會讓整頁往上跳一截，而浮出的那條是 fixed 補不回來。
            寬螢幕相反 —— 確認列就地接在同一個位置，這條要真的讓出流內空間。 -->
       <div
-        v-if="!done && (!confirming || !wide)"
-        class="bar card" :class="{ ghost: confirming }"
-        :aria-hidden="confirming || undefined"
+        v-if="!done && !delisted && (!asking || !wide)"
+        class="bar card" :class="{ ghost: asking }"
+        :aria-hidden="asking || undefined"
       >
         <p v-if="sold" class="soldOut">這張已經被買走了。</p>
+
+        <!-- 自己的掛單：這個位置本來是「買下」。賣家點進自己的卡真正想做的不是買，
+             是把它收回來或改價，所以同一個位置直接給下架 ——
+             一顆按不下去的灰色「買下」仍然是在說「這裡本來可以買」。 -->
+        <template v-else-if="isMine">
+          <span class="sum">
+            你掛 <strong class="mono">{{ listing.price.toLocaleString() }}</strong> 點，等買家上門
+          </span>
+          <button type="button" class="btn primary mineBtn" @click="askDelist">下架收回</button>
+        </template>
 
         <template v-else-if="!auth.isLoggedIn">
           <span class="sum">要登入才能購買</span>
@@ -296,7 +384,7 @@ async function buy() {
            都不會浮出一條空列。max-width 跟 .page 同寬，寬螢幕上才不會拉成
            橫貫整個視窗的一條。 -->
       <BottomActionBar
-        :open="!done && confirming"
+        :open="!done && !delisted && confirming"
         label="購買確認"
         :inline="wide"
         :max-width="560"
@@ -312,6 +400,30 @@ async function buy() {
           <button type="button" class="btn" :disabled="busy" @click="confirming = false">取消</button>
           <button type="button" class="btn primary" :disabled="busy" @click="buy">
             {{ busy ? '處理中…' : '確定買下' }}
+          </button>
+        </div>
+      </BottomActionBar>
+
+      <!-- 下架確認。用同一支 BottomActionBar：兩種確認在同一個位置、同一個高度出現，
+           而且兩者互斥（買家永遠看不到下架、賣家永遠看不到購買），不會疊在一起。 -->
+      <BottomActionBar
+        :open="!delisted && delistAsking"
+        label="下架確認"
+        :inline="wide"
+        :max-width="560"
+        :gap="12"
+        :spacer="150"
+      >
+        <p class="cq">
+          把 <strong>{{ listing.card.name }}</strong> 從市場收回？
+          <span class="cqLane">
+            卡會回到你的卡冊，{{ lane === 'vault' ? '仍然保管在庫內' : '仍然在你手上' }}；之後可以出貨、回收，或用別的價格重新上架。
+          </span>
+        </p>
+        <div class="crow">
+          <button type="button" class="btn" :disabled="busy" @click="delistAsking = false">取消</button>
+          <button type="button" class="btn primary mineBtn" :disabled="busy" @click="delist">
+            {{ busy ? '處理中…' : '確定下架' }}
           </button>
         </div>
       </BottomActionBar>
@@ -398,6 +510,34 @@ async function buy() {
   background: transparent;
   padding: 15px 16px;   /* 跟其他段落同一個內距，分隔線才齊頭 */
 }
+
+/* ---- 自己的掛單 ----
+   顏色跟市場列表上的標記同一組（--info-ink）：藍色在這一頁一律代表「這是你的」，
+   跟紅（買下）、綠（庫內轉移）、金（鑑定）都分得開。
+   不用 --accent 是因為那已經是「買下」那顆鍵的顏色。 */
+.heroMine { position: absolute; right: 8px; top: 8px; max-width: calc(100% - 16px); }
+
+.mineSeg { background: var(--info-wash); }
+.mineTitle { display: block; font-size: 13.5px; letter-spacing: -.01em; color: var(--info-ink); }
+.mineNote {
+  font-size: 12.5px; line-height: 1.75; margin: 4px 0 0;
+  color: color-mix(in srgb, var(--info-ink) 74%, var(--muted));
+}
+
+/* 賣家那一列的「你」：跟 who-tier 同一個形狀，只是換成自己的顏色 */
+.who-me {
+  flex: none; font-size: 10.5px; font-weight: 700;
+  padding: 2px 8px; border-radius: var(--pill);
+  background: var(--info-ink); color: var(--bg);
+}
+
+/* 下架鍵借 .btn.primary 的形狀，但換掉強調色 —— 這條列上不會有「買下」，
+   讓它維持紅色會讓人以為那是成交鍵 */
+.mineBtn { background: var(--info-ink); color: var(--bg); border-color: transparent; }
+@media (hover: hover) {
+  .mineBtn:hover { background: color-mix(in srgb, var(--info-ink) 86%, var(--ink)); box-shadow: var(--shadow); }
+}
+.mineBtn:focus-visible { outline-color: var(--info-ink); }
 
 .result {
   display: grid; justify-items: start; gap: 8px;

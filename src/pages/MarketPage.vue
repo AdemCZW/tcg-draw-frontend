@@ -19,7 +19,9 @@ import { api, type MarketSort } from '@/lib/api'
 import type { Listing } from '@/types/models'
 import { deliveryOf } from '@/shared/domain'
 import { useWalletStore } from '@/stores/wallet'
+import { useAuthStore } from '@/stores/auth'
 import CardArt from '@/components/CardArt.vue'
+import OwnerTag from '@/components/OwnerTag.vue'
 import TradeGuard from '@/components/TradeGuard.vue'
 import ListSentinel from '@/components/ListSentinel.vue'
 import { useInfiniteList } from '@/composables/useInfiniteList'
@@ -28,6 +30,15 @@ import { track } from '@/lib/ga'
 import { refDiscount, refPriceText } from '@/lib/refprice'
 
 const wallet = useWalletStore()
+const auth = useAuthStore()
+
+/* 這一頁原本完全不知道使用者是誰 —— 自己上架的卡跟別人的卡在列表上長得
+   一模一樣，要點進去、按下購買、被後端擋掉（orders.ts 的「不能買自己的掛單」）
+   才知道。整條路走到最後一步才擋，前面每一步都在騙人。
+
+   比對 sellerId 而不是 sellerName：名字會重複，也可能被改。
+   未登入時一律 false —— 那時候根本沒有「你」，訪客不該看到任何個人化痕跡。 */
+const isMine = (l: Listing) => !!auth.user && l.sellerId === auth.user.id
 
 /* 排序而不是篩選：市場的品項還不多，先給「怎麼排」比「濾掉什麼」有用。
    低於市值放第一個 —— 那是使用者真正在找的東西。 */
@@ -130,10 +141,15 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
       <div class="rail">
         <RouterLink
           v-for="l in deals" :key="l.id"
-          class="dealCard" :to="{ name: 'market-listing', params: { id: l.id } }"
+          class="dealCard" :class="{ mine: isMine(l) }"
+          :to="{ name: 'market-listing', params: { id: l.id } }"
         >
           <CardArt class="dealArt" :image="''" :alt="l.card.name" :art-id="l.card.artId" />
           <span v-if="diffPct(l) !== null" class="dealPct">{{ diffPct(l) }}%</span>
+          <!-- 104px 的小方塊左上角已經被折數佔走，標記放右上角。
+               只講「我的」兩個字：這個寬度放不下完整句子，形狀＋顏色＋外框
+               三個訊號加起來已經夠認 -->
+          <OwnerTag v-if="isMine(l)" class="dealMine" label="我的" compact />
           <span class="dealFoot">
             <span class="mono dealPrice">{{ l.price.toLocaleString() }}</span>
             <span class="dealRef mono">賣家標示 {{ refPriceText(l.card.refPrice) }}</span>
@@ -151,11 +167,17 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
       <div class="rail">
         <RouterLink
           v-for="l in graded" :key="l.id"
-          class="gradedCard" :to="{ name: 'market-listing', params: { id: l.id } }"
+          class="gradedCard" :class="{ mine: isMine(l) }"
+          :to="{ name: 'market-listing', params: { id: l.id } }"
         >
           <CardArt class="gradedArt" :image="''" :alt="l.card.name" :art-id="l.card.artId" />
           <span class="gradedInfo">
-            <strong class="gName">{{ l.card.name }}</strong>
+            <!-- 這種卡沒有可疊圖的空白角落（縮圖只有 66px），標記進資訊欄第一行。
+                 gName 要 min-width: 0 才不會被長卡名把標記擠出卡片外 -->
+            <span class="gTop">
+              <OwnerTag v-if="isMine(l)" label="我的" compact />
+              <strong class="gName">{{ l.card.name }}</strong>
+            </span>
             <span class="gCert mono">{{ l.card.grader }} {{ l.card.grade }} · #{{ l.card.certNo }}</span>
             <span class="mono gPrice">{{ l.price.toLocaleString() }} 點</span>
           </span>
@@ -176,7 +198,7 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
       <!-- 卡圖滿版鋪滿整格，資訊直接壓在圖上。
            左到右的漸層遮罩把左半邊壓暗 —— 卡圖的主體（寶可夢）多半偏中上，
            壓左下角最不會蓋到重點，文字也才有足夠對比。 -->
-      <article v-for="l in shown" :key="l.id" class="lot">
+      <article v-for="l in shown" :key="l.id" class="lot" :class="{ mine: isMine(l) }">
         <CardArt
           class="art"
           :image="l.card.image" :alt="l.card.name" :cert-no="l.card.certNo" :art-id="l.card.artId"
@@ -188,6 +210,9 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
         <span class="lane" :class="laneOf(l)">
           {{ laneOf(l) === 'vault' ? '庫內' : '需寄送' }}
         </span>
+
+        <!-- 通道徽章佔了左上角，這個放右上角，兩個不會撞在一起 -->
+        <OwnerTag v-if="isMine(l)" class="lotMine" label="我的掛單" />
 
         <div class="info">
           <strong class="name">{{ l.card.name }}</strong>
@@ -212,9 +237,13 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
              讓點在它身上的手指落到下面這條連結上。 -->
         <RouterLink
           class="open" :to="{ name: 'market-listing', params: { id: l.id } }"
-          :aria-label="`${l.card.name}，${l.price.toLocaleString()} 點`"
+          :aria-label="isMine(l)
+            ? `${l.card.name}，${l.price.toLocaleString()} 點，你上架的掛單`
+            : `${l.card.name}，${l.price.toLocaleString()} 點`"
         />
-        <span class="buy" aria-hidden="true">買下</span>
+        <!-- 自己的卡不能寫「買下」。後端本來就會擋，寫著買下等於邀請使用者
+             走一趟必定失敗的流程；改成「管理」才對得上點進去實際能做的事 -->
+        <span class="buy" aria-hidden="true">{{ isMine(l) ? '管理' : '買下' }}</span>
       </article>
     </div>
 
@@ -340,6 +369,7 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 
 /* 已鑑定：橫式寬卡，跟上面的小方塊形狀完全不同 */
 .gradedCard {
+  position: relative;
   flex: 0 0 min(80vw, 300px);
   scroll-snap-align: start;
   display: grid; grid-template-columns: 66px minmax(0, 1fr);
@@ -356,6 +386,14 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .gradedArt { width: 100%; aspect-ratio: 5 / 7; border-radius: 6px; overflow: hidden; }
 .gradedArt :deep(img) { width: 100%; height: 100%; object-fit: cover; }
 .gradedInfo { display: grid; gap: 3px; min-width: 0; }
+/* 標記與卡名同一行：多開一行會把這張橫式卡撐高，整條捲軸的節奏就跟著跑掉。
+   min-width: 0 在兩層都要有 —— flex 子元素預設不縮到比內容窄 */
+.gTop { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* 標記不准縮：它自己帶 min-width: 0（那是為了疊在卡圖上時不撐開格子），
+   放進 flex 行裡就會被長卡名壓成 0 寬 —— 實測長卡名下整顆標記被擠沒了，
+   只剩一條藍線。要讓的是卡名，不是標示。 */
+.gTop .omark { flex: 0 0 auto; }
+.gTop .gName { min-width: 0; }
 .gName { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gCert { font-size: 10px; color: #d8b25a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gPrice { font-size: 15px; font-weight: 800; margin-top: 1px; }
@@ -458,6 +496,37 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 }
 @media (hover: hover) { .lot:hover .buy { background: var(--accent-soft); } }
 
+/* ---- 自己上架的掛單 ----
+   三種形狀共用同一組訊號：藍色外框 ＋ 同一顆標記。只加一行小字是不夠的 ——
+   使用者是在滑動中掃過這些卡片的，能被掃到的只有形狀與顏色。
+
+   外框用 ::after 而不是 border / outline / inset box-shadow：
+   這三種卡的圖都是滿版鋪在元素裡的子節點，畫在元素自己身上的邊框會被圖蓋掉
+   （dealCard 與 lot 都是 overflow: hidden ＋ object-fit: cover）。
+   ::after 是繪製在子節點之上的獨立疊層，而且不必動 template 加空 span。
+   pointer-events: none —— 它蓋在整格的連結上面，不能把點擊吃掉。 */
+.dealCard.mine::after,
+.gradedCard.mine::after,
+.lot.mine::after {
+  content: '';
+  position: absolute; inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  border: 2px solid var(--info-ink);
+  border-radius: inherit;
+}
+
+/* 小方塊：左上角是折數，標記走右上角 */
+.dealMine { position: absolute; right: 5px; top: 5px; z-index: 6; pointer-events: none; max-width: calc(100% - 10px); }
+
+/* 滿版格：左上角是通道徽章，標記走右上角 */
+.lotMine { position: absolute; right: 8px; top: 8px; z-index: 6; pointer-events: none; max-width: calc(100% - 16px); }
+
+/* 「買下」在自己的卡上會變成「管理」（見 template）——
+   顏色也要跟著換，不然一顆強調色的鍵仍然在喊「買」 */
+.lot.mine .buy { background: var(--info-ink); color: var(--bg); }
+@media (hover: hover) { .lot.mine:hover .buy { background: var(--info-ink); } }
+
 .sk { aspect-ratio: 5 / 7; border-radius: var(--radius); background: var(--surface-2); }
 @media (prefers-reduced-motion: no-preference) {
   .sk { animation: pulse 1.4s ease-in-out infinite alternate; }
@@ -483,6 +552,9 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   .meta { font-size: 10px; }
   .by { display: none; }          /* 小格子放不下，賣家資訊讓給價格 */
   .buy { right: 7px; bottom: 8px; padding: 7px 12px; font-size: 12px; }
+  /* 兩欄版的格子只有一半寬，標記靠右上角容易跟卡圖的角落花紋糊在一起，
+     縮一階並貼近邊緣，留給卡名的空間才夠 */
+  .lotMine { right: 6px; top: 6px; max-width: calc(100% - 12px); }
   .sell { font-size: 12.5px; padding: 8px 13px; }
 }
 </style>

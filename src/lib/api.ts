@@ -549,7 +549,10 @@ export const api = {
         id: 'l-' + input.prizeId,
         card: input.card,
         price: input.price,
-        sellerId: 'me',
+        /* mock 也要用真的使用者 id：原本寫死 'me'，而 mock 登入拿到的是 'u-XXXX'，
+           兩者永遠對不起來 —— 市場上「自己上架的卡」的標示在 mock 模式下就會失效，
+           而 mock 是本機開發與展示唯一的資料來源。 */
+        sellerId: useAuthStore().user?.id ?? 'me',
         sellerName: input.sellerName,
         listedAt: '剛剛',
         status: 'live',
@@ -565,6 +568,31 @@ export const api = {
     }
     const r = await http<{ listing: Any }>('/v1/listings', { method: 'POST', json: { prizeId: input.prizeId, price: input.price } })
     return toListing(r.listing)
+  },
+  /**
+   * 下架自己的掛單。接的是既有的 POST /v1/listings/:id/delist
+   * （server/src/routes/public.ts），這裡只是把它接上前端 ——
+   * 後端會擋非本人（NOT_PARTY）與非 live 狀態（WRONG_STATE）。
+   *
+   * mock 直接把那筆從陣列拿掉，而不是改 status：Listing 的 status 型別只有
+   * 'live' | 'sold'（見 shared/domain.ts），沒有 'delisted' 可以放，
+   * 而後端對已下架的掛單本來就回 404「當成不存在」—— 拿掉正好等價。
+   * 同時把卡的狀態放回上架前的樣子，否則它會一直卡在 'listed'，
+   * 卡冊裡看起來還在市場販售中，出貨與回收也跟著鎖死（後端那支也做了同一件事）。
+   */
+  async delistListing(id: string): Promise<void> {
+    if (MOCK) {
+      await delay(260)
+      const i = mock.listings.findIndex(l => l.id === id)
+      if (i < 0) throw new Error('找不到這筆掛單')
+      const [l] = mock.listings.splice(i, 1)
+      if (l?.fromPrizeId) {
+        const src = mock.userPrizes.find(x => x.id === l.fromPrizeId)
+        if (src) src.status = deliveryOf(l) === 'vault' ? 'stashed' : 'shipped'
+      }
+      return
+    }
+    await http<{ ok: true }>(`/v1/listings/${id}/delist`, { method: 'POST' })
   },
 
   async ledger(): Promise<LedgerEntry[]> {
