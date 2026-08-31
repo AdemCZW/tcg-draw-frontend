@@ -85,9 +85,21 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
     </div>
 
     <p class="hint muted">
-      餘額 <span class="mono">{{ wallet.shown.toLocaleString() }}</span> 點 ·
-      <RouterLink :to="{ name: 'pool-prizes', params: { id: pool.id } }" replace>看全部獎項 →</RouterLink>
+      餘額 <span class="mono">{{ wallet.shown.toLocaleString() }}</span> 點
     </p>
+
+    <!-- 「看全部獎項」從上面那行小字裡拆出來，自己成為一列。
+         原本它是接在餘額後面的行內連結：13px 字、可點高度只有 16px。
+         實測（393×852）落點偏離連結中心超過 18px 就完全點不到 ——
+         Chromium 的觸控修正也只把它補到約 30px，仍遠低於 44。
+         使用者回報的「完全沒有反應」就是這麼來的：路由與頁面都是好的，
+         是那個目標小到拇指打不中，而且它還在首屏之外 87px，
+         得先捲到底才看得見，於是「找得很辛苦、點了又沒反應」。
+         把餘額（資訊）與看獎項（動作）分開，動作那列整塊可點、高度給滿 44。 -->
+    <RouterLink class="allPrizes" :to="{ name: 'pool-prizes', params: { id: pool.id } }" replace>
+      <span>看全部獎項</span>
+      <span class="arrow" aria-hidden="true">→</span>
+    </RouterLink>
   </div>
 </template>
 
@@ -115,7 +127,21 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
 .done { padding: 20px; text-align: center; display: grid; gap: 10px; }
 .done p { margin: 0; }
 .hint { font-size: 13px; margin: 0; }
-.hint a { color: var(--accent); }
+
+/* 整列可點。min-height 44 是硬性下限，padding 讓字不貼邊；
+   grid 的 minmax(0, 1fr) 讓長文字自己收斂，不會把箭頭擠出列外。 */
+.allPrizes {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; gap: 12px;
+  min-height: 44px; padding: 11px 14px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); color: var(--ink);
+  font-size: 14.5px; font-weight: 600;
+  transition: border-color .15s;
+}
+.allPrizes .arrow { color: var(--accent); font-size: 15px; }
+@media (hover: hover) { .allPrizes:hover { border-color: var(--accent); } }
+.allPrizes:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 @media (max-width: 860px) {
   .mobileCta { display: block; }
