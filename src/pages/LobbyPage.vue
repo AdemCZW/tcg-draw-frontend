@@ -256,9 +256,22 @@ const catalog = ref<HTMLElement | null>(null)
 const marketPicks = ref<Listing[]>([])
 /* 排序與取前幾張都交給後端。原本是把整個市場撈回來再自己排 ——
    掛單改成游標分頁之後那個做法只排得到第一批，選出來的「最殺」是假的。 */
+/* 失敗就留空陣列 —— 整段「現貨市場」的 v-if 會讓它整區不出現，
+   而大廳的主體（抽選池）跟它沒有關係，照常可用。
+
+   一定要接：這是 async 的 onMounted，裡面的 await 一旦 reject 就沒有人接得到，
+   瀏覽器把它記成 unhandled rejection。實測後端連不上時，大廳會在使用者
+   什麼都還沒做的時候吐一行「連不上伺服器，請檢查網路後重試」。
+   （同一族的問題在 stores/sellers.ts 的 ensureLoaded 那邊是下沉到 store 解決的；
+   這裡沒有 store 可以下沉 —— api.listMarket 是共用的資料層，
+   讓它不 reject 會害到真的需要知道失敗的呼叫端。所以在這裡接。） */
 onMounted(async () => {
-  const page = await api.listMarket({ sort: 'deal', limit: 8 })
-  marketPicks.value = page.items
+  try {
+    const page = await api.listMarket({ sort: 'deal', limit: 8 })
+    marketPicks.value = page.items
+  } catch {
+    marketPicks.value = []
+  }
 })
 // 沒有標示參考價就沒有折價幅度可言 —— 回 null，畫面不顯示那個標籤
 const dealPct = (l: Listing) => { const d = refDiscount(l); return d == null ? null : Math.round(d * 100) }

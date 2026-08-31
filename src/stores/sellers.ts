@@ -17,7 +17,13 @@ export const useSellerStore = defineStore('sellers', {
        兩者要分得開：前者還不能下結論，後者可以。 */
     status: null as SellerStatus | null,
     statusLoading: false,
-    statusLoaded: false
+    statusLoaded: false,
+
+    /* 賣家清單最後一次載入失敗的原因。**沒有任何畫面在讀它** ——
+       它存在的理由是「失敗不能靜靜消失」：ensureLoaded() 現在把例外吞掉
+       （見下面的說明），吞掉的東西至少要留在某個地方，之後想在畫面上
+       講出來的時候不必再改一次 store。 */
+    listError: null as string | null
   }),
   getters: {
     byId: s => (id: string) => s.sellers.find(x => x.id === id),
@@ -46,8 +52,38 @@ export const useSellerStore = defineStore('sellers', {
     }
   },
   actions: {
+    /**
+     * 載入賣家清單。**不會 reject。**
+     *
+     * ---- 為什麼把例外吞在這裡，而不是要每個呼叫端自己接 ----
+     * 這支有五個呼叫端（大廳、挑池台、賣家頁、池外殼、開池頁），
+     * 其中四個是 `onMounted(() => { sellers.ensureLoaded() })` 這種
+     * 開火即忘的寫法。它一旦 reject 就是一個沒有人接的 promise ——
+     * 瀏覽器把它記成 pageerror，實測畫面上是一行紅字
+     * 「連不上伺服器，請檢查網路後重試」，而使用者根本沒有做任何操作。
+     *
+     * 開池頁先前為此在**呼叫端**補過一次 `.catch(() => {})`（bf02ca2）。
+     * 那修好了那一頁，但剩下四處照樣會炸 —— 而且下一個新頁面照樣會漏。
+     * 判準不該是「有沒有人記得接」，那是紀律問題；改成「這支本來就不 reject」
+     * 之後，漏不掉。（同一個判斷今天也用在 applyWallet 搬到傳輸層那一筆。）
+     *
+     * ---- 為什麼吞掉是安全的 ----
+     * 賣家清單載不到時畫面會**優雅降級**：byId() 回 undefined，
+     * 賣家膠囊就不渲染，池與市場的其餘內容照常。沒有任何一個流程
+     * 會因為少了這份清單而做出錯的判斷（能不能開池看的是 ensureStatus()，
+     * 那是另一支、而且它自己有 try/catch）。
+     *
+     * 失敗時 sellers 維持空陣列，所以 `!this.sellers.length` 仍然成立 ——
+     * 下一次換頁會自動再試一次，不需要另外寫重試。
+     */
     async ensureLoaded() {
-      if (!this.sellers.length) this.sellers = await api.listSellers()
+      if (this.sellers.length) return
+      try {
+        this.sellers = await api.listSellers()
+        this.listError = null
+      } catch (e) {
+        this.listError = e instanceof Error ? e.message : '賣家清單載入失敗'
+      }
     },
 
     /**

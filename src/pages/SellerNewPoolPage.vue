@@ -65,11 +65,12 @@ useKeyboardInset()
 const route = useRoute()
 const sellers = useSellerStore()
 const pools = usePoolStore()
-/* ensureLoaded() 是 async 而這裡沒有人接 —— 網路一斷它就變成 unhandled
-   rejection（實測 console 上是一行紅字 `連不上伺服器，請檢查網路後重試`）。
-   賣家清單載不到不影響開池（只會少掉「以既有的池為範本」），
-   所以吞掉；pools.ensureLoaded() 自己內部已經接住了。 */
-sellers.ensureLoaded().catch(() => {})
+/* 兩支都不會 reject —— 各自在 store 裡把例外吞掉了（見 stores/sellers.ts
+   的 ensureLoaded 那段說明）。這裡原本有一顆 `.catch(() => {})`，
+   那是還沒把修正下沉到 store 之前的權宜；留著會讓下一個人以為
+   「這一頁特別需要接」，而其實是每一頁都不需要接。
+   賣家清單載不到只會少掉「以既有的池為範本」，開池本身不受影響。 */
+sellers.ensureLoaded()
 pools.ensureLoaded()
 
 /** mock 假資料裡的「我」。**只有 MOCK 模式能用**，理由見 mySellerId */
