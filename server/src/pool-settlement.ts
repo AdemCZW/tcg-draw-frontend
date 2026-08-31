@@ -458,9 +458,12 @@ export async function acceptRecycle(
  * 順帶的好處：原本第一段就把使用者名下**所有**保留中的結算全部上鎖，
  * 每一次讀卡冊都要跟別人搶那批鎖；現在只有真的到期的那幾筆才上鎖。
  *
- * 已知的殘餘（記錄，不處理）：後台出貨那條路先鎖 shipments 再動 prizes，
- * 跟賣家自助出貨（prizes → … → shipments）之間理論上仍有一個極窄的環。
- * 那條是平台自己按的、頻率極低，等它真的咬人再說。
+ * 曾經的殘餘，現在補掉了：後台出貨那條路原本先鎖 shipments 再動 prizes，
+ * 跟賣家自助出貨（prizes → … → shipments）方向相反。原本的判斷是
+ * 「平台自己按的、頻率極低，等它真的咬人再說」—— 它咬了。
+ * 併發壓測（regress-race.ts 第 7b 組）200 輪撞到 3 輪 40P01，
+ * 後台那一支變成沒有內容的 500。routes/admin.ts 已改成兩階段、
+ * 照 id 排序先鎖 prizes，全站鎖序現在一致是 prizes → settlements → shipments。
  */
 export async function sweepSettlements(tx: Tx, userId?: string): Promise<number> {
   /* 第一段：無鎖撈候選。條件跟原本兩個查詢一致 —— 保留中的（等時限），

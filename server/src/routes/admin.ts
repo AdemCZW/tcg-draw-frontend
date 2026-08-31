@@ -332,6 +332,28 @@ admin.post('/shipments/:id/status', async c => {
   }
 
   const r = await sql.begin(async tx => {
+    /* ── 鎖序：prizes 先，shipments 後（V-1 的同一條紀律）────────────────
+       這一支原本是 `shipments FOR UPDATE` → `update prizes`，而賣家自助出貨
+       是 `prizes FOR UPDATE` → … → `update shipments`，方向相反。
+       pool-settlement.ts 的檔頭把這條記成「理論上的極窄的環」，
+       併發壓測（server/src/regress-race.ts 第 7b 組）把它壓出來了：
+       一張出貨單裝三張同賣家的卡，同時發一個後台標出貨 + 三個賣家自助出貨，
+       200 輪撞到 3 輪。Postgres 回 40P01，拋出點就是下面那行 update prizes，
+       後台這一支變成沒有內容的 500（賣家那幾支照常 200）。
+       資料不會壞 —— 事務整個回滾 —— 壞的是後台會莫名其妙失敗而且看不出原因。
+
+       改成兩階段，跟 sweepSettlements 用的是同一個模式：
+       先不上鎖讀出 prize_ids，照 id 排序鎖 prizes，再鎖 shipments 那一列。
+       排序是必要的：`update ... where id = any(...)` 依掃描順序上鎖，
+       兩個同時進來的請求就算拿的是同一組 id，順序也不保證一樣。
+
+       先讀的那一筆只拿來知道「要鎖哪幾張卡」，狀態判斷一律用上鎖後重讀的
+       那一筆 —— 這中間出貨單可能已經被別人推進到下一個狀態了。 */
+    const [peek] = await tx`select prize_ids from shipments where id = ${id}`
+    if (!peek) return { error: 'NOT_FOUND', message: '找不到這筆出貨單', status: 404 }
+    const pids = [...(peek.prize_ids as string[])].sort()
+    if (pids.length) await tx`select id from prizes where id = any(${pids}) order by id for update`
+
     const [sh] = await tx`select * from shipments where id = ${id} for update`
     if (!sh) return { error: 'NOT_FOUND', message: '找不到這筆出貨單', status: 404 }
 
