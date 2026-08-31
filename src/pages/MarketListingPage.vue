@@ -15,7 +15,7 @@
  *   ship  卡在賣家手上，走託管，點數只是凍結，要等收貨才放款給賣家
  * 這件事講在成交之後才講就太晚了 —— 使用者會以為卡沒進卡冊是壞掉。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '@/lib/api'
 import { deliveryOf } from '@/shared/domain'
@@ -106,6 +106,33 @@ const boughtStashId = ref<string | undefined>()
 const boughtQuery = computed(() => (boughtStashId.value ? { new: boughtStashId.value } : undefined))
 onBeforeUnmount(() => { if (jump) clearTimeout(jump) })
 
+/* ---- 成交之後，畫面要當場說完 ----
+   .result 是接在詳情面板後面的流內區塊，在 393px 上它的位置是 945px ——
+   視窗下緣再往下 93px。庫內轉移那條靠 router.replace 把人帶走所以看得到結果，
+   需寄送這條原本只寫了 done.value，於是使用者按完「確定買下」看到的變化
+   只有「買下鈕不見了」：餘額不動（凍結不是扣款，本來就該不動）、卡圖與價格
+   一模一樣。那跟按壞了長得一樣，而他其實已經付了 18,220 點。
+
+   兩件事一起補，缺一不可：
+     1. 下面那條 sticky 列不消失，就地換成結果列 —— sticky 的位置不受
+        捲動位置影響，所以「成交了 / 錢是凍結不是扣款 / 下一步去哪」
+        這三件事在任何捲動位置都看得到，不必賭使用者剛好停在哪裡。
+     2. 主動把 .result 捲到眼前 —— 託管那段完整說明（誰、什麼時候拿到錢、
+        卡什麼時候進卡冊）值得看，光靠一行結果列講不完。
+   只做 2 不做 1 的話，使用者往回捲就又找不到下一步；
+   只做 1 不做 2 的話，他知道成交了卻不知道接下來會發生什麼。 */
+const resultEl = ref<HTMLElement | null>(null)
+/* 捲動用 smooth，除非使用者要求減少動態 —— 瞬移到另一段畫面會讓人
+   分不清是捲動還是換頁，而這一刻他最需要的就是「我還在同一頁」 */
+const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
+async function revealResult() {
+  await nextTick()
+  resultEl.value?.scrollIntoView({
+    behavior: reduceMotion.value ? 'auto' : 'smooth',
+    block: 'center'
+  })
+}
+
 function ask() {
   if (!buyable.value) return
   error.value = ''
@@ -143,6 +170,9 @@ async function buy() {
     confirming.value = false
     haptic('success')
     track('market_buy_success')
+    /* 兩條通道都捲：庫內轉移雖然 1.4 秒後會自己導去卡冊，但在那之前
+       「已買下 ○○」同樣是長在視窗外的，那一拍等於什麼都沒發生。 */
+    await revealResult()
   } catch (e) {
     error.value = e instanceof Error ? e.message : '購買失敗'
     // 被別人先買走了：把畫面改成已售出，不要讓他一直按同一顆會失敗的鍵
@@ -165,6 +195,10 @@ const delistAsking = ref(false)
 const delisted = ref(false)
 /** 待命列與確認列不能同時在畫面上（同一個位置會疊出兩條），兩種確認共用一個判斷 */
 const asking = computed(() => confirming.value || delistAsking.value)
+/** 三種「事情已經做完了」收斂成一個值：結果列與結果面板都只看它，
+    不必在樣板裡把 done / delisted 兩個旗標的組合再攤開一次 */
+const outcome = computed<'vault' | 'ship' | 'delist' | null>(() =>
+  delisted.value ? 'delist' : done.value)
 
 function askDelist() {
   if (!isMine.value || sold.value || delisted.value) return
@@ -183,6 +217,8 @@ async function delist() {
     delisted.value = true
     delistAsking.value = false
     haptic('success')
+    /* 下架走的是同一塊 .result、同一個位置，症狀也會一模一樣 */
+    await revealResult()
     /* 沒有 track()：GaEvent 的白名單住在 lib/ga.ts，那支不在這次的改動範圍內，
        為了埋一個點去動共用型別不值得 —— 之後要埋再一起加。 */
   } catch (e) {
@@ -306,40 +342,64 @@ async function delist() {
         <TradeGuard class="seg guardSeg" />
       </section>
 
-      <!-- 成交之後：明確告訴他卡（或錢）現在在哪裡 -->
-      <div v-if="done === 'vault'" class="result ok" role="status">
+      <!-- 成交之後：明確告訴他卡（或錢）現在在哪裡。
+           三種結果互斥，共用同一個 ref —— 成交後由 revealResult() 把它捲到眼前。
+           去處那顆鍵不放在這裡：它住在下面那條結果列，那條是 sticky 的，
+           使用者往回捲去看卡圖時下一步仍然跟著他。同一個畫面上放兩顆
+           一模一樣的「看這筆訂單」只會讓人猶豫該按哪一顆。 -->
+      <div v-if="done === 'vault'" ref="resultEl" class="result ok" role="status">
         <strong>已買下 {{ listing.card.name }}</strong>
         <p>卡片已經過戶到你名下，收進卡冊了。正在帶你過去…</p>
-        <RouterLink :to="{ name: 'cards', query: boughtQuery }" class="btn primary">去看我的卡冊</RouterLink>
       </div>
 
-      <div v-else-if="done === 'ship'" class="result ok" role="status">
+      <div v-else-if="done === 'ship'" ref="resultEl" class="result ok" role="status">
         <strong>{{ listing.price.toLocaleString() }} 點已凍結</strong>
         <p>
-          這筆走託管：點數是凍結不是扣款，錢還是你的。賣家出貨、你確認收貨
-          或 7 天驗收期滿之後才會放款給賣家。卡收到之前不會進卡冊。
+          這筆走託管：點數是凍結不是扣款，錢還是你的（所以頭部的餘額不會變少）。
+          賣家出貨、你確認收貨或 7 天驗收期滿之後才會放款給賣家。
+          卡收到之前不會進卡冊，進度都在訂單頁上。
         </p>
-        <RouterLink :to="{ name: 'orders' }" class="btn primary">看這筆訂單</RouterLink>
       </div>
 
-      <div v-if="delisted" class="result ok" role="status">
+      <div v-if="delisted" ref="resultEl" class="result ok" role="status">
         <strong>已下架 {{ listing.card.name }}</strong>
         <p>
           這張卡已經從市場收回，回到你的卡冊了。想重新賣就再上架一次，
           價格可以重新設定。
         </p>
-        <RouterLink :to="{ name: 'cards' }" class="btn primary">去我的卡冊</RouterLink>
       </div>
 
       <p v-if="error" class="err" role="alert">{{ error }}</p>
 
-      <!-- 結帳列只有一條，兩種狀態：待命（餘額＋買下）與確認（金額＋取消／確定）。
+      <!-- 成交／下架之後，這條列不消失，就地換成結果列。
+           原本 `!done` 把整條移除，畫面上唯一的變化就是「按鈕不見了」——
+           而那正是「壞掉」的長相。位置不變是刻意的：他剛剛按的那顆鍵在這裡，
+           答案就該出現在這裡。 -->
+      <div v-if="outcome" class="bar card doneBar">
+        <span class="sum">
+          <template v-if="outcome === 'ship'">
+            <strong class="mono">{{ listing.price.toLocaleString() }}</strong> 點已凍結，還沒扣款
+          </template>
+          <template v-else-if="outcome === 'vault'">已過戶進你的卡冊</template>
+          <template v-else>已從市場收回，卡回到你的卡冊</template>
+        </span>
+        <RouterLink v-if="outcome === 'ship'" :to="{ name: 'orders' }" class="btn primary">
+          看這筆訂單
+        </RouterLink>
+        <RouterLink
+          v-else
+          :to="{ name: 'cards', query: outcome === 'vault' ? boughtQuery : undefined }"
+          class="btn primary"
+        >去我的卡冊</RouterLink>
+      </div>
+
+      <!-- 待命的結帳列，兩種狀態：待命（餘額＋買下）與確認（金額＋取消／確定）。
            確認態改由 BottomActionBar 接手，所以這條在確認時要讓開，不然畫面上
            會疊出兩條列。窄螢幕用 visibility 藏而不是拿掉：它是 sticky、佔著
            版面高度，直接移除會讓整頁往上跳一截，而浮出的那條是 fixed 補不回來。
            寬螢幕相反 —— 確認列就地接在同一個位置，這條要真的讓出流內空間。 -->
       <div
-        v-if="!done && !delisted && (!asking || !wide)"
+        v-else-if="!asking || !wide"
         class="bar card" :class="{ ghost: asking }"
         :aria-hidden="asking || undefined"
       >
@@ -547,7 +607,6 @@ async function delist() {
 .result.ok { background: var(--ok-wash); color: var(--ok-ink); }
 .result strong { font-size: 14.5px; }
 .result p { margin: 0; font-size: 12.5px; line-height: 1.7; }
-.result .btn { margin-top: 4px; }
 
 .err {
   margin: 14px 0 0; padding: 11px 14px; border-radius: var(--radius);
@@ -575,6 +634,12 @@ async function delist() {
 
 /* 確認態讓待命列讓開時仍佔著版面高度，見 template 的說明 */
 .ghost { visibility: hidden; }
+
+/* 結果列：跟待命列同一個位置、同一個形狀，只換底色與內容。
+   綠底是全站「這件事成了」的顏色（跟上面那塊 .result.ok 同一組），
+   跟紅色的「買下」分得開 —— 不換色的話它看起來還像一顆可以再按一次的結帳列。 */
+.doneBar { background: var(--ok-wash); }
+.doneBar .sum, .doneBar .sum strong { color: var(--ok-ink); }
 
 /* 確認列的內容現在住在 BottomActionBar 裡，那是個一般的區塊容器，
    不再靠外層的 flex-wrap 換行 */

@@ -29,7 +29,7 @@
  * 每一種狀態講的話都不一樣，所以文案按狀態分開寫（buyerViewOf），
  * 不用一套通用句型帶過 —— 通用句型的結果就是每一種狀態都講得不清不楚。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useOrdersStore, shipToOf, isSelf, type ShipTo } from '@/stores/orders'
 import { useWalletStore } from '@/stores/wallet'
@@ -44,12 +44,23 @@ import CopyLine from '@/components/CopyLine.vue'
 import SellerChip from '@/components/SellerChip.vue'
 import { api } from '@/lib/api'
 import { MOCK } from '@/lib/config'
+import { useMediaQuery } from '@/composables/useMediaQuery'
 
 const store = useOrdersStore()
 const wallet = useWalletStore()
 
 const tab = ref<'open' | 'done'>('open')
 const shipFor = ref<string | null>(null)
+/**
+ * 「我已收到」的確認面板要開在哪一筆。
+ *
+ * 為什麼這一顆非要有守門不可：它是這一頁唯一「按一下就把錢放出去、
+ * 而且之後再也不能申訴」的動作，而它旁邊 8px 就是「我要申訴」——
+ * 那條路要附完整開箱影片才受理，按錯一次就沒有第二次機會。
+ * 原本的守門強度剛好裝反了：風險低得多的「我已寄出」有一整張確認面板，
+ * 真正不可還原的這一顆卻是直接呼叫 store.confirm()。
+ */
+const confirmFor = ref<string | null>(null)
 const tracking = ref('')
 const disputeFor = ref<string | null>(null)
 const reason = ref('')
@@ -376,6 +387,79 @@ function closeShip() {
   shipFor.value = null
 }
 
+const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
+
+/**
+ * 把剛打開的那張面板帶到眼前。
+ *
+ * 實測（393×852）：這兩顆鈕就在訂單卡的最下緣，捲到它們時位置是 top 808，
+ * 面板接在下面 —— top 864、送出鍵 999，整張都在視窗外。使用者按了「我已收到」
+ * 會看到畫面完全沒動，然後再按一次。守門面板開在看不見的地方等於沒有守門。
+ *
+ * 用 data-testid 找節點而不是 template ref：這三張面板長在 v-for 裡，
+ * ref 會收到一個陣列，還要自己對應是哪一筆；而 confirmFor / disputeFor
+ * 一次只可能有一個值，所以選擇器本來就唯一。
+ */
+async function revealPanel(sel: string) {
+  await nextTick()
+  document.querySelector(sel)?.closest('.form')?.scrollIntoView({
+    behavior: reduceMotion.value ? 'auto' : 'smooth',
+    /* nearest：只捲到剛好看得見，不要把使用者剛剛在看的訂單卡推出畫面 */
+    block: 'nearest'
+  })
+}
+
+/* 兩張面板互斥：同一張訂單卡上同時攤開「確認收貨」與「申訴」的話，
+   兩組送出鍵會前後相鄰，而它們的結果剛好相反 —— 那正是這條要修的問題本身。 */
+function openConfirm(o: Order) {
+  confirmFor.value = o.id
+  disputeFor.value = null
+  err.value = ''
+  revealPanel('[data-testid="confirm-submit"]')
+}
+function openDispute(o: Order) {
+  disputeFor.value = o.id
+  confirmFor.value = null
+  err.value = ''
+  revealPanel('[data-testid="dispute-submit"]')
+}
+
+/**
+ * 放款成功之後留在畫面上的一句話。
+ *
+ * 訂單在這一刻剛結案、從「進行中」的清單裡消失，所以這句話不能掛在
+ * 訂單卡上 —— 那張卡馬上就不在了。金額與對象在按下的當下就寫進字串，
+ * 原因同上：之後再去 o.price 取值，那筆訂單可能已經不在目前這個分頁裡。
+ * 不自動消失：使用者要能回頭確認「那 41,000 點是我自己放出去的」。
+ */
+const released = ref('')
+const releasedEl = ref<HTMLElement | null>(null)
+
+async function doConfirm(o: Order) {
+  if (busy.value) return
+  err.value = ''
+  busy.value = true
+  try {
+    await store.confirm(o.id)
+    confirmFor.value = null
+    /* 自動切到「已結案」：訂單剛從「進行中」消失，畫面還停在原本那個分頁的話
+       使用者看到的是一整片「目前沒有進行中的訂單」加一段教學文 ——
+       他會以為訂單被系統吃掉了，而不是自己剛把它結掉。 */
+    tab.value = 'done'
+    released.value =
+      `已確認收貨，${o.price.toLocaleString()} 點已放款給賣家 ${o.sellerName}。` +
+      '這筆訂單結案了，就在下面的「已結案」清單裡。'
+    /* 訊息長在清單上方，而使用者按下按鈕時人在訂單卡那邊（實測 scrollY 445）——
+       不主動捲過去的話這句話會落在視窗上方，等於沒說。 */
+    await nextTick()
+    releasedEl.value?.scrollIntoView({
+      behavior: reduceMotion.value ? 'auto' : 'smooth',
+      block: 'center'
+    })
+  } catch (e) { err.value = e instanceof Error ? e.message : '確認收貨失敗' }
+  finally { busy.value = false }
+}
+
 async function doShip(o: Order) {
   /* 唯一的門檻是「有填單號就要填對」。沒填、沒選物流商都照樣出得了貨 ——
      平台不經手實體卡，留存證據的設計本來就跟現實對不上。 */
@@ -427,6 +511,11 @@ async function doDispute(o: Order) {
       <button type="button" role="tab" :aria-selected="tab === 'done'"
         class="chip" :class="{ on: tab === 'done' }" @click="tab = 'done'">已結案</button>
     </div>
+
+    <!-- 放款成功。這句話擺在清單上方而不是訂單卡裡，因為那張卡在這一刻
+         已經換到「已結案」分頁去了。沒有它的話，使用者按完「我已收到」
+         看到的只有「訂單不見了」。 -->
+    <p v-if="released" ref="releasedEl" class="okMsg" role="status">{{ released }}</p>
 
     <!-- 雙方按下完成的機制。規則本來就在跑，但使用者看不到就等於不存在 ——
          逾時的三條尤其重要：它們會在沒有人動作的時候把錢移到某一邊 -->
@@ -620,10 +709,12 @@ async function doDispute(o: Order) {
           <button v-if="a === 'ship'" type="button" class="btn primary sm" @click="openShip(r.o)">
             我已寄出
           </button>
-          <button v-if="a === 'confirm'" type="button" class="btn primary sm" @click="store.confirm(r.o.id)">
+          <!-- 這一顆不再直接呼叫 store.confirm()：它是全站唯一「按一下就
+               不可還原地把錢放出去」的按鈕，先開確認面板（見下面 .form） -->
+          <button v-if="a === 'confirm'" type="button" class="btn primary sm" @click="openConfirm(r.o)">
             我已收到
           </button>
-          <button v-if="a === 'dispute'" type="button" class="btn sm" @click="disputeFor = r.o.id">
+          <button v-if="a === 'dispute'" type="button" class="btn sm" @click="openDispute(r.o)">
             我要申訴
           </button>
         </template>
@@ -677,6 +768,28 @@ async function doDispute(o: Order) {
         </div>
       </div>
 
+      <!-- 收貨確認。沿用「我已寄出」那張面板的形狀（.form / .lead / .hint / .frow）——
+           這一頁只該有一種確認面板，兩種長相會讓人以為它們是不同性質的東西。
+           文案要講滿三件事：不可還原、多少錢、給誰。少講任何一件，
+           使用者按下去的時候就不知道自己在同意什麼。 -->
+      <div v-if="confirmFor === r.o.id" class="form">
+        <p class="lead">
+          確認之後，<b>{{ r.o.price.toLocaleString() }} 點會立刻放款給賣家 {{ r.o.sellerName }}</b>。
+          這個動作<b>不能還原</b>，這筆訂單之後也不能再申訴。
+        </p>
+        <p class="hint">
+          卡還沒收到、或東西跟描述不符，就先按「取消」，改按「我要申訴」——
+          申訴要附完整未剪輯的開箱影片，所以拆封前先開始錄。
+        </p>
+        <div class="frow">
+          <button type="button" class="btn sm" @click="confirmFor = null">取消</button>
+          <button
+            type="button" class="btn primary sm" data-testid="confirm-submit"
+            :disabled="busy" @click="doConfirm(r.o)"
+          >{{ busy ? '處理中…' : '確定收到，放款給賣家' }}</button>
+        </div>
+      </div>
+
       <!-- 申訴表單：沒有開箱影片不受理 -->
       <div v-if="disputeFor === r.o.id" class="form">
         <label>
@@ -694,7 +807,10 @@ async function doDispute(o: Order) {
         <p class="hint">沒有影片無法受理索賠 —— 買東西不強制錄影，但要申請退款必須附。</p>
         <div class="frow">
           <button type="button" class="btn sm" @click="disputeFor = null">取消</button>
-          <button type="button" class="btn primary sm" :disabled="!canDispute() || busy" @click="doDispute(r.o)">{{ busy ? '處理中…' : '送出申訴' }}</button>
+          <button
+            type="button" class="btn primary sm" data-testid="dispute-submit"
+            :disabled="!canDispute() || busy" @click="doDispute(r.o)"
+          >{{ busy ? '處理中…' : '送出申訴' }}</button>
         </div>
       </div>
     </article>
@@ -992,7 +1108,13 @@ a.who2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .acts .btn.sm { min-height: 44px; padding: 8px 16px; font-size: 13px; }
 .btn.ghost { opacity: .72; font-size: 12px; }
 
-.form { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.form {
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line);
+  /* revealPanel() 用 scrollIntoView 把面板帶進畫面，而「畫面底部」不等於
+     視窗底部：手機上最後那 56px 加安全區被底部導覽蓋著。沒有這一行，
+     面板會剛好停在導覽底下 —— 送出鍵看得到一半、按不到（同 DrawPanel 的寫法）。 */
+  scroll-margin-bottom: calc(12px + max(var(--nav-total, 0px), var(--safe-b, 0px)));
+}
 .form label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
 .form input[type="text"] {
   display: block; width: 100%; margin-top: 5px;
@@ -1006,6 +1128,16 @@ a.who2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .frow { display: flex; gap: 8px; justify-content: flex-end; }
 
 .err { color: var(--danger); font-size: 13.5px; margin: 0 0 12px; }
+
+/* 放款成功的訊息。用綠底而不是一行綠字：這是使用者剛剛花掉一筆不可還原的
+   錢換來的唯一回執，它得跟旁邊的說明文字分得開。不自動消失 —— 訂單卡在
+   同一刻換到「已結案」去了，這句話是他唯一的線索。 */
+.okMsg {
+  margin: 0 0 12px; padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--ok-wash); color: var(--ok-ink);
+  font-size: 13px; line-height: 1.75;
+}
 .dev { margin-top: 26px; padding: 14px 16px; background: var(--surface-2); border-radius: var(--radius-lg); }
 .dev h2 { font-size: 14px; margin: 0 0 6px; }
 .dev p { font-size: 12.5px; line-height: 1.7; margin: 0 0 10px; }
