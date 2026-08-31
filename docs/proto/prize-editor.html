@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>獎項配置 · 設計原型</title>
+<title>獎項配置 · 分組 vs 分頁</title>
 <style>
 /* ------------------------------------------------------------------
    色票抄自 src/styles/tokens.css（只抄這份原型用得到的那些）。
@@ -48,18 +48,22 @@ input,select{font:inherit}
 /* ---------- 控制台（原型自己的外殼，不是設計的一部分） ---------- */
 .lab{max-width:1180px;margin:0 auto;padding:22px 18px 60px}
 .lab h1{font-size:20px;margin:0 0 4px}
-.lab .sub{color:var(--muted);font-size:13px;margin:0 0 18px;max-width:70ch}
+.lab .sub{color:var(--muted);font-size:13px;margin:0 0 18px;max-width:72ch}
+.lab .sub strong{color:var(--ink)}
 .bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--surface);position:sticky;top:0;z-index:40}
 .bar .grp{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .bar .lbl{font-size:11.5px;font-weight:700;color:var(--muted);margin-right:2px}
 .tgl{min-height:44px;min-width:44px;padding:0 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);color:var(--ink);font-size:13px}
 .tgl.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:700}
-.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:14px 0 18px}
+.tgl.danger.on{background:var(--danger);border-color:var(--danger);color:#fff}
+.readout{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:14px 0 18px}
 .ro{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--surface)}
 .ro b{display:block;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.02em}
 .ro .v{font-family:var(--font-mono);font-size:19px;font-weight:600;margin-top:2px}
-.ro .d{font-size:11.5px;color:var(--muted);margin-top:1px}
+.ro .d{font-size:11.5px;color:var(--muted);margin-top:1px;line-height:1.5}
 .ro .d.win{color:var(--ok-ink)}
+.ro .d.lose{color:var(--danger-ink)}
+.ro.hot{border-color:var(--accent)}
 
 /* ---------- 兩具手機 ---------- */
 .stage{display:grid;grid-template-columns:repeat(auto-fit,minmax(393px,1fr));gap:22px;justify-items:center}
@@ -71,8 +75,8 @@ input,select{font:inherit}
   position:relative;width:393px;max-width:100%;height:852px;
   border:1px solid var(--line);border-radius:20px;overflow:hidden;background:var(--bg);
 }
-.scroll{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;padding:14px 14px 132px}
-/* 底部常駐機構：模擬站上的挑卡列（70）與底部導覽（57） */
+.scroll{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;padding:14px 14px 132px;scroll-behavior:auto}
+/* 底部常駐機構：模擬站上的挑卡列（70）與底部導覽（57）＝ 一屏實際可用 725px */
 .chrome{position:absolute;left:0;right:0;bottom:0;pointer-events:none}
 .chromeBar{margin:0 12px 8px;height:70px;border-radius:16px;background:var(--surface-2);border:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-size:13px;color:var(--muted)}
 .chromeBar b{color:var(--ink)}
@@ -81,75 +85,37 @@ input,select{font:inherit}
 /* ---------- 共用的區塊外觀（抄自開池頁） ---------- */
 .card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--line-soft)}
 .block{padding:18px}
-.block+.block{margin-top:18px}
 .block-head{display:flex;align-items:center;gap:10px;margin-bottom:12px}
 .block-head h3{margin:0;font-size:16px}
 .chip{font-size:11.5px;padding:3px 9px;border-radius:999px;background:var(--surface-2);color:var(--muted)}
-.req{font-style:normal;font-size:10px;font-weight:700;margin-left:6px;padding:1px 5px;border-radius:5px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
-.hint{font-size:12px;line-height:1.55;color:var(--muted);margin:12px 0 0}
-.hint strong{color:var(--ink)}
 input,select{padding:8px 10px;font-size:14px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);min-width:0}
 input::placeholder{color:var(--faint)}
 
-/* ---------- A：現況（逐列表單） ---------- */
-.tierBuy{margin:0 0 16px;padding:14px;border:1px solid var(--line-soft);border-radius:12px;background:var(--surface-2)}
-.tierBuy h4{font-size:13.5px;margin:0 0 6px}
-.tbNote{font-size:12px;line-height:1.7;margin:0 0 12px;color:var(--muted)}
-.tbNote strong{color:var(--ink)}
-.tbGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px}
-.tbCell{display:grid;gap:4px;min-width:0}
-.tbLbl{font-size:11.5px;font-weight:600;color:var(--muted)}
-.tbCell input{width:100%}
-.tbLine{font-size:12.5px;line-height:1.7;margin:12px 0 0;color:var(--muted)}
-.tbLine strong{color:var(--ink)}
-
-.prize-row{
-  display:grid;grid-template-columns:34px minmax(0,1fr) minmax(0,1fr) 32px;
-  gap:8px;align-items:center;padding:10px;margin-bottom:10px;
-  border:1px solid var(--line-soft);border-radius:10px;min-width:0;
-}
-.prize-row>.art{grid-row:1;grid-column:1}
-.prize-row>.ident{grid-row:1;grid-column:2/4}
-.prize-row>.del{grid-row:1;grid-column:4}
-.prize-row>select{grid-row:2;grid-column:1/3}
-.prize-row>.f-qty{grid-row:2;grid-column:3/5}
-.prize-row>.f-ref{grid-row:3;grid-column:1/5}
-.prize-row>.f-buy{grid-row:4;grid-column:1/5}
-.art{display:block;width:34px;aspect-ratio:63/88;border-radius:4px;overflow:hidden;background:var(--surface-3)}
-.ident{display:grid;gap:1px;min-width:0}
-.idName{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.idMeta,.idCert{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.idCert{color:var(--accent)}
-.del{display:grid;place-items:center;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--muted);padding:8px 0}
-.del svg{width:15px;height:15px}
-.prize-row input,.prize-row select{width:100%}
-.twoCols{line-height:1.75}
-
-/* ---------- B：提案（賞別為主軸） ---------- */
-.tierGroup{border:1px solid var(--line);border-radius:14px;background:var(--surface-2);margin-bottom:10px;overflow:hidden}
-.tierGroup.empty{opacity:.55}
+/* ---------- 賞別分組（兩案共用的組內長相） ---------- */
+.tierGroup{border:1px solid var(--line);border-radius:14px;background:var(--surface-2);margin-bottom:10px;overflow:hidden;scroll-margin-top:8px}
+.tierGroup.bad{border-color:var(--danger)}
+.tierGroup.flash{animation:flash 1.1s ease-out}
+@keyframes flash{0%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 3px transparent}}
 .tgHead{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 12px}
 .tgDot{width:10px;height:10px;border-radius:3px}
 .tgName{font-size:14px;font-weight:700;min-width:0}
 .tgCount{font-size:11.5px;color:var(--muted);font-weight:500;margin-left:6px}
 .tgMoney{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:0 12px 10px}
 .tgMoney input{width:100%;min-height:44px;font-family:var(--font-mono)}
+.tgMoney input.bad{border-color:var(--danger);background:var(--danger-wash)}
 .tgMoney .unit{font-size:11.5px;color:var(--muted);white-space:nowrap}
 .tgMoney .fieldWrap{display:grid;gap:3px;min-width:0}
 .tgMoney .fl{font-size:11px;font-weight:700;color:var(--muted)}
+.tgErr{font-size:11.5px;color:var(--danger-ink);padding:0 12px 8px;font-weight:600}
 .tgSum{font-size:11.5px;color:var(--muted);padding:0 12px 8px;line-height:1.6}
 .tgSum b{color:var(--ink);font-family:var(--font-mono)}
 .tgSum .ovr{color:var(--gold-deep)}
 .rail{display:flex;gap:8px;overflow-x:auto;padding:0 12px 12px;scroll-snap-type:x proximity;overscroll-behavior-x:contain}
 .rail::-webkit-scrollbar{height:5px}
 .rail::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
-.tile{
-  flex:none;width:54px;padding:0;border:0;background:transparent;scroll-snap-align:start;
-  display:grid;gap:3px;min-height:44px;
-}
+.tile{flex:none;width:54px;padding:0;border:0;background:transparent;scroll-snap-align:start;display:grid;gap:3px;min-height:44px}
 .tileArt{position:relative;width:54px;aspect-ratio:63/88;border-radius:6px;overflow:hidden;background:var(--surface-3);border:2px solid transparent}
 .tile.sel .tileArt{border-color:var(--accent)}
-.tile.warn .tileArt{border-color:var(--danger)}
 .tileName{font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
 .tileTag{position:absolute;left:2px;bottom:2px;font-size:9px;font-weight:700;padding:0 3px;border-radius:3px;background:rgba(0,0,0,.66);color:#fff}
 .tileTag.ovr{background:var(--gold-deep);color:#1a1614}
@@ -167,16 +133,42 @@ input::placeholder{color:var(--faint)}
 .unassigned .tgName{color:var(--accent-soft)}
 .assignRow{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 12px}
 .assignBtn{min-height:44px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:13px;font-weight:600}
-.assignBtn:hover{border-color:var(--accent)}
 .selBar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 10px;padding:10px 12px;border-radius:12px;background:var(--surface-3);font-size:12.5px}
 .selBar .n{font-weight:700}
 .selBar button{min-height:44px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:12.5px}
 .miniNote{font-size:12px;line-height:1.7;color:var(--muted);margin:0 0 12px}
 .miniNote strong{color:var(--ink)}
-.why{margin:8px 0 0}
-.why summary{font-size:12px;color:var(--muted);cursor:pointer;min-height:44px;display:flex;align-items:center}
-.why p{font-size:12px;line-height:1.75;color:var(--muted);margin:0 0 8px}
-.why strong{color:var(--ink)}
+
+/* ---------- 左：索引膠囊（不是分頁 —— 點下去是捲過去，不藏別組） ---------- */
+/* 膠囊列換行，不橫捲。橫捲會讓最右邊的膠囊連同它的警示點被推出畫面 ——
+   而「錯誤不會被藏起來」正是這個設計唯一的賣點，一旦紅點捲得掉，整個主張就垮了。
+   代價是多佔一到兩行高度，這筆換得值。 */
+.pills{display:flex;flex-wrap:wrap;gap:6px;padding:2px 0 8px;margin:0 0 4px}
+.pill{position:relative;flex:none;min-height:44px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px;white-space:nowrap}
+.pill .pn{font-family:var(--font-mono);font-size:11.5px;color:var(--muted);font-weight:500}
+.pill .swatch{width:8px;height:8px;border-radius:2px}
+.pillWarn{width:8px;height:8px;border-radius:50%;background:var(--danger);flex:none}
+.pill.hasWarn{border-color:var(--danger)}
+.railHint{font-size:11px;color:var(--faint);margin:0 0 10px}
+
+/* ---------- 右：分頁列（一次只顯示一個賞別） ---------- */
+.tabs{display:flex;flex-wrap:wrap;gap:4px;padding:2px 0 0;margin:0 0 10px;border-bottom:1px solid var(--line)}
+.tab{position:relative;flex:none;min-height:44px;padding:0 12px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px;white-space:nowrap}
+.tab.on{color:var(--ink);border-bottom-color:var(--accent)}
+.tab .pn{font-family:var(--font-mono);font-size:11.5px;font-weight:500;opacity:.8}
+.tab .swatch{width:8px;height:8px;border-radius:2px}
+.tabWarn{width:8px;height:8px;border-radius:50%;background:var(--danger);flex:none}
+
+/* ---------- 送出結果 ---------- */
+.submitBtn{width:100%;min-height:48px;margin-top:6px;border-radius:12px;border:0;background:var(--accent);color:var(--on-accent);font-size:14px;font-weight:700}
+.verdict{border-radius:12px;padding:12px 14px;margin:0 0 12px;font-size:12.5px;line-height:1.6}
+.verdict.bad{background:var(--danger-wash);border:1px solid var(--danger)}
+.verdict.good{background:var(--ok-wash);border:1px solid var(--ok)}
+.verdict h5{margin:0 0 6px;font-size:13px;color:var(--danger-ink)}
+.verdict.good h5{color:var(--ok-ink)}
+.verdict ul{margin:0;padding:0;list-style:none;display:grid;gap:6px}
+.verdict li button{width:100%;min-height:44px;text-align:left;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:12.5px}
+.verdict .fine{color:var(--muted);margin:8px 0 0;font-size:11.5px}
 
 /* 貼底面板（抄 MyCardsPage 的 .sheetWrap/.sheet） */
 .sheetWrap{position:absolute;inset:0;z-index:60;display:flex;align-items:flex-end;justify-content:center;background:var(--scrim)}
@@ -206,22 +198,23 @@ input::placeholder{color:var(--faint)}
 .econ .lb{font-size:12px;font-weight:600;color:var(--muted)}
 .econ .msg{font-size:12px;margin:6px 0 0;line-height:1.55;color:var(--muted)}
 
-/* 文案對照 */
-.copy{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:26px}
-.copy .box{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--surface)}
-.copy h3{font-size:13px;margin:0 0 8px}
-.copy .old{color:var(--muted);font-size:12.5px;line-height:1.8}
-.copy .new{font-size:13px;line-height:1.85}
-.copy .new strong{color:var(--ink)}
-.copy .tagline{font-size:11px;color:var(--faint);margin:10px 0 0}
+/* 底下的三種行為對照 */
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:26px}
+.notes .box{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--surface)}
+.notes h3{font-size:13px;margin:0 0 8px}
+.notes p{font-size:12.5px;line-height:1.8;margin:0 0 8px;color:var(--muted)}
+.notes p:last-child{margin-bottom:0}
+.notes strong{color:var(--ink)}
+.notes .tagline{font-size:11px;color:var(--faint)}
 </style>
 </head>
 <body>
 <div class="lab">
-  <h1>獎項配置 · 現況 vs 提案</h1>
+  <h1>獎項配置 · 賞別分組 vs 賞別分頁</h1>
   <p class="sub">
-    兩具 393×852 的手機並排跑同一份資料。左邊是站上現在的逐列表單，右邊是提案的「賞別為主軸」。
-    上面的數字是即時量的，不是估的：切張數就看得到版面怎麼長。
+    兩具 393×852 的手機跑<strong>同一份資料</strong>：左邊所有賞別同時在頁上（上方那排膠囊是<strong>索引</strong>，點了是捲過去，不藏別組），
+    右邊一次只顯示一個賞別（上方那排是<strong>分頁</strong>）。
+    「觸發缺漏」那幾顆按鈕會讓兩邊<strong>同時</strong>進入「有一格沒填」的狀態 —— 這個原型真正要讓你摸到的就是那一刻。
   </p>
 
   <div class="bar">
@@ -231,6 +224,14 @@ input::placeholder{color:var(--faint)}
       <button class="tgl on" data-n="12">12</button>
       <button class="tgl" data-n="30">30</button>
       <button class="tgl" id="addFive">再挑 5 張（未分賞別）</button>
+    </div>
+    <div class="grp"><span class="lbl">觸發缺漏</span>
+      <button class="tgl on" data-sc="none">都填好</button>
+      <button class="tgl danger" data-sc="one" id="scOne">清空 D 賞買回價</button>
+      <button class="tgl danger" data-sc="two" id="scTwo">清空 B 與 D</button>
+    </div>
+    <div class="grp"><span class="lbl">公平起見</span>
+      <button class="tgl" id="tabDots">分頁列也掛警示點</button>
     </div>
     <div class="grp"><span class="lbl">主題</span>
       <button class="tgl on" data-theme="dark">深色</button>
@@ -242,47 +243,55 @@ input::placeholder{color:var(--faint)}
 
   <div class="stage">
     <div class="phoneWrap">
-      <div class="phoneCap"><h2>現況</h2><span>逐列表單</span></div>
-      <div class="phone">
-        <div class="scroll" id="scrollA"></div>
+      <div class="phoneCap"><h2>提案</h2><span>賞別分組（全部同時在頁上）＋ 索引膠囊</span></div>
+      <div class="phone" id="phoneL" data-side="L">
+        <div class="scroll" id="scrollL"></div>
         <div class="chrome">
-          <div class="chromeBar"><span>已選 <b id="chipA">12</b> 張　上限 60</span><span>查看清單</span></div>
+          <div class="chromeBar"><span>已選 <b id="chipL">12</b> 張　上限 60</span><span>查看清單</span></div>
           <div class="chromeNav"><span>大廳</span><span>市場</span><span>抽選</span><span>卡冊</span><span>我的</span></div>
         </div>
+        <div id="sheetL"></div>
       </div>
     </div>
 
     <div class="phoneWrap">
-      <div class="phoneCap"><h2>提案</h2><span>賞別為主軸的分組指派</span></div>
-      <div class="phone" id="phoneB">
-        <div class="scroll" id="scrollB"></div>
+      <div class="phoneCap"><h2>分頁版</h2><span>一次一個賞別</span></div>
+      <div class="phone" id="phoneR" data-side="R">
+        <div class="scroll" id="scrollR"></div>
         <div class="chrome">
-          <div class="chromeBar"><span>已選 <b id="chipB">12</b> 張　上限 60</span><span>查看清單</span></div>
+          <div class="chromeBar"><span>已選 <b id="chipR">12</b> 張　上限 60</span><span>查看清單</span></div>
           <div class="chromeNav"><span>大廳</span><span>市場</span><span>抽選</span><span>卡冊</span><span>我的</span></div>
         </div>
-        <div id="sheetHost"></div>
+        <div id="sheetR"></div>
       </div>
     </div>
   </div>
 
-  <div class="copy">
+  <div class="notes">
     <div class="box">
-      <h3>說明文字 · 改寫前（現況，103 字）</h3>
-      <p class="old">
-        你答應照這個價把卡買回來的金額，開賣前鎖死、開賣後改不了（它被寫進公平性承諾的雜湊裡）。
-        玩家按下接受時，這筆錢直接從你這個池的保留額出。同一個賞別的卡價值本來就相近，
-        所以填一個絕對金額就好，不需要任何基準。
-      </p>
-      <p class="tagline">四句話裡有三句在解釋機制，回答「我該填多少」的只有半句。</p>
+      <h3>三種行為，差在「不點的時候看得到什麼」</h3>
+      <p><strong>分頁</strong>：點 A 賞，只剩 A 賞在畫面上。版面最短、當下在哪一賞最清楚，
+        代價是<strong>其他五賞連同它們的錯誤一起從 DOM 消失</strong>。</p>
+      <p><strong>索引</strong>：點 A 賞，畫面捲到 A 賞，其他五賞仍在下面。
+        「看到選了哪些、可編輯哪些」拿得到，錯誤不會被藏起來。</p>
+      <p><strong>警示點</strong>：掛在膠囊／分頁上，說「那一組有問題」。
+        它能救分頁版一半 —— 你知道 D 賞有事，但<strong>要按下去才知道是什麼事</strong>，
+        而且永遠無法同時看到兩處缺漏。</p>
     </div>
     <div class="box">
-      <h3>說明文字 · 改寫後（56 字 + 折疊）</h3>
-      <p class="new">
-        <strong>填 3,000，就是抽到 A 賞的人可以拿 3,000 點跟你換走那張卡</strong>，錢從這個池的池款出。<br>
-        填高比較好賣，但那是你真的要付的錢；填太低這個池開不了。<br>
-        <strong>開賣後改不了。</strong>
-      </p>
-      <p class="tagline">先給一個具體例子，再講兩個方向各會怎樣，最後才講不可逆。「為什麼不是比率」收進折疊。</p>
+      <h3>「看到問題要幾次互動」是怎麼量的</h3>
+      <p>量的是<strong>送出之前</strong>的路：使用者停在預設的那一頁，還沒按送出，
+        要多少次點擊才會看到「哪一組缺東西、缺的是什麼」。</p>
+      <p><strong>分組版 0 次</strong>：紅點掛在索引膠囊上，索引膠囊在首屏內；
+        而那一組跟膠囊在同一頁，捲得到，不必點。</p>
+      <p><strong>分頁版＝照分頁順序翻過去的實際步數</strong>（問題在第 k 頁、人在第 i 頁就是 |k−i| 次），
+        不是拿最壞值嚇人 —— 最壞值另外寫在那一格的小字裡。
+        掛上警示點之後固定成 1 次：你知道哪一頁有事，還是要按過去才知道是什麼事。</p>
+      <p><strong>第二格「看齊全部缺漏」才是分頁真正付不起的地方</strong>：
+        兩處缺漏，分組版仍然是 0 次（兩顆紅點同時在索引上、兩組同時在頁上），
+        分頁版一次只能看一個。</p>
+      <p class="tagline">按了送出之後兩案都會列出「還差什麼」並跳到那一格 —— 那條路兩邊一樣長，
+        所以拿它來比不會有分別。真正的差別在按送出<strong>之前</strong>。</p>
     </div>
   </div>
 </div>
@@ -330,15 +339,20 @@ const tierLabel = t => t === 'BUST' ? '爆賞' : t === 'LAST' ? '最後賞' : t 
 const tierVar = t => 'var(--tier-' + t.toLowerCase() + ')';
 const BUYBACK_MIN = 10;      // src/shared/pool-settlement.ts
 const FLOOR_MINT = 100, FLOOR_THIN = 90, FLOOR_PREDATORY = 25;   // src/shared/economics.ts
+const VIEWPORT = 852, CHROME = 127, FIRST_SCREEN = VIEWPORT - CHROME;   // 一屏實際可用 725px
+
+const DEFAULT_BUYBACK = { A:4800, B:1500, C:500, D:36, LAST:6000, BUST:36 };
 
 const state = {
   n: 12,
   ticketPrice: 300,
-  tierBuyback: { A:4800, B:1500, C:500, D:36, LAST:6000, BUST:36 },
+  tierBuyback: { ...DEFAULT_BUYBACK },
   rows: [],
-  selected: new Set(),
-  openSheet: null,
-  expanded: new Set()
+  scenario: 'none',       // none | one | two
+  tabDots: false,         // 分頁列要不要掛警示點（公平起見的開關）
+  /* 兩側各自的 UI 狀態。資料是共用的，UI 狀態不是 —— 這正是要比的東西 */
+  L: { expanded:new Set(), selected:new Set(), openSheet:null, submitted:false },
+  R: { tab:'A', expanded:new Set(), selected:new Set(), openSheet:null, submitted:false }
 };
 
 function makeRow(i){
@@ -348,29 +362,64 @@ function makeRow(i){
     name, setCode, cardNo, hue,
     certNo: i < CARDS.length ? certNo : null,   // 超過一輪之後當成目錄卡（沒有鑑定編號）
     ref,
-    tier: null,          // 提案：一開始沒有賞別，落在「未指派」
-    legacyTier: i === 0 ? 'A' : i < 3 ? 'B' : i < 7 ? 'C' : 'D',   // 現況：挑進來就先猜一個
+    tier: null,
     qty: 1,
     buyback: null
   };
 }
-/* 重設成 n 張。兩側都先套同一套「猜」的賞別（第一張 A、其餘依序），
-   這樣兩具手機比的是**版面**，不是資料差異。 */
+/* 賞別分佈：沿用開池頁自己的猜法（第一張 A、其餘往下）。
+   12 張以上另外把最後兩張撥給最後賞與爆賞 —— 無敵賞本來就會用到這兩個賞別，
+   而且賞別數（＝分頁數）正是這次比較的變數，不能少畫。 */
+function guessTier(i, n){
+  if (n >= 12) { if (i === n - 1) return 'LAST'; if (i === n - 2) return 'BUST'; }
+  if (i === 0) return 'A';
+  if (i < 3) return 'B';
+  if (i < 7) return 'C';
+  return 'D';
+}
+
+function usedTiers(){ return TIERS.filter(t => state.rows.some(r => r.tier === t)); }
+
+/* 情境要清空的是哪幾個賞別：優先照使用者說的 D／B，
+   但張數少的時候根本沒有 D 賞，就退到「最後一個／第一個」用到的賞別，
+   免得按鈕按下去什麼都沒發生（那樣的示範是假的）。 */
+function scenarioTargets(){
+  const u = usedTiers();
+  if (!u.length || state.scenario === 'none') return [];
+  const last = u.includes('D') ? 'D' : u[u.length - 1];
+  if (state.scenario === 'one') return [last];
+  const first = u.includes('B') ? 'B' : u[0];
+  return first === last ? [last] : [first, last];
+}
+function applyScenario(){
+  TIERS.forEach(t => { if (state.tierBuyback[t] == null) state.tierBuyback[t] = DEFAULT_BUYBACK[t]; });
+  scenarioTargets().forEach(t => { state.tierBuyback[t] = null; });
+}
+
 function setCount(n){
   state.rows = [];
-  for (let i = 0; i < n; i++) { const r = makeRow(i); r.tier = r.legacyTier; state.rows.push(r); }
+  for (let i = 0; i < n; i++) { const r = makeRow(i); r.tier = guessTier(i, n); state.rows.push(r); }
   state.n = n;
-  state.selected.clear();
-  state.expanded.clear();
-  state.openSheet = null;
-  /* 票價跟著獎品組合走，讓示範一開始落在「過得了護欄」的區間（≈55%）。
-     這不是設計的一部分，只是原型的起始值 —— 改任何一格買回價就會看到比率跟著動。 */
-  const floor = state.rows.reduce((s,r) => s + (state.tierBuyback[r.tier] ?? 0) * r.qty, 0);
+  render0();
+}
+/* 切張數等於換一份資料，兩邊的分頁／展開／送出狀態都必須回到起點，
+   否則右邊停在上一輪的分頁上，量到的「要幾次點擊」就不是從同一個起點量的。 */
+function resetSides(){
+  state.L = { expanded:new Set(), selected:new Set(), openSheet:null, submitted:false };
+  state.R = { tab:(usedTiers()[0] || 'A'), expanded:new Set(), selected:new Set(), openSheet:null, submitted:false };
+}
+function render0(){
+  resetSides();
+  state.tierBuyback = { ...DEFAULT_BUYBACK };
+  applyScenario();
+  /* 票價跟著獎品組合走，讓示範一開始落在「過得了護欄」的區間（約 55%）。
+     這不是設計的一部分，只是原型的起始值。 */
+  const floor = state.rows.reduce((s,r) => s + (DEFAULT_BUYBACK[r.tier] ?? 0) * r.qty, 0);
   const seats = state.rows.reduce((s,r) => s + r.qty, 0) || 1;
   state.ticketPrice = Math.max(50, Math.round(floor / seats / 0.55 / 50) * 50);
   render();
 }
-/* 再挑幾張進來。新挑的卡**沒有賞別** —— 那是提案裡「未指派 → 批次設為某賞」那條路 */
+/* 再挑幾張進來。新挑的卡沒有賞別 —— 那是「未指派 → 批次設為某賞」那條路 */
 function addCards(k){
   const cur = state.rows.length;
   for (let i = cur; i < cur + k; i++) state.rows.push(makeRow(i));
@@ -378,7 +427,7 @@ function addCards(k){
   render();
 }
 
-const artStyle = hue => `background:linear-gradient(140deg,hsl(${hue} 70% 46%),hsl(${(hue+52)%360} 72% 36%) 62%,hsl(${(hue+18)%360} 55% 22%))`;
+const artStyle = hue => 'background:linear-gradient(140deg,hsl(' + hue + ' 70% 46%),hsl(' + ((hue+52)%360) + ' 72% 36%) 62%,hsl(' + ((hue+18)%360) + ' 55% 22%))';
 const fmt = n => (n ?? 0).toLocaleString('en-US');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -392,312 +441,418 @@ function econ(){
   const ratio = revenue ? floor / revenue * 100 : 0;
   let verdict = 'ok', msg = '保底回饋率落在合理區間。';
   if (!seats) { verdict = 'thin'; msg = '還沒有獎項。'; }
-  else if (ratio >= FLOOR_MINT) { verdict = 'bad'; msg = '保底回饋 ≥ 票收：整池被收回時你要倒貼，開不了池。'; }
+  else if (ratio >= FLOOR_MINT) { verdict = 'bad'; msg = '保底回饋大於等於票收：整池被收回時你要倒貼，開不了池。'; }
   else if (ratio >= FLOOR_THIN) { verdict = 'thin'; msg = '保底幾乎吃掉整筆票收，扣掉運費很可能倒貼。'; }
   else if (ratio < FLOOR_PREDATORY) { verdict = 'bad'; msg = '保底回饋率過低，開不了池。'; }
   return { seats, revenue, floor, ratio, verdict, msg };
 }
 
 /* ==================================================================
-   A：現況 —— 逐列表單
+   問題清單。key 同時是錨點名字：兩案都用同一組 key，
+   才能誠實地問「同一個問題，在這個版面上要花幾次互動才看得到」。
 ================================================================== */
-function renderLegacy(){
-  const used = [...new Set(state.rows.map(r => r.legacyTier))];
-  const e = econ();
-  const worst = Math.min(...state.rows.map(r => r.buyback ?? state.tierBuyback[r.legacyTier]).filter(v => v > 0));
-  const rows = state.rows.map(r => `
-    <div class="prize-row">
-      <span class="art" style="${artStyle(r.hue)}"></span>
-      <span class="ident">
-        <span class="idName">${esc(r.name)}</span>
-        <span class="idMeta">${esc(r.setCode)} · ${esc(r.cardNo)}</span>
-        ${r.certNo ? `<span class="idCert">PSA10 · #${esc(r.certNo)}</span>` : ''}
-      </span>
-      <button class="del" aria-label="移除這個獎項"><svg viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
-      <select aria-label="賞別">${TIERS.map(t => `<option ${t===r.legacyTier?'selected':''}>${tierLabel(t)}</option>`).join('')}</select>
-      <input class="f-qty" type="number" value="${r.qty}" aria-label="數量" placeholder="數量">
-      <input class="f-ref" type="number" value="${r.ref ?? ''}" aria-label="參考價（選填）" placeholder="參考價（選填）">
-      <input class="f-buy" type="number" value="" aria-label="買回價（留空照賞別預設）" placeholder="${fmt(state.tierBuyback[r.legacyTier])}">
-    </div>`).join('');
-
-  return `
-  <section class="card block">
-    <div class="block-head"><h3>獎項配置</h3><span class="chip">共 ${e.seats} 籤</span></div>
-    <section class="tierBuy">
-      <h4>買回價（依賞別）<i class="req">必填</i></h4>
-      <p class="tbNote">
-        你答應照這個價把卡買回來的金額，<strong>開賣前鎖死、開賣後改不了</strong>（它被寫進公平性承諾的雜湊裡）。
-        玩家按下接受時，這筆錢直接從你這個池的保留額出。同一個賞別的卡價值本來就相近，
-        所以填一個絕對金額就好，<strong>不需要任何基準</strong>。
-      </p>
-      <div class="tbGrid">
-        ${used.map(t => `<label class="tbCell"><span class="tbLbl">${tierLabel(t)}</span><input type="number" value="${state.tierBuyback[t]}"></label>`).join('')}
-      </div>
-      <p class="tbLine">買家會看到：<strong class="mono">${fmt(state.ticketPrice)} 點一抽，最差的賞別保底買回 ${fmt(worst)} 點</strong></p>
-    </section>
-    ${rows}
-    <p class="hint twoCols">
-      <strong>參考價</strong>是你自己標示的市場行情，<strong>選填</strong>，只顯示給買家看、<strong>不構成承諾</strong>，
-      也不參與任何金額計算。空著的話買家看到的是「未標示」。<br>
-      <strong>買回價</strong>那一格是<strong>覆寫</strong>：空著就照上面該賞別的金額走，
-      只有某一張在同賞別裡特別貴的時候才需要單獨填。每張 ${BUYBACK_MIN} 點起跳。
-    </p>
-    <p class="hint"><strong>到期日</strong>不在這張表上：它由系統從開池的當下起算 30 天。</p>
-    <p class="hint">無敵賞的「最後賞」就是籤池裡的一張獎品，所有賞別的數量加總必須剛好等於總籤數。</p>
-  </section>`;
+function problems(){
+  const out = [];
+  const un = state.rows.filter(r => r.tier === null);
+  if (un.length) out.push({ key:'unassigned', tier:null, msg:'還有 ' + un.length + ' 張沒分賞別' });
+  usedTiers().forEach(t => {
+    const v = state.tierBuyback[t];
+    if (v == null || v === '' || +v < BUYBACK_MIN)
+      out.push({ key:'buy-' + t, tier:t, msg:tierLabel(t) + '還沒填買回價（每張至少 ' + BUYBACK_MIN + ' 點）' });
+  });
+  return out;
 }
+const tierHasProblem = t => problems().some(p => p.tier === t);
 
 /* ==================================================================
-   B：提案 —— 賞別為主軸
+   共用零件
 ================================================================== */
-const RAIL_MAX = 8;   // 軌道上先畫幾張，其餘收成一顆「還有 N 張」
-
-function tileHTML(r){
-  const sel = state.selected.has(r.id);
+function tileHTML(side, r){
+  const sel = state[side].selected.has(r.id);
   const ovr = r.buyback != null;
-  return `
-  <button class="tile ${sel?'sel':''}" data-card="${r.id}">
-    <span class="tileArt" style="${artStyle(r.hue)}">
-      ${r.qty > 1 ? `<span class="tileTag">×${r.qty}</span>` : ''}
-      ${ovr ? `<span class="tileTag ovr" style="left:auto;right:2px">改</span>` : ''}
-      ${sel ? `<span class="tileTick"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>` : ''}
-    </span>
-    <span class="tileName">${esc(r.name)}</span>
-  </button>`;
+  return '<button class="tile ' + (sel?'sel':'') + '" data-card="' + r.id + '">' +
+    '<span class="tileArt" style="' + artStyle(r.hue) + '">' +
+    (r.qty > 1 ? '<span class="tileTag">x' + r.qty + '</span>' : '') +
+    (ovr ? '<span class="tileTag ovr" style="left:auto;right:2px">改</span>' : '') +
+    (sel ? '<span class="tileTick"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span>' : '') +
+    '</span><span class="tileName">' + esc(r.name) + '</span></button>';
 }
 
-function groupHTML(t){
+const RAIL_MAX = 8;   // 軌道上先畫幾張，其餘收成一顆「還有 N 張」
+
+function groupHTML(side, t){
   const mine = state.rows.filter(r => r.tier === t);
   const seats = mine.reduce((s,r) => s + (r.qty||0), 0);
   const overrides = mine.filter(r => r.buyback != null).length;
-  const expanded = state.expanded.has(t);
+  const expanded = state[side].expanded.has(t);
   const shown = mine.slice(0, RAIL_MAX);
   const rest = mine.length - shown.length;
-  const bad = mine.length && !(state.tierBuyback[t] >= BUYBACK_MIN);
-  return `
-  <div class="tierGroup ${mine.length?'':'empty'}">
-    <div class="tgHead">
-      <span class="tgDot" style="background:${tierVar(t)}"></span>
-      <span class="tgName">${tierLabel(t)}<span class="tgCount">${mine.length} 張 · ${seats} 籤</span></span>
-      ${mine.length > 1 ? `<button class="railMore" data-expand="${t}">${expanded?'收合':'展開成清單'}</button>` : '<span></span>'}
-    </div>
-    ${mine.length ? `
-    <div class="tgMoney">
-      <label class="fieldWrap">
-        <span class="fl">這一賞的買回價</span>
-        <input type="number" value="${state.tierBuyback[t]}" data-tierbuy="${t}" style="${bad?'border-color:var(--danger)':''}">
-      </label>
-      <span class="unit">點 / 張</span>
-    </div>
-    <p class="tgSum">
-      抽到就能換 <b>${fmt(state.tierBuyback[t])}</b> 點 · 這一賞共承諾 <b>${fmt(mine.reduce((s,r)=>s+resolvedOf(r)*(r.qty||0),0))}</b> 點
-      ${overrides ? `<br><span class="ovr">其中 ${overrides} 張單獨改過金額</span>` : ''}
-    </p>
-    ${expanded ? `
-    <ul class="tgList">
-      ${mine.map(r => `
-      <li><button class="tgLine" data-card="${r.id}">
-        <span class="tgLineArt" style="${artStyle(r.hue)}"></span>
-        <span class="tgLineName">${esc(r.name)}<span class="tgLineMeta">${esc(r.setCode)} · ${esc(r.cardNo)}${r.certNo ? ' · #' + esc(r.certNo) : ''}</span></span>
-        <span class="tgLineNum">${r.qty > 1 ? r.qty + ' 籤 · ' : ''}${fmt(resolvedOf(r))}${r.buyback != null ? '<span class="ovr"> 改</span>' : ''}</span>
-      </button></li>`).join('')}
-    </ul>` : `
-    <div class="rail">
-      ${shown.map(tileHTML).join('')}
-      ${rest > 0 ? `<button class="railMore" data-expand="${t}">還有 ${rest} 張</button>` : ''}
-    </div>`}` : `<p class="tgSum" style="padding-bottom:12px">這一賞還沒有卡。</p>`}
-  </div>`;
+  const v = state.tierBuyback[t];
+  const bad = mine.length && (v == null || v === '' || +v < BUYBACK_MIN);
+  const total = mine.reduce((s,r) => s + resolvedOf(r) * (r.qty||0), 0);
+
+  const body = mine.length ? (
+    '<div class="tgMoney">' +
+      '<label class="fieldWrap"><span class="fl">這一賞的買回價</span>' +
+      '<input type="number" class="' + (bad?'bad':'') + '" value="' + (v == null ? '' : v) + '" placeholder="必填" data-tierbuy="' + t + '" data-prob="buy-' + t + '"></label>' +
+      '<span class="unit">點 / 張</span></div>' +
+    (bad ? '<p class="tgErr" data-warnkey="buy-' + t + '">這一賞還沒填買回價，' + mine.length + ' 張卡都受影響</p>' : '') +
+    '<p class="tgSum">抽到就能換 <b>' + (v == null ? '—' : fmt(v)) + '</b> 點 · 這一賞共承諾 <b>' + fmt(total) + '</b> 點' +
+      (overrides ? '<br><span class="ovr">其中 ' + overrides + ' 張單獨改過金額</span>' : '') + '</p>' +
+    (expanded
+      ? '<ul class="tgList">' + mine.map(r =>
+          '<li><button class="tgLine" data-card="' + r.id + '">' +
+          '<span class="tgLineArt" style="' + artStyle(r.hue) + '"></span>' +
+          '<span class="tgLineName">' + esc(r.name) + '<span class="tgLineMeta">' + esc(r.setCode) + ' · ' + esc(r.cardNo) + (r.certNo ? ' · #' + esc(r.certNo) : '') + '</span></span>' +
+          '<span class="tgLineNum">' + (r.qty > 1 ? r.qty + ' 籤 · ' : '') + fmt(resolvedOf(r)) + (r.buyback != null ? '<span class="ovr"> 改</span>' : '') + '</span>' +
+          '</button></li>').join('') + '</ul>'
+      : '<div class="rail">' + shown.map(r => tileHTML(side, r)).join('') +
+        (rest > 0 ? '<button class="railMore" data-expand="' + t + '">還有 ' + rest + ' 張</button>' : '') + '</div>')
+  ) : '<p class="tgSum" style="padding-bottom:12px">這一賞還沒有卡。</p>';
+
+  return '<div class="tierGroup ' + (bad?'bad':'') + '" data-group="' + t + '">' +
+    '<div class="tgHead"><span class="tgDot" style="background:' + tierVar(t) + '"></span>' +
+    '<span class="tgName">' + tierLabel(t) + '<span class="tgCount">' + mine.length + ' 張 · ' + seats + ' 籤</span></span>' +
+    (mine.length > 1 ? '<button class="railMore" data-expand="' + t + '">' + (expanded?'收合':'展開成清單') + '</button>' : '<span></span>') +
+    '</div>' + body + '</div>';
 }
 
-function renderNext(){
+function unassignedHTML(side){
+  const un = state.rows.filter(r => r.tier === null);
+  if (!un.length) return '';
+  return '<div class="tierGroup unassigned" data-group="unassigned" data-prob="unassigned" data-warnkey="unassigned">' +
+    '<div class="tgHead"><span class="tgDot" style="background:var(--accent)"></span>' +
+    '<span class="tgName">還沒分賞別<span class="tgCount">' + un.length + ' 張</span></span><span></span></div>' +
+    '<div class="rail">' + un.map(r => tileHTML(side, r)).join('') + '</div>' +
+    '<div class="assignRow">' + TIERS.map(t => '<button class="assignBtn" data-assignall="' + t + '">全部設為 ' + tierLabel(t) + '</button>').join('') + '</div>' +
+    '</div>';
+}
+
+function selBarHTML(side){
+  const n = state[side].selected.size;
+  if (!n) return '';
+  return '<div class="selBar"><span class="n">已選 ' + n + ' 張</span><span style="color:var(--muted)">設為：</span>' +
+    TIERS.map(t => '<button data-assign="' + t + '">' + tierLabel(t) + '</button>').join('') +
+    '<button data-clearsel="1">取消選取</button></div>';
+}
+
+function econHTML(){
   const e = econ();
-  const unassigned = state.rows.filter(r => r.tier === null);
-  const used = TIERS.filter(t => state.rows.some(r => r.tier === t));
-  const selN = state.selected.size;
-  return `
-  <section class="card block">
-    <div class="block-head"><h3>獎項配置</h3><span class="chip">共 ${e.seats} 籤</span></div>
-
-    <div class="econ ${e.verdict}">
-      <div class="r"><span class="big">${e.ratio.toFixed(1)}%</span><span class="lb">保底回饋率</span></div>
-      <p class="msg">${e.msg}<br>每抽 ${fmt(state.ticketPrice)} 點 · 票收 ${fmt(e.revenue)} · 你承諾的保底 ${fmt(e.floor)}</p>
-    </div>
-
-    <p class="miniNote">
-      <strong>買回價一個賞別填一次</strong>：填多少，抽到那一賞的人就能拿多少點跟你換走那張卡，
-      錢從這個池的池款出。填高比較好賣，但那是你真的要付的錢。<strong>開賣後改不了。</strong><br>
-      某一張要單獨調整，點那張卡。
-    </p>
-
-    ${selN ? `
-    <div class="selBar">
-      <span class="n">已選 ${selN} 張</span>
-      <span style="color:var(--muted)">設為：</span>
-      ${TIERS.map(t => `<button data-assign="${t}">${tierLabel(t)}</button>`).join('')}
-      <button data-clearsel="1">取消選取</button>
-    </div>` : ''}
-
-    ${unassigned.length ? `
-    <div class="tierGroup unassigned">
-      <div class="tgHead">
-        <span class="tgDot" style="background:var(--accent)"></span>
-        <span class="tgName">還沒分賞別<span class="tgCount">${unassigned.length} 張</span></span>
-        <span></span>
-      </div>
-      <div class="rail">${unassigned.map(tileHTML).join('')}</div>
-      <div class="assignRow">${TIERS.map(t => `<button class="assignBtn" data-assignall="${t}">全部設為 ${tierLabel(t)}</button>`).join('')}</div>
-    </div>` : ''}
-
-    ${used.map(groupHTML).join('')}
-
-    <details class="why">
-      <summary>為什麼買回價是一個絕對金額，不是比率？</summary>
-      <p>比率要有基準，而唯一的基準是你自己填的參考價 —— 那是循環論證：你把參考價填高，回饋率就自己變漂亮。</p>
-      <p>金額則是你<strong>真的要付出去的錢</strong>。填高等於承諾多賠，所以這個數字不需要外部行情就是誠實的。</p>
-      <p><strong>爆賞也要填</strong>：爆賞發的是保底卡，那張卡一樣會被抽到、一樣可以換回點數。</p>
-    </details>
-  </section>`;
+  return '<div class="econ ' + e.verdict + '"><div class="r"><span class="big">' + e.ratio.toFixed(1) + '%</span>' +
+    '<span class="lb">保底回饋率</span></div><p class="msg">' + e.msg + '<br>每抽 ' + fmt(state.ticketPrice) +
+    ' 點 · 票收 ' + fmt(e.revenue) + ' · 你承諾的保底 ' + fmt(e.floor) + '</p></div>';
 }
 
-function sheetHTML(r){
-  const tdef = state.tierBuyback[r.tier] ?? 0;
-  return `
-  <div class="sheetWrap" data-closesheet="1">
-    <div class="sheet" role="dialog" aria-modal="true" aria-label="編輯這一張">
-      <button class="sheetClose" aria-label="關閉" data-closesheet="1"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
-      <h4>${esc(r.name)}</h4>
-      <p class="sheetSub">${esc(r.setCode)} · ${esc(r.cardNo)}${r.certNo ? ' · PSA10 #' + esc(r.certNo) : ''}</p>
+/* 送出結果條。兩案的內容完全一樣 —— 送出之後的那條路是公平的，
+   會有差別的是「還沒按送出的時候」。 */
+function verdictHTML(side){
+  if (!state[side].submitted) return '';
+  const ps = problems();
+  if (!ps.length) return '<div class="verdict good"><h5>檢查通過</h5>所有賞別都填了買回價，也沒有未分賞別的卡。</div>';
+  return '<div class="verdict bad"><h5>還差 ' + ps.length + ' 項才能開賣</h5><ul>' +
+    ps.map(p => '<li><button data-jump="' + p.key + '">' + esc(p.msg) + '</button></li>').join('') +
+    '</ul><p class="fine">點一項會跳到那一格。</p></div>';
+}
 
-      <div class="sf">
-        <span>賞別</span>
-        <div class="sheetTiers">${TIERS.map(t => `<button class="${t===r.tier?'on':''}" data-settier="${t}">${tierLabel(t)}</button>`).join('')}</div>
-      </div>
+const NOTE = '<p class="miniNote"><strong>買回價一個賞別填一次</strong>：填多少，抽到那一賞的人就能拿多少點跟你換走那張卡，' +
+  '錢從這個池的池款出。填高比較好賣，但那是你真的要付的錢。<strong>開賣後改不了。</strong><br>' +
+  '某一張要單獨調整，點那張卡。</p>';
 
-      <div class="sf">
-        <span>籤數</span>
-        ${r.certNo
-          ? `<div class="locked">1 籤（固定）</div><span class="fnote">這張有鑑定編號 #${esc(r.certNo)}，一個編號只對應一張實體卡，開兩籤就會有兩個得主。</span>`
-          : `<input type="number" min="1" value="${r.qty}" data-qty="1"><span class="fnote">同一張卡面要放幾支籤。</span>`}
-      </div>
+const SUBMIT = '<button class="submitBtn" data-submit="1">送出開賣</button>';
 
-      <div class="sf">
-        <span>這一張的買回價</span>
-        <input type="number" value="${r.buyback ?? ''}" placeholder="${fmt(tdef)}（照 ${tierLabel(r.tier)}）" data-buy="1">
-        <span class="fnote">空著就照 ${tierLabel(r.tier)} 的 ${fmt(tdef)} 點。只有這張在同一賞裡特別貴才要改。</span>
-      </div>
+/* ==================================================================
+   左：賞別分組 + 索引膠囊
+   膠囊「不是分頁」：點下去只捲動，不改變哪一組看得見。
+   缺東西的那一組，膠囊上直接掛一顆紅點 —— 這是分組版付得起、
+   分頁版付不起的那件事：訊號在索引上，內容也還在頁上。
+================================================================== */
+function pillsHTML(){
+  const u = usedTiers();
+  const un = state.rows.filter(r => r.tier === null).length;
+  const pill = (key, label, count, dot, color) =>
+    '<button class="pill ' + (dot?'hasWarn':'') + '" data-goto="' + key + '">' +
+    (color ? '<span class="swatch" style="background:' + color + '"></span>' : '') +
+    label + '<span class="pn">' + count + '</span>' +
+    (dot ? '<span class="pillWarn" data-warn="1" data-warnkey="' + (key === 'unassigned' ? 'unassigned' : 'buy-' + key) + '"></span>' : '') + '</button>';
+  return '<div class="pills">' +
+    (un ? pill('unassigned', '未分賞別', un, true, 'var(--accent)') : '') +
+    u.map(t => pill(t, tierLabel(t), state.rows.filter(r => r.tier === t).length, tierHasProblem(t), tierVar(t))).join('') +
+    '</div><p class="railHint">點膠囊會捲到那一組，其他組不會被藏起來。紅點＝那一組缺東西。</p>';
+}
 
-      <div class="sf">
-        <span>參考價（選填，不參與計算）</span>
-        <input type="number" value="${r.ref ?? ''}" placeholder="未標示" data-ref="1">
-        <span class="fnote">只顯示給買家看，不構成承諾。空著就是「未標示」。</span>
-      </div>
-
-      <button class="sheetDel" data-del="1">從這個池移除</button>
-    </div>
-  </div>`;
+function renderL(){
+  const e = econ();
+  return '<section class="card block">' +
+    '<div class="block-head"><h3>獎項配置</h3><span class="chip">共 ' + e.seats + ' 籤</span></div>' +
+    verdictHTML('L') + econHTML() + pillsHTML() + NOTE + selBarHTML('L') +
+    unassignedHTML('L') + usedTiers().map(t => groupHTML('L', t)).join('') +
+    SUBMIT + '</section>';
 }
 
 /* ==================================================================
-   量測 + 繪製
+   右：賞別分頁
+   一次只有一個賞別在 DOM 裡 —— 版面最短、當下在哪一賞最清楚，
+   代價是別的賞別連同它們的錯誤一起不見。
+   「分頁列也掛警示點」是公平起見的開關：開了之後你會發現它只救一半，
+   因為你知道 D 賞有事，還是得按過去才知道是什麼事。
+================================================================== */
+function tabsHTML(){
+  const u = usedTiers();
+  const un = state.rows.filter(r => r.tier === null).length;
+  const cur = state.R.tab;
+  const tab = (key, label, count, dot, color) =>
+    '<button class="tab ' + (cur===key?'on':'') + '" data-tab="' + key + '">' +
+    (color ? '<span class="swatch" style="background:' + color + '"></span>' : '') +
+    label + '<span class="pn">' + count + '</span>' +
+    (dot && state.tabDots ? '<span class="tabWarn" data-warn="1" data-warnkey="' + (key === 'unassigned' ? 'unassigned' : 'buy-' + key) + '"></span>' : '') + '</button>';
+  return '<div class="tabs">' +
+    (un ? tab('unassigned', '未分賞別', un, true, 'var(--accent)') : '') +
+    u.map(t => tab(t, tierLabel(t), state.rows.filter(r => r.tier === t).length, tierHasProblem(t), tierVar(t))).join('') +
+    '</div>';
+}
+
+function renderR(){
+  const e = econ();
+  const u = usedTiers();
+  let cur = state.R.tab;
+  const un = state.rows.filter(r => r.tier === null).length;
+  if (cur === 'unassigned' && !un) cur = state.R.tab = (u[0] || 'A');
+  if (cur !== 'unassigned' && !u.includes(cur)) cur = state.R.tab = (u[0] || 'A');
+  const body = cur === 'unassigned' ? unassignedHTML('R') : (u.length ? groupHTML('R', cur) : '');
+  return '<section class="card block">' +
+    '<div class="block-head"><h3>獎項配置</h3><span class="chip">共 ' + e.seats + ' 籤</span></div>' +
+    verdictHTML('R') + econHTML() + tabsHTML() + NOTE + selBarHTML('R') + body +
+    SUBMIT + '</section>';
+}
+
+function sheetHTML(side, r){
+  const tdef = state.tierBuyback[r.tier];
+  const tname = r.tier ? tierLabel(r.tier) : '未分賞別';
+  return '<div class="sheetWrap" data-closesheet="1"><div class="sheet" role="dialog" aria-modal="true" aria-label="編輯這一張">' +
+    '<button class="sheetClose" aria-label="關閉" data-closesheet="1"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button>' +
+    '<h4>' + esc(r.name) + '</h4><p class="sheetSub">' + esc(r.setCode) + ' · ' + esc(r.cardNo) + (r.certNo ? ' · PSA10 #' + esc(r.certNo) : '') + '</p>' +
+    '<div class="sf"><span>賞別</span><div class="sheetTiers">' +
+      TIERS.map(t => '<button class="' + (t===r.tier?'on':'') + '" data-settier="' + t + '">' + tierLabel(t) + '</button>').join('') +
+    '</div></div>' +
+    '<div class="sf"><span>籤數</span>' +
+      (r.certNo
+        ? '<div class="locked">1 籤（固定）</div><span class="fnote">這張有鑑定編號 #' + esc(r.certNo) + '，一個編號只對應一張實體卡，開兩籤就會有兩個得主。</span>'
+        : '<input type="number" min="1" value="' + r.qty + '" data-qty="1"><span class="fnote">同一張卡面要放幾支籤。</span>') +
+    '</div>' +
+    '<div class="sf"><span>這一張的買回價</span>' +
+      '<input type="number" value="' + (r.buyback ?? '') + '" placeholder="' + (tdef == null ? tname + '還沒填' : fmt(tdef) + '（照 ' + tname + '）') + '" data-buy="1">' +
+      '<span class="fnote">' + (tdef == null ? tname + '本身還沒填買回價，這張也就沒有可以照的預設。' : '空著就照 ' + tname + ' 的 ' + fmt(tdef) + ' 點。只有這張在同一賞裡特別貴才要改。') + '</span></div>' +
+    '<div class="sf"><span>參考價（選填，不參與計算）</span>' +
+      '<input type="number" value="' + (r.ref ?? '') + '" placeholder="未標示" data-ref="1">' +
+      '<span class="fnote">只顯示給買家看，不構成承諾。空著就是「未標示」。</span></div>' +
+    '<button class="sheetDel" data-del="1">從這個池移除</button></div></div>';
+}
+
+/* ==================================================================
+   繪製 + 量測
 ================================================================== */
 function render(){
-  document.getElementById('scrollA').innerHTML = renderLegacy();
-  document.getElementById('scrollB').innerHTML = renderNext();
-  document.getElementById('sheetHost').innerHTML = state.openSheet
-    ? sheetHTML(state.rows.find(r => r.id === state.openSheet)) : '';
-  document.getElementById('chipA').textContent = state.rows.length;
-  document.getElementById('chipB').textContent = state.rows.length;
+  const keep = { L: document.getElementById('scrollL').scrollTop, R: document.getElementById('scrollR').scrollTop };
+  document.getElementById('scrollL').innerHTML = renderL();
+  document.getElementById('scrollR').innerHTML = renderR();
+  ['L','R'].forEach(s => {
+    const host = document.getElementById('sheet' + s);
+    const r = state[s].openSheet ? state.rows.find(x => x.id === state[s].openSheet) : null;
+    host.innerHTML = r ? sheetHTML(s, r) : '';
+    document.getElementById('chip' + s).textContent = state.rows.length;
+    /* 重畫會把捲動位置歸零。量測要從 scrollTop=0 起算才有意義，
+       但使用者正在操作的時候把他捲回頂端很惡劣，所以量完再還原。 */
+    document.getElementById('scroll' + s).scrollTop = 0;
+  });
   document.querySelectorAll('.bar [data-n]').forEach(b => b.classList.toggle('on', +b.dataset.n === state.rows.length));
+  document.querySelectorAll('.bar [data-sc]').forEach(b => b.classList.toggle('on', b.dataset.sc === state.scenario));
+  document.getElementById('tabDots').classList.toggle('on', state.tabDots);
+  syncScenarioLabels();
   measure();
+  document.getElementById('scrollL').scrollTop = keep.L;
+  document.getElementById('scrollR').scrollTop = keep.R;
+}
+
+/* 按鈕上寫的是實際會被清空的賞別。張數少的時候沒有 D 賞，
+   照抄「D 賞」會變成一顆按了沒事的假按鈕。 */
+function syncScenarioLabels(){
+  const u = usedTiers();
+  const last = u.includes('D') ? 'D' : u[u.length - 1];
+  const first = u.includes('B') ? 'B' : u[0];
+  document.getElementById('scOne').textContent = last ? '清空 ' + tierLabel(last) + '買回價' : '清空買回價';
+  document.getElementById('scTwo').textContent = (first && last && first !== last)
+    ? '清空 ' + tierLabel(first) + '與' + tierLabel(last) : '清空兩處（本張數只有一賞）';
+}
+
+/* 「不點也不捲，看得到幾個問題的存在」：
+   數的是**有幾個不同的問題**在首屏 725px 之內留下了看得見的訊號，
+   不是數訊號元素 —— 同一個問題同時有膠囊紅點與組內紅字時只能算一次，
+   否則分組版會靠「同一件事講兩遍」把自己的數字灌大，那樣的比較是假的。
+   左邊的訊號是索引膠囊上的紅點；右邊只有開了「分頁列也掛警示點」才有，
+   否則就只剩當前分頁自己那一格的紅字。 */
+function signalsInFirstScreen(scrollEl){
+  const box = scrollEl.getBoundingClientRect();
+  const seen = new Set();
+  scrollEl.querySelectorAll('[data-warnkey]').forEach(el => {
+    const r = el.getBoundingClientRect();
+    const top = r.top - box.top + scrollEl.scrollTop;
+    /* 水平也要真的在畫面上。只量垂直位置的話，被橫捲推出去的膠囊會被算成「看得到」，
+       那是拿一個看不見的紅點去證明「錯誤藏不住」—— 剛好把要證的事情證反。 */
+    const onScreenX = r.right > box.left + 1 && r.left < box.right - 1;
+    if (top < FIRST_SCREEN && onScreenX) seen.add(el.dataset.warnkey);
+  });
+  return seen.size;
+}
+
+/* 「看到問題是什麼，要幾次點擊」——送出之前，停在預設那一頁。
+   量的是**照分頁順序翻過去的實際步數**，不是嚇人的最壞值：
+   問題在第 k 頁、人在第 i 頁，就是 |k − i| 次。掛了警示點就是 1 次
+   （知道哪一頁有事，但還是要按過去才知道是什麼事）。
+   左邊一律 0：紅點在首屏的索引列上，而那一組本來就跟它在同一頁，捲得到。
+   另外分開算「看齊全部缺漏」——分頁版一次只能看一個問題，這一格才看得出來。 */
+function clicksToSee(){
+  const un = state.rows.some(r => r.tier === null);
+  const order = (un ? ['unassigned'] : []).concat(usedTiers());
+  const tabs = order.length;
+  const ps = problems();
+  if (!ps.length) return { L:0, R:0, Lall:0, Rall:0, tabs, worst:Math.max(0, tabs - 1) };
+  const cur = Math.max(0, order.indexOf(state.R.tab));
+  const d = ps.map(p => Math.abs(order.indexOf(p.tier ?? 'unassigned') - cur));
+  const near = Math.min(...d), far = Math.max(...d);
+  const R = state.tabDots ? (near === 0 ? 0 : 1) : near;
+  const Rall = state.tabDots ? d.filter(x => x > 0).length : far;
+  return { L:0, Lall:0, R, Rall, tabs, worst:Math.max(0, tabs - 1), near, far };
 }
 
 function measure(){
-  const a = document.getElementById('scrollA'), b = document.getElementById('scrollB');
-  const secA = a.querySelector('section.card.block'), secB = b.querySelector('section.card.block');
-  const hA = Math.round(secA.getBoundingClientRect().height), hB = Math.round(secB.getBoundingClientRect().height);
-  const cA = a.querySelectorAll('input,select,button').length, cB = b.querySelectorAll('input,select,button').length;
-  const screensA = (a.scrollHeight / 852), screensB = (b.scrollHeight / 852);
+  const L = document.getElementById('scrollL'), R = document.getElementById('scrollR');
+  const sL = L.querySelector('section.card.block'), sR = R.querySelector('section.card.block');
+  const hL = Math.round(sL.getBoundingClientRect().height), hR = Math.round(sR.getBoundingClientRect().height);
+  const cL = L.querySelectorAll('input,select,button').length, cR = R.querySelectorAll('input,select,button').length;
+  const ps = problems();
+  const sigL = signalsInFirstScreen(L), sigR = signalsInFirstScreen(R);
+  const clk = clicksToSee();
   const cut = n => Math.round(n * 100) / 100;
-  const pct = (x, y) => y ? '−' + Math.round((1 - y / x) * 100) + '%' : '';
-  document.getElementById('readout').innerHTML = `
-    <div class="ro"><b>獎項配置區段高度</b><div class="v">${hA} → ${hB} px</div><div class="d win">${pct(hA,hB)}</div></div>
-    <div class="ro"><b>這一段要捲幾個螢幕</b><div class="v">${cut(hA/852)} → ${cut(hB/852)}</div><div class="d">393×852 一屏為 1</div></div>
-    <div class="ro"><b>可互動控制項</b><div class="v">${cA} → ${cB}</div><div class="d win">${pct(cA,cB)}</div></div>
-    <div class="ro"><b>整段捲動總長</b><div class="v">${a.scrollHeight} → ${b.scrollHeight} px</div><div class="d">${cut(screensA)} → ${cut(screensB)} 屏</div></div>`;
+  const delta = (a, b) => a === b ? '一樣' : (b < a ? '短 ' : '長 ') + Math.abs(Math.round((1 - b / a) * 100)) + '%';
+
+  const rows = [
+    ['獎項配置區段高度', hL + ' → ' + hR + ' px', '分組 → 分頁，分頁' + delta(hL, hR), hR < hL ? 'win' : '', false],
+    ['這一段要捲幾屏', cut(hL / VIEWPORT) + ' → ' + cut(hR / VIEWPORT), '一屏 852px，實際可用 725px', '', false],
+    ['可互動控制項', cL + ' → ' + cR, '分頁只畫一個賞別，所以天生比較少', cR < cL ? 'win' : '', false],
+    ['目前的缺漏', ps.length + ' 項', ps.length ? ps.map(p => p.msg).join('；') : '都填好了', ps.length ? 'lose' : 'win', false],
+    ['看到第一個問題要幾次點擊', clk.L + ' → ' + clk.R + ' 次',
+      ps.length
+        ? ('送出之前、停在「' + (state.R.tab === 'unassigned' ? '未分賞別' : tierLabel(state.R.tab)) + '」那一頁。' +
+           '共 ' + clk.tabs + ' 頁' +
+           (state.tabDots ? '；警示點讓它固定成 1 次（知道哪頁有事，仍要按過去才知道是什麼事）'
+                          : '；照順序翻，最壞會是 ' + clk.worst + ' 次'))
+        : '沒有缺漏可看',
+      ps.length && clk.R > clk.L ? 'lose' : '', true],
+    ['看齊全部缺漏要幾次點擊', clk.Lall + ' → ' + clk.Rall + ' 次',
+      ps.length > 1
+        ? '分頁版一次只能看一個賞別，' + ps.length + ' 項缺漏就得分 ' + ps.length + ' 次看；分組版全部在同一頁上'
+        : (ps.length ? '目前只有 1 項缺漏，跟上一格一樣' : '沒有缺漏可看'),
+      ps.length && clk.Rall > clk.Lall ? 'lose' : '', true],
+    ['不點不捲看得到幾個問題', sigL + ' → ' + sigR + ' 個',
+      '首屏 725px 之內的警示訊號個數（共 ' + ps.length + ' 項缺漏）',
+      ps.length && sigR < sigL ? 'lose' : '', true]
+  ];
+  document.getElementById('readout').innerHTML = rows.map(r =>
+    '<div class="ro ' + (r[4] ? 'hot' : '') + '"><b>' + r[0] + '</b><div class="v">' + r[1] + '</div>' +
+    '<div class="d ' + r[3] + '">' + r[2] + '</div></div>').join('');
 }
 
-/* ---------- 事件 ---------- */
+/* ==================================================================
+   捲動／跳轉
+================================================================== */
+function scrollToGroup(side, key){
+  const sc = document.getElementById('scroll' + side);
+  const el = sc.querySelector('[data-group="' + key + '"]');
+  if (!el) return false;
+  const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 8;
+  sc.scrollTop = Math.max(0, top);
+  el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  return true;
+}
+/* 送出之後跳到出問題的那一格。
+   左邊：捲過去（那一組本來就在頁上）。
+   右邊：先切分頁（那一組原本不在 DOM 裡），重畫完才捲得到 —— 這一步就是分頁版的成本。 */
+function jumpTo(side, key){
+  const tier = key.startsWith('buy-') ? key.slice(4) : 'unassigned';
+  if (side === 'R') { state.R.tab = tier; render(); }
+  scrollToGroup(side, tier);
+  const sc = document.getElementById('scroll' + side);
+  const f = sc.querySelector('[data-prob="' + key + '"]');
+  if (f && f.tagName === 'INPUT') f.focus({ preventScroll:true });
+}
+
+/* ==================================================================
+   事件
+================================================================== */
 document.querySelector('.bar').addEventListener('click', e => {
   const t = e.target.closest('button'); if (!t) return;
   if (t.dataset.n) setCount(+t.dataset.n);
   if (t.id === 'addFive') addCards(5);
+  if (t.dataset.sc) { state.scenario = t.dataset.sc; state.tierBuyback = { ...DEFAULT_BUYBACK }; applyScenario(); render(); }
+  if (t.id === 'tabDots') { state.tabDots = !state.tabDots; render(); }
   if (t.dataset.theme) {
     document.documentElement.dataset.theme = t.dataset.theme;
     document.querySelectorAll('.bar [data-theme]').forEach(x => x.classList.toggle('on', x === t));
     measure();
   }
 });
+['L','R'].forEach(side => {
+  const phone = document.getElementById('phone' + side);
+  const S = () => state[side];
 
-document.getElementById('phoneB').addEventListener('click', e => {
-  const el = e.target.closest('[data-card],[data-assign],[data-assignall],[data-clearsel],[data-expand],[data-settier],[data-del],[data-closesheet]');
-  if (!el) return;
+  phone.addEventListener('click', e => {
+    const el = e.target.closest('[data-card],[data-assign],[data-assignall],[data-clearsel],[data-expand],[data-settier],[data-del],[data-closesheet],[data-goto],[data-tab],[data-submit],[data-jump]');
+    if (!el) return;
 
-  if (el.dataset.closesheet && (e.target === el || el.tagName === 'BUTTON')) { state.openSheet = null; return render(); }
-  if (el.dataset.card) {
-    const id = el.dataset.card;
-    // 有東西被選取時＝多選模式，點卡是加選；沒有時，點卡就是打開那一張
-    if (state.selected.size) { state.selected.has(id) ? state.selected.delete(id) : state.selected.add(id); }
-    else state.openSheet = id;
-    return render();
-  }
-  if (el.dataset.assign) {
-    state.rows.forEach(r => { if (state.selected.has(r.id)) r.tier = el.dataset.assign; });
-    state.selected.clear(); return render();
-  }
-  if (el.dataset.assignall) {
-    state.rows.forEach(r => { if (r.tier === null) r.tier = el.dataset.assignall; });
-    return render();
-  }
-  if (el.dataset.clearsel) { state.selected.clear(); return render(); }
-  if (el.dataset.expand) {
-    const t = el.dataset.expand;
-    state.expanded.has(t) ? state.expanded.delete(t) : state.expanded.add(t);
-    return render();
-  }
-  if (el.dataset.settier) {
-    const r = state.rows.find(x => x.id === state.openSheet); if (r) r.tier = el.dataset.settier;
-    return render();
-  }
-  if (el.dataset.del) {
-    state.rows = state.rows.filter(x => x.id !== state.openSheet);
-    state.openSheet = null; state.n = state.rows.length; return render();
-  }
-});
+    if (el.dataset.closesheet && (e.target === el || el.tagName === 'BUTTON')) { S().openSheet = null; return render(); }
+    if (el.dataset.goto) { return void scrollToGroup(side, el.dataset.goto); }   // 索引：只捲，不藏
+    if (el.dataset.tab) { S().tab = el.dataset.tab; return render(); }           // 分頁：換掉畫面上的內容
+    if (el.dataset.submit) { S().submitted = true; render(); const ps = problems(); if (ps.length) jumpTo(side, ps[0].key); return; }
+    if (el.dataset.jump) { return jumpTo(side, el.dataset.jump); }
+    if (el.dataset.card) {
+      const id = el.dataset.card;
+      if (S().selected.size) { S().selected.has(id) ? S().selected.delete(id) : S().selected.add(id); }
+      else S().openSheet = id;
+      return render();
+    }
+    if (el.dataset.assign) {
+      state.rows.forEach(r => { if (S().selected.has(r.id)) r.tier = el.dataset.assign; });
+      S().selected.clear(); return render();
+    }
+    if (el.dataset.assignall) { state.rows.forEach(r => { if (r.tier === null) r.tier = el.dataset.assignall; }); return render(); }
+    if (el.dataset.clearsel) { S().selected.clear(); return render(); }
+    if (el.dataset.expand) { const t = el.dataset.expand; S().expanded.has(t) ? S().expanded.delete(t) : S().expanded.add(t); return render(); }
+    if (el.dataset.settier) { const r = state.rows.find(x => x.id === S().openSheet); if (r) r.tier = el.dataset.settier; return render(); }
+    if (el.dataset.del) { state.rows = state.rows.filter(x => x.id !== S().openSheet); S().openSheet = null; state.n = state.rows.length; return render(); }
+  });
 
-/* 長按縮圖＝進多選（手機上最順的「我要一次改好幾張」入口） */
-let pressTimer = null;
-document.getElementById('phoneB').addEventListener('pointerdown', e => {
-  const t = e.target.closest('[data-card]'); if (!t) return;
-  pressTimer = setTimeout(() => { state.selected.add(t.dataset.card); render(); }, 420);
-});
-['pointerup','pointerleave','pointercancel'].forEach(k =>
-  document.getElementById('phoneB').addEventListener(k, () => clearTimeout(pressTimer)));
+  /* 長按縮圖進多選（手機上最順的「我要一次改好幾張」入口） */
+  let pressTimer = null;
+  phone.addEventListener('pointerdown', e => {
+    const t = e.target.closest('[data-card]'); if (!t) return;
+    pressTimer = setTimeout(() => { S().selected.add(t.dataset.card); render(); }, 420);
+  });
+  ['pointerup','pointerleave','pointercancel'].forEach(k => phone.addEventListener(k, () => clearTimeout(pressTimer)));
 
-document.getElementById('phoneB').addEventListener('input', e => {
-  const el = e.target;
-  const r = state.rows.find(x => x.id === state.openSheet);
-  if (el.dataset.tierbuy) { state.tierBuyback[el.dataset.tierbuy] = el.value === '' ? 0 : +el.value; measureSoft(); return; }
-  if (!r) return;
-  if (el.dataset.qty) r.qty = el.value === '' ? 0 : +el.value;
-  if (el.dataset.buy) r.buyback = el.value === '' ? null : +el.value;
-  if (el.dataset.ref) r.ref = el.value === '' ? null : +el.value;
-  measureSoft();
-});
-/* 打字時不整塊重畫（會把焦點與游標弄丟），只更新看板上的數字。
-   放開／離開欄位（change）時才整塊重畫，摘要那一行才跟得上。 */
-function measureSoft(){ measure(); }
-document.getElementById('phoneB').addEventListener('change', e => {
-  if (e.target.dataset.tierbuy || e.target.dataset.qty || e.target.dataset.buy) render();
+  /* 打字時不整塊重畫（會把焦點與游標弄丟），只更新看板上的數字。
+     放開／離開欄位（change）時才整塊重畫，摘要那一行才跟得上。 */
+  phone.addEventListener('input', e => {
+    const el = e.target;
+    if (el.dataset.tierbuy) { state.tierBuyback[el.dataset.tierbuy] = el.value === '' ? null : +el.value; measure(); return; }
+    const r = state.rows.find(x => x.id === S().openSheet); if (!r) return;
+    if (el.dataset.qty) r.qty = el.value === '' ? 0 : +el.value;
+    if (el.dataset.buy) r.buyback = el.value === '' ? null : +el.value;
+    if (el.dataset.ref) r.ref = el.value === '' ? null : +el.value;
+    measure();
+  });
+  phone.addEventListener('change', e => {
+    if (e.target.dataset.tierbuy || e.target.dataset.qty || e.target.dataset.buy) render();
+  });
 });
 
 setCount(12);
