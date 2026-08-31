@@ -628,75 +628,58 @@ async function copyLink() {
   <div class="container page">
     <h1>我的卡冊</h1>
 
-    <!-- 收藏總覽：這一頁最想被回答的問題就是「我收了多少、值多少」。
-         一個主角（總值）+ 三個配角（張數、賞別分佈、最高價）+ 一張成長曲線 -->
+    <!-- ---- 收藏總覽 ----
+         這一頁最想被回答的問題就是「我收了多少、值多少」。
+
+         這張卡原本是八條互不相干的橫帶（標題／大數字、分佈條、圖例、最高價、
+         「收藏總值累積」＋日期、圖表、逐張數字、分隔線＋分享），中間隔著三條
+         水平分隔線，而「收藏總值」這四個字出現了兩次。碎裂感就是從那裡來的。
+
+         現在只剩三個群組，靠間距分群，一條分隔線都不畫：
+
+           抬頭 ── 左邊「收藏總值」說這張卡在講什麼，右邊是「誰看得到」的控制項
+           主角 ── 大數字 ＋ 持有張數 ＋ 緊接著的累積曲線（曲線的標題整個拿掉了，
+                   因為大數字就是那條線的終點，兩者本來就在講同一件事；
+                   起訖日期改由曲線底下那行細字負責，見 ValueCurve.vue）
+           組成 ── 賞別分佈條 ＋ 圖例 ＋ 最高價（三者都在回答「這批卡是什麼組成的」，
+                   本來就該是同一組，原本卻被一條分隔線切成兩塊）
+
+         分享搬到抬頭右上角，是因為它是**動作**不是資訊：留在最底下時它跟上面
+         那些數字的關係說不清楚，只好用一條分隔線把它隔開 —— 那條線正是碎裂感
+         的來源之一。放進抬頭之後它有了明確的身分（這張卡的控制項），
+         不必再多一條橫帶，也不必再畫線。 -->
     <section v-if="ownedCount || total" class="overview card">
-      <template v-if="ownedCount">
-      <p class="ovLabel">收藏總值</p>
-      <div class="ovHero">
-        <!-- 數字與單位鎖在同一個 inline 盒子裡，永遠不會被折成兩行 -->
-        <p class="ovVal">
-          <strong class="ovNum">{{ totalValue.toLocaleString() }}</strong><span class="ovUnit">點</span>
-        </p>
-        <p class="ovHold">持有 <b class="mono">{{ ownedCount }}</b> 張</p>
-      </div>
+      <div class="ovHead">
+        <p v-if="ownedCount" class="ovLabel">收藏總值</p>
 
-      <!-- 賞別分佈。段與段之間留 2px 底色縫，不畫外框 —— 邊框是多餘的墨水。
-           只有一種賞別時整條都是同一色，那條長方形不含任何資訊，
-           下面那行圖例已經把話講完了，所以直接不畫 -->
-      <div v-if="tierMix.length > 1" class="mixBar" aria-hidden="true">
-        <span
-          v-for="m in tierMix" :key="m.tier ?? 'none'"
-          class="seg" :class="tierKey(m.tier)"
-          :style="{ flexGrow: m.n }"
-        ></span>
-      </div>
-      <ul class="mixKey">
-        <li v-for="m in tierMix" :key="m.tier ?? 'none'">
-          <span class="kd" :class="tierKey(m.tier)" aria-hidden="true"></span>
-          {{ tierLabel(m.tier) }}<b class="mono">{{ m.n }}</b><span class="sr-only">張</span>
-        </li>
-      </ul>
+        <!-- 公開卡冊：分享出去的就是這張卡講的東西（總值、張數、賞別分佈），
+             所以控制項就掛在這張卡的抬頭上。
+             網址不顯示 —— 一長串亂碼佔兩行卻沒人會去讀它，要用的時候按複製就好。 -->
+        <div v-if="total" class="shareRow">
+          <template v-if="shareOn && shareLink">
+            <button type="button" class="btn sm" @click="copyLink">
+              {{ copied ? '已複製' : '複製卡冊連結' }}
+            </button>
+            <button type="button" class="btn sm ghost" :disabled="shareBusy" @click="askRotate = !askRotate">
+              換新連結
+            </button>
+          </template>
+          <span v-else class="shareOffLabel">公開卡冊</span>
 
-      <!-- 只有一張卡時「最高價」就是總值本身，再列一次是廢話 -->
-      <p class="ovBest" v-if="bestCard && ownedCount > 1">
-        <span class="bLabel">最高價</span>
-        <span class="kd" :class="tierKey(bestCard.tier)" aria-hidden="true"></span>
-        <span class="bName">{{ bestCard.name }}</span>
-        <span class="bVal mono">{{ bestCard.refPrice.toLocaleString() }}</span>
-      </p>
-
-      <!-- 成長曲線。放在總覽裡而不是另開一張卡：它回答的是同一個問題的時間版本 -->
-      <ValueCurve class="ovCurve" :prizes="curvePrizes" />
-      </template>
-
-      <!-- 公開卡冊併進總覽：分享出去的就是這一區講的東西（總值、張數、賞別分佈），
-           兩者是同一件事的兩面，各佔一張卡會讓人以為是兩個不相干的功能。
-           網址不顯示了 —— 一長串亂碼佔兩行卻沒人會去讀它，要用的時候按複製就好。
-           換新連結是不可逆的，所以確認仍然留在這裡，不收進按鈕的 tooltip。 -->
-      <div v-if="total" class="shareRow">
-        <template v-if="shareOn && shareLink">
-          <button type="button" class="btn sm" @click="copyLink">
-            {{ copied ? '已複製' : '複製卡冊連結' }}
+          <button
+            type="button" role="switch" :aria-checked="shareOn"
+            class="sw" :class="{ on: shareOn }"
+            :disabled="shareBusy"
+            @click="toggleShare"
+          >
+            <span class="track" aria-hidden="true"><span class="knob"></span></span>
+            <span class="sr-only">公開卡冊</span>
           </button>
-          <button type="button" class="btn sm ghost" :disabled="shareBusy" @click="askRotate = !askRotate">
-            換新連結
-          </button>
-        </template>
-        <span v-else class="shareOffLabel">公開卡冊</span>
-
-        <button
-          type="button" role="switch" :aria-checked="shareOn"
-          class="sw" :class="{ on: shareOn }"
-          :disabled="shareBusy"
-          @click="toggleShare"
-        >
-          <span class="track" aria-hidden="true"><span class="knob"></span></span>
-          <span class="sr-only">公開卡冊</span>
-        </button>
+        </div>
       </div>
 
-      <!-- 換連結是不可逆的，跟回收一樣用行內確認：後果要跟按鈕在同一個畫面 -->
+      <!-- 換連結是不可逆的，跟回收一樣用行內確認：後果要跟按鈕在同一個畫面。
+           緊接在抬頭下方，因為觸發它的按鈕就在抬頭上 -->
       <div v-if="askRotate && shareOn" class="confirm">
         <p class="warn">
           換新之後<strong>舊連結立刻失效</strong> —— 已經貼在群組、私訊裡的網址
@@ -711,6 +694,50 @@ async function copyLink() {
       </div>
 
       <p v-if="shareErr" class="shareErr" role="alert">{{ shareErr }}</p>
+
+      <template v-if="ownedCount">
+        <div class="ovHero">
+          <!-- 數字與單位鎖在同一個 inline 盒子裡，永遠不會被折成兩行 -->
+          <p class="ovVal">
+            <strong class="ovNum">{{ totalValue.toLocaleString() }}</strong><span class="ovUnit">點</span>
+          </p>
+          <p class="ovHold">持有 <b class="mono">{{ ownedCount }}</b> 張</p>
+        </div>
+
+        <!-- 成長曲線緊貼著大數字，中間不留大縫也不畫線：
+             那個數字就是這條線的最後一點，兩者是同一件事的兩種讀法 -->
+        <ValueCurve class="ovCurve" :prizes="curvePrizes" />
+
+        <!-- 「這批卡是什麼組成的」：分佈條、圖例、最高價三者一組。
+             跟上面那組之間留一段明顯的空白（不是分隔線）—— 間距分得開群組，
+             線只是把空白畫出來給人看，多此一舉。 -->
+        <div class="ovMix">
+          <!-- 賞別分佈。段與段之間留 2px 底色縫，不畫外框 —— 邊框是多餘的墨水。
+               只有一種賞別時整條都是同一色，那條長方形不含任何資訊，
+               下面那行圖例已經把話講完了，所以直接不畫 -->
+          <div v-if="tierMix.length > 1" class="mixBar" aria-hidden="true">
+            <span
+              v-for="m in tierMix" :key="m.tier ?? 'none'"
+              class="seg" :class="tierKey(m.tier)"
+              :style="{ flexGrow: m.n }"
+            ></span>
+          </div>
+          <ul class="mixKey">
+            <li v-for="m in tierMix" :key="m.tier ?? 'none'">
+              <span class="kd" :class="tierKey(m.tier)" aria-hidden="true"></span>
+              {{ tierLabel(m.tier) }}<b class="mono">{{ m.n }}</b><span class="sr-only">張</span>
+            </li>
+          </ul>
+
+          <!-- 只有一張卡時「最高價」就是總值本身，再列一次是廢話 -->
+          <p class="ovBest" v-if="bestCard && ownedCount > 1">
+            <span class="bLabel">最高價</span>
+            <span class="kd" :class="tierKey(bestCard.tier)" aria-hidden="true"></span>
+            <span class="bName">{{ bestCard.name }}</span>
+            <span class="bVal mono">{{ bestCard.refPrice.toLocaleString() }}</span>
+          </p>
+        </div>
+      </template>
     </section>
 
     <p class="muted note">寄存中的卡可合併出貨（省運費），寄存期限 90 天。</p>
@@ -1371,14 +1398,24 @@ async function copyLink() {
 /* ---- 收藏總覽 ----
    底色維持純 var(--surface)，沒有漸層：曲線的端點靠一圈「底色描邊」跟線分離，
    底下只要有漸層，那圈描邊就會在某個高度對不上底色而露出接縫。 */
+/* 群組之間的距離由各區塊自己的 margin-top 決定，不用統一的 grid gap ——
+   統一的間距等於「每一帶都一樣重要」，那正是原本讀起來東一塊西一塊的原因。
+   抬頭與大數字幾乎相黏、曲線緊接著大數字、組成那一組退開 18px。 */
 .overview {
-  display: grid; gap: 12px;
+  display: grid; gap: 0;
   padding: 16px 18px; margin: 14px 0 10px;
+}
+/* 抬頭：左邊是這張卡的名字，右邊是分享控制項。
+   兩者不會互相擠 —— 分享那一組靠 margin-left: auto 永遠貼右，
+   窄到裝不下時整組換行（wrap），而不是把標題壓扁 */
+.ovHead {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 4px 10px; min-width: 0;
 }
 .ovLabel {
   margin: 0; font-size: 11.5px; color: var(--faint); letter-spacing: .04em;
 }
-.ovHero { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: nowrap; }
+.ovHero { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: nowrap; margin-top: 2px; }
 /* 主角數字。單位是行內元素、不換行，「53,380 點」永遠是一個量詞而不是兩段。
    clamp 讓它在 320px 上自己縮到塞得下，不必等到折行才發現放不下 */
 .ovVal { margin: 0; white-space: nowrap; min-width: 0; }
@@ -1392,6 +1429,16 @@ async function copyLink() {
 .ovUnit { margin-left: 4px; font-size: 12.5px; color: var(--muted); }
 .ovHold { margin: 0; flex: none; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .ovHold b { color: var(--ink); font-weight: 700; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+
+/* 曲線緊貼大數字：它是那個數字的時間版本，不是另一個區塊 */
+.ovCurve { margin-top: 4px; }
+
+/* 「組成」那一組。組內只留 6px，跟上面那組之間留 10px ——
+   看起來像 24px，因為曲線那一列的「逐張數字」開關是 44px 高的觸控目標，
+   它的字只有 16px，下面本來就跟著 14px 的空白（見 ValueCurve 的 .tbl summary）。
+   那段空白同時當成群組之間的分界，所以這裡不必再補滿。
+   分界一律用留白，不畫線。 */
+.ovMix { display: grid; gap: 6px; margin-top: 10px; }
 
 /* 賞別分佈條。2px 的縫是底色本身，不是描邊 —— 描邊會多一圈不是資料的墨水 */
 .mixBar {
@@ -1413,7 +1460,7 @@ async function copyLink() {
 /* 圖例才是識別的主要管道：C 賞的藍與 D 賞的灰在色覺檢測下分離度不足，
    只靠顏色會有人分不出來，所以每一段都配文字 */
 .mixKey {
-  list-style: none; margin: -2px 0 0; padding: 0;
+  list-style: none; margin: 0; padding: 0;
   display: flex; flex-wrap: wrap; gap: 4px 12px;
   font-size: 11px; color: var(--muted);
 }
@@ -1428,9 +1475,12 @@ async function copyLink() {
 .kd.t-bust { background: var(--ink); }
 .kd.t-none { background: var(--faint); }
 
+/* 最高價原本上面有一條分隔線，把它跟賞別圖例切成兩塊 ——
+   但兩者講的是同一件事（這批卡的組成），線是切錯地方。改成同組內的一列，
+   只留 2px 的呼吸，不畫線。 */
 .ovBest {
   display: flex; align-items: center; gap: 7px; min-width: 0;
-  margin: 0; padding-top: 10px; border-top: 1px solid var(--line-soft);
+  margin: 2px 0 0;
   font-size: 12.5px;
 }
 .bLabel { color: var(--faint); font-size: 11.5px; flex: none; }
@@ -1439,8 +1489,6 @@ async function copyLink() {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .bVal { margin-left: auto; flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
-
-.ovCurve { padding-top: 10px; border-top: 1px solid var(--line-soft); }
 
 /* ---- 狀態分頁 ----
    換行，不橫向捲。
@@ -1488,10 +1536,14 @@ async function copyLink() {
 /* 這段警語不縮成灰字小號 —— 它是使用者決定要不要按開關的依據，
    跟標題一樣要讀得下去 */
 
-/* 開關本體 30px 高，但按鈕撐到 44px 觸控高度（touch.css 的門檻） */
+/* 開關本體 30px 高，但按鈕撐到 44px 觸控高度（touch.css 的門檻）。
+   上下各 -7px 的外距把多出來的 14px 從版面裡抽掉：熱區仍然是 56×44，
+   但抬頭那一列的高度只由 30px 的軌道決定 —— 不這樣做的話，
+   一個看不見的觸控區會把整張卡的第一列撐成 44px 高的空白帶。 */
 .sw {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 56px; height: 44px; padding: 0; border: 0; background: none; cursor: pointer;
+  margin: -7px -8px -7px 0;
 }
 .sw:disabled { opacity: .5; cursor: not-allowed; }
 .sw .track {
@@ -1508,16 +1560,18 @@ async function copyLink() {
 .sw.on .knob { transform: translateX(22px); background: #fff; }
 .sw:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--pill); }
 
-/* 分享列併進總覽卡的最後一段，用一條細線跟上面的數字分開 ——
-   它是同一張卡裡的另一件事，不是另一張卡 */
+/* 分享控制項掛在總覽卡的抬頭右上角。
+   原本它是卡片最底下的一條橫帶，上面還壓著一條分隔線 —— 那條線是被迫的：
+   一組動作按鈕接在一串數字後面，不畫線就分不出那是另一件事。
+   搬到抬頭之後它自己就有身分（卡片的控制項），線和整條橫帶一起省掉。 */
 .shareRow {
   display: flex; align-items: center; gap: 8px; min-width: 0;
-  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line-soft);
+  margin: 0 0 0 auto;
 }
 .shareRow .btn { min-width: 0; white-space: nowrap; }
-.shareOffLabel { min-width: 0; font-size: 13px; font-weight: 600; }
+.shareOffLabel { min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--muted); }
 /* 開關永遠靠右：不管左邊是標籤還是兩顆按鈕，它的位置都不該跳動 */
-.shareRow .sw { margin-left: auto; flex: none; }
+.shareRow .sw { flex: none; }
 .shareErr { margin: 10px 0 0; font-size: 12px; color: var(--danger); }
 .overview .confirm { margin-top: 12px; }
 
