@@ -67,7 +67,27 @@ const reason = ref('')
 const hasVideo = ref(false)
 /* API 模式：伺服器要影片的 URL 才受理。R2 直傳是下一階段，先讓使用者貼連結 */
 const videoUrl = ref('')
-const canDispute = () => MOCK ? hasVideo.value : /^https?:\/\/.+/.test(videoUrl.value.trim())
+
+/* ---- 「送出申訴」灰掉的理由 ----
+   擋住它的是一條 `^https?://` 的正規式，而畫面上完全沒講。
+   申訴是買家唯一能把錢要回來的路，而且他多半是在「東西不對」的當下才來按 ——
+   一顆按不動又不說話的按鈕在這個時間點特別傷。
+
+   「發生什麼事」刻意不列進來：那一欄沒填會被 doDispute() 補成「未說明」，
+   它不是門檻。把不是門檻的欄位列進「還差」是在騙人。
+
+   兩種模式的門檻不同，講的話也要不同 —— 一律講「影片連結」的話，
+   mock 的人會去找一個畫面上根本不存在的欄位。 */
+const disputeMissing = computed(() => {
+  if (MOCK) return hasVideo.value ? '' : '還差：勾選「我有完整未剪輯的開箱影片」。'
+  const u = videoUrl.value.trim()
+  if (!u) return '還差：開箱影片連結。'
+  /* 貼了連結還是灰的最難自己脫困 —— 直接指出缺的是開頭那段通訊協定，
+     多數人是從相簿分享出來只複製到路徑，或前面黏了一個空白。 */
+  return /^https?:\/\/.+/.test(u) ? '' : '還差：影片連結要是完整網址，開頭要有 http:// 或 https://。'
+})
+const canDispute = () => !disputeMissing.value
+const disputeBlockWhy = computed(() => (busy.value ? '' : disputeMissing.value))
 
 /* 每分鐘重掃一次，讓倒數會動、到期的訂單自己結案。
    真正的推進靠時間戳，這個計時器只是讓畫面跟上，
@@ -382,6 +402,10 @@ function openShip(o: Order) {
   tracking.value = ''
   carrier.value = ''
   err.value = ''
+  /* 出貨面板是這一頁三張裡最高的（物流商下拉 + 單號 + 兩段說明 + 動作列），
+     而「我已寄出」就在訂單卡的最下緣 —— 不把面板帶進視野的話，賣家按下去
+     看到的是畫面完全沒動。確認收貨與申訴早就這樣做了，這一顆是漏掉的那個。 */
+  revealPanel('[data-testid="ship-submit"]')
 }
 function closeShip() {
   shipFor.value = null
@@ -805,11 +829,17 @@ async function doDispute(o: Order) {
           <input v-model="videoUrl" type="url" placeholder="https://…" />
         </label>
         <p class="hint">沒有影片無法受理索賠 —— 買東西不強制錄影，但要申請退款必須附。</p>
+        <!-- 灰按鈕的理由，就在動作列正上方。用 --warn-ink 不用 --danger：
+             使用者沒做錯事，只是還沒填完。role="status" 讓讀屏在貼上連結的
+             當下就聽到門檻過了，不必自己去 Tab 一圈猜。 -->
+        <p v-if="disputeBlockWhy" id="disputeWhy" class="blockWhy" role="status">{{ disputeBlockWhy }}</p>
         <div class="frow">
           <button type="button" class="btn sm" @click="disputeFor = null">取消</button>
           <button
             type="button" class="btn primary sm" data-testid="dispute-submit"
-            :disabled="!canDispute() || busy" @click="doDispute(r.o)"
+            :disabled="!canDispute() || busy"
+            :aria-describedby="disputeBlockWhy ? 'disputeWhy' : undefined"
+            @click="doDispute(r.o)"
           >{{ busy ? '處理中…' : '送出申訴' }}</button>
         </div>
       </div>
@@ -1116,16 +1146,30 @@ a.who2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   scroll-margin-bottom: calc(12px + max(var(--nav-total, 0px), var(--safe-b, 0px)));
 }
 .form label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
-.form input[type="text"] {
+/* 選擇器不能只挑 type="text"：API 模式的開箱影片欄是 type="url"，
+   原本整個吃不到這段樣式 —— 那一欄在正式環境是沒有邊框、沒有 44px 高的裸欄位，
+   而它正好是唯一擋住「送出申訴」的那一欄。checkbox 排除掉，它不該被撐成 44px 寬。 */
+.form input:not([type="checkbox"]) {
   display: block; width: 100%; margin-top: 5px;
   background: var(--field); border: 1px solid var(--line);
   border-radius: var(--radius); color: var(--ink);
-  padding: 10px 12px; font-size: 14px; min-height: 44px;
+  /* 16px 不是排版偏好，是 iOS 的門檻：欄位字級小於 16 就會在聚焦時
+     自動放大整頁，而且不會自己縮回去（touch.css 第 4 節）。這一條原本是
+     14px，被 scoped 的特異度贏過 touch.css 那條補強 —— 同一頁的 select
+     早就寫了 16px，兩個欄位不該一個放大一個不放大。 */
+  padding: 10px 12px; font-size: 16px; min-height: 44px;
 }
 .chk { display: flex; gap: 8px; align-items: flex-start; line-height: 1.6; }
 .chk input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
 .hint { font-size: 11.5px; line-height: 1.65; color: var(--muted); margin: 0 0 10px; }
 .frow { display: flex; gap: 8px; justify-content: flex-end; }
+/* 灰按鈕的理由。--warn-ink 而不是 --danger：使用者沒做錯事，只是還沒填完，
+   紅字會讀成「出錯了」（同卡冊出貨面板、出價面板、上架列） */
+.blockWhy {
+  margin: 0 0 10px; min-width: 0;
+  font-size: 12.5px; line-height: 1.55; color: var(--warn-ink);
+  overflow-wrap: anywhere;
+}
 
 .err { color: var(--danger); font-size: 13.5px; margin: 0 0 12px; }
 

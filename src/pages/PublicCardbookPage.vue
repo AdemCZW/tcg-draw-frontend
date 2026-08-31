@@ -12,6 +12,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { share, offers, type PublicCard } from '@/lib/social'
+import { useKeyboardInset } from '@/composables/useKeyboardInset'
 import { ApiError } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
 import { useInfiniteList } from '@/composables/useInfiniteList'
@@ -182,37 +183,12 @@ function onEsc(e: KeyboardEvent) {
   if (e.key === 'Escape' && offerFor.value) closeOffer()
 }
 
-/* ---- 軟鍵盤 ----
-   覆蓋層是 position: fixed，而 fixed 貼的是「版面視窗」。
-   iOS Safari 的軟鍵盤不會縮版面視窗、只縮 visualViewport，
-   所以鍵盤一彈出來，面板下緣（連同黏在那裡的送出鍵）就躲到鍵盤底下了。
-   出價一定要打字，這是主要路徑不是邊角情況。
+/* 軟鍵盤讓位（--kb）。原本這裡跟 MyCardsPage 各存一份，
+   LoginMethods 加入之後搬進 composable —— 理由寫在 useKeyboardInset.ts。 */
+useKeyboardInset()
 
-   --kb 掛在 documentElement：.sheetWrap 是 Teleport 到 body 的，
-   不在這個元件的 DOM 子樹裡。
-   （同一段也在 MyCardsPage.vue，兩頁各一份 —— 見上面對複製 CSS 的說明。）
-   scale 的防呆：雙指放大時 visualViewport 也會變小，那不是鍵盤。 */
-function syncKeyboardInset() {
-  const vv = window.visualViewport
-  const kb = vv && vv.scale <= 1.01
-    ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
-    : 0
-  document.documentElement.style.setProperty('--kb', `${Math.round(kb)}px`)
-}
-
-onMounted(() => {
-  window.addEventListener('keydown', onEsc)
-  window.visualViewport?.addEventListener('resize', syncKeyboardInset)
-  window.visualViewport?.addEventListener('scroll', syncKeyboardInset)
-  syncKeyboardInset()
-})
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onEsc)
-  window.visualViewport?.removeEventListener('resize', syncKeyboardInset)
-  window.visualViewport?.removeEventListener('scroll', syncKeyboardInset)
-  /* 離開這一頁要還原：--kb 掛在根節點上，留著會讓別頁的固定元件也跟著位移 */
-  document.documentElement.style.removeProperty('--kb')
-})
+onMounted(() => window.addEventListener('keydown', onEsc))
+onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
 </script>
 
 <template>
@@ -450,7 +426,7 @@ h1 { font-size: 21px; margin: 0; line-height: 1.25; overflow-wrap: anywhere; }
 .sheetWrap {
   position: fixed; inset: 0; z-index: 80;
   display: flex; align-items: flex-end; justify-content: center;
-  background: #000a;
+  background: var(--scrim);
   /* 下緣讓給軟鍵盤（--kb 由 syncKeyboardInset() 寫進根節點，預設 0） */
   bottom: var(--kb, 0px);
 }

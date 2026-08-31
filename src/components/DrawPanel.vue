@@ -118,12 +118,20 @@ function goPick() {
 
 <style scoped>
 .panel { padding: 18px; border-radius: var(--radius-lg); }
-.counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+/* minmax(0, 1fr)：1fr 的下限是 auto，也就是內容寬度 —— 「10 抽」比其他三個寬，
+   用 1fr 的話那一格會撐開、隔壁三格被擠扁（docs/HANDOFF.md 2.1） */
+.counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 /* 讓 scrollIntoView 知道畫面下緣那塊被浮動的列佔走了，不然它會以為
    這排已經「看得到」。算式跟 BottomActionBar 的 bottom 同源：10 的下緣間距
    ＋ 列高約 76 ＋ 8 的呼吸，再加上底部導覽／安全區的讓位 */
 .counts.sheet { scroll-margin-bottom: calc(94px + max(var(--nav-total, 0px), var(--safe-b, 0px))); }
 .count {
+  /* 44px：抽數是整條抽卡動線的第一個決定，原本只有 40px。
+     不放進 @media (pointer: coarse) —— 桌機側欄那份面板是同一個元件，
+     兩種寬度差 4px 沒有任何好處，多一條斷點反而多一個會漂掉的地方
+     （同 OrdersPage 的 select）。padding 維持 9px，靠 min-height 補齊，
+     文字仍然垂直置中（grid + place-items）。 */
+  min-height: 44px; display: grid; place-items: center;
   padding: 9px 0; border-radius: 9px;
   background: var(--surface-2); border: 1px solid var(--line);
   color: var(--muted); font-size: 14px; font-weight: 600;

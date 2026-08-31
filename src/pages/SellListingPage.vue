@@ -57,10 +57,33 @@ onMounted(async () => {
 
 const total = computed(() =>
   cards.value.reduce((a, p) => a + (price.value[p.id] || 0), 0))
-const ready = computed(() =>
-  cards.value.length > 0 && cards.value.every(p => (price.value[p.id] ?? 0) > 0))
 
 const busy = ref(false)
+
+/* ---- 灰掉的「確認上架」要說得出是哪一張卡 ----
+   門檻只有一條：每一張都要有大於 0 的售價。但卡冊一次可以選很多張，
+   價格欄一路往下排、按鈕在最下面 —— 上面某一格空著、下面按鈕灰掉，
+   使用者看不出是哪一格的問題，而那一列很可能已經捲到視窗外了。
+   所以理由要**指名卡片**，不能只說「有卡不符合條件」。
+
+   帶市值進來當預設值的那一段（onMounted）讓大多數格子一開始就是填好的，
+   會空的通常是「賣家沒標參考價」的那幾張 —— 更需要被點名，
+   因為使用者根本不知道自己漏了哪一張。 */
+const priceMissing = computed(() =>
+  cards.value.filter(p => !((price.value[p.id] ?? 0) > 0)).map(p => p.card.name))
+/* 超過四張就只列前四張。全部列出來的話，選了二十張時這段字會比表單還長，
+   而「還差 N 張」那個數字已經把規模講清楚了，往上捲就找得到剩下的。 */
+const LIST_CAP = 4
+const blockWhy = computed(() => {
+  if (busy.value || !cards.value.length) return ''
+  const miss = priceMissing.value
+  if (!miss.length) return ''
+  const shown = miss.slice(0, LIST_CAP).join('、')
+  const rest = miss.length > LIST_CAP ? `等 ${miss.length} 張` : ''
+  return `還差 ${miss.length} 張的售價（要大於 0）：${shown}${rest}。`
+})
+const ready = computed(() => cards.value.length > 0 && priceMissing.value.length === 0)
+
 const err = ref('')
 /** 部分成功也要講清楚是哪幾張成功了，不要只說「失敗」讓人不知道現在的狀態 */
 const done = ref<{ ok: string[]; failed: string[] } | null>(null)
@@ -145,12 +168,22 @@ async function submit() {
       </ul>
 
       <div class="bar card">
-        <span class="sum">
-          {{ cards.length }} 張 · 合計 <strong class="mono">{{ total.toLocaleString() }}</strong> 點
-        </span>
-        <button class="btn primary" :disabled="!ready || busy" @click="submit">
-          {{ busy ? '上架中…' : '確認上架' }}
-        </button>
+        <!-- 理由跟按鈕同一格、就在它正上方：這條列是 sticky，按鈕永遠看得到，
+             把理由放在別的地方等於又要使用者去找。role="status" 讓讀屏在
+             最後一格填好的當下就聽到門檻已經過了。 -->
+        <p v-if="blockWhy" id="sellWhy" class="blockWhy" role="status">{{ blockWhy }}</p>
+        <div class="barRow">
+          <span class="sum">
+            {{ cards.length }} 張 · 合計 <strong class="mono">{{ total.toLocaleString() }}</strong> 點
+          </span>
+          <button
+            class="btn primary" :disabled="!ready || busy"
+            :aria-describedby="blockWhy ? 'sellWhy' : undefined"
+            @click="submit"
+          >
+            {{ busy ? '上架中…' : '確認上架' }}
+          </button>
+        </div>
       </div>
 
       <p v-if="err" class="msg bad">{{ err }}</p>
@@ -199,9 +232,19 @@ h1 { font-size: 20px; margin: 0; }
      取 max：手機的 --nav-total 已含安全區，桌機是 0 才輪到 --safe-b
      （同 NotifyBell 的寫法）。 */
   position: sticky; bottom: calc(12px + max(var(--nav-total, 0px), var(--safe-b, 0px)));
-  display: flex; align-items: center; gap: 12px;
+  /* 從 flex 改成 grid：理由那一行要獨佔一列疊在按鈕上方，
+     跟合計並排的話它會被擠成一條讀不了的窄柱。 */
+  display: grid; gap: 8px; min-width: 0;
   padding: 12px 14px; margin-top: 14px;
   background: var(--surface);
+}
+.barRow { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* 灰按鈕的理由。用 --warn-ink 不用 --danger：使用者沒做錯事，
+   只是還沒填完，紅字會讀成「出錯了」（同卡冊出貨面板與出價面板） */
+.blockWhy {
+  margin: 0; min-width: 0;
+  font-size: 12.5px; line-height: 1.55; color: var(--warn-ink);
+  overflow-wrap: anywhere;
 }
 .sum { flex: 1; min-width: 0; font-size: 13px; }
 .sum strong { font-size: 17px; color: var(--gold-deep); }

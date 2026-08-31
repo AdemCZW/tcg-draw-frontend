@@ -153,7 +153,13 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
   gap: 24px;
   height: 66px;
 }
-.brand { font-size: 21px; font-weight: 600; letter-spacing: -0.03em; white-space: nowrap; }
+/* inline-flex + 44px：標誌是回首頁的連結，但文字本身只有 19px 高 ——
+   撐開的是可點區域，字級與位置都不動（列是 align-items: center，
+   多出來的高度平均分到上下兩側）。 */
+.brand {
+  display: inline-flex; align-items: center; min-height: 44px;
+  font-size: 21px; font-weight: 600; letter-spacing: -0.03em; white-space: nowrap;
+}
 .brand span { color: var(--accent); }
 
 /* 導覽置中在中間那一欄，而不是貼著標誌排。
@@ -316,13 +322,18 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))
      padding 和 .me 的 padding 全部無聲蓋掉 —— 320px 的溢出從註解裡記的 2px
      惡化到 28px 就是這麼來的，而且 diff 上完全看不出有人改過餘額膠囊。
      連寫 .pill.wallet（0,2,0）之後，順序就不再是正確性的一部分。 */
-  .pill { height: 34px; font-size: 13px; padding: 0 12px; }
+  /* 高度 44 不是 34。這一列每一顆都是觸控目標（餘額進儲值、頭像進「我的」、
+     鈴打開通知），而它們全都貼在螢幕最上緣、彼此只差 5–6px —— 誤觸的代價是
+     跳到一個沒打算去的頁面。列高 56 減 44 還剩 12（上下各 6），放得下。
+     字級不跟著長：撐大的是可點區域，不是視覺重量。 */
+  .pill { height: 44px; font-size: 13px; padding: 0 12px; }
   /* 餘額九位數在 375px 會折成兩行；不換行 + 收字距 */
-  .pill.wallet { font-size: 12.5px; height: 32px; padding: 0 11px; letter-spacing: -.01em; }
-  /* 帳號在手機上只剩頭像。左右各留 8px 不是留白而是觸控範圍：
-     26px 的頭像加上這 16px 正好讓可點區域到 44px 寬（Apple HIG 的下限）。
-     高度受限於整條列只有 56px，仍是 34px —— 那條要整列一起改，記在 docs/open-issues.md。 */
-  .pill.me { padding: 0 8px; }
+  .pill.wallet { font-size: 12.5px; padding: 0 11px; letter-spacing: -.01em; }
+  /* 帳號在手機上只剩頭像。左右各留 9px 不是留白而是觸控範圍：
+     26px 的頭像加上這 18px 讓可點區域到 44px 寬（Apple HIG 的下限）。
+     高度由上面那條 .pill 的 44px 給 —— 舊註解說「高度受限於整條列只有 56px」，
+     那不成立：56 減 44 還剩 12，上下各 6，排得下。 */
+  .pill.me { padding: 0 9px; }
   .avatar { width: 26px; height: 26px; font-size: 12px; }
 }
 

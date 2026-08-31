@@ -11,6 +11,7 @@ import ValueCurve from '@/components/ValueCurve.vue'
 import ListSentinel from '@/components/ListSentinel.vue'
 import BottomActionBar from '@/components/BottomActionBar.vue'
 import { useInfiniteList } from '@/composables/useInfiniteList'
+import { useKeyboardInset } from '@/composables/useKeyboardInset'
 import { useWalletStore } from '@/stores/wallet'
 import { recycleQuote } from '@/lib/recycle'
 import { track } from '@/lib/ga'
@@ -468,40 +469,18 @@ function onChosenKey(e: KeyboardEvent) {
   if (chosenOpen.value) { closeChosen(); return }
   if (openCard.value) closeCard(true)
 }
-/* ---- 軟鍵盤 ----
-   覆蓋層是 position: fixed，而 fixed 貼的是「版面視窗」。
-   iOS Safari 的軟鍵盤不會縮版面視窗，只縮 visualViewport ——
-   所以鍵盤一彈出來，面板的下緣（連同黏在那裡的送出鍵）就躲到鍵盤底下了。
-   在手機上填地址必然會彈鍵盤，這不是邊角情況，是主要路徑。
-
-   把鍵盤吃掉的高度寫成 --kb，讓覆蓋層的下緣停在鍵盤上面。
-   掛在 documentElement 而不是元件內：.sheetWrap 是 Teleport 到 body 的，
-   不在這個元件的 DOM 子樹裡，scoped 的 style 綁得到、CSS 變數要走根節點。
-
-   scale 的防呆：雙指放大時 visualViewport 也會變小，那不是鍵盤，
-   照著縮會讓面板莫名其妙變矮。 */
-function syncKeyboardInset() {
-  const vv = window.visualViewport
-  const kb = vv && vv.scale <= 1.01
-    ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
-    : 0
-  document.documentElement.style.setProperty('--kb', `${Math.round(kb)}px`)
-}
+/* 軟鍵盤讓位（--kb）。這段原本在這裡跟 PublicCardbookPage 各存一份，
+   LoginMethods 是第三個使用者，所以搬進 composable —— 理由與 scale 防呆
+   都寫在 useKeyboardInset.ts 裡。 */
+useKeyboardInset()
 onMounted(() => {
   window.addEventListener('keydown', onChosenKey)
   /* capture：面板裡的按鈕自己會 stopPropagation 的話，冒泡階段就收不到了 */
   document.addEventListener('click', onDocPointer, true)
-  window.visualViewport?.addEventListener('resize', syncKeyboardInset)
-  window.visualViewport?.addEventListener('scroll', syncKeyboardInset)
-  syncKeyboardInset()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onChosenKey)
   document.removeEventListener('click', onDocPointer, true)
-  window.visualViewport?.removeEventListener('resize', syncKeyboardInset)
-  window.visualViewport?.removeEventListener('scroll', syncKeyboardInset)
-  /* 離開這一頁要還原：--kb 掛在根節點上，留著會讓別頁的固定元件也跟著位移 */
-  document.documentElement.style.removeProperty('--kb')
 })
 
 /* 存的是卡片本身而不是 id：確認改成覆蓋層之後，它已經不在那張卡的
@@ -1299,7 +1278,7 @@ async function copyLink() {
 .sheetWrap {
   position: fixed; inset: 0; z-index: 80;
   display: flex; align-items: flex-end; justify-content: center;
-  background: #000a;
+  background: var(--scrim);
   padding: 0;
   /* 下緣讓給軟鍵盤（--kb 由 syncKeyboardInset() 寫進根節點，預設 0）。
      不用 inset: 0 是因為 bottom 要能被覆蓋。 */

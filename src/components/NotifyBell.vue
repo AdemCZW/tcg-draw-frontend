@@ -347,19 +347,26 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 .bell.on { background: var(--accent); border-color: transparent; color: #fff; }
 .bell:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
-/* 徽章：有數字就顯示數字，一位數維持正圓 */
+/* 徽章：有數字就顯示數字，一位數維持正圓。
+   位置在鈴的**裡面**，不是掛在角落外。原本是 top/right: -3px，量出來
+   scrollWidth 39 > clientWidth 36 —— 徽章整個超出按鈕的邊界框。它自己不會
+   捲，但一個「內容比自己寬」的元素只要哪天被放進會捲的容器就會生出捲軸，
+   而鈴這顆在每一頁的頁首上。鈕撐到 44px 之後裡面本來就放得下，
+   不必再往外借空間。 */
 .badge {
-  position: absolute; top: -3px; right: -3px;
+  position: absolute; top: 2px; right: 2px;
   min-width: 19px; height: 19px;
   padding: 0 5px;
   display: grid; place-items: center;
   border-radius: var(--pill);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 11px; font-weight: 700; line-height: 1;
-  /* 描邊用底色：徽章疊在鈴的邊線上，沒有這圈會糊成一團 */
-  box-shadow: 0 0 0 2px var(--bg);
+  /* 描邊隔開徽章與鈴的圖示。顏色要跟鈴當下的底色一樣才像「挖出來的」——
+     搬進按鈕裡面之後再用 --bg 會變成一圈頁面底色的洞。 */
+  box-shadow: 0 0 0 2px var(--surface-3);
 }
+.bell.hot .badge { box-shadow: 0 0 0 2px var(--gold); }
 .badge.wide { letter-spacing: -0.02em; }
 
 /* ---- 遮罩 ---- */
@@ -571,9 +578,13 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 }
 
 @media (max-width: 720px) {
-  /* 對齊頁首在窄螢幕上收小的膠囊高度（見 AppHeader 的 .wallet） */
-  .bell { width: 32px; height: 32px; }
+  /* 44×44。原本是 32×32，對齊的是頁首那時收小的膠囊高度 ——
+     那條現在整列一起長到 44 了（見 AppHeader 的 .pill），所以這顆跟著走。
+     圖示維持 19px：撐大的是可點區域，不是視覺重量。 */
+  .bell { width: 44px; height: 44px; }
   .bell svg { width: 19px; height: 19px; }
+  /* 44px 的鈕裡放得下更靠內一點的徽章，離邊線遠一些比較不像被切到 */
+  .badge { top: 4px; right: 4px; }
 }
 
 @media (min-width: 721px) {

@@ -31,6 +31,17 @@ const tierMeta: Record<Seller['tier'], { label: string }> = {
 
 <style scoped>
 .chip-wrap { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+/* ---- 觸控目標 ----
+   這顆 chip 只有 22px 高（頭像的高度），而 link 版是一條真的連結，
+   在市場詳情、抽選台面板、池總覽三處都是「想知道賣家是誰」的唯一入口。
+   撐到 44px 的是**可點區域**，不是頭像與字級 —— 版面上看起來一樣，
+   只是上下各多了 11px 的可按範圍。
+
+   只給 a.chip-wrap，不給 span 版：link=false 的三處（賣家頁的大標、
+   訂單頁、大廳的池卡）它只是一段標示，不是觸控目標，撐高只會在版面裡
+   多開一個 22px 的洞。訂單頁另外包了一層 44px 的外層連結繞開這件事，
+   那個繞法在這裡仍然成立，不必動它。 */
+a.chip-wrap { min-height: 44px; }
 .avatar {
   display: grid; place-items: center;
   width: 22px; height: 22px; flex: none;
