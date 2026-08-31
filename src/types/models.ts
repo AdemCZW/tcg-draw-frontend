@@ -223,7 +223,10 @@ export interface LedgerEntry {
   id: string
   delta: number
   balanceAfter: number
-  type: 'topup' | 'draw' | 'refund' | 'recycle' | 'redeem'
+  /* 'trade' 是私下交易邀約成交（後端的 trade-buy / trade-sell）。
+     它不能併進 'redeem'：使用者回來對帳時要分得出「這筆是市場買賣」
+     還是「這筆是有人跟我換卡」，兩者的申訴窗口與對造都不一樣。 */
+  type: 'topup' | 'draw' | 'refund' | 'recycle' | 'redeem' | 'trade'
   note: string
   createdAt: string
 }

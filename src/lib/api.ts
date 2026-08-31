@@ -183,11 +183,16 @@ function toSettlement(r: Any): SellerSettlement {
 const REASON_TYPE: Record<string, LedgerEntry['type']> = {
   'admin-grant': 'topup', topup: 'topup', draw: 'draw',
   refund: 'refund', recycle: 'recycle', 'vault-buy': 'redeem', 'vault-sell': 'redeem',
-  'order-pay': 'redeem', 'order-receive': 'redeem'
+  'order-pay': 'redeem', 'order-receive': 'redeem',
+  /* 交易邀約成交。沒有這兩行的話會落到預設的 'redeem'，而 note 會退回
+     後端的原始字串 —— 錢包頁上就是一行「trade-sell」，看得懂的只有寫程式的人。 */
+  'trade-buy': 'trade', 'trade-sell': 'trade'
 }
 const REASON_NOTE: Record<string, string> = {
   'admin-grant': '平台發放', draw: '抽選', recycle: '回收', 'vault-buy': '市場購入',
   'vault-sell': '市場售出', 'order-pay': '託管訂單付款', 'order-receive': '託管訂單收款',
+  /* 類型徽章已經寫著「交易」了，note 不用再說一次「交易」 */
+  'trade-buy': '出價買入', 'trade-sell': '出價售出',
   'deposit-forfeit': '保證金沒收', seed: '測試點數'
 }
 function toLedger(rows: Any[], endBalance: number): LedgerEntry[] {
@@ -257,10 +262,9 @@ function toListing(l: Any): Listing {
   }
 }
 
-/** 後端回應裡若帶 wallet，直接套用 —— 伺服器是餘額的唯一真相 */
-function applyWallet(res: { wallet?: { points: number; locked: number } }) {
-  if (res?.wallet) useWalletStore().applyServer(res.wallet)
-}
+/* 這裡原本有一支 applyWallet()，由下面每一支端點自己記得呼叫。
+   它已經搬到 lib/http.ts 的傳輸層 —— 只要後端回應帶 wallet 就會套用，
+   不再有「這支忘了呼叫」這種漏（見那支的說明）。 */
 
 export const api = {
   async listPools(): Promise<Pool[]> {
@@ -288,7 +292,6 @@ export const api = {
     if (MOCK) { await delay(600); return mock.mockDraw(poolId, seats) }
     const r = await http<{ drawId: string; items: Any[]; cost: number; wallet: { points: number; locked: number } }>(
       `/v1/pools/${poolId}/draw`, { method: 'POST', json: { seats, idempotencyKey: idem() } })
-    applyWallet(r)
     return {
       drawId: r.drawId, poolId, cost: r.cost,
       items: r.items.map(it => ({
@@ -536,7 +539,6 @@ export const api = {
     // 真的買：回 { order | null, wallet }。order 為 null 表示庫內轉移，成交即完成
     const r = await http<{ order: Any | null; stashId?: string; wallet: { points: number; locked: number } }>(
       '/v1/orders', { method: 'POST', json: { listingId: id, idempotencyKey: idem() } })
-    applyWallet(r)
     /* 原本這裡會把整個市場再撈一次只為了找回那一筆。掛單改成分頁之後那個做法
        既錯（要的那筆可能不在第一頁）又浪費，而且呼叫端根本沒用這個回傳值 ——
        成交與否看的是有沒有丟例外。 */
@@ -598,7 +600,6 @@ export const api = {
   async ledger(): Promise<LedgerEntry[]> {
     if (MOCK) { await delay(150); return mock.ledger }
     const r = await http<{ wallet: { points: number; locked: number }; ledger: Any[] }>('/v1/wallet')
-    applyWallet(r)
     return toLedger(r.ledger, r.wallet.points)
   },
 
@@ -617,7 +618,6 @@ export const api = {
     }
     const r = await http<{ points: number; wallet: { points: number; locked: number } }>(
       `/v1/prizes/${prizeId}/recycle`, { method: 'POST' })
-    applyWallet(r)
     return { points: r.points }
   },
 
@@ -709,7 +709,6 @@ export const api = {
     const r = await http<{
       settlements: Any[]; orders?: Order[]; wallet: SellerWallet; serverTime: number
     }>('/v1/seller/settlements')
-    applyWallet(r)
     return {
       settlements: r.settlements.map(toSettlement),
       /* 舊版後端不回這個欄位。缺的時候當成空陣列而不是壞掉 ——
@@ -763,7 +762,6 @@ export const api = {
     const w = useWalletStore()
     if (MOCK) return { points: w.points, locked: w.locked }
     const r = await http<{ wallet: { points: number; locked: number } }>('/v1/wallet')
-    applyWallet(r)
     return r.wallet
   },
 

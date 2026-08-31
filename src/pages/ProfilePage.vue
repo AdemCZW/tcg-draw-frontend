@@ -10,11 +10,12 @@
  * 全部欄位都不強制。要出貨時才需要補齊，那時再擋比較合理——
  * 註冊當下就要人填地址是流失使用者最快的方法。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { MOCK } from '@/lib/config'
 import { http, ApiError } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
+import { useMediaQuery } from '@/composables/useMediaQuery'
 
 interface Profile {
   handle: string; memberNo?: string | null; name: string
@@ -45,8 +46,40 @@ async function copyMemberNo() {
 }
 
 const busy = ref(false)
-const err = ref('')
-const okMsg = ref('')
+/**
+ * 載入失敗與**送出結果**是兩件事，畫在兩個地方。
+ *
+ * 原本共用頁面最上方那一格。載入失敗時使用者就在頁首，看得到；
+ * 但按「儲存」的時候他已經捲到表單最下面 —— 實測儲存鈕在 top 590、
+ * 錯誤訊息在 top **-339**（視窗上方 339px），而且頁面不會自己捲過去。
+ * 使用者看到的是「按了沒反應」，於是再按一次、再一次，最後以為資料存好了
+ * 就去申請出貨，發現地址還是空的。
+ *
+ * 這不是 mock 的 404 才有的問題：正式環境的驗證失敗、連線中斷、
+ * session 過期，走的是同一條路、畫在同一個看不到的地方。
+ */
+const loadErr = ref('')
+/** 送出的結果。成功與失敗共用同一個位置：使用者按完鈕，眼睛就在那裡 */
+const saveMsg = ref<{ kind: 'ok' | 'err'; text: string } | null>(null)
+const saveMsgEl = ref<HTMLElement | null>(null)
+/* 捲動用 smooth，除非使用者要求減少動態 —— 瞬移會讓人分不清是捲動還是換頁 */
+const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
+
+/**
+ * 把結果講出來，並且**確保它在眼前**。
+ *
+ * 光是把訊息搬到按鈕旁邊還不夠：軟鍵盤收起來、表單長度變動，都可能讓
+ * 動作列剛好落在視窗外。所以訊息一出現就主動捲到它 —— 已經在視窗內時
+ * scrollIntoView 幾乎不動，不會製造多餘的跳動。
+ */
+async function say(kind: 'ok' | 'err', text: string) {
+  saveMsg.value = { kind, text }
+  await nextTick()
+  saveMsgEl.value?.scrollIntoView({
+    behavior: reduceMotion.value ? 'auto' : 'smooth',
+    block: 'center'
+  })
+}
 
 /** 出貨需要的欄位是否齊全 —— 讓使用者知道還差什麼，而不是等到出貨才被擋 */
 const shipReady = computed(() =>
@@ -68,7 +101,7 @@ async function load() {
       addressLine1: p.addressLine1 ?? '', birthday: p.birthday ?? ''
     }
   } catch (e) {
-    err.value = e instanceof ApiError ? e.message : '載入失敗'
+    loadErr.value = e instanceof ApiError ? e.message : '載入失敗'
   } finally {
     loading.value = false
   }
@@ -76,15 +109,17 @@ async function load() {
 
 async function save() {
   busy.value = true
-  err.value = ''
-  okMsg.value = ''
+  saveMsg.value = null
   try {
     await http('/v1/auth/profile', { method: 'PUT', json: form.value })
-    okMsg.value = '已儲存'
+    await say('ok', '已儲存。出貨資料下次申請出貨時會自動帶入。')
     // 暱稱會影響全站顯示，重新抓一次讓標頭那些地方立刻跟上
     await auth.refresh()
   } catch (e) {
-    err.value = e instanceof ApiError ? e.message : '儲存失敗'
+    /* 失敗要講「還沒存進去」，不能只回一句錯誤碼就算了 ——
+       使用者接下來會不會重填，取決於他知不知道剛才那次沒生效。 */
+    const why = e instanceof ApiError ? e.message : '儲存失敗'
+    await say('err', `${why} —— 這次的修改還沒存進去，請再試一次。`)
   } finally {
     busy.value = false
   }
@@ -109,8 +144,9 @@ onMounted(load)
     </header>
 
     <p v-if="MOCK" class="msg warn">展示模式沒有連後端，這頁的儲存不會生效。</p>
-    <p v-if="err" class="msg err" role="alert">{{ err }}</p>
-    <p v-if="okMsg" class="msg ok" role="status">{{ okMsg }}</p>
+    <!-- 只有「載入失敗」留在頁首。它發生時使用者還在頁首，看得到；
+         送出的結果則畫在動作列旁邊（見表單最下方）。 -->
+    <p v-if="loadErr" class="msg err" role="alert">{{ loadErr }}</p>
     <p v-if="loading" class="muted">載入中…</p>
 
     <form v-else @submit.prevent="save">
@@ -169,6 +205,14 @@ onMounted(load)
         </label>
       </section>
 
+      <!-- 送出的結果就長在按鈕正上方：使用者按完鈕，視線與拇指都在這裡。
+           成功與失敗共用同一格，位置固定，不用去別的地方找答案。 -->
+      <p
+        v-if="saveMsg" ref="saveMsgEl"
+        class="result" :class="saveMsg.kind"
+        :role="saveMsg.kind === 'err' ? 'alert' : 'status'"
+      >{{ saveMsg.text }}</p>
+
       <div class="acts">
         <button type="button" class="btn" @click="router.back()">返回</button>
         <button type="submit" class="btn primary" :disabled="busy">
@@ -208,7 +252,6 @@ h2 { font-size: 15px; margin: 0 0 4px; }
 
 .msg { font-size: 13.5px; margin: 0 0 12px; }
 .msg.err { color: var(--danger); }
-.msg.ok { color: var(--ok); }
 .msg.warn { color: var(--warn); }
 
 .block { padding: 18px; margin-bottom: 12px; display: grid; gap: 12px; }
@@ -228,6 +271,20 @@ input:focus-visible { outline: 2px solid var(--holo-a); outline-offset: 1px; }
 .row2 { display: grid; grid-template-columns: 110px 1fr; gap: 10px; }
 .row2 .grow { min-width: 0; }
 
+/* 結果訊息：描一圈底色而不是一行純文字色 —— 它在一排白卡片之間出現，
+   沒有底色的話跟上面的欄位說明長得一樣，掃過去會看不到它變了。 */
+.result {
+  margin: 16px 0 0; padding: 12px 14px;
+  border-radius: var(--radius);
+  font-size: 13.5px; line-height: 1.65;
+}
+.result.ok { background: var(--ok-wash); color: var(--ok-ink); }
+/* 字色用 --*-ink 不是 --ok / --danger：淺色主題的 wash 幾乎是白的，
+   直接用狀態色對比只有 2.6，讀不到（見 tokens.css 那行說明）。 */
+.result.err { background: var(--danger-wash); color: var(--danger-ink); }
+
 .acts { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
-.acts .btn { padding: 12px 24px; }
+/* 44px 是拇指的最小可靠命中範圍。這兩顆是這頁唯二的動作，
+   按不準的代價是使用者以為自己按到了、其實沒有。 */
+.acts .btn { min-height: 44px; padding: 12px 24px; }
 </style>

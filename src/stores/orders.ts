@@ -22,9 +22,9 @@ import { ORDER_ROUTES } from '@/shared/contract'
    時限的推進在伺服器（讀取時重算 + 排程），前端只顯示。 */
 type OrdersRes = { orders: Order[]; wallet: { points: number; locked: number }; serverTime: number }
 async function pull(): Promise<OrdersRes> {
-  const r = await http<OrdersRes>(ORDER_ROUTES.list())
-  useWalletStore().applyServer(r.wallet)
-  return r
+  /* 回應裡的 wallet 由 http() 統一套用（見 lib/http.ts 的 applyWallet），
+     這裡不再自己套一次 —— 兩個地方做同一件事，改的時候只會改到一邊。 */
+  return http<OrdersRes>(ORDER_ROUTES.list())
 }
 
 /**
@@ -144,7 +144,7 @@ export const useOrdersStore = defineStore('orders', {
      */
     syncLocked() {
       const w = useWalletStore()
-      w.setLocked(
+      w.setOrderLocked(
         this.orders
           .filter(o => isSelf(o.buyerId) && isOpen(o))
           .reduce((sum, o) => sum + o.price, 0)

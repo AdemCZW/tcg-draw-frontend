@@ -356,7 +356,11 @@ social.post('/trade-offers/:id/decline', async c => {
     return { ok: true }
   })
   if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
-  return c.json(r)
+  /* 錢包要一起回。待回應的出價算在 locked 裡（見 money.ts），所以「收回」
+     這個動作會把凍結解掉 —— 不回錢包的話，前端的可動用點數會一直停在
+     解凍前的數字，直到下一支有回錢包的端點碰巧被呼叫。
+     前端不需要為此改任何一行：帶 wallet 的回應由 lib/http.ts 統一套用。 */
+  return c.json({ ...r, wallet: await walletOf(me) })
 })
 
 /* ---- 通知 ---- */

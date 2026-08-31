@@ -6,6 +6,7 @@
  * ApiError 把 code 跟 message 都帶著，頁面顯示 message、邏輯看 code。
  */
 import { API_URL } from './config'
+import { useWalletStore } from '@/stores/wallet'
 
 const TOKEN_KEY = 'vd.token'
 export const token = {
@@ -18,6 +19,30 @@ export class ApiError extends Error {
   constructor(public code: string, message: string, public status: number, public data?: unknown) {
     super(message)
   }
+}
+
+/* 後台那幾支（grant、users/:id、users/:id/wallet）回的 wallet 是
+   **被查看的那個使用者**的錢包，不是客服自己的。套下去會把客服頭部的
+   餘額換成別人的數字，而且他完全不會知道。 */
+const FOREIGN_WALLET = /^\/v1\/admin\//
+
+/**
+ * 回應裡帶 wallet 就套用到錢包 store —— 伺服器是餘額的唯一真相。
+ *
+ * **這件事故意放在傳輸層，不放在每一支呼叫端。** 原本它是 api.ts 裡的一個
+ * helper，由每支端點自己記得呼叫；漏掉的那幾支就變成「畫面說錢動了、
+ * 餘額不動」（接受交易邀約那條最明顯：後端確實把新錢包回在 response 裡，
+ * 前端整包丟掉）。逐處補只會修好這一輪已知的漏，下一支新端點照樣會漏 ——
+ * 判準必須從「有沒有人記得呼叫」改成「後端有沒有回 wallet」，
+ * 後者是後端契約的一部分，不是前端的紀律問題。
+ *
+ * 匯出而不是私有：之後若有不經過 http() 的來源（SSE 推播、WebSocket）也帶回
+ * 錢包，那條路要走同一支，不要在別的地方再長出第二套套用邏輯。
+ */
+export function applyWallet(res: unknown, path = '') {
+  if (FOREIGN_WALLET.test(path)) return
+  const w = (res as { wallet?: { points: number; locked: number } } | null)?.wallet
+  if (w && typeof w.points === 'number') useWalletStore().applyServer(w)
 }
 
 export async function http<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
@@ -50,6 +75,9 @@ export async function http<T>(path: string, init: RequestInit & { json?: unknown
     if (res.status === 401) token.clear()
     throw new ApiError(d.error ?? `HTTP_${res.status}`, d.message ?? `請求失敗（${res.status}）`, res.status, data)
   }
+  /* 成功才套用。失敗的回應不帶 wallet，而且失敗代表那筆交易在後端整筆
+     回滾了（見 server/src/db.ts 的 Rollback），這時去改餘額是憑空造數字。 */
+  applyWallet(data, path)
   return data as T
 }
 

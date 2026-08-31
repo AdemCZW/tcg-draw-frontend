@@ -18,6 +18,18 @@ export const useWalletStore = defineStore('wallet', {
      * 該還多少、以及餘額為什麼會變動。
      */
     locked: 0,
+    /**
+     * mock 模式下「凍結」的各個來源，locked 是它們的**總和**。
+     *
+     * 分開記是因為兩邊的推算者不同：訂單那一份由 orders store 從訂單列表算，
+     * 出價那一份由 social 的 mock 從待回應的出價算。誰都不知道對方現在是多少，
+     * 所以任何一邊直接對 locked 做加減，另一邊下一次重算就會把它抹掉。
+     * 由 store 自己加總，兩邊就只需要各自宣告「我這一份是多少」。
+     *
+     * API 模式用不到：那邊 locked 整包由伺服器回（applyServer），
+     * 下面兩支 setter 本來就是 mock-only。
+     */
+    lockedBy: { orders: 0, offers: 0 },
     ledger: [] as LedgerEntry[],
     ledgerLoaded: false
   }),
@@ -73,16 +85,33 @@ export const useWalletStore = defineStore('wallet', {
       this.points += amount
     },
     /**
-     * 設定託管中的總額。
+     * 設定「進行中託管訂單」凍結的總額。
      *
      * 刻意不做 lock/unlock 這種增減式的 API —— 訂單存在 localStorage、
      * 錢包沒有，重新整理之後兩邊就會對不起來（實測：訂單顯示已鎖點，
      * 託管中卻是 0）。改成由訂單列表推算出唯一的總額再推過來，
      * 就不存在「兩份真相」的問題。
      */
-    setLocked(total: number) {
+    setOrderLocked(total: number) {
       if (!MOCK) return
-      this.locked = Math.max(0, total)
+      this.lockedBy.orders = Math.max(0, total)
+      this.locked = this.lockedBy.orders + this.lockedBy.offers
+    },
+
+    /**
+     * 設定「待回覆的交易出價」凍結的總額。
+     *
+     * 出價會凍結點數是後端的規則（見 server/src/money.ts 的 locked 計算）：
+     * 餘額 1000 的人不該同時對十張卡各出價 1000，那是十個持有人白等一場。
+     * mock 不跟著凍的話，展示模式下的可動用點數會比正式環境寬鬆 ——
+     * 「餘額不足」那條分支在本機永遠走不到，改版時等於沒有被看過。
+     *
+     * 跟訂單那一份一樣是推算出來的總額，不是增減。
+     */
+    setOfferLocked(total: number) {
+      if (!MOCK) return
+      this.lockedBy.offers = Math.max(0, total)
+      this.locked = this.lockedBy.orders + this.lockedBy.offers
     },
     /** 放款給賣家：這筆錢真的離開買家帳戶 */
     charge(amount: number) {
@@ -90,20 +119,32 @@ export const useWalletStore = defineStore('wallet', {
       this.points -= amount
     },
     /**
-     * 回收入點。跟 topup 分開是因為這筆一定要留下帳本紀錄 ——
-     * 使用者拿卡換點，事後一定會回來對帳「我那張卡換了多少」。
+     * 入點／扣點，並留下一筆帳本紀錄。
+     *
+     * 跟 topup／spend 分開是因為這種動作**事後一定會被回來對帳**
+     * （「我那張卡換了多少」「那筆出價到底有沒有入帳」），
+     * 只改數字不留紀錄的話，錢包頁會出現一個解釋不了的餘額。
+     *
+     * 原本只有回收一種（creditRecycle），但「有帳本紀錄的金額變動」不只回收 ——
+     * 接受交易邀約也是。抽成同一支，type 與 note 由呼叫端給，
+     * 免得每多一種入帳理由就複製一次這五行。
      */
-    creditRecycle(points: number, note: string) {
+    credit(delta: number, type: LedgerEntry['type'], note: string) {
       if (!MOCK) return
-      this.points += points
+      this.points += delta
       this.ledger.unshift({
         id: `l-${Date.now()}`,
-        delta: points,
+        delta,
         balanceAfter: this.points,
-        type: 'recycle',
+        type,
         note,
         createdAt: new Date().toISOString().slice(0, 16).replace('T', ' ')
       })
+    },
+
+    /** 回收入點。就是 credit() 的回收版，留著是因為呼叫端讀起來比較直接 */
+    creditRecycle(points: number, note: string) {
+      this.credit(points, 'recycle', note)
     }
   }
 })

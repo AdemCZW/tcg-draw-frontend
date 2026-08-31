@@ -6,7 +6,7 @@ const wallet = useWalletStore()
 onMounted(() => wallet.loadLedger())
 
 const typeLabel: Record<string, string> = {
-  topup: '儲值', draw: '抽選', refund: '退點', recycle: '回收', redeem: '兌換'
+  topup: '儲值', draw: '抽選', refund: '退點', recycle: '回收', redeem: '兌換', trade: '交易'
 }
 </script>
 

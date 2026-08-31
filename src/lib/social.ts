@@ -9,6 +9,7 @@
  */
 import { http } from './http'
 import { MOCK } from './config'
+import { useWalletStore } from '@/stores/wallet'
 
 /* ---------- 型別 ---------- */
 export interface ShareSettings { public: boolean; slug: string | null }
@@ -166,20 +167,67 @@ export const shareUrl = (slug: string) =>
   `${location.origin}${import.meta.env.BASE_URL.replace(/\/$/, '')}/u/${slug}`
 
 /* ---------- 交易邀約 ---------- */
+
+/**
+ * mock：把「我送出去、還在等回覆的出價」總額推回錢包的凍結。
+ *
+ * API 模式什麼都不用做 —— 後端的 walletOf() 本來就把待回應的出價算進 locked，
+ * 而回應裡的 wallet 由 http() 統一套用。這一支只補 mock 模式那一半，
+ * 否則展示模式下出價是免費的，「可動用點數不足」那條分支永遠走不到。
+ *
+ * 推的是總額不是增減：跟訂單那一份同一個模型（見 stores/wallet.ts），
+ * 增減式的寫法只要漏掉一次還原，凍結就會永遠卡在那裡下不來。
+ */
+function syncMockOfferLock() {
+  useWalletStore().setOfferLocked(
+    mockOutgoing.filter(o => o.status === 'pending').reduce((sum, o) => sum + o.points, 0)
+  )
+}
+
 export const offers = {
   async list(): Promise<{ incoming: TradeOffer[]; outgoing: TradeOffer[] }> {
-    if (MOCK) { await delay(); return { incoming: mockIncoming, outgoing: mockOutgoing } }
+    if (MOCK) {
+      await delay()
+      // 讀取也重算一次：凍結是從清單推出來的，清單一到手就該對得上
+      syncMockOfferLock()
+      return { incoming: mockIncoming, outgoing: mockOutgoing }
+    }
     return http('/v1/social/trade-offers')
   },
   async create(prizeId: string, points: number, message = ''): Promise<{ offerId: string }> {
-    if (MOCK) { await delay(); return { offerId: 'to-mock' } }
+    if (MOCK) {
+      await delay()
+      /* 真的把這筆記進寄件匣。原本只回一個假 id 就結束，於是出價送出後
+         收發匣裡找不到它、點數也沒被凍 —— 使用者剛剛承諾出去的那筆錢
+         在畫面上完全不存在。mock 是本機開發與展示唯一的資料來源，
+         少了這一步，「出完價之後」的每一格畫面都沒有人看過。 */
+      const id = 'to-mock-' + Date.now().toString(36)
+      mockOutgoing.unshift({
+        id, prize_id: prizeId, from_user: 'u-me', to_user: 'u-x',
+        points, message, status: 'pending',
+        created_at: Date.now(), responded_at: null,
+        card: { name: mockBook.find(p => p.id === prizeId)?.card.name },
+        to_name: '對方'
+      })
+      syncMockOfferLock()
+      return { offerId: id }
+    }
     return http('/v1/social/trade-offers', { method: 'POST', json: { prizeId, points, message } })
   },
   async accept(id: string) {
     if (MOCK) {
       await delay()
       const o = mockIncoming.find(x => x.id === id)
-      if (o) { o.status = 'accepted'; o.responded_at = Date.now() }
+      if (o) {
+        o.status = 'accepted'
+        o.responded_at = Date.now()
+        /* 接受＝對方的點數真的進我的帳戶。這一行以前不存在：畫面寫著
+           「12,000 點與卡片已完成移轉」，頭部餘額卻一動也不動，使用者
+           只能猜那行字是不是假的。API 模式那一半由 http() 套用後端回的
+           wallet（後端確實有回），mock 這一半沒有伺服器，只能自己記。
+           走 credit() 而不是直接加 points：這種入帳事後一定會被回來對帳。 */
+        useWalletStore().credit(o.points, 'trade', `出價售出 · ${o.card?.name ?? '卡片'}`)
+      }
       return { ok: true }
     }
     return http(`/v1/social/trade-offers/${id}/accept`, { method: 'POST', json: {} })
@@ -192,6 +240,9 @@ export const offers = {
       if (inc) { inc.status = 'declined'; inc.responded_at = Date.now() }
       const out = mockOutgoing.find(x => x.id === id)
       if (out) { out.status = 'cancelled'; out.responded_at = Date.now() }
+      /* 收回自己的出價要把凍結解掉。婉拒別人的出價不動我的錢，
+         但這一支兩種身分共用，重算總額對兩邊都成立，不必分支。 */
+      syncMockOfferLock()
       return { ok: true }
     }
     return http(`/v1/social/trade-offers/${id}/decline`, { method: 'POST', json: {} })
