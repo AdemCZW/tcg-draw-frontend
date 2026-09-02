@@ -79,7 +79,7 @@ function onLeave() {
     >
       <CardArt
         class="art"
-        :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo" :art-id="topPrize?.card.artId"
+        :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :art-id="topPrize?.card.artId"
       />
       <span
         class="glare"

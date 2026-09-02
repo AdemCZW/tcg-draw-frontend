@@ -50,7 +50,7 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
           <PoolOriginBadge :origin="pool.origin" />
         </div>
         <Tilt3D :max="16" class="cover" :style="{ viewTransitionName: `pool-cover-${pool.id}` }">
-          <CardArt :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :cert-no="topPrize?.card.certNo" :art-id="topPrize?.card.artId" />
+          <CardArt :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :art-id="topPrize?.card.artId" />
         </Tilt3D>
       </div>
 

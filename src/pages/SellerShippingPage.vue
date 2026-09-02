@@ -595,7 +595,7 @@ const barOpen = computed(() => tab.value === 'ship' && toShip.value.length > 0 &
           </span>
         </span>
         <CardArt class="thumb" :image="j.card.image" :alt="j.card.name"
-                 :cert-no="j.card.certNo" :art-id="j.card.artId" />
+                 :art-id="j.card.artId" />
         <div class="meta">
           <SourceTag :src="j.src" />
           <strong class="nm">{{ j.card.name }}</strong>

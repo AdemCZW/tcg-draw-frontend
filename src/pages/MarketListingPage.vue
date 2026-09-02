@@ -253,7 +253,7 @@ async function delist() {
         <CardArt
           class="art"
           :image="listing.card.image" :alt="listing.card.name"
-          :cert-no="listing.card.certNo" :art-id="listing.card.artId"
+          :art-id="listing.card.artId"
         />
         <span class="lane" :class="lane">{{ lane === 'vault' ? '庫內轉移' : '需寄送' }}</span>
         <!-- 跟列表上同一顆標記、同一個位置（左上通道、右上自己的）——

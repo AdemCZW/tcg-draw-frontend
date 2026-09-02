@@ -97,8 +97,8 @@ const asTier = (t: string | null | undefined): Tier | null =>
   (t ? (TIERS.includes(t as Tier) ? (t as Tier) : 'D') : null)
 
 
-/* 公開卡冊沒有實拍圖欄位，CardArt 會依序拿 certNo（PSA 實拍）→ artId（官方卡圖），
-   都查不到才落到漸層佔位卡。佔位色相由 id 推出來，否則整面格線會是同一個顏色。 */
+/* 公開卡冊沒有實拍圖欄位，CardArt 依 artId 取官方卡圖，
+   查不到才落到漸層佔位卡。佔位色相由 id 推出來，否則整面格線會是同一個顏色。 */
 const artSeed = (p: PublicCard) => `placeholder:${hueOf(p.id)}`
 
 /* ---- 提出交易 ----
@@ -266,7 +266,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
             :image="artSeed(p)"
             :alt="p.card.name"
             :tier="asTier(p.tier)"
-            :cert-no="p.card.certNo"
             :art-id="p.card.artId"
           />
           <div class="body">

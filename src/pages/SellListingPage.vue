@@ -137,7 +137,7 @@ async function submit() {
         <li v-for="p in cards" :key="p.id" class="row card">
           <CardArt
             class="thumb" :image="p.card.image" :alt="p.card.name"
-            :tier="p.tier" :cert-no="p.card.certNo" :art-id="p.card.artId"
+            :tier="p.tier" :art-id="p.card.artId"
           />
           <div class="meta">
             <div class="top"><TierBadge :tier="p.tier" /><strong class="nm">{{ p.card.name }}</strong></div>

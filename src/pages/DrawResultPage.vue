@@ -188,7 +188,7 @@ onMounted(() => {
         <Tilt3D :max="10" radius="16px" class="spotArt">
           <CardArt
             :image="spotlight.card.image" :alt="spotlight.card.name" :tier="spotlight.tier"
-            :cert-no="spotlight.card.certNo" :art-id="spotlight.card.artId"
+            :art-id="spotlight.card.artId"
           />
         </Tilt3D>
         <figcaption class="spotMeta">
@@ -216,7 +216,7 @@ onMounted(() => {
         >
           <CardArt
             :image="item.card.image" :alt="item.card.name" :tier="item.tier"
-            :cert-no="item.card.certNo" :art-id="item.card.artId"
+            :art-id="item.card.artId"
           />
           <TierBadge class="cellTier" :tier="item.tier" />
           <!-- 鑑定分數只在「有鑑定」時出現。每張都掛一個「RAW · 未鑑定」

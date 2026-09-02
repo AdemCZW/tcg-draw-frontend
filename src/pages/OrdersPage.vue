@@ -601,7 +601,7 @@ async function doDispute(o: Order) {
     <article v-for="r in rows" :key="r.o.id" class="ord">
       <div class="top">
         <CardArt class="thumb" :image="r.o.card.image" :alt="r.o.card.name"
-                 :cert-no="r.o.card.certNo" :art-id="r.o.card.artId" />
+                 :art-id="r.o.card.artId" />
         <div class="meta">
           <strong class="nm">{{ r.o.card.name }}</strong>
           <p class="who">
