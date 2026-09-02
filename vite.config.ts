@@ -49,8 +49,13 @@ function cspPlugin(env: Record<string, string | undefined>): Plugin {
            那是另一件事，不該讓 CSP 卡在那裡不上線。 */
         `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`,
         `font-src 'self' https://fonts.gstatic.com data:`,
-        /* blob: 是開卡演出的 canvas 截圖用的；data: 是佔位圖與 QR。 */
-        ...[`img-src ${has(`'self'`, 'data:', 'blob:', 'https://assets.tcgdex.net', r2Public).join(' ')}`],
+        /* blob: 是開卡演出的 canvas 截圖用的；data: 是佔位圖與 QR。
+           **api 一定要在這裡**：使用者上傳的卡面是 <img src="${API_URL}/v1/files/…/raw">，
+           少了它整條卡面上傳在正式建置下會被 CSP 直接擋掉 —— 而且後端有沒有那條路由
+           完全無關，症狀是破圖加一行 CSP 違規，跟「端點壞了」長得一模一樣。
+           （下一行的 connect-src 一直都有 api，這一行漏掉。）
+           r2Public 也一定要設：/raw 是 302 導到 R2，目的地同樣受這條規則管。 */
+        ...[`img-src ${has(`'self'`, 'data:', 'blob:', api, 'https://assets.tcgdex.net', r2Public).join(' ')}`],
         ...[`connect-src ${has(`'self'`, api, 'https://api.tcgdex.net', r2Upload).join(' ')}`],
         /* 這三條是低成本高價值的：沒有 <object>／<embed>、
            <base> 不能被改寫（防止相對路徑被劫持）、表單只能送回自己站上。 */

@@ -98,12 +98,19 @@ async function save() {
   }
 }
 
-/* 綁 LINE：把目前的 token 當一次性憑證帶過去，後端驗過才知道要綁到誰身上。
-   走整頁導向而不是彈窗——LINE 的授權頁不允許被嵌在 iframe 裡。 */
-function linkLine() {
-  const t = token.get()
-  if (!t) return
-  window.location.href = `${API_URL}/v1/auth/line/start?link=${encodeURIComponent(t)}`
+/* 綁 LINE：先以 Authorization header 向後端取得授權網址，再整頁導向 LINE。
+   JWT 不進 URL，才不會被代理或伺服器存取日誌收走。 */
+async function linkLine() {
+  if (!token.get() || busy.value) return
+  busy.value = true
+  err.value = ''
+  try {
+    const { url } = await http<{ url: string }>('/v1/auth/line/link/start', { method: 'POST' })
+    window.location.href = url
+  } catch (e) {
+    err.value = e instanceof ApiError ? e.message : 'LINE 綁定沒有完成，請再試一次'
+    busy.value = false
+  }
 }
 
 function onEsc(e: KeyboardEvent) {

@@ -113,6 +113,31 @@ export const EDIT_POLICY: Record<UploadPurpose, EditPolicy | null> = {
     skipDim: 1600, skipBytes: 700 * 1024,
     outMime: 'image/jpeg', label: '池封面'
   },
+  /* 卡片正面照。以前是 null，而且一句理由都沒寫 —— 那個 null 有兩個具體代價：
+       1. 顯示端（CardFrontUpload 的預覽、CardArt、卡冊與市場的卡位）
+          一律是 5:7 框 + object-fit: cover。手機直出的照片是 4:3，
+          cover 會從中間硬切，卡的上下緣直接被裁掉，而使用者沒有任何
+          辦法決定要留哪一段。
+       2. card-front 的上限是 8MB，比出貨照的 15MB 更緊。手機拍的照片
+          4–5MB 很常見、開了高畫質更容易破 8MB，而 precheck 會當場退掉 ——
+          使用者在手機上沒有辦法自己縮圖，那條路等於走不通。
+     兩件事都正好是這一層存在的理由，所以它不該是 null。
+
+     參數比照最相近的 pool-cover（同樣是「重構圖不是重證據」的用途），
+     只有兩處不同：
+       · initial 一樣是 'card'，但 aspects 把 'source' 排在第二 ——
+         卡本來就是 5:7，可是使用者可能拍了整個卡殼（鑑定卡的殼是 6:11 左右），
+         那種要留原圖比例才不會把標籤裁掉。
+       · maxDim 給 2000 而不是 1600：卡面上的圖鑑編號與鑑定標籤
+         買家會拿來核對，1600 在放大看時已經開始糊。8MB 的上限撐得住。
+     skipDim / skipBytes 設在 2000 / 900KB：已經夠小又方正的圖
+     （例如從電腦轉存過的卡圖）不必再逼人走一次裁切。 */
+  'card-front': {
+    aspects: ['card', 'source', 'square', 'wide'], initial: 'card', cardGuide: true,
+    maxDim: 2000, quality: 0.85, minQuality: 0.65,
+    skipDim: 2000, skipBytes: 900 * 1024,
+    outMime: 'image/jpeg', label: '卡片正面'
+  },
   /* 頭像只有方形一種，而且一定要走裁切 —— 直接把長方形照片塞進圓框
      會從中間硬切，臉常常被切掉半邊。沒有 'source' 就沒有「跳過裁切」 */
   avatar: {

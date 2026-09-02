@@ -217,6 +217,32 @@ export interface UserPrize {
   buyback?: number | null
   /** 這一籤的結算狀態（保留中／已入帳／已退還…）。舊制抽到的卡沒有結算列 */
   settleStatus?: string | null
+  /**
+   * 「這是哪一款卡」的鍵。同鍵的卡在卡冊上併成一格 ×N。
+   *
+   * **由後端算**（server/src/routes/prizes.ts 的 GROUP_KEY），前端不重算 ——
+   * 規則本身跟 src/lib/card-merge.ts 的 cardMergeKey 一致，但列表是游標分頁的，
+   * 分組必須跟 order by 是同一份定義，否則「同款相鄰」這個前提就不成立。
+   *
+   * 有鑑定編號的卡每一張自成一鍵（`one:` 開頭）—— 那是兩張可以各自對外
+   * 查證的實體卡，永遠不合併。
+   */
+  groupKey?: string
+  /**
+   * 這一款卡在**整本卡冊**裡有幾張（受目前的狀態分頁限制，但不受分頁批次限制）。
+   *
+   * 這一欄存在的唯一理由就是它不能從已載入的陣列數出來：同一款卡的 10 張裡
+   * 可能只有 3 張在第一批，前端數出來的「×3」會讓使用者以為自己只有 3 張。
+   */
+  groupTotal?: number
+  /**
+   * 這一款卡裡**還能上架**的張數（狀態是 stashed 或 in_book）。
+   *
+   * 使用者原話裡的「哪些已經上架了」就是靠它回答的：一格「×10」在「全部」
+   * 分頁上會蓋掉「其中 7 張已經在市場上」，而那正是他不想再逐張確認的事。
+   * 同樣由後端算 —— 前端只數得到已載入的那幾張。
+   */
+  groupSellable?: number
 }
 
 export interface LedgerEntry {

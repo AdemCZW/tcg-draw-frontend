@@ -431,7 +431,26 @@ const DEPOSIT = [
           沒有串接任何物流商的 API，所以無法確認「這組單號真的存在、交寄時間也晚於訂單成立」。
           真的沒收到貨，請開爭議讓人工查。
         </li>
-        <li><b>鑑定編號的即時查證目前不通。</b>PSA 的查詢 API 在帳號核准前一律拒絕存取，所以現在只查得到我們曾經查證成功並快取起來的編號；查不到的卡會標成待確認，而不是被判定為假卡。</li>
+        <li>
+          <b>平台完全不查證鑑定編號的真偽。</b>系統沒有串接 PSA 或任何鑑定機構的查詢 API，
+          也不保留任何查證結果。<b>你填的鑑定編號不會被拿去跟任何外部來源比對</b> ——
+          它只是被原樣記錄下來的一串字。這表示<b>捏造的、或屬於別張卡的編號，系統會照收</b>，
+          而且不會有任何標記提示它可疑。看到卡片上標著鑑定編號，
+          <b>不等於這張卡經過本平台驗證</b>。
+        </li>
+        <li>
+          <b>「編號唯一」不等於「編號被驗證過」，這是兩件不同的事。</b>
+          系統唯一保證的是：<b>同一組鑑定機構＋鑑定編號，站上只能有一筆有效登記</b>
+          （資料庫層的唯一約束）。第二個人拿同一個編號登記、開池或上架都會被擋下，
+          要走客服接管流程。這道防線擋的是<b>一卡多賣</b>，
+          擋不了<b>編號本身是假的</b> —— 一個世界上不存在的編號同樣可以被登記，
+          而且一旦被登記就一樣佔著那個位置。
+        </li>
+        <li>
+          <b>接管流程的前提因此比原本弱。</b>接管申請要求「這個編號已經登記在站上」，
+          而由於上一條，登記本身不代表編號為真。客服在裁決接管與爭議時，
+          依據的是雙方提出的證據（時間戳照片、交易紀錄），不是任何自動查證的結果。
+        </li>
       </ul>
     </section>
 
@@ -484,7 +503,9 @@ const DEPOSIT = [
             <tr><td>十二・「完成第一個池」的定義（種子已公布）</td><td class="m">src/shared/pool-settlement.ts:103-121</td></tr>
             <tr><td>十三・通知的判準與清單</td><td class="m">docs/notifications-audit.md 全文</td></tr>
             <tr><td>十四・物流未串接 API</td><td class="m">src/shared/escrow.ts:162-167</td></tr>
-            <tr><td>十四・PSA 查證 403、只讀快取</td><td class="m">server/src/psa.ts:10-18；server/migrations/020_psa_cert_cache.sql</td></tr>
+            <tr><td>十四・不查證鑑定編號（查證整組移除）</td><td class="m">server/migrations/029_remove_psa_cache.sql</td></tr>
+            <tr><td>十四・編號唯一性由資料庫約束保證</td><td class="m">server/src/preflight.ts:1-11, 44（unique(grader, cert_no)）；server/src/routes/cardbook.ts:157-166, 195-201；server/src/routes/pools.ts:493-500</td></tr>
+            <tr><td>十四・接管申請要求編號已登記</td><td class="m">server/src/tickets.ts:340；server/src/routes/tickets.ts:104</td></tr>
           </tbody>
         </table>
       </div>

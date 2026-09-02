@@ -7,11 +7,16 @@
  * 場景才驗得到。
  *
  *   用法：npx tsx src/regress-f.ts http://localhost:8099
- *   伺服器要 DEV_LOGIN=1。
+ *   伺服器要 DEV_LOGIN=1 與 DEV_LOGIN_SECRET。
  */
 export {} // 讓 top-level await 合法 —— 這個檔沒有其他 import/export
 
 const base = (process.argv[2] ?? 'http://localhost:8080').replace(/\/$/, '')
+const devSecret = process.env.DEV_LOGIN_SECRET
+const devHeaders = () => {
+  if (!devSecret) throw new Error('regress-f 需要 DEV_LOGIN_SECRET，請與開發伺服器設定相同的值')
+  return { 'x-dev-login-secret': devSecret }
+}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any
 const json = (r: Response): Promise<Any> => r.json()
@@ -25,7 +30,7 @@ const head = (s: string) => console.log(`\n── ${s} ${'─'.repeat(Math.max(0
 
 async function login(handle: string, name: string) {
   const r = await fetch(`${base}/v1/auth/dev-login`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
     body: JSON.stringify({ handle, name })
   })
   if (!r.ok) throw new Error(`login ${handle}: ${r.status} ${await r.text()}`)
@@ -39,7 +44,7 @@ const call = (token: string, path: string, body?: unknown, method?: 'GET' | 'POS
   })
 const dev = (path: string, body: unknown) =>
   fetch(`${base}/v1/dev/${path}`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+    method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() }, body: JSON.stringify(body)
   })
 
 const balance = async (t: string) => (await json(await call(t, '/v1/wallet'))).wallet.points as number

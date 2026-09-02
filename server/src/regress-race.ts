@@ -8,7 +8,7 @@
  *
  * ── 不變式只有一條 ──────────────────────────────────────────────────
  * 全站 SUM(points_ledger.delta) 恆等於發行量（topup + seed + admin-grant
- * + line-signup-bonus），也就是 `GET /v1/admin/reconcile` 的 `drift` 不變。
+ * ），也就是 `GET /v1/admin/reconcile` 的 `drift` 不變。
  * 每一組壓完都驗它，外加「沒有人的餘額變成負的」。
  * 其他的（誰贏誰輸、狀態機、分錄成不成對）都是為了在 drift 真的壞掉時
  * **指得出是哪一筆**，不是驗收標準本身。
@@ -18,8 +18,8 @@
  *   DATABASE_URL=postgres://$(whoami)@localhost:5432/vd_race \
  *   JWT_SECRET=<至少 32 個字元> npx tsx src/migrate.ts
  *   DATABASE_URL=... JWT_SECRET=... npx tsx src/seed.ts
- *   DATABASE_URL=... JWT_SECRET=... PORT=8051 DEV_LOGIN=1 PSA_STUB=1 npx tsx src/index.ts
- *   DATABASE_URL=... JWT_SECRET=... npx tsx src/regress-race.ts http://localhost:8051
+ *   DATABASE_URL=... JWT_SECRET=... PORT=8051 DEV_LOGIN=1 DEV_LOGIN_SECRET=<至少 32 個字元> npx tsx src/index.ts
+ *   DATABASE_URL=... JWT_SECRET=... DEV_LOGIN_SECRET=<同一個值> npx tsx src/regress-race.ts http://localhost:8051
  *
  * ⚠️ **要自己一個乾淨的庫**，不能跟 smoke / regress-f / regress-pledge 共用。
  * 這支會吃掉數百個籤位、把賣家的違約次數推高、把一大批結算撥到逾期 ——
@@ -47,6 +47,11 @@ import { sql } from './db.js'
 import { sweepSettlementsAll } from './pool-settlement.js'
 
 const base = (process.argv[2] ?? 'http://localhost:8051').replace(/\/$/, '')
+const devSecret = process.env.DEV_LOGIN_SECRET
+const devHeaders = () => {
+  if (!devSecret) throw new Error('regress-race 需要 DEV_LOGIN_SECRET，請與開發伺服器設定相同的值')
+  return { 'x-dev-login-secret': devSecret }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any
@@ -90,12 +95,12 @@ const call = (token: string, path: string, body?: unknown, method?: 'GET' | 'POS
   })
 const dev = (path: string, body: unknown) =>
   hit(`/v1/dev/${path}`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+    method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() }, body: JSON.stringify(body)
   })
 
 async function login(handle: string, name: string) {
   const r = await hit('/v1/auth/dev-login', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
     body: JSON.stringify({ handle, name })
   })
   if (r.status !== 200) throw new Error(`login ${handle}: ${r.status} ${r.text}`)

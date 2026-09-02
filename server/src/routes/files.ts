@@ -2,7 +2,8 @@
  * 檔案上傳與讀取。位元組不經過這台伺服器——這裡只發「限時通行證」。
  *
  *   POST /v1/files/presign   要一個可以直接 PUT 到 R2 的網址
- *   GET  /v1/files/:id       要一個可以讀這個檔案的網址（依用途決定誰能要）
+ *   GET  /v1/files/:id       要一個可以讀這個檔案的網址（依用途決定誰能要），回 JSON
+ *   GET  /v1/files/:id/raw   同樣的權限判斷，但 302 導到那個網址 —— 給 <img src> 用
  *
  * 讀取權限：
  *   pool-cover / avatar   公開，誰都能看——池封面跟頭像本來就要能在列表頁顯示
@@ -26,11 +27,12 @@ import { configured, presignPut, presignGet, publicUrlOf } from '../r2.js'
 
 export const files = new Hono()
 
-type Purpose = 'pool-cover' | 'ship-photo' | 'unbox-video' | 'seller-doc' | 'avatar' | 'ticket-doc'
+type Purpose = 'pool-cover' | 'ship-photo' | 'unbox-video' | 'seller-doc' | 'avatar' | 'ticket-doc' | 'card-front'
 
 const MB = 1024 * 1024
 const PURPOSES: Record<Purpose, { mimes: string[]; maxBytes: number; public: boolean }> = {
   'pool-cover': { mimes: ['image/jpeg', 'image/png', 'image/webp'], maxBytes: 8 * MB, public: true },
+  'card-front': { mimes: ['image/jpeg', 'image/png', 'image/webp'], maxBytes: 8 * MB, public: true },
   avatar: { mimes: ['image/jpeg', 'image/png', 'image/webp'], maxBytes: 4 * MB, public: true },
   'ship-photo': { mimes: ['image/jpeg', 'image/png', 'image/webp'], maxBytes: 15 * MB, public: false },
   'unbox-video': { mimes: ['video/mp4', 'video/quicktime', 'video/webm'], maxBytes: 300 * MB, public: false },
@@ -55,7 +57,7 @@ const notReady = (c: import('hono').Context) =>
   c.json({ error: 'NOT_CONFIGURED', message: '檔案上傳尚未設定' }, 503)
 
 const PresignBody = z.object({
-  purpose: z.enum(['pool-cover', 'ship-photo', 'unbox-video', 'seller-doc', 'avatar', 'ticket-doc']),
+  purpose: z.enum(['pool-cover', 'ship-photo', 'unbox-video', 'seller-doc', 'avatar', 'ticket-doc', 'card-front']),
   mime: z.string().min(1),
   bytes: z.number().int().positive()
 })
@@ -94,15 +96,23 @@ files.post('/presign', requireAuth, async c => {
   return c.json({ fileId: id, uploadUrl, key })
 })
 
-files.get('/:id', async c => {
-  if (!configured()) return notReady(c)
+/**
+ * 解析一個 file id 成「可以讀的網址」，或是一個該回給呼叫端的錯誤。
+ *
+ * 抽出來的理由：/:id（回 JSON）與 /:id/raw（302 導轉）是同一段權限判斷，
+ * 抄兩份的話總有一天只有其中一份被收緊 —— 而被漏掉的那一份就是洞。
+ */
+async function resolveFile(c: import('hono').Context): Promise<
+  { ok: true; url: string; public: boolean } | { ok: false; res: Response }
+> {
+  if (!configured()) return { ok: false, res: notReady(c) }
   const [f] = await sql`select * from files where id = ${c.req.param('id') ?? ''}`
-  if (!f) return c.json({ error: 'NOT_FOUND', message: '找不到這個檔案' }, 404)
+  if (!f) return { ok: false, res: c.json({ error: 'NOT_FOUND', message: '找不到這個檔案' }, 404) }
 
   const purpose = f.purpose as Purpose
   if (!PURPOSES[purpose].public) {
     const me = await optionalUserId(c)
-    if (!me) return c.json({ error: 'UNAUTHORIZED', message: '請先登入' }, 401)
+    if (!me) return { ok: false, res: c.json({ error: 'UNAUTHORIZED', message: '請先登入' }, 401) }
     /* 私有用途一律「本人或管理員」。
        原本只有 seller-doc 這樣擋，ship-photo / unbox-video 是任何登入使用者都能讀 ——
        但那兩種正是最敏感的：出貨照會拍到面單（收件人姓名、電話、地址），
@@ -114,11 +124,40 @@ files.get('/:id', async c => {
        ship 端點收了 photos 卻沒有落地），那是另一件事。 */
     const [u] = await sql`select role from users where id = ${me}`
     if (me !== f.owner_id && u?.role !== 'admin') {
-      return c.json({ error: 'NOT_PARTY', message: '沒有權限查看這個檔案' }, 403)
+      return { ok: false, res: c.json({ error: 'NOT_PARTY', message: '沒有權限查看這個檔案' }, 403) }
     }
   }
 
   const pub = PURPOSES[purpose].public ? publicUrlOf(f.key as string) : null
   const url = pub ?? (await presignGet(f.key as string))
-  return c.json({ url, public: !!pub })
+  return { ok: true, url, public: !!pub }
+}
+
+files.get('/:id', async c => {
+  const r = await resolveFile(c)
+  if (!r.ok) return r.res
+  return c.json({ url: r.url, public: r.public })
+})
+
+/**
+ * GET /v1/files/:id/raw —— 給 `<img src>` 直接指的網址。
+ *
+ * 為什麼要有這一條：/:id 回的是 **JSON**（`{url, public}`），content-type 是
+ * application/json。把它塞進 `<img src>` 得到的一定是破圖 —— 而卡冊、市場、
+ * 開池那三個地方存進資料庫的 image 就是 `/v1/files/f-xxx` 這個字串，
+ * 前端 CardArt 只是加上 API_URL 就當圖片用。也就是說在這條路存在之前，
+ * **每一張使用者上傳的卡面都是破圖**，沒有例外。
+ *
+ * 為什麼是 302 而不是把位元組讀出來轉發：整個 r2.ts 的前提就是「位元組不經過
+ * 這台伺服器」。轉發等於把每一張卡圖的頻寬與記憶體都搬回 Node 行程裡，
+ * 而且會失去 R2／CDN 的快取。302 到公開網址或簽名網址兩者都成立。
+ *
+ * Cache-Control 只給 60 秒：私密用途拿到的是 1 小時的簽名網址，
+ * 導轉本身被快取太久會讓使用者在權限被撤銷後還導得過去。
+ */
+files.get('/:id/raw', async c => {
+  const r = await resolveFile(c)
+  if (!r.ok) return r.res
+  c.header('cache-control', 'private, max-age=60')
+  return c.redirect(r.url, 302)
 })

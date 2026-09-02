@@ -37,7 +37,6 @@ export interface PublicCardView {
   grade?: unknown
   refPrice?: unknown
   variantId?: unknown
-  psaStatus?: unknown
 }
 
 /**
@@ -47,13 +46,10 @@ export interface PublicCardView {
  * `id`（目錄內部的卡片鍵）也不在裡面：它對展示沒有用途，而白名單的規矩是
  * 「沒有展示用途就不出去」，不是「想不到壞處就放行」。
  *
- * `psaStatus` 有留：它是「已驗證／未驗證」的徽章，本身不含編號，
- * 拿著它沒有辦法去任何地方登記任何東西 —— 它是查證的**結果**，不是憑據。
- * 而且 grader 是 PSA 這件事本來就看得到，它沒有多透露什麼。
  */
 const PUBLIC_CARD_KEYS = [
   'name', 'image', 'artId', 'setCode', 'cardNo', 'language',
-  'grader', 'grade', 'refPrice', 'variantId', 'psaStatus'
+  'grader', 'grade', 'refPrice', 'variantId'
 ] as const
 
 /**

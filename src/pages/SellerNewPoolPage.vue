@@ -209,14 +209,6 @@ interface PrizeRow {
    * 不擋住的話賣家會開出一個「本來是 PSA 10、現在悄悄變成裸卡」的池。
    */
   needsRepick?: boolean
-  /**
-   * PSA 查到的卡跟這一張對不上時，後端回來的資訊（PSA 的卡號與主體）。
-   * 有值時這一列會冒出一個「這確實是同一張卡」的確認勾選。
-   * null / undefined = 沒有對不上的問題。
-   */
-  certMismatch?: { psaCardNumber: string | null; psaSubject: string | null } | null
-  /** 賣家勾了「確實是同一張卡」。勾了才會把 certConfirmed 送給後端放行 */
-  certConfirmed?: boolean
 }
 
 const form = reactive({
@@ -660,14 +652,6 @@ const tierHasProblem = (t: Tier) => problems.value.some(p => p.tier === t)
 const offTabProblems = computed(() =>
   problems.value.filter(p => p.tier && p.tier !== curTier.value))
 
-/**
- * 後端說「PSA 查到的卡跟你挑的對不上」的那幾張。
- *
- * 那個確認勾選現在住在單卡面板裡（它是例外中的例外），所以被擋住的當下
- * 錯誤訊息旁邊要有一條路開得到它 —— 否則賣家讀完錯誤，找不到勾選在哪。
- */
-const mismatchRows = computed(() => form.prizes.filter(p => p.certMismatch))
-
 /** 從清單直接開一張卡：切到它的分頁再開面板（順序跟 jumpToProblem 一樣） */
 function openCardRow(p: PrizeRow) {
   selectTier(p.tier)
@@ -916,10 +900,7 @@ async function runSubmit() {
            所以最後蓋回 card 上 —— 賣家在表單上改的是這一格，不是挑卡時的原值。 */
         card: { ...p.pick.card, refPrice: p.unitValue },
         qty: p.qty,
-        buyback: resolved.value[i]!,
-        /* 只有賣家勾過「確實是同一張卡」才送 certConfirmed。
-           一般情況卡號對得上、根本不會用到這個旗標。 */
-        certConfirmed: p.certConfirmed || undefined
+          buyback: resolved.value[i]!
       }))
     })
     /* 成功。不導頁 —— 就地把結果留在按鈕原本的位置（理由見 created 的宣告）。
@@ -928,17 +909,7 @@ async function runSubmit() {
     await nextTick()
     ensureVisible(doneBox.value)
   } catch (e) {
-    /* PSA 查到的卡跟賣家挑的對不上：後端不硬擋，要賣家自己確認是不是同一張
-       （PSA 是英文、目錄是日文，卡名無法字串相等）。把對不上的列標出來、
-       冒出確認勾選，賣家勾了再送一次就會過。 */
-    if (e instanceof ApiError && e.code === 'CERT_MISMATCH') {
-      const list = (e.data as { mismatches?: { certNo: string; psaCardNumber: string | null; psaSubject: string | null }[] })?.mismatches ?? []
-      for (const m of list) {
-        const row = form.prizes.find(p => p.pick.card.certNo === m.certNo)
-        if (row) row.certMismatch = { psaCardNumber: m.psaCardNumber, psaSubject: m.psaSubject }
-      }
-      error.value = e.message
-    } else if (e instanceof ApiError && e.code === 'CERT_ALREADY_LISTED') {
+    if (e instanceof ApiError && e.code === 'CERT_ALREADY_LISTED') {
       /* 「這個編號已經登記在系統裡了」是整條路上唯一一個**使用者做對了事
          卻走不下去**的錯誤：卡在他手上，但編號還掛在上一手名下。
          後端那句話的結尾是「請聯絡客服」—— 而平台上找客服的路他不見得知道。
@@ -1614,19 +1585,6 @@ function bottomOccluded(): number {
              而使用者按完按鈕視線就在按鈕與底下，看不到就等於沒發生。 -->
         <p v-if="error" ref="errBox" class="err" data-testid="submit-error" role="alert">{{ error }}</p>
 
-        <!-- PSA 查到的卡跟賣家挑的對不上：那個「確認是同一張卡」的勾選住在
-             單卡面板裡（它是例外中的例外）。錯誤訊息旁邊要有一條開得到它的路，
-             否則賣家讀完錯誤之後找不到勾選在哪 —— 面板不點縮圖是不會出現的。 -->
-        <div v-if="mismatchRows.length" class="mismatch" data-testid="mismatch-jump">
-          <p class="mismatchT">要你確認的卡在這裡：</p>
-          <button
-            v-for="p in mismatchRows" :key="p.pick.key" type="button"
-            class="mismatchGo" @click="openCardRow(p)"
-          >
-            {{ p.pick.card.name }}<span class="muted"> · {{ tierLabel(p.tier) }}</span>
-          </button>
-        </div>
-
         <!-- 編號已被登記：把出路接在錯誤訊息旁邊。
              使用者被擋住的當下就看得到下一步，而不是自己去找客服頁。 -->
         <div v-if="takeoverCerts.length" class="takeover" data-testid="takeover-box">
@@ -1750,18 +1708,6 @@ function bottomOccluded(): number {
             />
             <span class="fnote">只顯示給買家看，不構成承諾、不參與任何計算。空著就是「未標示」。</span>
           </div>
-
-          <!-- PSA 查到的卡跟這一張的卡號對不上。PSA 是英文、目錄是日文，
-               卡名沒辦法直接比對，所以不硬擋 —— 讓賣家看過 PSA 查到的卡號後
-               自己確認是不是同一張，勾了才會放行。 -->
-          <label v-if="sheetRow.certMismatch" class="certConfirm">
-            <input type="checkbox" v-model="sheetRow.certConfirmed" />
-            <span>
-              PSA 查到的卡號是「{{ sheetRow.certMismatch.psaCardNumber || '未提供' }}」<template
-                v-if="sheetRow.certMismatch.psaSubject">（{{ sheetRow.certMismatch.psaSubject }}）</template>，
-              跟你挑的「{{ sheetRow.pick.card.cardNo || '—' }}」對不上。確認是同一張卡再勾選並重新送出。
-            </span>
-          </label>
 
           <div class="sheetFoot">
             <button type="button" class="btn primary sheetDone" @click="closeSheet">完成</button>

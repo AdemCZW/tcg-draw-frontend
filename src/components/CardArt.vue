@@ -1,17 +1,16 @@
 <script setup lang="ts">
 /**
- * 卡圖顯示，依序嘗試四個來源：
+ * 卡圖顯示，依序嘗試三個來源：
  *   1. image 是真實網址（賣家實拍 / R2）——這是實際要出貨的那張卡，最優先
- *   2. certNo 有值 → 向 PSA 取鑑定卡實拍圖（一樣是那張實體卡的照片）
- *   3. 都沒有 → 依卡名向 TCGdex 取官方卡圖當「示意圖」（見 tcgdex.ts 的授權風險說明；
+ *   2. 沒有實拍圖 → 依卡名向 TCGdex 取官方卡圖當「示意圖」（見 tcgdex.ts 的授權風險說明；
  *      示意圖不代表實際出貨那張卡的狀況，只是讓玩家看得出這是哪隻寶可夢）
- *   4. 都查不到 → 漸層佔位卡（"placeholder:<hue>"）
+ *   3. 都查不到 → 漸層佔位卡（"placeholder:<hue>")
  */
 import { computed, ref, watch } from 'vue'
 import type { Tier } from '@/types/models'
-import { certImages } from '@/lib/psa'
 import { artUrlById, canonicalArt } from '@/lib/tcgdex'
 import { useNearViewport } from '@/lib/near-viewport'
+import { API_URL } from '@/lib/config'
 
 const props = defineProps<{
   image: string
@@ -19,7 +18,6 @@ const props = defineProps<{
   /** null 與 undefined 同義：沒有賞別（例如使用者自己登記的卡），角標不畫 */
   tier?: Tier | null
   caption?: string
-  certNo?: string | null
   /** TCGdex 卡片編號。給了就直接用那一張的圖，不必靠卡名去猜 */
   artId?: string | null
 }>()
@@ -27,7 +25,7 @@ const props = defineProps<{
 const remoteUrl = ref<string | null>(null)
 
 /* 只有接近畫面才去查圖。
-   查圖要打 PSA / TCGdex，一頁四十張卡就是開頁瞬間八十個請求 ——
+  查圖要打 TCGdex，一頁四十張卡就會形成大量請求 ——
    畫面外的卡把頻寬吃光，正在看的那幾張反而最慢出來。
    這是「載入慢一拍」的真正原因，`loading="lazy"` 管不到（那只管圖片本身，
    網址早就查完了）。 */
@@ -41,28 +39,52 @@ const TIER_LABEL: Record<Tier, string> = {
   A: 'A 賞', B: 'B 賞', C: 'C 賞', D: 'D 賞', LAST: '最後賞', BUST: '爆賞'
 }
 const tierLabel = computed(() => (props.tier ? TIER_LABEL[props.tier] : ''))
-/* 空字串不算「有自己的圖」。
+const rawImage = computed(() => (props.image || '').trim())
+/* 站內檔案的網址要補 /raw。
+   資料庫裡存的是 `/v1/files/f-xxx`（server/src/routes/cardbook.ts），
+   而**那條路徑回的是 JSON**（`{url, public}`）不是圖片位元組 ——
+   直接餵給 <img src> 每一張都是破圖。要位元組得走 `/v1/files/:id/raw`，
+   它做同一套權限判斷之後 302 導到 R2。
+   這裡而不是在資料庫裡補，是因為已經寫進去的列也要能畫得出來。 */
+const ownSrc = computed(() => {
+  const img = rawImage.value
+  if (!img || img.startsWith('placeholder:')) return ''
+  if (!img.startsWith('/v1/')) return img
+  const path = /^\/v1\/files\/[^/]+$/.test(img) ? `${img}/raw` : img
+  return `${API_URL}${path}`
+})
+
+/* 載不出來的那個網址。
+   R2 沒設定會回 503、檔案被刪會 404、mock 模式下 API_URL 是空字串
+   會打到 SPA 自己 —— 三種情況以前都是一張破圖收場，因為
+   「有自己的圖」直接短路掉 TCGdex 與佔位卡兩條退路。
+   記下失敗的網址（而不是一個布林）：props.image 換成別張時要能重試。 */
+const failedSrc = ref('')
+
+/* 空字串不算「有自己的圖」（ownSrc 對空字串與 placeholder: 都回 ''）。
    原本只判斷開頭不是 placeholder:，於是 image:'' 會被當成有實拍圖，
    watch 直接 return，artId 與卡名搜尋都不會跑 —— 整站卡圖變成佔位漸層。 */
-const hasOwnImage = computed(() => !!props.image && !props.image.startsWith('placeholder:'))
+const hasOwnImage = computed(() => !!ownSrc.value && ownSrc.value !== failedSrc.value)
 // 有自己的實拍就不必打任何 API
-const src = computed(() => (hasOwnImage.value ? props.image : remoteUrl.value))
+const src = computed(() => (hasOwnImage.value ? ownSrc.value : remoteUrl.value))
 const isPlaceholder = computed(() => !src.value)
+
+/** 這一張畫不出來 —— 往下一個來源退，而不是留一個破圖在那裡 */
+function onImgError() {
+  if (hasOwnImage.value) { failedSrc.value = ownSrc.value; return }
+  // 退到 TCGdex 的示意圖也載不出來 → 剩下漸層佔位卡
+  remoteUrl.value = null
+}
 const tierClass = computed(() => (props.tier ? `t-${props.tier.toLowerCase()}` : ''))
 
 watch(
-  () => [props.certNo, props.alt, props.artId, hasOwnImage.value, near.value] as const,
-  async ([cert, alt, artId, own, visible]) => {
+  () => [props.alt, props.artId, hasOwnImage.value, near.value] as const,
+  async ([alt, artId, own, visible]) => {
     remoteUrl.value = null
     if (own) return
     // 還沒接近畫面就先不查。near 變 true 時這個 watch 會再跑一次
     if (!visible) return
 
-    if (cert) {
-      const imgs = await certImages(cert)
-      // 等待期間 props 可能已改變，確認仍是同一張卡才套用
-      if (imgs?.front && props.certNo === cert) { remoteUrl.value = imgs.front; return }
-    }
     /* 有指定編號就直接組網址，不必查 API 也不會拿錯版本。
        靠卡名搜尋只會拿到「第一張有圖的」—— 通常是普卡而不是密卡。 */
     if (artId) {
@@ -102,7 +124,7 @@ watch(
        同步解碼會讓捲動卡住一拍 -->
   <img
     v-else ref="rootEl" class="art-img" :src="src!" :alt="alt ?? '卡片圖'"
-    loading="lazy" decoding="async"
+    loading="lazy" decoding="async" @error="onImgError"
   />
 </template>
 

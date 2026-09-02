@@ -118,7 +118,7 @@ function afterLogin() {
   else router.replace({ name: 'home' })
 }
 
-/* LINE 登入回來時網址是 /login#token=…；收下 token 就直接進站。
+/* LINE 登入回來時網址是 /login#code=…；換取 JWT 後就直接進站。
    LINE 那邊拒絕或驗證失敗會帶 ?line=denied|state|token|verify 回來。 */
 onMounted(async () => {
   if (MOCK) return

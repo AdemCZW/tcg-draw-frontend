@@ -44,15 +44,106 @@ const STATUSES = [
 ] as const
 
 /**
- * 狀態過濾在這裡做，不在前端做。
+ * 「同一款卡」的定義。**這是卡冊分組的唯一實作。**
+ *
+ * ---- 為什麼寫在 SQL 而不是撈回來再用 TS 的 cardMergeKey 分 ----
+ * 卡冊是游標分頁的。同款卡要在畫面上併成一格「×10」，前端就必須知道
+ * 兩件事：哪些列屬於同一組（分組），以及**這一組總共幾張**（數量）。
+ * 兩件事在前端都做不到 ——
+ *   分組：只分得到已載入的那 24 張，第 3 批才出現的同款卡會另外自成一組；
+ *   數量：使用者看到「×3」而實際上他有 10 張。對一個「要拿來整理重複卡
+ *        去出售」的功能，那個 3 是會讓人做錯決定的假數字。
+ * 所以分組鍵要進 order by（讓同組必然相鄰），張數要用 window function 算
+ * （整本卡冊的 count，不是這一頁的）。兩件事都只有 SQL 做得到。
+ *
+ * ---- 規則本身（跟 src/lib/card-merge.ts 的 cardMergeKey 逐字一致）----
+ * 1. **有鑑定編號的卡永遠不合併**：certNo 進鍵，等於每一張自成一組，
+ *    group_total 恆為 1。PSA 10 #82345671 與 #82345672 是兩張可以各自
+ *    對外查證的實體卡，併成「×2」之後「要賣的是哪一張」就講不清楚了 ——
+ *    整套爭議判定就建立在 certNo 可以逐張查證上。
+ * 2. **變體要進鍵**：SV2a-025 普卡 €0.02、同卡號的マスターボールミラー €369，
+ *    差約 18,000 倍。併在一起等於把兩種商品講成同一種。
+ * 3. 鑑定機構、分數、語言都是「這是哪一張卡」的一部分。artId 是最準的身分，
+ *    沒有才退回 setCode/cardNo。
+ *
+ * 前端拿到的是這裡算出來的字串（group_key），**不會自己再算一次**；
+ * cardMergeKey 留給建池挑卡器（那份清單不分頁，手上也沒有 group_key）。
+ * 產生的字串刻意跟 cardMergeKey 完全相同，兩份規則分岔時看得出來。
+ *
+ * coalesce 每一格都要有：jsonb 的 ->> 取不到會回 null，而 null 參與字串
+ * 串接的結果是 null —— 少一個 coalesce，那一整組卡的鍵會變成 NULL，
+ * 而 SQL 裡 NULL 不等於 NULL，同款卡反而全部散開。
+ */
+const GROUP_KEY = sql`
+  case when coalesce(p.card->>'certNo', '') <> '' then
+    'one:' || coalesce(nullif(p.card->>'artId', ''),
+                       coalesce(p.card->>'setCode', '') || '/' || coalesce(p.card->>'cardNo', ''))
+          || ':' || coalesce(p.card->>'grader', '')
+          || ':' || (p.card->>'certNo')
+  else
+    'same:' || coalesce(nullif(p.card->>'artId', ''),
+                        coalesce(p.card->>'setCode', '') || '/' || coalesce(p.card->>'cardNo', ''))
+            || '|' || coalesce(p.card->>'variantId', '')
+            || '|' || coalesce(p.card->>'grader', '')
+            || '|' || coalesce(p.card->>'grade', '')
+            || '|' || coalesce(p.card->>'language', '')
+  end
+`
+
+/** 這一組的參考價。同組每一張都是同一款卡，取 max 只是為了讓組內完全一致 ——
+    同款卡的 refPrice 理論上一樣，但它是賣家自填的欄位，不能假設。
+    值必須組內恆等，否則「照參考價排」時同一組會被別的卡插進中間，分組就斷了。
+    沒有標示參考價的卡當 -1（排最後），不是 0 —— 見 CardItem.refPrice 的說明。 */
+const GROUP_REF = sql`max(coalesce((p.card->>'refPrice')::numeric, -1)) over (partition by ${GROUP_KEY})`
+
+/**
+ * 排序。
+ *
+ * 為什麼只有這三個 —— 使用者提到「類型／等級」，但站上真正存在的維度只有
+ * 賞別（tier）、取得時間、參考價、卡名，而其中兩個是**看起來有用**：
+ *
+ *   賞別：tier 是「這張卡在那個池裡被當成第幾賞」，是**池的屬性不是卡的屬性**。
+ *         同一張卡在 A 池是 A 賞、在 B 池可能是 C 賞，照它排不會把同款卡排在一起。
+ *         而且自己登記進卡冊的卡 tier 是 null（migration 027），卡冊裡自登記的卡
+ *         愈多，這個排序就愈接近「一大坨未分級」。賞別的分佈總覽卡上已經有一條
+ *         堆疊條連張數一起講完了，再做一個排序是重複。
+ *   卡名：跟「同款集中」高度重疊（同名卡在那裡本來就相鄰），而中日文卡名的
+ *         排序取決於資料庫的 collation，使用者無法預期順序。
+ *
+ * 三種排序裡有兩種（dupes / value）保證**同款卡相鄰**，前端才敢把它們併成
+ * 一格 ×N。acquired 刻意不分組：它是一條時間軸，把 9 張舊卡拉到新卡旁邊
+ * 就不再是時間軸了；而且它是預設值，抽完卡導回來的 ?new= 要靠它落在第一張。
+ */
+const SORTS = ['acquired', 'dupes', 'value'] as const
+type Sort = (typeof SORTS)[number]
+
+/** 游標裡的數值段。參考價可能是小數，isNumeric（只收整數）擋不住也放不過 */
+const isDecimal = (s: string) => /^-?\d+(\.\d+)?$/.test(s)
+
+/**
+ * 過濾與排序**全部在這裡做，不在前端做**。
  *
  * 卡冊上那排「寄存中／已出貨…」的分頁，一旦列表變成分批載入就不能再用前端過濾：
  * 前端只濾得到「已經載進來的那 24 張」，於是使用者會看到「寄存中 0 張」，
  * 而真正的寄存中卡片躺在還沒載入的第 3 頁。分頁的數字也是同一個問題，
  * 所以總數走 /summary 由 SQL 算，不從已載入的陣列數。
+ *
+ * **排序與分組是一模一樣的坑，而且更嚴重**：前端排序只排得到已載入的那批，
+ * 捲一頁就整個重排；前端分組則會告訴使用者「這款你有 3 張」，而他其實有 10 張。
+ * 「找出重複的卡拿去賣」正是靠那個數字做決定的功能。
  */
 const PrizeQuery = PageQuery.extend({
-  status: z.enum(STATUSES).optional()
+  status: z.enum(STATUSES).optional(),
+  sort: z.enum(SORTS).default('acquired'),
+  /**
+   * 只回這一組的卡。
+   *
+   * 「這一組全選」需要**還沒載入的那幾張的 id**：使用者看到「×10」就按下
+   * 全選，而畫面上只有 3 張載進來了。沒有這個參數的話，前端只有兩條路 ——
+   * 假裝選了 10 張（實際只送出 3 個 id，使用者要到定價頁才發現少了 7 張），
+   * 或者叫使用者「先捲到底再按」。兩條都是把分頁的實作細節丟給使用者。
+   */
+  group: z.string().min(1).max(400).optional()
 })
 
 prizes.get('/', async c => {
@@ -61,21 +152,129 @@ prizes.get('/', async c => {
   await sql.begin(tx => sweepSettlements(tx, c.get('userId'))).catch(() => {})
   const parsed = PrizeQuery.safeParse(c.req.query())
   if (!parsed.success) {
-    return c.json({ error: 'BAD_REQUEST', message: '分頁參數不合法（limit 介於 1 到 100）' }, 400)
+    /* 分開講。四個參數的下一步完全不同（改網址、換排序、換狀態、縮 limit），
+       全部回同一句「limit 介於 1 到 100」等於在 sort 打錯時答非所問 ——
+       呼叫端會照著訊息去改一個根本沒問題的參數。 */
+    const which = parsed.error.issues[0]?.path[0]
+    const message =
+      which === 'sort' ? `排序只接受 ${SORTS.join(' / ')}`
+      : which === 'status' ? '狀態不在已知的值域內'
+      : which === 'group' ? '分組鍵不合法'
+      : '分頁參數不合法（limit 介於 1 到 100）'
+    return c.json({ error: 'BAD_REQUEST', message }, 400)
   }
-  const { limit, cursor, status } = parsed.data
+  const { limit, cursor, status, sort, group } = parsed.data
 
-  let after: [string, string] | null = null
+  /**
+   * 游標。三種排序的鍵不一樣，段數也不一樣。
+   *
+   * ⚠️ **group_key 一定要放在最後一段。** 它裡面本來就含有分隔字元 `|`
+   * （'same:SV4a-205||RAW||JP'），而 decodeCursor 只把**最後一段**的
+   * 剩餘部分接回來 —— 放中間會在解碼時被切成好幾段，換頁就整個錯位。
+   * 所以 payload 的順序（把 group_key 移到最後）跟排序鍵的順序刻意不同，
+   * 下面的比較式再把它排回去。
+   */
+  let after: string[] | null = null
   if (cursor) {
-    const p = decodeCursor(cursor, 2)
-    if (!p || !isNumeric(p[0]!)) return c.json({ error: 'BAD_CURSOR', message: '分頁游標不合法' }, 400)
-    after = [p[0]!, p[1]!]
+    const parts = sort === 'acquired' ? 2 : sort === 'value' ? 3 : 4
+    const p = decodeCursor(cursor, parts)
+    const bad =
+      !p ||
+      (sort === 'acquired' && !isNumeric(p[0]!)) ||
+      (sort === 'value' && !isDecimal(p[0]!)) ||
+      (sort === 'dupes' && (!isNumeric(p[0]!) || !isDecimal(p[1]!)))
+    if (bad) return c.json({ error: 'BAD_CURSOR', message: '分頁游標不合法' }, 400)
+    after = p as string[]
   }
 
   /* 排序鍵是 acquired_at（進到這個人卡冊的時間）而不是 won_at（這張卡被抽出來的時間）。
      庫內轉移只換 owner，被買走的卡帶著賣家當初抽到的時間 —— 用 won_at 排的話，
      剛買到的卡會落在幾天前的位置，卡冊一超過一頁它就不在第一頁上，
      使用者看到的就是「我買的卡沒進卡冊」。見 migrations/014_acquired_at.sql。 */
+
+  /**
+   * 分組的張數與參考價先在一個 CTE 裡算好。
+   *
+   * ⚠️ **window function 一定要算在游標條件之前。** 窗算的是 WHERE 之後的
+   * 結果集，如果把 `(排序鍵) < (游標)` 一起寫進這一層，第 2 頁的
+   * count(*) over (...) 數到的就只剩「游標之後的那幾張」—— 同一張卡
+   * 第 1 頁說 ×10、第 2 頁說 ×7，而且兩個都不是使用者手上的張數。
+   * 所以：狀態過濾（那是「要看哪一批卡」，屬於統計範圍的一部分）留在這一層，
+   * 游標（那是「我讀到哪」，是分頁的實作）擋在外面。
+   *
+   * 代價是每翻一頁都要掃過這個人整本卡冊。這跟 /summary 是同一個量級
+   * （那支的 curve 本來就逐張投影整本），而卡冊的規模是「一個人擁有幾張卡」，
+   * 不是全站資料量；prizes_user 索引已經把範圍限縮到這個人。
+   * 真正貴的仍然是列表那邊的卡圖與 DOM。
+   */
+  const me = c.get('userId')
+  const book = sql`
+    select p.id,
+           ${GROUP_KEY} as group_key,
+           count(*) over (partition by ${GROUP_KEY})::int as group_total,
+           /* 這一組裡**還能上架**的張數。
+              使用者原話：「就會需要一張一張確認哪些有重複、哪些已經上架了」——
+              「已經上架了」正是這個數字在回答的事。少了它，一格「×10」在
+              「全部」分頁上會蓋掉「其中 7 張已經在市場上」這件事，
+              而那正是他不想再逐張確認的東西。
+              可上架的狀態（stashed / in_book）跟前端 canSell 與上架端點
+              收的兩種是同一組；三處要一起改。 */
+           count(*) filter (where p.status in ('stashed', 'in_book'))
+             over (partition by ${GROUP_KEY})::int as group_sellable,
+           ${GROUP_REF} as group_ref
+      from prizes p
+     where p.user_id = ${me}
+       ${status ? sql`and p.status = ${status}` : sql``}
+  `
+
+  /**
+   * 三種排序的 [order by, 游標比較, 從一列取出游標]。
+   *
+   * dupes / value 的排序鍵裡都夾著 group_key，這不是為了好看 —— 它是
+   * 「同組必然相鄰」的保證本身，前端把連續同鍵的列併成一格 ×N 就是靠它。
+   * 少了它，兩款張數相同（或參考價相同）的卡會照 id 交錯，畫面上一組卡
+   * 會被另一組插斷成兩格。
+   *
+   * 方向全部統一成 asc（要倒過來的就取負值），因為列值比較 (a,b,c) > (x,y,z)
+   * 只有在所有欄位同方向時才成立 —— 混方向就得拆成一串 or，規劃器用不到索引，
+   * 而且邊界（含不含等號、哪一欄比哪一邊）非常容易寫錯。
+   */
+  const spec = (() => {
+    switch (sort) {
+      case 'dupes':
+        /* 張數多的排最前面 —— 使用者打開這個排序就是為了找「我有好幾張的那些」。
+           張數相同時照參考價高低，值錢的先看到（要整理去賣的話那才是重點）。 */
+        return {
+          order: sql`order by (-b.group_total), (-b.group_ref), b.group_key, b.id`,
+          where: after
+            ? sql`and ((-b.group_total), (-b.group_ref), b.group_key, b.id)
+                    > (${after[0]!}::int, ${after[1]!}::numeric, ${after[3]!}::text, ${after[2]!}::text)`
+            : sql``,
+          key: (r: Row) => [String(-r.group_total), String(-Number(r.group_ref)), r.id, r.group_key]
+        }
+      case 'value':
+        return {
+          order: sql`order by (-b.group_ref), b.group_key, b.id`,
+          where: after
+            ? sql`and ((-b.group_ref), b.group_key, b.id)
+                    > (${after[0]!}::numeric, ${after[2]!}::text, ${after[1]!}::text)`
+            : sql``,
+          key: (r: Row) => [String(-Number(r.group_ref)), r.id, r.group_key]
+        }
+      case 'acquired':
+        /* 預設。游標格式跟這個改動之前**逐字相同**（2 段、acquired_at + id），
+           所以舊分頁請求打進來仍然對得上，不會在部署的那一刻讓正在捲動的
+           使用者拿到 400。 */
+        return {
+          order: sql`order by p.acquired_at desc, p.id desc`,
+          where: after
+            ? sql`and (p.acquired_at, p.id) < (${after[0]!}::bigint, ${after[1]!}::text)`
+            : sql``,
+          key: (r: Row) => [String(r.acquired_at), String(r.id)]
+        }
+    }
+  })()
+
   /* 一併帶出這張卡的**宣告買回價**與結算狀態。
      買回價是那個池的賣家在開賣前宣告、寫進 commit 鎖死的金額，前端算不出來，
      也不該猜 —— 猜一個數字顯示給使用者比誠實說「這個池沒有宣告買回價」更糟。
@@ -83,8 +282,9 @@ prizes.get('/', async c => {
      為什麼要繞 pool_seats：prizes 那一列只記得自己在哪個池的第幾號籤位，
      沒有直接指向 pool_prizes 的欄位。籤位對應到哪個獎項本來就是 pool_seats
      的職責（那是籤序本身），從它接過去才是唯一正確的來源。 */
-  const rows = await sql<{ id: string; acquired_at: string }[]>`
-    select p.*,
+  const rows = await sql<Row[]>`
+    with b as (${book})
+    select p.*, b.group_key, b.group_total, b.group_sellable, b.group_ref,
            /* 買回價只有在**這一筆結算還付得出來**的時候才回（F-7）。
               結算一旦 released / refunded / recycled，那筆保留額已經不在了，
               回收端點會回 409。原本這裡照樣回買回價，卡冊就長出一個
@@ -94,18 +294,28 @@ prizes.get('/', async c => {
            case when st.status in ('held', 'awaiting_ship') then pp.buyback end as buyback,
            st.status as settle_status,
            st.ship_due_at as settle_ship_due_at, st.shipped_at as settle_shipped_at
-      from prizes p
+      from b
+      join prizes p on p.id = b.id
       left join pool_seats ps on ps.pool_id = p.pool_id and ps.seat = p.seat
       left join pool_prizes pp on pp.id = ps.prize_id
       left join pool_settlements st on st.prize_id = p.id
-    where p.user_id = ${c.get('userId')}
-      ${status ? sql`and p.status = ${status}` : sql``}
-      ${after ? sql`and (p.acquired_at, p.id) < (${after[0]}::bigint, ${after[1]}::text)` : sql``}
-    order by p.acquired_at desc, p.id desc
+     where true
+       ${group ? sql`and b.group_key = ${group}` : sql``}
+       ${spec.where}
+    ${spec.order}
     limit ${limit + 1}
   `
-  return c.json(slicePage(rows, limit, r => encodeCursor([String(r.acquired_at), String(r.id)])))
+  return c.json(slicePage(rows, limit, r => encodeCursor(spec.key(r))))
 })
+
+/** 列表那支查出來的一列。只列後面真的會讀到的欄位 */
+type Row = {
+  id: string
+  acquired_at: string
+  group_key: string
+  group_total: number
+  group_ref: string
+}
 
 /**
  * 卡冊總覽的數字。
@@ -121,7 +331,7 @@ prizes.get('/', async c => {
  */
 prizes.get('/summary', async c => {
   const me = c.get('userId')
-  const [counts, mix, best, curve] = await Promise.all([
+  const [counts, mix, best, curve, dup] = await Promise.all([
     sql<{ status: string; n: string }[]>`
       select status, count(*)::text as n from prizes where user_id = ${me} group by status
     `,
@@ -146,6 +356,26 @@ prizes.get('/summary', async c => {
       select acquired_at, card->>'name' as name, card->>'refPrice' as ref
       from prizes where user_id = ${me} and status not in ('recycled', 'refunded')
       order by acquired_at asc, id asc
+    `,
+    /**
+     * 重複的卡有幾款、共幾張。
+     *
+     * 為什麼要放進總覽而不是讓前端數已載入的那幾張：那正是這一整個功能要解掉的
+     * 錯誤答案 —— 分批載入之下前端數出來的「重複 1 款」是假的。
+     * 而這個數字的用途是**讓「同款集中」這個排序被看見**：使用者不會去點一個
+     * 他不知道自己需要的排序，但「你有 4 款重複的卡」會讓他去點。
+     *
+     * 已回收與已退還排除掉：那些卡已經不在這個人手上，「重複」對它們不成立。
+     */
+    sql<{ groups: string; cards: string }[]>`
+      select count(*)::text as groups, coalesce(sum(n), 0)::text as cards
+        from (
+          select ${GROUP_KEY} as k, count(*) as n
+            from prizes p
+           where p.user_id = ${me} and p.status not in ('recycled', 'refunded')
+           group by 1
+          having count(*) > 1
+        ) g
     `
   ])
 
@@ -162,6 +392,11 @@ prizes.get('/summary', async c => {
     total, counts: byStatus, owned, totalValue,
     best: b ? { name: b.card?.name ?? '', tier: b.tier, refPrice: Number(b.card?.refPrice) || 0 } : null,
     tierMix: mix.map(r => ({ tier: r.tier, n: Number(r.n) })),
+    /* 「4 款重複的卡、共 21 張」。dupCards 含每一款自己的第一張 ——
+       講的是「這 21 張卡分屬 4 款」，不是「有 21 張多餘的」，
+       因為「多餘幾張」要看使用者想留幾張，那不是系統能替他決定的事。 */
+    dupGroups: Number(dup[0]?.groups ?? 0),
+    dupCards: Number(dup[0]?.cards ?? 0),
     /* 曲線畫的是「這本卡冊怎麼累積起來的」，所以 x 軸是取得時間。
        用 won_at 的話，今天買到的一張舊卡會把曲線的起點往回拉到賣家抽中它的那天。 */
     curve: curve.map(r => ({ wonAt: Number(r.acquired_at), name: r.name ?? '', refPrice: Number(r.ref) || 0 }))

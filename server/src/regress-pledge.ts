@@ -14,6 +14,11 @@
  * 兩種都是測試互相污染，不是缺陷。各自 migrate + seed 一個新庫再跑。
  */
 const base = (process.argv[2] ?? 'http://localhost:8089').replace(/\/$/, '')
+const devSecret = process.env.DEV_LOGIN_SECRET
+const devHeaders = () => {
+  if (!devSecret) throw new Error('regress-pledge 需要 DEV_LOGIN_SECRET，請與開發伺服器設定相同的值')
+  return { 'x-dev-login-secret': devSecret }
+}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any
 const json = (r: Response): Promise<Any> => r.json()
@@ -25,7 +30,7 @@ const head = (s: string) => console.log(`\n── ${s} ${'─'.repeat(Math.max(0
 
 async function login(handle: string, name: string) {
   const r = await fetch(`${base}/v1/auth/dev-login`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
     body: JSON.stringify({ handle, name })
   })
   if (!r.ok) throw new Error(`login ${handle}: ${r.status}`)
@@ -45,14 +50,14 @@ const platform = await login('platform', 'VaultDraw 官方')
 const seller = await login('seller', '測試賣家')
 await call(platform, '/v1/admin/grant', { userId: 'u-seller', points: 5_000_000, note: '023 測試' })
 
-/* PSA_STUB=1 時查證走 psa.ts 的 stubExchange：'STUB-OK-<卡號>' 才會回
-   verified，隨手編的數字一律 'No data found' → CERT_NOT_FOUND 400。
-   第一版用了隨機數字，結果「第二個池被擋下」是因為 PSA 查無此卡而不是
-   唯一索引 —— 測試通過但驗到的是完全不同的東西。卡號要跟下面 certCard
-   的 cardNo 前綴對得上（cardNumbersAgree 比的是數字部分）。 */
 /* 帶時間戳讓這支可以重複跑：編號一旦登記過就永遠佔著
-   （那正是這支要驗的東西），固定編號第二次跑就會被自己上一輪擋住。
-   stub 取的是 split('-')[2]，所以後面再接東西不影響卡號對照。 */
+   （那正是這支要驗的東西 —— 唯一索引，不是任何外部查證），
+   固定編號第二次跑就會被自己上一輪擋住。
+   `STUB-` 前綴只是沿用下來的命名，已經沒有 stub 語意。
+
+   ⚠️ 這支驗的是**唯一性**：第二個池被擋下必須是因為唯一索引。
+   平台已經不查證編號真偽，所以現在不會再有「其實是被 CERT_NOT_FOUND 擋掉」
+   那種假通過 —— 但這條區別仍然是這支測試的重點。 */
 const RUN = String(Date.now()).slice(-8)
 const CERT = `STUB-OK-349-${RUN}`
 const CERT2 = `STUB-OK-237-${RUN}`
@@ -68,10 +73,7 @@ const plainCard = {
 const makePool = (title: string, certNo: string) => call(seller, '/v1/pools', {
   mode: 'muteki', title, ticketPrice: 2000, totalTickets: 4, days: 7,
   prizes: [
-    /* certConfirmed: true —— stub 回的 CardNumber 是從 'STUB-OK-<卡號>'
-       取的，跟目錄卡號比得上就 verified；比不上時這個旗標表示賣家已經
-       自己確認過。這裡測的不是 PSA 對照那條路，不要讓它擋住。 */
-    { tier: 'A', card: certCard(certNo), total: 1, certConfirmed: true },
+    { tier: 'A', card: certCard(certNo), total: 1 },
     { tier: 'D', card: plainCard, total: 3 }
   ],
   tierBuyback: { A: 3000, D: 200 }
@@ -146,13 +148,13 @@ head('池結束時沒被抽走的押記卡要回賣家卡冊')
   /* 讓它到期。到期只停止販售，接著會走到 revealed —— 解押掛在 revealPool，
      因為那是抽完／到期／提前關三條路的共同終點。 */
   await fetch(`${base}/v1/dev/expire-pool`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
     body: JSON.stringify({ poolId: pid2 })
   })
   /* sweepPools 是五分鐘一次的排程，測試等不了。用 dev 端點推。
      到期→cancelled→revealed 是兩步（同一支掃描的不同分支），所以推兩次。 */
   for (let i = 0; i < 4; i++) {
-    await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST' })
+    await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST', headers: devHeaders() })
     const { pool } = await json(await call(seller, `/v1/pools/${pid2}`))
     if (pool?.status === 'revealed') break
   }
@@ -195,11 +197,11 @@ head('回庫的卡要出得來（A-3）：能上架市場')
   ck('建池', r.ok)
   const pid3 = (await json(r.clone())).poolId as string
   await fetch(`${base}/v1/dev/expire-pool`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
     body: JSON.stringify({ poolId: pid3 })
   })
   for (let i = 0; i < 4; i++) {
-    await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST' })
+    await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST', headers: devHeaders() })
     const { pool } = await json(await call(seller, `/v1/pools/${pid3}`))
     if (pool?.status === 'revealed') break
   }

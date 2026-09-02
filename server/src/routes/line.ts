@@ -12,16 +12,12 @@
  * 不一定落在同一台；而且重新部署後記憶體就沒了。
  */
 import { Hono } from 'hono'
-import { randomBytes } from 'node:crypto'
-import { credit } from '../money.js'
-import { notify } from '../notify.js'
+import { createHash, randomBytes } from 'node:crypto'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
+import { z } from 'zod'
 import { env } from '../env.js'
 import { sql } from '../db.js'
-import { issueToken } from '../auth.js'
-
-/** 測試期的註冊禮金。正式營運前移除，見下方 credit 呼叫處的說明 */
-const SIGNUP_BONUS = 1_000_000
+import { issueToken, requireAuth } from '../auth.js'
 
 export const line = new Hono()
 
@@ -29,6 +25,7 @@ const AUTH = 'https://access.line.me/oauth2/v2.1/authorize'
 const TOKEN = 'https://api.line.me/oauth2/v2.1/token'
 const redirectUri = `${env.PUBLIC_URL}/v1/auth/line/callback`
 const configured = () => !!env.LINE_CHANNEL_SECRET
+const codeHash = (code: string) => createHash('sha256').update(code).digest('hex')
 
 /* LINE 的 ID token 是 HS256，key 就是 channel secret；不需要 JWKS。
    但保留 verify 的方式而不是自己解 base64 —— 要驗簽名、issuer、audience、過期，
@@ -36,23 +33,8 @@ const configured = () => !!env.LINE_CHANNEL_SECRET
 const secretKey = () => new TextEncoder().encode(env.LINE_CHANNEL_SECRET)
 void createRemoteJWKSet // 之後若 LINE 改用 RS256 再切過去
 
-/* 帶 ?link=<token> 時進入「綁定模式」：把 LINE 綁到那個既有帳號，而不是建新帳號。
-   意圖必須在導去 LINE 之前就記進 oauth_states —— callback 只拿得到 state，
-   沒有其他上下文可以判斷這次是登入還是綁定。 */
-line.get('/start', async c => {
-  if (!configured()) return c.json({ error: 'NOT_CONFIGURED', message: 'LINE 登入尚未設定' }, 503)
-
-  let linkUserId: string | null = null
-  const linkToken = c.req.query('link')
-  if (linkToken) {
-    try {
-      const { payload } = await jwtVerify(linkToken, new TextEncoder().encode(env.JWT_SECRET))
-      linkUserId = (payload.sub as string) ?? null
-    } catch {
-      return c.redirect(`${env.FRONTEND_URL}/me?line=badtoken`, 302)
-    }
-  }
-
+/** 把登入／綁定意圖寫進一次性 OAuth state，再組 LINE 授權網址。 */
+async function authorizationUrl(linkUserId: string | null) {
   const state = randomBytes(16).toString('hex')
   const nonce = randomBytes(16).toString('hex')
   await sql`insert into oauth_states (state, nonce, provider, user_id, created_at)
@@ -64,7 +46,20 @@ line.get('/start', async c => {
   u.searchParams.set('state', state)
   u.searchParams.set('scope', 'profile openid')
   u.searchParams.set('nonce', nonce)
-  return c.redirect(u.toString(), 302)
+  return u.toString()
+}
+
+/* 一般 LINE 登入不需要身份，直接導向 LINE。 */
+line.get('/start', async c => {
+  if (!configured()) return c.json({ error: 'NOT_CONFIGURED', message: 'LINE 登入尚未設定' }, 503)
+  return c.redirect(await authorizationUrl(null), 302)
+})
+
+/* 綁定必須用 Authorization header 識別既有帳號。JWT 絕不能放進 URL query，
+   因為 query 會進代理與伺服器日誌。前端取得 URL 後才整頁導向 LINE。 */
+line.post('/link/start', requireAuth, async c => {
+  if (!configured()) return c.json({ error: 'NOT_CONFIGURED', message: 'LINE 登入尚未設定' }, 503)
+  return c.json({ url: await authorizationUrl(c.get('userId')) })
 })
 
 line.get('/callback', async c => {
@@ -155,20 +150,28 @@ line.get('/callback', async c => {
   })
   void picture  // 頭像之後接 files 再存
 
-  /* 測試期：LINE 登入的帳號送一百萬點，讓人不用儲值就能把整條動線走完。
-     用 ledger_once（ref_id + user_id + reason 唯一）擋重複，所以：
-       - 每次登入都會嘗試發，但只會成功一次
-       - 在這個功能之前就已經用 LINE 登入過的人，下次登入自動補發
-     正式營運前要把這段拿掉 —— 它繞過了儲值，等於免費發行點數。 */
-  await credit(sql, userId, SIGNUP_BONUS, 'line-signup-bonus', userId)
-  await notify({
-    userId, kind: 'system',
-    title: '測試點數已入帳',
-    body: `LINE 登入送 ${SIGNUP_BONUS.toLocaleString('zh-TW')} 點，可以直接開始抽卡。`,
-    link: '/me/wallet', refId: userId
-  })
+  /* 不把 JWT 放進 URL：fragment 雖然不進 Referer，仍可能被瀏覽器歷史或擴充套件
+     讀到。回傳一把高熵、五分鐘有效且只能消耗一次的交換碼；資料庫只留雜湊。 */
+  const loginCode = randomBytes(32).toString('base64url')
+  await sql`
+    insert into oauth_login_codes (code_hash, user_id, expires_at)
+    values (${codeHash(loginCode)}, ${userId}, now() + interval '5 minutes')
+  `
+  return c.redirect(`${env.FRONTEND_URL}/login#code=${encodeURIComponent(loginCode)}`, 302)
+})
 
-  const jwt = await issueToken(userId)
-  // token 放 fragment 不放 query：fragment 不會進伺服器日誌、也不會被 Referer 帶走
-  return c.redirect(`${env.FRONTEND_URL}/login#token=${jwt}`, 302)
+const ExchangeBody = z.object({ code: z.string().min(40).max(64) })
+
+/** 用 LINE callback 的一次性 code 換 JWT。DELETE ... RETURNING 讓並發重放只有一個成功。 */
+line.post('/exchange', async c => {
+  const parsed = ExchangeBody.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '登入交換碼不合法' }, 400)
+
+  const [row] = await sql`
+    delete from oauth_login_codes
+     where code_hash = ${codeHash(parsed.data.code)} and expires_at > now()
+     returning user_id
+  `
+  if (!row) return c.json({ error: 'LOGIN_CODE_INVALID', message: '登入連結已失效，請重新使用 LINE 登入' }, 401)
+  return c.json({ token: await issueToken(String(row.user_id)) })
 })

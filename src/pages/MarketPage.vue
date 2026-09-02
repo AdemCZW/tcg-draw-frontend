@@ -14,7 +14,8 @@
  * 從上方的橫向捲軸點一張，確認框會跑到下面某一格去長出來；主列表改成
  * 游標分頁之後，那一格甚至可能還沒載入，點了完全沒有反應。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { api, type MarketSort } from '@/lib/api'
 import type { Listing } from '@/types/models'
 import { deliveryOf } from '@/shared/domain'
@@ -40,6 +41,54 @@ const auth = useAuthStore()
    未登入時一律 false —— 那時候根本沒有「你」，訪客不該看到任何個人化痕跡。 */
 const isMine = (l: Listing) => !!auth.user && l.sellerId === auth.user.id
 
+/* ---- 搜尋 ----
+
+   「有一張很明確想收的卡」是買家來市場的第一個動作，而這一頁原本只能用捲的。
+   排序解不了它：捲到第 8 批才看到那張卡，跟沒有一樣。
+
+   搜尋一定要打後端（api.listMarket 會把 q 帶下去）。前端過濾只濾得到
+   已載入的那一批 —— 搜「伊布」看到 2 筆而市場上有 15 筆，另外 13 筆
+   在還沒載入的批次裡。那不是不方便，是**錯的答案**，而且畫面上看不出來。
+
+   系列篩選（setCode）沒有另外做一個選單：使用者說的「伊布家族」是一個主題，
+   它的卡散在 sv8a、sv3、sv6 好幾個 setCode 裡，選單解不了他的需求；
+   反過來，真的要按系列看的人打 `sv8a` 就有 —— 後端的搜尋欄位含 setCode。 */
+const route = useRoute()
+const router = useRouter()
+
+/** 輸入框最大字數。後端上界是 80，這裡收得更緊：卡名沒有這麼長 */
+const Q_MAX = 40
+/** 去抖動間隔。連續打字時只有停下來之後才會送出一次請求 */
+const DEBOUNCE_MS = 300
+
+/** 使用者正在打的字（每一鍵都會變） */
+const draft = ref(typeof route.query.q === 'string' ? route.query.q : '')
+/** 真正送去查詢的關鍵字（去抖動之後才會變）。分成兩個 ref 是去抖動的全部意義 */
+const q = ref(draft.value.trim())
+/** 打完了但還沒送出去的那段空窗。這一段也要顯示忙碌狀態，否則使用者以為沒反應 */
+const pending = ref(false)
+let timer: ReturnType<typeof setTimeout> | null = null
+
+function commit(value: string) {
+  if (timer) { clearTimeout(timer); timer = null }
+  pending.value = false
+  q.value = value.trim()
+}
+
+watch(draft, v => {
+  if (timer) clearTimeout(timer)
+  // 打到跟目前查詢一樣的字（例如刪掉又打回來）不必再排一次
+  if (v.trim() === q.value) { timer = null; pending.value = false; return }
+  pending.value = true
+  timer = setTimeout(() => commit(v), DEBOUNCE_MS)
+})
+
+/** Enter 直接送出，不等剩下的去抖動 —— 使用者已經表示打完了 */
+const submitNow = () => commit(draft.value)
+const clearSearch = () => { draft.value = ''; commit('') }
+
+onBeforeUnmount(() => { if (timer) clearTimeout(timer) })
+
 /* 排序而不是篩選：市場的品項還不多，先給「怎麼排」比「濾掉什麼」有用。
    低於市值放第一個 —— 那是使用者真正在找的東西。 */
 type Sort = MarketSort
@@ -51,24 +100,57 @@ const SORTS: { k: Sort; label: string }[] = [
   { k: 'pricey', label: '價格高到低' }
 ]
 
-/* 掛單分批載入，排序在後端。
+/* 符合關鍵字的**全市場**筆數，由後端在第一批一起回。
+   為什麼不自己數 listings.length：那是「已經載進來幾筆」，正是這個功能
+   要避免的那個錯誤答案。null＝沒有在搜尋，或這一批還沒回來。 */
+const matched = ref<number | null>(null)
+
+/* 掛單分批載入，排序與搜尋都在後端。
    排序不能留在前端：分批之後前端只排得到已載入的那幾筆，捲一頁就整個重排，
    已經看過的卡片會在眼前跳位。這跟卡冊的狀態分頁是同一個問題。 */
-const list = useInfiniteList<Listing>((cursor, signal) =>
-  api.listMarket({ cursor, signal, sort: sort.value }))
+const list = useInfiniteList<Listing>(async (cursor, signal) => {
+  /* 發出去的當下是哪個關鍵字要記住：回應晚於下一次輸入時，
+     用它擋掉過期的筆數（清單本身由 composable 的世代編號擋）。 */
+  const asked = q.value
+  const page = await api.listMarket({ cursor, signal, sort: sort.value, q: asked })
+  if (cursor === null && asked === q.value) matched.value = page.total ?? null
+  return page
+})
 const sentinelRef = list.sentinel
 const listings = list.items
 const loading = computed(() => list.loading.value && !list.ready.value)
+/** 有沒有事情正在進行：去抖動的空窗也算，不然按下第一個鍵之後畫面像沒反應 */
+const busy = computed(() => pending.value || list.loading.value)
 
 const gridRef = ref<HTMLElement | null>(null)
-/* 換排序＝換一組查詢：游標歸零、清空既有清單，過期的回應由 composable 擋掉。
-   同時把清單頂端捲回視野：整批換掉之後停在原本的捲動位置，會落在一個
-   只剩第一批的短清單底部，哨兵當場又在範圍內 —— 使用者沒有捲動，
+/* 換排序或換關鍵字＝換一組查詢：游標歸零、清空既有清單，過期的回應由
+   composable 擋掉。同時把清單頂端捲回視野：整批換掉之後停在原本的捲動位置，
+   會落在一個只剩第一批的短清單底部，哨兵當場又在範圍內 —— 使用者沒有捲動，
    卻會看到後面幾批被一路抓下來。 */
-watch(sort, () => {
+function restart() {
   list.reset()
   const top = gridRef.value?.getBoundingClientRect().top ?? 0
   if (top < 0) gridRef.value?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+}
+watch(sort, restart)
+watch(q, v => {
+  matched.value = null
+  restart()
+  /* 關鍵字進網址：搜尋結果要能貼給別人、能重新整理、能加書籤。
+     用 replace 不用 push —— 去抖動之後每停一次就是一筆歷史紀錄的話，
+     使用者按上一頁要按十幾次才離得開這一頁。 */
+  const next: LocationQueryRaw = { ...route.query }
+  if (v) next.q = v
+  else delete next.q
+  void router.replace({ query: next })
+})
+/* 從外面帶著 ?q= 進來（分享連結、上一頁）時要跟著走。
+   自己 replace 造成的那一次會落在這裡但兩邊相等，是個空操作，不會迴圈。 */
+watch(() => route.query.q, v => {
+  const s = (typeof v === 'string' ? v : '').trim()
+  if (s === q.value) return
+  draft.value = s
+  commit(s)
 })
 
 /* 上方兩條橫向捲軸與總筆數講的是「整個市場」，不是「已經捲出來的那幾筆」——
@@ -120,6 +202,32 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
       </RouterLink>
     </header>
 
+    <!-- 搜尋：放在排序上面。買家「我就是要這張」的意圖比「怎麼排」更前面，
+         而且排序膠囊是可以左右滑的，把搜尋擠進那一排會被滑走看不見 -->
+    <form class="search" role="search" @submit.prevent="submitNow">
+      <svg class="mag" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" />
+      </svg>
+      <input
+        v-model="draft"
+        class="qbox"
+        type="search"
+        :maxlength="Q_MAX"
+        enterkeyhint="search"
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+        placeholder="搜尋卡名、系列或卡號"
+        aria-label="搜尋掛單"
+      />
+      <!-- 忙碌指示跟清除鍵佔同一格：兩個都出現會把輸入框擠窄，
+           而且「還在查」跟「清掉」不是同時想做的事 -->
+      <span v-if="busy && draft" class="ring" aria-hidden="true"></span>
+      <button v-else-if="draft" type="button" class="clear" aria-label="清除搜尋" @click="clearSearch">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      </button>
+    </form>
+
     <!-- 排序：極簡橫向膠囊 -->
     <div class="sorts" role="tablist" aria-label="排序方式">
       <button
@@ -132,8 +240,10 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
 
     <TradeGuard />
 
-    <!-- 撿便宜：橫向捲動的小方塊，密度高，跟下面的大格線形成對比 -->
-    <section v-if="deals.length && sort === 'deal'" class="band">
+    <!-- 撿便宜：橫向捲動的小方塊，密度高，跟下面的大格線形成對比。
+         搜尋時整區收起來：這兩條講的是「整個市場」，跟關鍵字無關，
+         留著會讓使用者以為那也是搜尋結果 -->
+    <section v-if="deals.length && sort === 'deal' && !q" class="band">
       <header class="bh">
         <h2><span class="dot deal"></span>今日最殺</h2>
         <span class="muted bhNote">低於市值 8% 以上</span>
@@ -159,7 +269,7 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
     </section>
 
     <!-- 鑑定卡：單價最高的一區，用寬一點的卡凸顯 -->
-    <section v-if="graded.length && sort === 'deal'" class="band gradedBand">
+    <section v-if="graded.length && sort === 'deal' && !q" class="band gradedBand">
       <header class="bh">
         <h2><span class="dot cert"></span>已鑑定</h2>
         <span class="muted bhNote">附鑑定編號，可自行到鑑定機構查證</span>
@@ -178,14 +288,26 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
               <OwnerTag v-if="isMine(l)" label="我的" compact />
               <strong class="gName">{{ l.card.name }}</strong>
             </span>
-            <span class="gCert mono">{{ l.card.grader }} {{ l.card.grade }} · #{{ l.card.certNo }}</span>
+            <!-- 只到「哪一家、幾分」為止，不接鑑定編號。
+                 編號是身分憑據（見 server/src/card-public.ts），公開市場的回應
+                 本來就過了白名單拿不到它 —— 印在這裡的結果是一個孤零零的 "#"。 -->
+            <span class="gCert mono">{{ l.card.grader }} {{ l.card.grade }}</span>
             <span class="mono gPrice">{{ l.price.toLocaleString() }} 點</span>
           </span>
         </RouterLink>
       </div>
     </section>
 
-    <header v-if="sort === 'deal' && (deals.length || graded.length)" class="bh allHead">
+    <!-- 搜尋結果的標頭。筆數是**整個市場**符合的數量（後端第一批一起回），
+         不是「已經載進來幾筆」—— 後者正是分頁搜尋最容易給錯的那個數字。
+         aria-live 讓讀螢幕的人也知道結果換了。 -->
+    <header v-if="q" class="bh allHead" aria-live="polite">
+      <h2><span class="dot all"></span>「{{ q }}」的結果</h2>
+      <span v-if="matched !== null" class="muted bhNote">{{ matched }} 件</span>
+      <span v-else-if="busy" class="muted bhNote">搜尋中</span>
+    </header>
+
+    <header v-else-if="sort === 'deal' && (deals.length || graded.length)" class="bh allHead">
       <h2><span class="dot all"></span>全部掛單</h2>
       <span class="muted bhNote">{{ total }} 件</span>
     </header>
@@ -201,7 +323,7 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
       <article v-for="l in shown" :key="l.id" class="lot" :class="{ mine: isMine(l) }">
         <CardArt
           class="art"
-          :image="l.card.image" :alt="l.card.name" :cert-no="l.card.certNo" :art-id="l.card.artId"
+          :image="l.card.image" :alt="l.card.name" :art-id="l.card.artId"
         />
         <span class="scrim" aria-hidden="true"></span>
 
@@ -247,6 +369,21 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
       </article>
     </div>
 
+    <!-- 查無結果。一片空白等於讓使用者自己猜「是壞了還是真的沒有」，
+         所以要把三件事講清楚：沒有的是什麼、為什麼可能沒有、下一步往哪走。
+         兩條出路都是真的走得到的地方 —— 回全部掛單，或去抽選池碰。 -->
+    <div v-else-if="q && !list.error.value" class="none">
+      <p class="noneTitle">市場上沒有「{{ q }}」的掛單</p>
+      <p class="muted noneWhy">
+        可能還沒有人賣這張卡，或是卡名的寫法不一樣。
+        試試短一點的關鍵字（例如只打「伊布」），或直接輸入卡號、系列代碼。
+      </p>
+      <div class="noneActs">
+        <button type="button" class="btn" @click="clearSearch">看全部掛單</button>
+        <RouterLink :to="{ name: 'home' }" class="btn ghost">去抽選池找</RouterLink>
+      </div>
+    </div>
+
     <p v-else-if="!list.error.value" class="empty muted">目前市場沒有掛單。</p>
 
     <!-- 哨兵放在格線外面：塞進 grid 會佔掉一格，而且 grid 子元素預設
@@ -258,7 +395,7 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
       :error="list.error.value"
       :manual="list.manual.value"
       :empty="!shown.length"
-      done-text="已經是全部的掛單了"
+      :done-text="q ? '已經是全部的搜尋結果了' : '已經是全部的掛單了'"
       @retry="list.retry()"
       @more="list.load()"
     />
@@ -296,12 +433,82 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 @media (hover: hover) { .sell:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); } }
 .sell:active { transform: scale(.97); }
 
+/* ---- 搜尋框 ----
+   一整條 44px 高的欄位（觸控目標下限），圖示與清除鍵用 grid 分三欄，
+   中間那欄 minmax(0, 1fr) 才不會被 input 的預設寬度（size=20）撐破版面。 */
+.search {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 0 6px 0 14px;
+  min-height: 46px;
+  border-radius: var(--pill);
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  transition: border-color .15s, background .15s;
+}
+.search:focus-within { border-color: var(--line); background: var(--surface-2); }
+.mag { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; }
+.qbox {
+  min-width: 0;
+  border: 0; background: transparent; outline: none;
+  color: var(--ink);
+  /* 16px 是 iOS 不自動放大頁面的門檻。小於它的話點進輸入框整頁會被縮放，
+     退出時又不會縮回去 —— 這頁的兩欄格線會整個跑掉 */
+  font-size: 16px;
+  padding: 12px 0;
+  font-family: inherit;
+}
+.qbox::placeholder { color: var(--faint); }
+/* type=search 在 WebKit 會長出自己的清除鍵，跟下面那顆重複而且不受樣式控制 */
+.qbox::-webkit-search-cancel-button,
+.qbox::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+
+.clear {
+  flex: none;
+  width: 44px; height: 44px;      /* 觸控目標下限，視覺上靠 svg 縮小 */
+  display: grid; place-items: center;
+  border: 0; background: transparent; cursor: pointer;
+  border-radius: 50%;
+  color: var(--muted);
+}
+.clear svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+@media (hover: hover) { .clear:hover { color: var(--ink); } }
+.clear:active { transform: scale(.92); }
+/* 忙碌指示佔跟清除鍵一樣的 44px，兩者互換時輸入框寬度不會跳一下 */
+.search .ring {
+  flex: none;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  position: relative;
+}
+.search .ring::after {
+  content: '';
+  position: absolute; inset: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .search .ring::after { animation: spin .7s linear infinite; }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- 查無結果 ---- */
+.none { display: grid; justify-items: center; gap: 10px; padding: 48px 0 40px; text-align: center; }
+.noneTitle { margin: 0; font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+.noneWhy { margin: 0; font-size: 13px; line-height: 1.7; max-width: 30em; }
+.noneActs { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 6px; }
+.noneActs .btn { min-height: 44px; padding: 10px 20px; font-size: 14px; }
+
 /* 右緣淡出：這排是可以左右滑的，但截斷處如果是硬邊，看起來就只是「被切掉」
    而不是「還有更多」。mask 讓最後一顆膠囊漸隱，滑動的可能性才看得出來。 */
 .sorts {
   -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 34px), transparent 100%);
   mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 34px), transparent 100%);
-  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 16px 0 14px; padding-bottom: 2px; }
+  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 12px 0 14px; padding-bottom: 2px; }
 .sorts::-webkit-scrollbar { display: none; }
 .chip {
   flex: none;

@@ -14,6 +14,12 @@ import { verifyReveal, manifestHashOf, manifestString, commitV2, type Reveal } f
 import { genId } from './seed-gen.js'
 
 const base = (process.argv[2] ?? 'http://localhost:8080').replace(/\/$/, '')
+const devSecret = process.env.DEV_LOGIN_SECRET
+
+function devHeaders() {
+  if (!devSecret) throw new Error('smoke 需要 DEV_LOGIN_SECRET，請與開發伺服器設定相同的值')
+  return { 'x-dev-login-secret': devSecret }
+}
 
 // 測試腳本裡對回應形狀的假設是刻意寬鬆的：這裡驗的是行為，不是型別
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -28,7 +34,7 @@ function check(name: string, ok: boolean, detail = '') {
 
 async function login(handle: string, name: string) {
   const r = await fetch(`${base}/v1/auth/dev-login`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
     body: JSON.stringify({ handle, name })
   })
   if (!r.ok) throw new Error(`login ${handle} failed: ${r.status} ${await r.text()}`)
@@ -49,7 +55,7 @@ const call = (token: string, path: string, body?: unknown, method?: 'GET' | 'POS
     // 沒指定 method 時沿用「有 body 就是 POST」的推斷（見上方說明）；
     // PUT 的端點必須明寫，推斷不出來
     method: method ?? (body === undefined ? 'GET' : 'POST'),
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...devHeaders() },
     ...(body === undefined ? {} : { body: JSON.stringify(body) })
   })
 
@@ -272,7 +278,7 @@ async function run() {
 
       // 撥過 15 天：買家從頭到尾沒有按任何東西
       await fetch(`${base}/v1/dev/rewind-order`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
+        method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
         body: JSON.stringify({ orderId: o2.id, ms: 15 * 86_400_000 })
       })
       const mid = (await json(await call(buyer2, '/v1/orders'))).orders?.find((x: Any) => x.id === o2.id)
@@ -281,7 +287,7 @@ async function run() {
 
       // 再撥 8 天：驗收期滿
       await fetch(`${base}/v1/dev/rewind-order`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
+        method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
         body: JSON.stringify({ orderId: o2.id, ms: 8 * 86_400_000 })
       })
       const done = (await json(await call(buyer2, '/v1/orders'))).orders?.find((x: Any) => x.id === o2.id)
@@ -452,116 +458,20 @@ async function run() {
     }
   }
 
-  /* ---- PSA 鑑定編號查證 ----
-     全部走 stub（伺服器要設 PSA_STUB=1）：不能真的打正式環境的 PSA
-     （會吃掉 100/天配額，而且帳號待核准全 403，見 docs/psa-api-access.md）。
-     stub 用 cert 編號的前綴選分支，見 src/psa.ts 的 stubExchange。
-     沒開 stub 時（例如對正式環境跑）整段跳過，不製造假警報。 */
-  console.log('\nPSA 鑑定編號查證：')
-  {
-    const probe = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-OK-025' }))
-    const stubbed = probe.ok === true && probe.cert?.cardNumber === '025'
-    if (!stubbed) {
-      check('（跳過 PSA 查證：伺服器沒開 PSA_STUB=1）', true)
-    } else {
-      // ── 直接打端點，逐條驗四種 reason ──
-      const noAuthPsa = await fetch(`${base}/v1/psa/verify`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ certNumber: 'STUB-OK-025' })
-      })
-      check('查證端點沒帶 token 回 401', noAuthPsa.status === 401)
+  /* ---- 鑑定編號查證：已移除 ----
+     平台**不再**查證鑑定編號的真偽（server/src/psa.ts、routes/psa.ts 與
+     020 的快取表都已刪除，見 migration 029）。原本這一段驗的六條分支
+     —— not_found / invalid_format / api_unavailable / not_configured、
+     快取命中、以及開池時的 CERT_INVALID / CERT_NOT_FOUND / CERT_MISMATCH
+     與 psaStatus 標記 —— 現在沒有任何一條對應到跑得起來的程式，所以整段刪掉。
 
-      const notFound = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-NOTFOUND-1' }))
-      check('查無此卡 → not_found', notFound.ok === false && notFound.reason === 'not_found', JSON.stringify(notFound))
-
-      const invalid = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-INVALID-1' }))
-      check('格式錯 → invalid_format', invalid.ok === false && invalid.reason === 'invalid_format', JSON.stringify(invalid))
-
-      const un403 = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-403-1' }))
-      check('403 待核准 → api_unavailable（不是賣家的錯）', un403.ok === false && un403.reason === 'api_unavailable', JSON.stringify(un403))
-
-      const un500 = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-500-1' }))
-      check('500 憑證問題 → api_unavailable（我方問題，不說 PSA 掛了）', un500.ok === false && un500.reason === 'api_unavailable', JSON.stringify(un500))
-
-      const noCfg = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-NOTCONFIG-1' }))
-      check('沒設 token → not_configured', noCfg.ok === false && noCfg.reason === 'not_configured', JSON.stringify(noCfg))
-
-      // 查到就快取，第二次同一張是 cached（省配額，一張卡一輩子查一次）
-      const first = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-OK-CACHE' }))
-      const second = await json(await call(seller, '/v1/psa/verify', { certNumber: 'STUB-OK-CACHE' }))
-      check('查到的結果進快取，第二次同一張讀快取',
-        first.ok === true && first.cached === false && second.ok === true && second.cached === true,
-        `${JSON.stringify(first).slice(0, 60)} / ${JSON.stringify(second).slice(0, 60)}`)
-
-      // ── 開鑑定卡池：每條分支走一遍 ──
-      // 一個小到穩過經濟護欄的鑑定卡池：A 賞是鑑定卡（1 籤）、D 賞是生卡湊數。
-      // floor = (50+50)/(100×2) = 50%，過關；票收 200 遠低於新賣家上限。
-      const gradedPool = (certNo: string, sellerCardNo: string, certConfirmed?: boolean) => ({
-        mode: 'muteki', title: 'PSA 測試池', ticketPrice: 100, totalTickets: 2,
-        prizes: [
-          {
-            tier: 'A', total: 1, buyback: 50, certConfirmed,
-            card: {
-              id: 'c-psa-a', name: 'テストカード', setCode: 'SV8a', cardNo: sellerCardNo,
-              language: 'JP', grader: 'PSA', grade: 10, certNo, image: '', variantId: null, refPrice: null
-            }
-          },
-          {
-            tier: 'D', total: 1, buyback: 50,
-            card: {
-              id: 'c-psa-d', name: '生卡', setCode: 'SV8a', cardNo: '001',
-              language: 'JP', grader: 'RAW', grade: null, certNo: null, image: '', variantId: null, refPrice: null
-            }
-          }
-        ]
-      })
-      // 讀回某個池的鑑定卡（tier A）的 psaStatus
-      const gradedStatus = async (poolId: string): Promise<string | null | undefined> => {
-        const pj = await json(await fetch(`${base}/v1/pools/${poolId}`))
-        const a = (pj.pool?.prizes ?? []).find((x: Any) => x.tier === 'A')
-        return a?.card?.psaStatus
-      }
-
-      // 1) 格式錯 → 擋
-      const cInvalid = await call(seller, '/v1/pools', gradedPool('STUB-INVALID-9', '025'))
-      const cInvalidJ = await json(cInvalid)
-      check('開池：鑑定編號格式錯 → 擋下，不准進池',
-        cInvalid.status === 400 && cInvalidJ.error === 'CERT_INVALID', `${cInvalid.status} ${JSON.stringify(cInvalidJ)}`)
-
-      // 2) 查無此卡（假編號）→ 擋
-      const cNotFound = await call(seller, '/v1/pools', gradedPool('STUB-NOTFOUND-9', '025'))
-      const cNotFoundJ = await json(cNotFound)
-      check('開池：查無此卡（假編號）→ 擋下',
-        cNotFound.status === 400 && cNotFoundJ.error === 'CERT_NOT_FOUND', `${cNotFound.status} ${JSON.stringify(cNotFoundJ)}`)
-
-      // 3) 查到且卡號對得上 → 放行、標 verified
-      const cOk = await call(seller, '/v1/pools', gradedPool('STUB-OK-025', '025'))
-      const cOkJ = await json(cOk)
-      check('開池：查到且卡號對得上 → 放行', cOk.ok === true && typeof cOkJ.poolId === 'string', `${cOk.status} ${JSON.stringify(cOkJ)}`)
-      if (cOk.ok) check('放行的鑑定卡標記為 verified', (await gradedStatus(cOkJ.poolId)) === 'verified')
-
-      // 4) API 不可用（403）→ 不硬擋，標 pending
-      const cUnavail = await call(seller, '/v1/pools', gradedPool('STUB-403-9', '025'))
-      const cUnavailJ = await json(cUnavail)
-      check('開池：暫時無法驗證（403）→ 不硬擋，池照開得成',
-        cUnavail.ok === true && typeof cUnavailJ.poolId === 'string', `${cUnavail.status} ${JSON.stringify(cUnavailJ)}`)
-      if (cUnavail.ok) check('無法驗證的鑑定卡標記為 pending（未驗證）', (await gradedStatus(cUnavailJ.poolId)) === 'pending')
-
-      // 5) 卡號對不上、賣家沒確認 → 要賣家確認（擋，但講清楚）
-      const cMismatch = await call(seller, '/v1/pools', gradedPool('STUB-OK-999', '025'))
-      const cMismatchJ = await json(cMismatch)
-      check('開池：PSA 卡號跟賣家挑的對不上、又沒確認 → 要賣家確認',
-        cMismatch.status === 409 && cMismatchJ.error === 'CERT_MISMATCH' &&
-        Array.isArray(cMismatchJ.mismatches) && cMismatchJ.mismatches[0]?.psaCardNumber === '999',
-        `${cMismatch.status} ${JSON.stringify(cMismatchJ)}`)
-
-      // 6) 同樣對不上、但賣家確認了是同一張 → 放行、標 verified
-      const cConfirmed = await call(seller, '/v1/pools', gradedPool('STUB-OK-999', '025', true))
-      const cConfirmedJ = await json(cConfirmed)
-      check('開池：卡號對不上但賣家確認過 → 放行', cConfirmed.ok === true, `${cConfirmed.status} ${JSON.stringify(cConfirmedJ)}`)
-      if (cConfirmed.ok) check('賣家確認後的鑑定卡標記為 verified', (await gradedStatus(cConfirmedJ.poolId)) === 'verified')
-    }
-  }
+     **沒有跟著刪的是鑑定編號的唯一性**：同一個編號不能在站上登記兩次
+     （CERT_ALREADY_LISTED / CERT_ALREADY_YOURS，資料庫層的唯一約束）。
+     那是一卡不賣兩次的核心防線，跟 PSA 查證是兩回事。它現在驗在：
+       · 本檔「帶鑑定編號卻開 10 籤被擋」（一個編號對應一張實體卡）
+       · 本檔「客服工單」段的接管單：沒登記過的編號、自己名下的編號、
+         重複開單 409、以及大小寫與空白的正規化
+       · regress-upload.ts 的「同一個編號第二次登記被擋」整段 */
 
   /* ---- 檔案上傳 ---- */
   console.log('\n檔案上傳：')
@@ -1078,18 +988,9 @@ async function run() {
     /* 卡冊來源的卡本來就帶著鑑定編號，那份資訊也要進得去。
        一個編號對應一張實體卡，所以只能開 1 籤 —— 這條規則反過來也要成立：
        帶了編號又開 2 籤要被擋（一卡多賣正是平台聲稱要防的事）。 */
-    /* 鑑定編號用 STUB-OK-349：stub 讓 PSA 回 CardNumber=349，
-       而這張卡的 cardNo 是卡面印的「349/190」（第 349 張／全套 190 張）——
-       **這正是真實日版鑑定卡的樣子**：PSA 給流水號，卡面給「編號／總數」。
-       對得上 → 查證通過、標 verified。
-
-       這一組值原本是 `STUB-OK-349190` 配 `349/190`，因為當時的比對規則
-       把兩邊的數字全部串起來比（"349190" vs "349190"）—— 也就是說，
-       這條測試當年是為了遷就一個壞掉的規則，才餵給 PSA 一個
-       **世界上任何一張卡都不會有的卡號**。規則修好之後（card-cert.ts
-       的 cardNumbersAgree 改成分開比「編號」與「總數」），這裡才餵得起
-       真實的資料。用真的編號在 stub 下會被當成查無此卡擋掉，
-       那是 stub 的安全預設，不是這條測試要驗的東西。 */
+    /* 編號只要是站上沒登記過的字串就行 —— 平台不查證編號真偽，
+       所以這裡不再有「對得上／對不上」的分支可驗。
+       `STUB-` 前綴留著只是為了跟種子資料不相撞，已經沒有 stub 語意。 */
     const graded = {
       id: 'cg-smoke-pick', name: '噴火龍 ex UR', setCode: 'sv4a', cardNo: '349/190',
       language: 'JP', grader: 'PSA', grade: 10, certNo: 'STUB-OK-349', image: '',
@@ -1110,7 +1011,6 @@ async function run() {
       const a = (snap.pool?.prizes ?? []).find((x: Any) => x.tier === 'A')?.card
       check('鑑定資訊（grader / grade / certNo）完整保留',
         a?.grader === 'PSA' && a?.grade === 10 && a?.certNo === 'STUB-OK-349', JSON.stringify(a))
-      check('卡冊挑的鑑定卡查證通過後標記為 verified', a?.psaStatus === 'verified', JSON.stringify(a?.psaStatus))
     }
 
     const dup = await call(seller, '/v1/pools', {
@@ -1532,7 +1432,7 @@ async function run() {
     const walletOf = async (t: string) => (await json(await call(t, '/v1/wallet'))).wallet
     const rewind = (prizeId: string, ms: number) =>
       fetch(`${base}/v1/dev/rewind-settlement`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
+        method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
         body: JSON.stringify({ prizeId, ms })
       })
     const freeSeat = async (poolId: string, skip = new Set<number>()) => {
@@ -1652,7 +1552,7 @@ async function run() {
     {
       const g = await drawOne(buyer, genId('p-shop-4'))
       await fetch(`${base}/v1/dev/expire-pool`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
+        method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
         body: JSON.stringify({ poolId: genId('p-shop-4') })
       })
       const seat = await freeSeat(genId('p-shop-4'))
@@ -1727,7 +1627,7 @@ async function run() {
         const row = mine.find((x: Any) => x.id === g.stashId)
         const expect = Number(row?.buyback ?? -1)
         const bumped = await fetch(`${base}/v1/dev/set-ref-price`, {
-          method: 'POST', headers: { 'content-type': 'application/json' },
+          method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
           body: JSON.stringify({ prizeId: g.stashId, refPrice: 9_000_000 })
         })
         check('把 refPrice 改成天價（測試用端點）', bumped.ok, String(bumped.status))
@@ -1981,7 +1881,7 @@ async function run() {
         }
         const rewindOrder = (id: string, ms: number) =>
           fetch(`${base}/v1/dev/rewind-order`, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
+            method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
             body: JSON.stringify({ orderId: id, ms })
           })
 
@@ -2104,16 +2004,16 @@ async function run() {
         if (pid) {
           // 一張都不抽就收攤：質押的那張應該原封不動回到卡冊
           await fetch(`${base}/v1/dev/expire-pool`, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
+            method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
             body: JSON.stringify({ poolId: pid })
           })
-          await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST' })
+          await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST', headers: devHeaders() })
           const n = withRef(await notifs(seller), 'pool-released:' + pid)
           check('池揭曉後，賣家收到「沒抽走的卡已回到卡冊」', n.length === 1, `${n.length} 則`)
           check('通知說得出張數，而且指到卡冊',
             String(n[0]?.title ?? '').includes('1 張') && n[0]?.link === '/me/cards',
             `${n[0]?.title} link=${n[0]?.link}`)
-          await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST' })
+          await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST', headers: devHeaders() })
           check('重掃不會再發一次（refId 綁 poolId）',
             withRef(await notifs(seller), 'pool-released:' + pid).length === 1)
         }

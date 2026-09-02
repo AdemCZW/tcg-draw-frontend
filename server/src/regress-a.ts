@@ -6,12 +6,17 @@
  *
  *   DATABASE_URL=... JWT_SECRET=... npx tsx src/regress-a.ts http://localhost:PORT
  *
- * ⚠️ 要自己一個乾淨的庫（migrate + seed），伺服器要 DEV_LOGIN=1。
+ * ⚠️ 要自己一個乾淨的庫（migrate + seed），伺服器要 DEV_LOGIN=1 與 DEV_LOGIN_SECRET。
  */
 import { sql, Rollback } from './db.js'
 import { acceptRecycle, toSettlement } from './pool-settlement.js'
 
 const base = (process.argv[2] ?? 'http://localhost:8079').replace(/\/$/, '')
+const devSecret = process.env.DEV_LOGIN_SECRET
+const devHeaders = () => {
+  if (!devSecret) throw new Error('regress-a 需要 DEV_LOGIN_SECRET，請與開發伺服器設定相同的值')
+  return { 'x-dev-login-secret': devSecret }
+}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any
 const json = (r: Response): Promise<Any> => r.json()
@@ -23,7 +28,7 @@ const head = (s: string) => console.log(`\n── ${s} ${'─'.repeat(Math.max(0
 
 async function login(handle: string, name: string) {
   const r = await fetch(`${base}/v1/auth/dev-login`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
     body: JSON.stringify({ handle, name })
   })
   if (!r.ok) throw new Error(`login ${handle}: ${r.status}`)

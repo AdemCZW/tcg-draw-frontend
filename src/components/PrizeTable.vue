@@ -12,7 +12,6 @@
 import type { Pool } from '@/types/models'
 import TierBadge from './TierBadge.vue'
 import CertTag from './CertTag.vue'
-import PsaBadge from './PsaBadge.vue'
 import { refPriceText } from '@/lib/refprice'
 defineProps<{ pool: Pool }>()
 </script>
@@ -33,10 +32,6 @@ defineProps<{ pool: Pool }>()
       <div class="name" v-else>
         <strong>{{ p.card.name }}</strong>
         <span class="mono muted set">{{ p.card.setCode }} · {{ p.card.cardNo }} · {{ p.card.language }}</span>
-        <!-- 鑑定卡的 PSA 查證狀態。verified 連到 PSA 官網讓買家自己對；
-             pending 是「暫時無法驗證」，目前 API 待核准多半落在這裡。
-             沒有 certNo 的生卡不顯示（psaStatus 是 null）。 -->
-        <PsaBadge :status="p.card.psaStatus" :cert-no="p.card.certNo" :grade="p.card.grade" />
       </div>
       <CertTag v-if="p.tier !== 'BUST'" :card="p.card" />
       <span v-else></span>

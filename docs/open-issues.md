@@ -13,7 +13,7 @@
 |---|---|
 | **第一節 F-1〜F-7** | **全部修完並驗過。** 迴歸測試在 `server/src/regress-f.ts`，32/32；既有 smoke 295/295；對帳 drift = 0。舊碼上跑同一套會失敗 5 條（F-1 完整重現）。含新增 migration 022 |
 | 第二節 U-1〜U-5 | 021 已寫並驗過（回填 8/8）。**剩下的卡在資料庫連不到**（X-4） |
-| **P-3 DEV_LOGIN** | **正式環境實測是關的。**四條端點全部 404。**但這條不劃掉** —— 它是每次部署都要重新確認的檢查項，理由見第三節 |
+| **P-3 DEV_LOGIN** | **防護已加強（2026-09-02）。**正式環境仍應確認關閉，但即使誤設 `DEV_LOGIN=1`，少了 `DEV_LOGIN_SECRET` 服務會拒絕啟動；所有開發端點也要求私密 header。 |
 | **P-5 舊 seed 池** | **正式環境實測完畢。**security-audit C-1 的急迫狀態解除（舊池全 revealed），但換來另一個事實：**正式站陳列的 32 個池 100% 是假池**。見第三節 P-1 與 P-5 |
 | **P-4 低熵種子閘** | **已加並驗過。** `assertSeedEntropy()` 在 `pools-service.ts:41`，`commitPool()`（`pools-service.ts:159`）與 `seed.ts:461` 兩條寫入路都過閘。實測 `'b1'.repeat(32)` 被擋、`randomBytes(32)` 五次全過 |
 | ~~S-1 mode check~~ | **不用做 —— 016 早就修了，是我的清單寫錯。**見第四節的更正 |
@@ -95,8 +95,8 @@ U-1〜U-5 是 [inventory-first-plan.md](inventory-first-plan.md) 要解的。
 | # | 問題 | 驗證 | 狀態 |
 |---|---|---|---|
 | P-1 | **Railway 啟動指令還有 `npm run seed`** —— 每次部署重塞一批假掛單與假池 | 讀碼＋實測 | `server/railway.json` 的 `startCommand`：`npm run migrate && npm run seed && npm start`。**security-audit 把這條標為最高優先，現在還在**。<br>**2026-08-27 補上後果的實際量體**（見 P-5 的實測）：原本寫的是「塞了一些假資料」，實際上是**正式網址上陳列的商品 100% 是假的** —— 公開 API 撈到的 32 個池，`clientSeedSource` 全部以 `fixture:` 開頭，**沒有一個是真實賣家開的**。這不是資料乾淨度問題，是整間店沒有一件真貨 |
-| P-2 | LINE 登入送 1,000,000 點 | 讀碼 | 使用者說測試階段還要留。`server/src/routes/line.ts:158-169` 在 LINE 登入時貸記 `SIGNUP_BONUS`，繞過任何儲值路徑。**跟 M-1 合看要當成一條水龍頭**：M-1 讓開帳號不受限，這條讓每個新帳號自帶點數 |
-| P-3 | **`DEV_LOGIN` 每次部署都要重新確認正式環境是關的** | 實測 | **2026-08-27 實測：目前是關的。**四條端點以不合法 body POST（不會改任何東西）全部回 `404`，對照組 `/v1/dev/nonsense-xyz` 也 404；同一時間 `GET /health` 回 `200 {"ok":true,...}`、`GET /v1/pools` 回 `200` —— 伺服器是活的，只是那四條路不存在。<br>成立原因：四條端點包在 `server/src/index.ts:41` 的 `if (process.env.DEV_LOGIN === '1')` 裡才註冊（端點本體在 `index.ts:43 / 59 / 76 / 92`），沒開就是路由不存在。<br>**這條不劃掉，因為它是一個環境變數而不是一段程式碼** —— 詳見下方風險說明 |
+| ~~P-2~~ | ~~LINE 登入送 1,000,000 點~~ | 讀碼＋型別檢查 | **已修（2026-09-02）。**移除 `line-signup-bonus` 的帳本貸記與通知；LINE OAuth 現在只負責建立／登入帳號，不再是點數發行入口。既有歷史分錄仍列為對帳發行來源，避免造成假 drift。 |
+| P-3 | **`DEV_LOGIN` 每次部署仍應確認正式環境是關的** | 實測＋型別檢查 | **已緩解（2026-09-02）。**2026-08-27 的唯讀實測顯示正式環境端點回 404。現在即使誤設 `DEV_LOGIN=1`，`env.ts` 會要求至少 32 字元的 `DEV_LOGIN_SECRET`，少設即拒絕啟動；所有 `/v1/auth/dev-login` 與 `/v1/dev/*` 另要求 `x-dev-login-secret`。這不取代部署檢查，但已移除「單一旗標誤設就可接管」的風險。 |
 | P-4 | ~~**C-1 的低熵種子閘沒有加**~~ **已加**（見上方進度表） | 讀碼 | `assertSeedEntropy()` 定義在 `server/src/pools-service.ts:41`，兩條寫入路都過閘：`commitPool()`（`pools-service.ts:159`）與 `seedPool()`（`seed.ts:461`）。產生端也對了：`seed.ts:456` 是 `randomBytes(32).toString('hex')` |
 | P-5 | **正式環境全部 32 個池都是示範池，10 個還在收錢** | 實測 | 從公開 API `GET /v1/pools?limit=100` 撈的，見下方明細。**兩個結論要分開讀**：籤序可算的急迫狀態解除了，但正式站的商品全是假的 |
 | P-6 | `public/og.png`（1200×630）還沒放 | — | |
@@ -183,8 +183,8 @@ C-1 講的是「正式環境有 12 個籤序算得出來的池在收錢」——
 | L-1 | 金額欄位沒有上界，塞大數字會 500 | Low | 讀碼 | **修正中（做完一半，未 commit）。**原本「金額欄位沒有上界」是以偏概全 —— 大多數欄位早就有界：`refPrice`（`routes/pools.ts:217` `REF_PRICE_MAX`，套用在 `:234`）、買回價（`pools.ts:222-224`，常數在 `shared/pool-settlement.ts:81-82`）、後台發點數（`routes/admin.ts:39`）、交易邀約（`routes/social.ts:140`）。<br>**本輪落地**：新增 `server/src/limits.ts`（`POINTS_INPUT_MAX = 1_000_000_000`，`:41`），票價已補上界（`pools.ts:288-289`）。<br>**還沒補的一個，而且正是 500 的那一個**：市場掛單價 `price`（`routes/public.ts:235` 仍只有 `.int().positive()`，欄位 `bigint`／`001_init.sql:35`）。上架的 `catch`（`public.ts:302-303`）只放行 `23505`，其餘原樣往上丟 → Postgres 的數值溢位變成沒人接的例外，落到 Hono 預設 500。`public.ts` 目前不在 `git diff` 裡 |
 | L-2 | **公開 API 回傳 `certNo`** —— 跟第二節直接相關：編號公開等於把「可以拿去別處登記的東西」送出去 | Low | 讀碼 | **修正中（做完一半，未 commit）。**範圍比原本寫的大：不只公開卡冊，市場也漏。<br>**本輪落地**：新增 `server/src/card-public.ts` —— 走**白名單**而不是刪 `certNo`（因為 `card` 是 jsonb 且建池端用 `.passthrough()`，黑名單一定會漏掉未來新增的欄位）。已套用在公開卡冊 `GET /cardbook/:slug`（`routes/social.ts:91`）與 `social.ts:226`。<br>**市場那一側還沒套**：`toListing()`（`routes/public.ts:154-155`）仍然回傳整包 `card`，供 `public.ts:182`、`:207`、`:225-232` 三條公開端點使用；`public.ts:199-201` 還提供一個以 `cert_no is not null` 篩出來的「已鑑定」貨架。`public.ts` 不在 `git diff` 裡 |
 | L-3 | 出貨憑證收任意外部 URL | Low | 讀碼 | **仍成立，但原本寫的出處是錯的。**不在 `sellers.ts`／`prizes.ts`：實際位置是 `server/src/routes/orders.ts:180-184` 的 `photoUrls: z.array(z.string().url()).min(1, ...)` —— **任何 scheme、任何 host 都收，沒有白名單、沒有長度上限、沒有陣列數量上限**，原樣寫進 `orders.ship_photos`（`orders.ts:209-210`）。<br>**第一方的路已經蓋好但沒有被強制走**：`server/src/routes/files.ts:29-38` 定義了 `'ship-photo'` 用途（含 MIME 與大小規則、R2 presign），但 `/ship` 從來不要求那裡發出來的 file id。<br>另兩條出貨路是乾淨的：`sellers.ts:144-166` 的 `ShipOne` 根本不收照片（只收 `carrier` / `tracking`，且 `tracking` 有 `validateTracking`），`prizes.ts` 沒有憑證欄位。`009_ship_evidence.sql:11-16` 的 `ship_photos jsonb` 也沒有任何約束 |
-| L-4 | 上游錯誤訊息直接透給呼叫端 | Low | 讀碼 | **修正中（已改完，未 commit）。原本寫的出處是錯的。**<br>**出處更正**：不在 `psa.ts`／`r2.ts` —— 那兩支反而一直是乾淨的：`psa.ts:143` 與 `:221` 只 `console.warn/error`，對外只回固定的 `ok/reason`（`routes/psa.ts:33-38`）；`r2.ts:20`、`:50-55` 直接吞掉錯誤。真正外洩的是 `routes/pools.ts` 的三個 `catch`，都是 `message: e instanceof Error ? e.message : '…'`，會把 drand 的上游狀態原文（`pools-service.ts:88`、`:99`）與內部狀態字串（如 `pool is draft, not committed`）轉給呼叫端。<br>**本輪落地**：那三處全部改成「只進 log、對外回固定中文訊息」（`pools.ts:505-509`、`:526-529`、`:625-628`）。全檔已經 grep 不到 `e.message` 外送。<br>順帶查到一件好事：`index.ts` **沒有** `app.onError`，所以未捕捉的例外只會落到 Hono 的通用 500，不會外洩 |
-| L-5 | LINE 的 JWT 走 URL fragment 回前端 | Low | 讀碼 | **仍成立，但這是刻意的取捨而且緩解已經到位** —— 應該降為觀察項而不是待修項。<br>`server/src/routes/line.ts:171-173` 導向 `${FRONTEND_URL}/login#token=${jwt}`，選 fragment 而不是 query 正是為了讓 token 不進伺服器日誌與 Referer（原始碼註解就這樣寫）。前端 `src/stores/auth.ts:86-94` 讀完立刻 `history.replaceState` 把 fragment 清掉（`:91`）。<br>殘餘曝險是瀏覽器歷史／擴充套件／在第 91 行執行前跑到的任何腳本 —— **而那正是 M-2 缺 CSP 放大的東西**。要處理的話先處理 M-2 |
+| L-4 | 上游錯誤訊息直接透給呼叫端 | Low | 讀碼 | **修正中（已改完，未 commit）。原本寫的出處是錯的。**<br>**出處更正**：不在 `psa.ts`／`r2.ts` —— 那兩支反而一直是乾淨的（`psa.ts` 只 `console.warn/error`，對外只回固定的 `ok/reason`；`r2.ts:20`、`:50-55` 直接吞掉錯誤）。`psa.ts` 與 `routes/psa.ts` 之後已整組刪除，見 X-1。真正外洩的是 `routes/pools.ts` 的三個 `catch`，都是 `message: e instanceof Error ? e.message : '…'`，會把 drand 的上游狀態原文（`pools-service.ts:88`、`:99`）與內部狀態字串（如 `pool is draft, not committed`）轉給呼叫端。<br>**本輪落地**：那三處全部改成「只進 log、對外回固定中文訊息」（`pools.ts:505-509`、`:526-529`、`:625-628`）。全檔已經 grep 不到 `e.message` 外送。<br>順帶查到一件好事：`index.ts` **沒有** `app.onError`，所以未捕捉的例外只會落到 Hono 的通用 500，不會外洩 |
+| ~~L-5~~ | ~~LINE 的 JWT 走 URL fragment 回前端~~ | 讀碼＋前後端建置 | **已修（2026-09-02）。**callback 現在只帶一把 256-bit、5 分鐘有效、只能使用一次的 code；資料庫只保存 SHA-256 雜湊，`POST /v1/auth/line/exchange` 以原子 `DELETE ... RETURNING` 交換 JWT。前端先清掉 fragment 才呼叫交換端點。帳號綁定也改為受 Authorization header 保護的 `POST /v1/auth/line/link/start`，不再把既有 JWT 放進 query。 |
 | M-3 | `refPrice` 同時是護欄分母與回收分子 | ~~Medium~~ | — | **已解**（migration 018 把回收換成宣告買回價） |
 
 ---
@@ -200,6 +200,9 @@ C-1 講的是「正式環境有 12 個籤序算得出來的池在收錢」——
 | ~~W-3~~ | ~~`/me/cards/sell` 直接進入顯示「沒有可以上架的卡」~~ **已修** | 實際是「沒有帶選取進來」，有卡的人會誤以為卡不能上架 |
 | ~~W-4~~ | ~~桌機 header 沒有「出貨與結算」入口~~ **已做，但還沒 commit** | **修正中（前端 header 工作線）**：入口已經在 `src/components/AppHeader.vue:102-104`（桌機 `.actions` 區塊，接在「＋ 我要開池」後面），目標路由 `seller-shipping` 存在（`src/router/index.ts:118-119`）。<br>**驗收前要注意一個條件**：它掛的是 `v-if="sellers.isSeller"`，而 `isSeller` 是新加的 getter（`src/stores/sellers.ts`，`!!t && t !== 'pending'`），要等 `ensureStatus()` 打完 `/v1/seller/me` 才有值。所以**只有審核通過的賣家、且在該請求回來之後**才看得到 —— pending 賣家永遠看不到。如果 W-4 的驗收標準是「桌機 header 看得到」，這個條件要先講清楚 |
 | W-5 | `/u/:slug` 對爬蟲回 404 | **結論仍成立，但原本的敘述要改 —— 「沒有 SPA rewrite」已經不精確了。**<br>現在**有** 404.html 後備（`scripts/seo.mjs:82-88` 建置時產生，並額外寫入 `robots: noindex`），而且 `.github/workflows/deploy-pages.yml:31-35` 明確記載舊的 `cp dist/index.html dist/404.html` 是被**刻意移除**的（它會蓋掉 noindex 版本）。另外五條靜態路由（`/`、`/lobby`、`/market`、`/fairness`、`/trade-protection`，清單在 `src/lib/seo-routes.json`）已經各自預先產生實體 `index.html`，那些路徑對爬蟲**回 200**。<br>**沒解決的是動態路由**：GitHub Pages 送 404.html 時帶的是 404 狀態碼，而 `/u/:slug` 的 slug 事前不知道、無法預先產生（`scripts/seo.mjs:16-17` 自己記著這件事）。所以「人打得開、爬蟲拿到 404」對 `/u/:slug` 依然成立，LINE 分享仍然沒有預覽卡。<br>**根治仍然是換主機，而且設定檔都已經寫好了**：`public/_redirects`（Netlify／Cloudflare Pages，`/* /index.html 200`）、`vercel.json:6`、`public/staticwebapp.config.json`。目前實際部署仍是 GitHub Pages（唯一的 workflow 是 `deploy-pages.yml`，base 由 `vite.config.ts:9` 處理），倉庫裡沒有 `CNAME` |
+| I-1 | 目錄外自訂卡的「必須附正面照」只在前端強制 | Medium / 讀碼（2026-09-02） | 已完成的部分：`CardUploadPage.vue` 有「目錄沒有這張卡」模式，要求卡名／系列／卡號與 `card-front` 正面照；`030_card_front_files.sql`、`routes/files.ts` 與 `CardArt.vue` 已把受控上傳、公開讀取、`/raw` 圖片導轉接通。<br>**缺口**：`routes/cardbook.ts` 的 `frontFileId` 是選填，後端不能分辨「從目錄選的卡」和「使用者手填的卡」。直接 POST `/v1/cardbook/upload` 帶空 `artId`、空 `frontFileId` 仍會成功，形成沒有可辨識圖片的自訂卡，且仍可進入開池／交易流程。<br>**修法**：後端把規則寫死：`artId` 為空時，`frontFileId` 必填；有 `artId` 的目錄卡維持可不傳正面照。不要只依賴前端 disabled 按鈕。 |
+| I-2 | 自訂卡只確認 `files` 資料列存在，未確認 R2 物件真的上傳完成 | Medium / 讀碼（2026-09-02） | `/v1/files/presign` 先 insert `files`，再由瀏覽器直接 PUT R2。若取得 URL 後取消、逾時或傳輸失敗，直接 POST cardbook API 仍能用該 `frontFileId` 建立卡片；卡片的 `/v1/files/:id/raw` 之後會 404 或 503。正常前端會等上傳完成才送出，因此不是一般操作必現；但後端仍需保護直接 API 呼叫。<br>**修法**：在 R2 helper 區分「物件不存在」與「R2 暫時無法查詢」，前者回 `BAD_CARD_IMAGE`，後者回可重試的 503；入庫前確認 object key 存在。 |
+| I-3 | 自訂卡與正面照流程沒有自動回歸測試 | Medium / 讀碼（2026-09-02） | PSA 專屬測試預期已從 smoke／regression 移除，但 `smoke.ts`、`regress-upload.ts` 尚未覆蓋新流程。至少要驗：`card-front` presign、本人圖片成功入庫、他人／錯誤用途 file ID 回 `BAD_CARD_IMAGE`、目錄外卡漏圖被拒、`/v1/files/:id/raw` 可取得實際圖片。 |
 
 ---
 
@@ -221,8 +224,8 @@ C-1 講的是「正式環境有 12 個籤序算得出來的池在收錢」——
 
 | # | 事情 | 狀態 |
 |---|---|---|
-| X-1 | **PSA API 403** | 帳號待核准。程式做好了，預設「暫不驗證」，卡標 pending，池照開。核准後兩步啟用不動碼：PSA 改 approved → 自動回 ok；Railway 設 `PSA_VERIFY_ENFORCE=1` → 切成強制。使用者要寄 `collectors-apis@collectors.com` |
-| X-2 | **PSA EULA 未確認能不能顯示資料給買家** | 使用者要自己登入 PSA 讀 API End User Agreement |
+| ~~X-1~~ | ~~**PSA API 403**~~ | **已放棄，整組移除（未 commit 的工作樹）。**`server/src/psa.ts`、`routes/psa.ts`、`src/lib/psa.ts`、`PsaBadge.vue` 全部刪除，migration 029 刪掉快取表，`PSA_STUB` / `PSA_VERIFY_ENFORCE` 兩個環境變數已不存在。**現在平台不做任何鑑定編號真偽查證**，也沒有 pending／verified 標記。<br>**代價**：捏造的編號會被收下（實測 `00000001` 現在 200，以前是 400 `CERT_NOT_FOUND`）。條款頁與隱私頁已照實改寫。<br>**沒有跟著消失的是唯一性**：`prizes_cert_alive`（`unique(grader, cert_no)`，由 `server/src/preflight.ts` 在啟動時建）仍然擋住同一個編號登記兩次 —— 那跟查證是兩件事 |
+| ~~X-2~~ | ~~**PSA EULA 未確認能不能顯示資料給買家**~~ | **不再適用**：沒有 PSA 資料可顯示（見 X-1） |
 | X-3 | 沒有第二個可用的編號驗證來源 | 研究結論見 [cert-verification-alternatives.md](cert-verification-alternatives.md)。爬 PSA 不可行（Collectors.com 條款禁止自動存取、Cloudflare 擋、台灣 Lawsnote 一審判決把違反條款當成刑法 359「無故」） |
 | X-4 | **資料庫連不到** | Railway 的 postgres 只有內部主機名，沒開公開 proxy。掃描腳本 `server/scripts/scan-certs.ts` 寫好了但跑不了。要開 Settings → Networking → TCP Proxy |
 

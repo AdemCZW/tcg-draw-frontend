@@ -59,7 +59,8 @@ Railway 那組連線字串（Railway 的 Postgres 頁面 → Connect → Public 
    - `PUBLIC_URL`：Railway 給你的後端網址（組 LINE 的 redirect_uri 用）
    - `FRONTEND_URL`：`https://ademczw.github.io/tcg-draw-frontend`
    - `LINE_CHANNEL_SECRET`：LINE Developers → channel → Basic settings（**只放這裡，不進 git**）
-   - `DEV_LOGIN=1`：**只在測試環境**。開啟 `/v1/auth/dev-login`（給 handle 就發 token）讓 smoke 能跑；正式環境不要設
+  - `DEV_LOGIN=1`：**只在測試環境**。開啟受私密 header 保護的開發端點，讓 smoke 與回歸測試能建立測試身分；正式環境不要設
+  - `DEV_LOGIN_SECRET`：DEV_LOGIN=1 時必填，至少 32 字元的隨機值。測試腳本必須以同一個環境變數執行；少設時伺服器會拒絕啟動
    - `R2_ACCOUNT_ID` / `R2_BUCKET` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`：Cloudflare R2 → 你的 bucket。
      Access Key / Secret 從 R2 → Manage API Tokens 建立，**只放這裡，不進 git**
    - `R2_PUBLIC_URL`（可選）：bucket 開了公開讀取（r2.dev 開發網域或自訂網域）才填，

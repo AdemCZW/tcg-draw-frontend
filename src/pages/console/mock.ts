@@ -97,7 +97,7 @@ const detailOf = (id: string): UserDetail | null => {
       { id: 4, delta: 5000, reason: 'admin-grant', created_at: ago(1) },
       { id: 3, delta: -1050, reason: 'draw', created_at: ago(4) },
       { id: 2, delta: 19600, reason: 'recycle', created_at: ago(11) },
-      { id: 1, delta: 1_000_000, reason: 'line-signup-bonus', created_at: ago(23) }
+      { id: 1, delta: 1_000_000, reason: 'admin-grant', created_at: ago(23) }
     ]
   }
 }

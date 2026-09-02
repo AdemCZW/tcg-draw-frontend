@@ -23,29 +23,12 @@ import { useAuthStore } from '@/stores/auth'
    不另外發明第二條路（第二條路遲早會跟第一條長得不一樣）。 */
 import { useOrdersStore, type ShipTo } from '@/stores/orders'
 import { refDiscount, refPriceNum } from './refprice'
+import { cardMergeKey } from './card-merge'
 import type { SettlementStatus } from '@/shared/pool-settlement'
 import { RESERVED_STATUSES } from '@/shared/pool-settlement'
 import type { Carrier } from '@/shared/escrow'
 
 export { MOCK }
-
-/** PSA 查證的結果形狀（跟後端 server/src/psa.ts 的 VerifyResult 對齊） */
-export interface PsaCert {
-  certNumber: string
-  subject: string | null
-  brand: string | null
-  year: string | null
-  cardNumber: string | null
-  variety: string | null
-  cardGrade: string | null
-  gradeDescription: string | null
-  totalPopulation: number | null
-  populationHigher: number | null
-  itemStatus: string | null
-}
-export type VerifyCertResult =
-  | { ok: true; cert: PsaCert; cached: boolean }
-  | { ok: false; reason: 'invalid_format' | 'not_found' | 'api_unavailable' | 'not_configured' }
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
@@ -93,7 +76,13 @@ function toPrize(r: Any): UserPrize {
        前端要能分辨「這個池沒有宣告買回價」跟「買回價 0 點」—— 後者是假的數字。
        買回價跟 card.refPrice 沒有任何算式關係，前端算不出來也不該猜。 */
     buyback: r.buyback == null ? null : Number(r.buyback),
-    settleStatus: (r.settle_status as string | null) ?? null
+    settleStatus: (r.settle_status as string | null) ?? null,
+    /* 分組鍵與同款張數由後端算（server/src/routes/prizes.ts 的 GROUP_KEY）。
+       前端**不自己再算一次**：張數要跨整本卡冊才對，而前端手上只有已載入的那批。
+       舊後端沒有這兩欄，所以是選填 —— 那時畫面退回逐張顯示，不會壞。 */
+    groupKey: r.group_key == null ? undefined : String(r.group_key),
+    groupTotal: r.group_total == null ? undefined : Number(r.group_total),
+    groupSellable: r.group_sellable == null ? undefined : Number(r.group_sellable)
   }
 }
 
@@ -228,7 +217,22 @@ export interface PrizeSummary {
   tierMix: { tier: Tier | null; n: number }[]
   /** 成長曲線只需要「時間 + 金額」，所以不帶整包 card */
   curve: { wonAt: number; name: string; refPrice: number }[]
+  /** 重複的卡有幾款（同款 2 張以上才算）。舊後端沒有這一欄 */
+  dupGroups?: number
+  /** 那幾款總共幾張（含每一款的第一張） */
+  dupCards?: number
 }
+
+/**
+ * 卡冊的排序。三個值跟 server/src/routes/prizes.ts 的 SORTS 一一對應。
+ *
+ *   acquired 取得時間（預設，一條時間軸，**不分組**）
+ *   dupes    同款集中（張數多的在前，同款卡保證相鄰）
+ *   value    參考價高到低（同款卡也保證相鄰）
+ *
+ * 後兩個保證「同鍵必然相鄰」，前端才敢把連續同鍵的卡併成一格 ×N。
+ */
+export type PrizeSort = 'acquired' | 'dupes' | 'value'
 
 /** 只把有值的參數放進 query string —— 帶 cursor=null 會被後端當成不合法的游標 */
 function qs(o: Record<string, unknown>): string {
@@ -239,6 +243,18 @@ function qs(o: Record<string, unknown>): string {
   }
   const s = p.toString()
   return s ? `?${s}` : ''
+}
+
+/**
+ * 搜尋字串的正規化 —— **只給 MOCK 用**。
+ *
+ * 真後端的規則寫在 migrations/031 的 search_text 與 routes/public.ts 的 normQ，
+ * 那兩處才是唯一的事實；這裡是為了讓沒有後端的 mock 模式表現得一樣。
+ * 三件事：NFKC（全形 Ｑ／半形片假名 ﾘｻﾞｰﾄﾞﾝ 都要能打得中）、
+ * 小寫（SV4A = sv4a）、去掉所有空白（「噴火龍 ex」＝「噴火龍ex」）。
+ */
+function normalizeSearch(s: string): string {
+  return s.normalize('NFKC').toLowerCase().replace(/\s+/g, '')
 }
 
 /**
@@ -350,9 +366,6 @@ export const api = {
            但那只是填表的方式。後端仍然收得下 tierBuyback，
            前端先解析完再送是為了讓畫面上的試算跟送出去的東西逐字相同。 */
         buyback: p.buyback,
-        /* 賣家確認過「PSA 查到的卡就是這張」時才帶（卡號對不上時後端會要求確認）。
-           沒設就不送，undefined 不會進 JSON。 */
-        certConfirmed: p.certConfirmed,
         /* 逐欄明列不用展開整個物件：card 會被雜湊進 manifest（v4），
            而 manifest 的欄位集合就是「承諾涵蓋什麼」。順手多送一個欄位
            等於默默擴張承諾的範圍，之後沒有人知道那一欄是什麼時候進去的。
@@ -380,36 +393,59 @@ export const api = {
   },
 
   /**
-   * 向 PSA 查證一個鑑定編號。讓賣家在**送出開池表單之前**就知道結果。
-   *
-   * 真正的把關在建池 API（直接打那支的人不會先來這裡），這支只是提前給回饋。
-   * 四種結果的語意見 server/src/psa.ts：invalid_format / not_found 是硬擋，
-   * api_unavailable / not_configured 是「暫時無法驗證」（目前 PSA 待核准全走這裡）。
-   *
-   * MOCK 模式沒有後端可查，回 api_unavailable —— 對應「暫時無法驗證」，
-   * 不會把卡誤判成假卡（那會擋掉 demo 裡的鑑定卡）。
-   */
-  async verifyCert(certNumber: string): Promise<VerifyCertResult> {
-    if (MOCK) { await delay(200); return { ok: false, reason: 'api_unavailable' } }
-    return http<VerifyCertResult>('/v1/psa/verify', { method: 'POST', json: { certNumber } })
-  },
-
-  /**
    * 我的卡冊，一次一批。
    *
-   * status 由後端過濾，不是撈回來再自己濾 —— 分批載入之後前端只濾得到
-   * 已經載進來的那幾張，「寄存中 0 張」但第 3 頁其實有，是這個改動最容易踩的坑。
+   * status、sort、group 三個**全部由後端做**，不是撈回來再自己處理 ——
+   * 分批載入之後前端只碰得到已經載進來的那幾張：
+   *   status：「寄存中 0 張」但第 3 頁其實有，是這個改動最容易踩的坑
+   *   sort：  只排得到已載入的那批，捲一頁就整個重排，看過的卡在眼前跳位
+   *   group： 更糟 —— 會告訴使用者「這款你有 3 張」而他其實有 10 張
+   *
+   * group 是「只回這一組的卡」。給「這一組全選」用：使用者看到 ×10 按下全選，
+   * 而畫面上只有 3 張載進來了，其餘 7 個 id 只有後端拿得出來。
    */
-  async myPrizes(opts: PageOpts & { status?: UserPrize['status'] } = {}): Promise<Page<UserPrize>> {
+  async myPrizes(
+    opts: PageOpts & { status?: UserPrize['status']; sort?: PrizeSort; group?: string } = {}
+  ): Promise<Page<UserPrize>> {
     /* mock 也要真的分頁，不能整包回。mock 是本機開發與展示唯一的資料來源，
        它不分頁的話捲動載入這條路在開發時永遠走不到，等到接上後端才發現壞掉。 */
     if (MOCK) {
       await delay(150)
-      const all = opts.status ? mock.userPrizes.filter(p => p.status === opts.status) : mock.userPrizes
+      let all = opts.status ? mock.userPrizes.filter(p => p.status === opts.status) : mock.userPrizes
+      /* mock 也要照同一套規則分組與排序，否則本機開發時「同款集中」永遠是空的，
+         而這個功能最容易錯的地方（跨批的張數）在 mock 下根本走不到。
+         鍵用 cardMergeKey —— 它跟後端 GROUP_KEY 產生的是同一個字串。 */
+      const total = new Map<string, number>()
+      for (const p of all) {
+        const k = cardMergeKey(p.card)
+        total.set(k, (total.get(k) ?? 0) + 1)
+      }
+      const refOf = (k: string) =>
+        Math.max(...all.filter(p => cardMergeKey(p.card) === k).map(p => refPriceNum(p.card.refPrice) || -1))
+      const sellable = new Map<string, number>()
+      for (const p of all) {
+        const k = cardMergeKey(p.card)
+        if (p.status === 'stashed' || p.status === 'in_book') sellable.set(k, (sellable.get(k) ?? 0) + 1)
+      }
+      all = all.map(p => ({
+        ...p, groupKey: cardMergeKey(p.card),
+        groupTotal: total.get(cardMergeKey(p.card)),
+        groupSellable: sellable.get(cardMergeKey(p.card)) ?? 0
+      }))
+      if (opts.group) all = all.filter(p => p.groupKey === opts.group)
+      if (opts.sort === 'dupes' || opts.sort === 'value') {
+        // 同鍵必須相鄰 —— 分組能成立的唯一前提，跟後端的 order by 對齊
+        all = [...all].sort((a, b) =>
+          (opts.sort === 'dupes' ? (b.groupTotal ?? 1) - (a.groupTotal ?? 1) : 0) ||
+          refOf(b.groupKey!) - refOf(a.groupKey!) ||
+          a.groupKey!.localeCompare(b.groupKey!) ||
+          a.id.localeCompare(b.id))
+      }
       return mockPage(all, p => p.id, opts)
     }
     const r = await http<{ items: Any[]; nextCursor: string | null }>(
-      `/v1/prizes${qs({ ...opts, status: opts.status })}`, { signal: opts.signal })
+      `/v1/prizes${qs({ ...opts, status: opts.status, sort: opts.sort, group: opts.group })}`,
+      { signal: opts.signal })
     return { items: r.items.map(toPrize), nextCursor: r.nextCursor }
   },
 
@@ -437,30 +473,56 @@ export const api = {
         totalValue: owned.reduce((a, p) => a + refPriceNum(p.card.refPrice), 0),
         best: best ? { name: best.card.name, tier: best.tier, refPrice: refPriceNum(best.card.refPrice) } : null,
         tierMix: [...mix].map(([tier, n]) => ({ tier, n })),
-        curve: owned.map(p => ({ wonAt: Date.parse(p.wonAt) || Date.now(), name: p.card.name, refPrice: refPriceNum(p.card.refPrice) }))
+        curve: owned.map(p => ({ wonAt: Date.parse(p.wonAt) || Date.now(), name: p.card.name, refPrice: refPriceNum(p.card.refPrice) })),
+        /* 重複的卡有幾款、共幾張。跟後端 /summary 同一條規則（同款 2 張以上才算） */
+        ...(() => {
+          const n = new Map<string, number>()
+          for (const p of owned) { const k = cardMergeKey(p.card); n.set(k, (n.get(k) ?? 0) + 1) }
+          const dup = [...n.values()].filter(v => v > 1)
+          return { dupGroups: dup.length, dupCards: dup.reduce((a, v) => a + v, 0) }
+        })()
       }
     }
     return http<PrizeSummary>('/v1/prizes/summary')
   },
 
   // ---- 市場 ----
-  /** 掛單一次一批。排序也在後端 —— 前端排序只排得到已載入的那幾筆，會愈捲愈亂 */
-  async listMarket(opts: PageOpts & { sort?: MarketSort } = {}): Promise<Page<Listing>> {
+  /**
+   * 掛單一次一批。排序與**搜尋**都在後端。
+   *
+   * 搜尋為什麼不能留在前端：列表是游標分頁的，前端過濾只濾得到已載入的那一批。
+   * 使用者搜「伊布」看到 2 筆、實際上市場有 15 筆，另外 13 筆在還沒載入的批次裡 ——
+   * 排序做錯只是順序怪，搜尋做錯是給出**錯的答案**，而且畫面上看不出來。
+   * 完整理由見 server/src/routes/public.ts 與 migrations/031。
+   *
+   * total 只有在有關鍵字、而且是第一批時後端才會給（見同一支路由的說明）。
+   */
+  async listMarket(
+    opts: PageOpts & { sort?: MarketSort; q?: string } = {}
+  ): Promise<Page<Listing> & { total?: number }> {
     if (MOCK) {
       await delay(160)
       const live = mock.listings.filter(l => l.status === 'live')
+      /* mock 的比對規則要跟真後端同一套（NFKC + 小寫 + 去空白），
+         不然本機看起來會的東西接上後端就不會 —— 那種落差最難查。
+         這裡只搜卡名、系列、卡號三欄，也跟 031 的 search_text 一致。 */
+      const q = normalizeSearch(opts.q ?? '')
+      const hit = (l: Listing) =>
+        !q || normalizeSearch(`${l.card.name}|${l.card.setCode}|${l.card.cardNo}`).includes(q)
+      const found = live.filter(hit)
       // 沒有標示參考價的排在最後：沒有基準可比，不是「零折價」
       const d = (l: Listing) => refDiscount(l) ?? Number.POSITIVE_INFINITY
-      const sorted = [...live].sort(
+      const sorted = [...found].sort(
         opts.sort === 'cheap' ? (a, b) => a.price - b.price
         : opts.sort === 'pricey' ? (a, b) => b.price - a.price
         : opts.sort === 'new' ? () => 0            // mock 已依上架時間排好
         : (a, b) => d(a) - d(b))
-      return mockPage(sorted, l => l.id, opts)
+      const page = mockPage(sorted, l => l.id, opts)
+      return { ...page, ...(q && !opts.cursor ? { total: found.length } : {}) }
     }
-    const r = await http<{ items: Any[]; nextCursor: string | null }>(
-      `/v1/listings${qs({ ...opts, sort: opts.sort })}`, { signal: opts.signal })
-    return { items: r.items.map(toListing), nextCursor: r.nextCursor }
+    const r = await http<{ items: Any[]; nextCursor: string | null; total?: number }>(
+      `/v1/listings${qs({ ...opts, sort: opts.sort, q: opts.q })}`, { signal: opts.signal })
+    return { items: r.items.map(toListing), nextCursor: r.nextCursor, total: r.total }
   },
 
   /** 市場上方那兩條橫向捲軸：講的是「整個市場最便宜／最貴的幾張」，跟分頁無關 */
@@ -1110,25 +1172,8 @@ export interface UploadCardInput {
   variantId?: string | null
   /** 自己標的參考價。選填、只顯示，不參與任何計算 */
   refPrice?: number | null
-  /**
-   * 使用者看過 PSA 查到的卡片資訊之後，確認「就是同一張卡」。
-   *
-   * 只有在畫面已經把差異攤開給他看過之後才准送 true —— 這個旗標是
-   * 把系統的判斷讓給人，責任跟著轉移過去，所以他必須先看得到他在確認什麼。
-   * 卡號本來就對得上、或這張卡根本沒有編號時，後端會忽略它。
-   */
-  certConfirmed?: boolean
-}
-
-/** CERT_MISMATCH 的 409 body 裡那一組差異。畫面靠它並排「PSA 說的」與「你填的」 */
-export interface CertMismatch {
-  certNo: string
-  /** 使用者自己填的卡號（後端原樣回來） */
-  cardNo?: string | null
-  /** PSA 查到的卡號。PSA 沒給就是 null */
-  psaCardNumber: string | null
-  /** PSA 查到的卡片主體（英文，例如 "PIKACHU"） */
-  psaSubject: string | null
+  /** 目錄沒有這張卡時必填的正面照；必須是本人上傳的 card-front 檔案。 */
+  frontFileId?: string | null
 }
 
 /* mock 專用：一個「登記在別人名下」的示範編號。
@@ -1144,56 +1189,14 @@ export const cardbookApi = {
    * tier 是 **null**（沒進過池就沒有賞別，見 types/models.ts）、
    * 保管人是自己（卡還在使用者手上，所以沒有寄存期限）。
    *
-   * 失敗的四種都要分開呈現（呼叫端看 ApiError.code）：
-   *   400 CERT_NOT_FOUND / CERT_INVALID  編號查不到／格式不對
-   *   409 CERT_ALREADY_LISTED            登記在**別人**名下 → 引導申請接管
-   *   409 ALREADY_IN_BOOK                已經在自己卡冊裡 → 說明現在的狀態
-   *   409 CERT_MISMATCH                  PSA 查到的卡號跟填的對不上
-   *                                      → data.mismatches 攤開差異，
-   *                                        使用者確認後帶 certConfirmed 再送一次
+  * 失敗時以 ApiError.code 分流：CERT_ALREADY_LISTED 代表登記在別人名下，
+  * ALREADY_IN_BOOK 代表已經在自己的卡冊裡。
    */
   async upload(input: UploadCardInput): Promise<{ prize: UserPrize }> {
     if (MOCK) {
       await delay(420)
       const cert = input.certNo?.trim() || null
       if (cert) {
-        /* 順序講究：格式不對的編號不可能登記在任何人名下，先擋格式；
-           再來是「查不到」；然後才輪得到唯一性的兩種 409。 */
-        if (!/^[0-9A-Za-z-]{6,20}$/.test(cert)) {
-          throw new ApiError('CERT_INVALID', '這個鑑定編號的格式不對，請對照卡殼上的號碼再輸入一次。', 400)
-        }
-        /* mock 的「查不到」：9999 開頭當成 PSA 資料庫裡不存在的編號。
-           真後端是真的去查（server/src/psa.ts），這裡只是讓分支走得到。 */
-        if (cert.startsWith('9999')) {
-          throw new ApiError('CERT_NOT_FOUND', '鑑定機構查不到這個編號。請確認號碼沒有抄錯；查證持續失敗的話，這張卡可能有問題。', 400)
-        }
-        /* mock 的「查到了，但 PSA 說的卡號跟你填的對不上」。
-           照後端 stub 的同一個約定（server/src/psa.ts）：`STUB-OK-<卡號>`
-           表示「PSA 回的 CardNumber 是 <卡號>」。用同一個約定，同一組編號
-           在展示模式與真後端走的是同一條分支 —— 兩邊各編一套規則的話，
-           照著 mock 練出來的操作到了真後端就不成立。
-
-           比法也照後端（server/src/card-cert.ts）：只比斜線前面那一段。
-           PSA 給裸號（331）、目錄給「編號/總數」（331/190）是常態，
-           把總數也算進去比就會變成每一張日版卡都對不上。
-
-           順序在「已經在你卡冊裡」之前：真後端也是先查證再寫入，
-           查證沒過根本走不到唯一性那一關。 */
-        const stub = /^STUB-OK-([^-]+)/i.exec(cert)
-        if (stub && !input.certConfirmed) {
-          const localNo = (s: string) =>
-            (s.split('/')[0] ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^0+(?=\d)/, '')
-          const psaCardNumber = stub[1]!
-          if (localNo(psaCardNumber) !== localNo(input.cardNo)) {
-            throw new ApiError(
-              'CERT_MISMATCH',
-              'PSA 查到的卡片跟你填的卡號對不上（PSA 是英文、目錄是日文，卡名無法直接比對）。'
-              + '請對照下面 PSA 查到的資訊，確認是同一張卡再送出。',
-              409,
-              { mismatches: [{ certNo: cert, cardNo: input.cardNo, psaCardNumber, psaSubject: 'PIKACHU' }] }
-            )
-          }
-        }
         const mine = mock.userPrizes.find(p =>
           p.card.certNo === cert && p.status !== 'recycled' && p.status !== 'refunded')
         if (mine) {
@@ -1233,7 +1236,7 @@ export const cardbookApi = {
           grader: input.grader ?? 'RAW',
           grade: input.grader && input.grader !== 'RAW' ? (input.grade ?? null) : null,
           certNo: cert,
-          image: '',
+          image: input.frontFileId ? `/v1/files/${input.frontFileId}` : '',
           refPrice: input.refPrice ?? null,
           artId: input.artId ?? undefined,
           variantId: input.variantId ?? null
@@ -1264,12 +1267,9 @@ export const cardbookApi = {
         grade: input.grade ?? undefined,
         certNo: input.certNo || undefined,
         variantId: input.variantId || undefined,
-        refPrice: input.refPrice ?? undefined
-      },
-      /* 只有使用者**真的勾過**才送。送 false 跟不送對後端是同一件事，
-         但那會讓每一個請求都攜帶一個「我沒有確認」的宣告 ——
-         這個旗標的意義是責任轉移，不該在沒有發生轉移時出現在線上。 */
-      certConfirmed: input.certConfirmed || undefined }
+        refPrice: input.refPrice ?? undefined,
+        frontFileId: input.frontFileId || undefined
+      } }
     })
     return { prize: toPrize(r.prize) }
   }

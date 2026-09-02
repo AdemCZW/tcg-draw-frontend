@@ -114,11 +114,6 @@ const THIRD = [
     dir: '我們送出'
   },
   {
-    who: 'PSA（Collectors Universe）', use: '鑑定編號查證',
-    what: '把卡片的鑑定編號送去查證，回來的是卡片資料（卡名、分數、卡號、鑑定數量）。不含任何會員資料。查證結果會存在我們的資料庫，同一個編號不再重複查。',
-    dir: '我們送出'
-  },
-  {
     who: 'drand', use: '抽選的外部亂數',
     what: '取得公開隨機信標的輪次值。這是單向讀取，不送出任何資料，也跟使用者無關。',
     dir: '我們讀取'
@@ -302,7 +297,7 @@ const STORAGE = [
             <tr><td class="k">訂單與交易紀錄</td><td>永久保存，含已結案的訂單。這是交易憑證，也是日後申訴的依據</td></tr>
             <tr><td class="k">卡片的寄存</td><td>抽到之後 <b class="t">90 天</b>；到期前 <b class="t">14 天</b>會先通知你</td></tr>
             <tr><td class="k">登入失敗紀錄</td><td>自動清除：登入成功即刪除；未清除的登入紀錄約 1 小時後、註冊紀錄約 48 小時後由排程刪除</td></tr>
-            <tr><td class="k">鑑定編號的查證結果</td><td>永久。這是卡片的資料（分數、卡號），不是個人資料；一張鑑定卡的身分一輩子不會變</td></tr>
+            <tr><td class="k">鑑定機構與鑑定編號</td><td>永久，跟著那一張卡片紀錄走。<b>這是你自己填的值，我們不會送去任何外部機構查證，也不保留任何查證結果</b>（查證功能已整組移除）。編號永久保留的理由是唯一性：同一組機構＋編號站上只能有一筆有效登記，紀錄刪掉就擋不住第二次登記</td></tr>
             <tr>
               <td class="k">上傳的檔案</td>
               <td class="todo">
@@ -464,11 +459,10 @@ const STORAGE = [
             <tr><td>三・客服可見的完整檔案</td><td class="m">server/src/routes/admin.ts:417-436</td></tr>
             <tr><td>四・寄存 90 天、到期前 14 天提醒</td><td class="m">server/src/pools-service.ts:21, 520</td></tr>
             <tr><td>四・登入紀錄自動清除的窗</td><td class="m">server/src/rate-limit.ts:23, 34, 105-125</td></tr>
-            <tr><td>四・鑑定查證結果永久保存</td><td class="m">server/migrations/020_psa_cert_cache.sql</td></tr>
+            <tr><td>四・鑑定編號永久保存、無查證結果可存</td><td class="m">server/migrations/029_remove_psa_cache.sql（刪除快取表）；server/src/preflight.ts:44（唯一性索引）</td></tr>
             <tr><td>四・檔案保存期限未實作（欄位存在但無人寫入）</td><td class="m">server/migrations/002_core.sql:52-53（files.expires_at）；全庫查無寫入或刪除的程式</td></tr>
             <tr><td>四・無帳號刪除功能</td><td class="m">server/src/routes/auth.ts（查無刪除端點）</td></tr>
             <tr><td>五・LINE 權限範圍</td><td class="m">server/src/routes/line.ts:8-9, 65</td></tr>
-            <tr><td>五・PSA 查證與快取</td><td class="m">server/src/psa.ts:1-30；server/migrations/020_psa_cert_cache.sql</td></tr>
             <tr><td>五・drand</td><td class="m">src/shared/fairness.ts:7；src/lib/pool-status.ts:51-57</td></tr>
             <tr><td>五・Railway</td><td class="m">server/src/env.ts:6, 19；server/src/rate-limit.ts:9-11</td></tr>
             <tr><td>五・Cloudflare R2 與限時網址</td><td class="m">server/src/r2.ts:1-33</td></tr>

@@ -12,8 +12,7 @@ import { sql, Rollback } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { walletOf } from '../money.js'
 import { commitPool, draw, tryOpenPool, revealPool, STASH_DAYS } from '../pools-service.js'
-import { verifyCert, enforceVerification } from '../psa.js'
-import { cardNumbersAgree, REF_PRICE_MAX } from '../card-cert.js'
+import { REF_PRICE_MAX } from '../card-cert.js'
 import { POINTS_INPUT_MAX, pointsInputMaxText } from '../limits.js'
 import {
   BUYBACK_MAX, BUYBACK_MIN,
@@ -26,9 +25,6 @@ export const pools = new Hono()
 type Row = Record<string, unknown>
 // Hono 的 param() 型別是 string | undefined；路由有 :id 就一定有值
 const pid = (c: { req: { param: (k: 'id') => string | undefined } }) => c.req.param('id') ?? ''
-
-/* cardNumbersAgree 搬到 src/card-cert.ts —— 卡冊上傳（routes/cardbook.ts）
-   要用同一套對照，兩邊各寫一份規則會分岔。 */
 
 /** 對外的池資料。這裡決定什麼能出去 —— server_seed 只在 revealed 之後 */
 function toPublic(p: Row, prizes: Row[], taken: number[], publicTaken: number) {
@@ -223,12 +219,6 @@ const PrizeIn = z.object({
      一般情況下買回價按賞別給（見 CreatePool.tierBuyback），這裡只處理例外：
      同一個賞別裡某一張特別貴的時候單獨指定。 */
   buyback: buybackAmount.optional(),
-  /* 賣家已經確認「PSA 查到的卡就是我挑的這張」。
-     只在 PSA 查得到、但回傳的 CardNumber 跟賣家挑的 cardNo 對不上時才有意義：
-     PSA 是英文、我們目錄是日文，卡名無法字串相等，所以對不上不能直接擋，
-     要讓賣家看過 PSA 的卡片資訊後自己確認是不是同一張（見建池端的說明）。
-     沒對不上、或根本沒 certNo 時這個旗標會被忽略。 */
-  certConfirmed: z.boolean().optional(),
   total: z.number().int().nonnegative()
 }).refine(p => !p.card.certNo || p.total <= 1, {
   /* 一個鑑定編號只對應一張實體卡。開 total > 1 等於宣告「這 N 個籤位都會
@@ -376,64 +366,6 @@ pools.post('/', requireAuth, async c => {
     }, 400)
   }
 
-  /* ── PSA 鑑定編號查證 ──────────────────────────────────────────────
-     只驗有 certNo 的獎品（沒編號的是生卡或目錄卡，沒有東西可查）。
-     **在交易之外先查完**：查證是網路 I/O，擺進交易會讓 DB 連線被 PSA 的
-     往返時間佔著；而且查證結果值得獨立於建池成敗留在快取裡（見 psa.ts）。
-
-     四種結果對應四種行為（docs 有整理，見 psa.ts 的 VerifyResult）：
-       invalid_format / not_found        → 一律擋（假編號或格式錯，跟旗標無關）
-       api_unavailable / not_configured  → 預設不硬擋，卡標 pending；
-                                            PSA_VERIFY_ENFORCE=1 時才擋（明天啟用的開關）
-       查到但 CardNumber 對不上賣家挑的卡 → 要賣家確認（certConfirmed）才放行 */
-  const psaStatuses: (string | null)[] = []
-  const mismatches: { tier: string; certNo: string; psaCardNumber: string | null; psaSubject: string | null }[] = []
-  for (const p of b.prizes) {
-    const certNo = p.card.certNo
-    if (!certNo) { psaStatuses.push(null); continue }
-    const v = await verifyCert(sql, certNo)
-    if (v.ok) {
-      // p.card 是 passthrough，cardNo 型別是 unknown —— 收窄成字串再比
-      const sellerCardNo = typeof p.card.cardNo === 'string' ? p.card.cardNo : null
-      if (cardNumbersAgree(v.cert.cardNumber, sellerCardNo) || p.certConfirmed) {
-        psaStatuses.push('verified')
-      } else {
-        // 對不上、賣家也還沒確認 —— 收集起來，等回圈跑完一次回報所有需要確認的
-        mismatches.push({
-          tier: p.tier, certNo,
-          psaCardNumber: v.cert.cardNumber, psaSubject: v.cert.subject
-        })
-        psaStatuses.push('verified') // 佔位，實際不會用到（下面一定 return）
-      }
-    } else if (v.reason === 'invalid_format' || v.reason === 'not_found') {
-      // 假編號或格式錯：不准放進池。訊息要講清楚是哪一張、為什麼
-      return c.json({
-        error: v.reason === 'not_found' ? 'CERT_NOT_FOUND' : 'CERT_INVALID',
-        message: v.reason === 'not_found'
-          ? `鑑定編號 ${certNo} 在 PSA 查無此卡，不能放進池。請確認編號是否正確。`
-          : `鑑定編號 ${certNo} 的格式不正確，PSA 無法辨識。請確認編號。`
-      }, 400)
-    } else {
-      // api_unavailable / not_configured：暫時無法驗證
-      if (enforceVerification()) {
-        return c.json({
-          error: 'VERIFY_REQUIRED',
-          message: `目前無法向 PSA 查證鑑定編號 ${certNo}，而平台已開啟強制驗證，暫時無法開這張卡的池。請稍後再試。`
-        }, 503)
-      }
-      // 不硬擋：卡照放，但標成未驗證（pending），前端會顯示「暫時無法驗證」
-      psaStatuses.push('pending')
-    }
-  }
-  if (mismatches.length) {
-    return c.json({
-      error: 'CERT_MISMATCH',
-      message: 'PSA 查到的卡片跟你挑的卡對不上（PSA 是英文、目錄是日文，卡名無法直接比對）。' +
-        '請確認是不是同一張卡，確認後再送出一次。',
-      mismatches
-    }, 409)
-  }
-
   const id = 'p-' + randomBytes(5).toString('hex')
   try {
     const result = await sql.begin(async tx => {
@@ -458,16 +390,13 @@ pools.post('/', requireAuth, async c => {
            variantId 同理明確寫 null：commitPool 會把它序列化進 manifest v4，
            讓「有這個鍵但值是 null」與「沒有這個鍵」在資料庫裡讀起來一致。
 
-           psaStatus 是查證狀態（verified / pending / null）。**刻意不進 manifest**：
            manifestString 只讀卡片身分那幾欄（name/setCode/cardNo/grader/grade/
-           certNo/refPrice/buyback/variantId），psaStatus 跟 image 一樣是會變的
-           附註（今天 pending、明天 PSA 通了重驗就變 verified），綁進承諾會讓
-           一次誠實的重新查證看起來像竄改。null = 這張卡沒有 certNo，不需要驗證。 */
+           certNo/refPrice/buyback/variantId）；不加入外部驗證結果，避免日後
+           查驗服務或展示文案變動改寫已公布的承諾。 */
         card: {
           ...p.card,
           refPrice: p.card.refPrice ?? null,
-          variantId: p.card.variantId ?? null,
-          psaStatus: psaStatuses[i] ?? null
+          variantId: p.card.variantId ?? null
         },
         total: p.total,
         // 解析後的絕對金額。manifest 與回收都只看這一欄

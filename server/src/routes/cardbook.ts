@@ -12,18 +12,15 @@
  * 建檔）；賣家身分是「開池」的門檻，不是「擁有卡」的門檻。
  *
  * 驗證邏輯與建池押記（routes/pools.ts）**同一套**：
- * 正規化（upper(btrim)/nullif）、PSA 分流（verifyCert 的四種結果）、
- * 唯一性靠 prizes_cert_alive（unique(grader, cert_no)）。共用件在
- * src/card-cert.ts；分流的形狀刻意跟建池那段逐條對齊，改其中一邊
- * 時要看另一邊。
+ * 正規化（upper(btrim)/nullif），唯一性靠 prizes_cert_alive
+ * （unique(grader, cert_no)）。
  */
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
 import { sql, Rollback } from '../db.js'
 import { requireAuth } from '../auth.js'
-import { verifyCert, enforceVerification } from '../psa.js'
-import { cardNumbersAgree, REF_PRICE_MAX } from '../card-cert.js'
+import { REF_PRICE_MAX } from '../card-cert.js'
 import { STASH_DAYS } from '../pools-service.js'
 
 export const cardbook = new Hono()
@@ -41,16 +38,13 @@ const CardIn = z.object({
   grade: z.union([z.number(), z.string().max(20)]).nullable().optional(),
   certNo: z.string().max(40).nullable().optional(),
   variantId: z.string().max(120).nullable().optional(),
+  frontFileId: z.string().regex(/^f-[0-9a-f]{12}$/, '卡片正面圖片必須先上傳').nullable().optional(),
   refPrice: z.number().int().nonnegative()
     .max(REF_PRICE_MAX, `參考價不能超過 ${REF_PRICE_MAX.toLocaleString('zh-TW')}`)
     .nullable().optional()
 })
 const UploadBody = z.object({
-  card: CardIn,
-  /* 跟建池的 certConfirmed 同一個意思：PSA 查到的 CardNumber 跟填的
-     卡號對不上時，使用者看過 PSA 的卡片資訊後確認「就是同一張」。
-     對得上、或沒有 certNo 時這個旗標會被忽略。 */
-  certConfirmed: z.boolean().optional()
+  card: CardIn
 })
 
 /** 給「卡已經在你卡冊裡」的 409 用的狀態白話。狀態機的字不該原樣丟給使用者。 */
@@ -72,7 +66,28 @@ cardbook.post('/upload', async c => {
     const msg = parsed.error.issues.find(i => i.code === 'too_big')?.message ?? '卡片資料不完整（至少要卡名、系列、卡號）'
     return c.json({ error: 'BAD_REQUEST', message: msg }, 400)
   }
-  const { card, certConfirmed } = parsed.data
+  const { card } = parsed.data
+
+  let frontImage: string | null = null
+  if (card.frontFileId) {
+    const [front] = await sql`select owner_id, purpose from files where id = ${card.frontFileId}`
+    if (!front || front.owner_id !== me || front.purpose !== 'card-front') {
+      return c.json({ error: 'BAD_CARD_IMAGE', message: '請上傳自己的卡片正面圖片後再登記' }, 400)
+    }
+    /* ⚠️ 已知缺口：files 有一列**不等於** R2 上真的有那個物件。
+       presign 一成功就先寫 files，位元組是瀏覽器另外 PUT 上去的 ——
+       PUT 失敗（斷線、逾時、簽章過期）那一列照樣留著，拿那個 id 來登記，
+       卡就會帶著一個永遠 404 的 image 進卡冊。
+
+       r2.ts 有一支 objectExists() 正是為此而寫，而且從定義至今全站沒有
+       任何地方呼叫過。這裡沒有接上去是**刻意**的：objectExists() 把所有
+       例外都吞成 false，所以它分不出「物件確實不在」與「這一刻問不到 R2」。
+       拿它當關卡，一次網路抖動就會把一張圖好好傳完的登記擋成
+       「你的圖沒傳完」—— 那比現在的缺口更糟。
+       要接上去得先讓 objectExists 把「找不到」跟「問不到」分開回報，
+       那要改 r2.ts，不在這條工作線的檔案範圍內。 */
+    frontImage = `/v1/files/${card.frontFileId}`
+  }
 
   /* 正規化跟 021 的回填、抽卡寫入（pools-service.ts）、建池押記同一套：
      upper(btrim) / nullif。索引照正規化的，card jsonb 裡的原值不動 ——
@@ -91,52 +106,6 @@ cardbook.post('/upload', async c => {
     }, 400)
   }
 
-  /* ── PSA 查證：分流照建池那段（routes/pools.ts 的建池迴圈）──────
-     在交易之外先查：查證是網路 I/O，擺進交易會讓 DB 連線被 PSA 的
-     往返時間佔著。
-       invalid_format / not_found        → 擋（假編號或格式錯）
-       api_unavailable / not_configured  → 不硬擋，標 pending；
-                                            PSA_VERIFY_ENFORCE=1 才擋
-       查到但 CardNumber 對不上           → 要使用者確認（certConfirmed） */
-  let psaStatus: 'verified' | 'pending' | null = null
-  if (certRaw) {
-    const v = await verifyCert(sql, certRaw)
-    if (v.ok) {
-      if (!cardNumbersAgree(v.cert.cardNumber, card.cardNo) && !certConfirmed) {
-        return c.json({
-          error: 'CERT_MISMATCH',
-          /* 訊息只講「怎麼往下走」，判斷的材料靠 mismatches 帶回去讓畫面攤開。
-             把「請確認」講成一句沒有指涉的話（舊版就是），使用者會照字面
-             再按一次送出，然後拿到一模一樣的 409 —— 那是一條死路。 */
-          message: 'PSA 查到的卡片跟你填的卡號對不上（PSA 是英文、目錄是日文，卡名無法直接比對）。'
-            + '請對照下面 PSA 查到的資訊，確認是同一張卡再送出。',
-          /* cardNo 是**使用者自己填的那個值**，一起回去讓畫面可以並排顯示
-             「PSA 說的」與「你填的」。不回這一欄的話，畫面只能自己猜是拿
-             哪一個欄位去比的 —— 猜錯就會把差異指到錯的地方。 */
-          mismatches: [{
-            certNo: certRaw, cardNo: card.cardNo,
-            psaCardNumber: v.cert.cardNumber, psaSubject: v.cert.subject
-          }]
-        }, 409)
-      }
-      psaStatus = 'verified'
-    } else if (v.reason === 'invalid_format' || v.reason === 'not_found') {
-      return c.json({
-        error: v.reason === 'not_found' ? 'CERT_NOT_FOUND' : 'CERT_INVALID',
-        message: v.reason === 'not_found'
-          ? `鑑定編號 ${certRaw} 在 PSA 查無此卡，不能登記。請確認編號是否正確。`
-          : `鑑定編號 ${certRaw} 的格式不正確，PSA 無法辨識。請確認編號。`
-      }, 400)
-    } else {
-      if (enforceVerification()) {
-        return c.json({
-          error: 'VERIFY_REQUIRED',
-          message: `目前無法向 PSA 查證鑑定編號 ${certRaw}，而平台已開啟強制驗證，暫時無法登記這張卡。請稍後再試。`
-        }, 503)
-      }
-      psaStatus = 'pending'
-    }
-  }
   /* 沒有編號（裸卡）**照收**。先前拍板的「裸卡先緩」指的是市場上架
      （對買家宣稱一張無法驗證的卡），登記進自己的卡冊沒有欺騙任何人。
      但要知道代價：唯一索引的述詞是 `where cert_no is not null`，
@@ -147,8 +116,7 @@ cardbook.post('/upload', async c => {
   const now = Date.now()
   const id = 'pz-up-' + randomBytes(6).toString('hex')
   /* refPrice / variantId 沒填就明確存 null（跟建池同一條理由：讓
-     「有這個鍵但值是 null」與「沒有這個鍵」讀起來一致）。
-     psaStatus 記進 card jsonb，跟池裡獎品的擺法一致 —— 前端讀同一個位置。 */
+    「有這個鍵但值是 null」與「沒有這個鍵」讀起來一致）。 */
   const cardJson = {
     ...card,
     /* image 明確補一個空字串。CardIn 沒有這一欄（登記進來的卡沒有實拍圖，
@@ -156,15 +124,14 @@ cardbook.post('/upload', async c => {
        `image: string` —— 少了這個鍵，前端拿到的是 undefined，
        卡冊那顆 CardArt 每畫一次就吐一行 [Vue warn]（型別檢查失敗）。
        池裡的獎品一直都帶著 image: ''，這裡對齊它。 */
-    image: '',
+    image: frontImage ?? '',
     artId: card.artId ?? null,
     language: card.language ?? null,
     grader: card.grader ?? null,
     grade: card.grade ?? null,
     certNo: card.certNo ?? null,
     refPrice: card.refPrice ?? null,
-    variantId: card.variantId ?? null,
-    psaStatus
+    variantId: card.variantId ?? null
   }
 
   try {
@@ -219,7 +186,7 @@ cardbook.post('/upload', async c => {
         id: String(prize.id), card: prize.card, tier: prize.tier as string | null,
         status: String(prize.status), grader: prize.grader as string | null,
         certNo: prize.cert_no as string | null,
-        custodianId: String(prize.custodian_id), psaStatus
+        custodianId: String(prize.custodian_id)
       }
     })
   } catch (e) {

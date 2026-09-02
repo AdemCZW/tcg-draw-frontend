@@ -7,7 +7,7 @@ import { http, token } from '@/lib/http'
  *
  * mock：任何帳密都通過，記在 localStorage。
  * API：Email/密碼打後端，或 LINE Login（整頁導向後端 /auth/line/start，
- *      回來時網址帶 #token=…，由 consumeToken() 收下）。
+ *      回來時網址帶 #code=…，由 consumeToken() 換取 JWT）。
  *
  * token 存 localStorage、user 也存一份 —— 重整不用等 /me 就能先畫出已登入的畫面，
  * 但 /me 回來後以伺服器為準。
@@ -58,7 +58,7 @@ export const useAuthStore = defineStore('auth', {
          啟動之後才發生的 —— 少了這一步，登入完成後餘額會一直停在初始值 0，
          要等到使用者剛好做了某個會夾帶 wallet 的動作（抽卡、買東西）
          才會跳成正確的數字，或是自己重新整理一次。
-         實際踩到過：LINE 登入送的一百萬點在畫面上是 0，看起來像被清空。
+         實際踩到過：登入後既有點數在畫面上是 0，看起來像被清空。
 
          修在這裡而不是三個呼叫點各補一行：登入方式之後還會再增加，
          補在呼叫點的話下一種一定會漏。refresh() 是三條路的交會點。
@@ -93,17 +93,20 @@ export const useAuthStore = defineStore('auth', {
       return this.refresh()
     },
 
-    /** LINE：整頁導去後端，後端處理完導回 /login#token=… */
+    /** LINE：整頁導去後端，後端處理完導回 /login#code=… */
     loginWithLine() {
       window.location.href = `${API_URL}/v1/auth/line/start`
     },
 
-    /** 從網址 fragment 收下 token（LINE 回來時）。收完把 fragment 清掉，token 不要留在網址列 */
+    /** 從 URL fragment 收下單次交換碼（LINE 回來時）。先清掉網址，再向後端交換 JWT。 */
     async consumeToken(): Promise<boolean> {
-      const m = /[#&]token=([^&]+)/.exec(window.location.hash)
+      const m = /[#&]code=([^&]+)/.exec(window.location.hash)
       if (!m) return false
-      token.set(decodeURIComponent(m[1]!))
       history.replaceState(null, '', window.location.pathname + window.location.search)
+      const r = await http<{ token: string }>('/v1/auth/line/exchange', {
+        method: 'POST', json: { code: decodeURIComponent(m[1]!) }
+      })
+      token.set(r.token)
       await this.refresh()
       return !!this.user
     },

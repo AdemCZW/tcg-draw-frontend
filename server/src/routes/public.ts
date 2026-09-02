@@ -111,7 +111,57 @@ const DEAL_RATIO = sql`coalesce(
 const SORTS = ['deal', 'new', 'cheap', 'pricey'] as const
 type Sort = (typeof SORTS)[number]
 
-const ListingQuery = PageQuery.extend({ sort: z.enum(SORTS).default('deal') })
+/**
+ * 搜尋關鍵字。
+ *
+ * ── 為什麼一定要在後端 ──
+ *
+ * 排序在後端的理由（上面那段）對搜尋只會更強烈。列表是游標分頁的，前端過濾
+ * 只濾得到已經載進來的那一批：使用者搜「伊布」看到 2 筆，而市場上其實有 15 筆，
+ * 另外 13 筆躺在第 2、3 批還沒載。排序做錯只是順序怪，搜尋做錯是**答錯**，
+ * 而且錯得毫無徵兆 —— 畫面上就是「只有 2 筆」，看不出少了什麼。
+ * 卡冊的狀態過濾已經踩過一次同一個坑（見 MyCardsPage.vue 的註解）。
+ *
+ * ── 上界 ──
+ *
+ * 80 個字。前端的輸入框已經有 maxlength，正常打字碰不到這條線；
+ * 它擋的是手動組網址塞進來的長字串，不讓它一路走進資料庫做無謂的掃描。
+ * 超過就回 400 而不是默默截斷 —— 截斷之後的關鍵字比較短，會命中**更多**筆，
+ * 那是在使用者不知情的狀況下回答另一個問題。
+ */
+const Q_MAX = 80
+const ListingQuery = PageQuery.extend({
+  sort: z.enum(SORTS).default('deal'),
+  q: z.string().trim().max(Q_MAX).optional()
+})
+
+/**
+ * 關鍵字的正規化。**跟 migration 031 的 search_text 是同一條規則**，
+ * 兩邊只要有一邊改了就會開始搜不到東西，改動請一起改。
+ *
+ * 放在 SQL 裡而不是在 JS 先算好，就是為了讓它跟欄位定義用同一套實作：
+ * JS 的 \s 與 Postgres 的 \s、JS 的 toLowerCase 與 Postgres 的 lower()
+ * 在邊角情形上並不完全一致，兩份實作遲早會分岔。
+ *
+ * `${q}::text` 的 ::text 是明寫的保險：讓 Postgres 在 describe 階段就把 $1 判成
+ * text，postgres.js 才會把字串原封送出去。不寫也剛好能跑（normalize 的參數本來
+ * 就是 text），但同一支路由的 new 排序游標正是栽在「讓型別自己被推斷出來」上
+ * （見 sortSpec 裡那段），這裡不重蹈覆轍。
+ */
+const normQ = (q: string) => sql`regexp_replace(lower(normalize(${q}::text, NFKC)), '\\s+', '', 'g')`
+
+/**
+ * 比對用 strpos()（子字串位置）而不是 LIKE。
+ *
+ * 關鍵字是使用者原封不動打進來的字串，而 LIKE 會把 `%` 和 `_` 當成萬用字元：
+ * 搜「100%」會變成「100 開頭的任何東西」，搜「_」會命中全部。要用 LIKE 就得
+ * 自己逃脫 `\ % _`，而那個逃脫必須發生在 NFKC **之後** —— 全形的「％」(U+FF05)
+ * 正規化之後會變成半形 `%`，先逃脫再正規化等於沒逃脫。
+ * strpos 沒有任何萬用字元，這一整類問題不存在。
+ *
+ * 代價是 B-tree 索引用不上；為什麼現在不需要索引、之後怎麼辦，見 031 的說明。
+ */
+const searchWhere = (q: string) => (q ? sql`and strpos(search_text, ${normQ(q)}) > 0` : sql``)
 
 /** 回傳 [order by 片段, 游標比較片段, 從一列取出游標值] 三件一組 */
 function sortSpec(sort: Sort, after: [string, string] | null) {
@@ -119,7 +169,19 @@ function sortSpec(sort: Sort, after: [string, string] | null) {
     case 'new':
       return {
         order: sql`order by listed_at desc, id desc`,
-        where: after ? sql`and (listed_at, id) < (${after[0]}::timestamptz, ${after[1]}::text)` : sql``,
+        /* ${...}::text::timestamptz 的中間那一段 ::text 不是多餘的。
+           寫成 ${after[0]}::timestamptz 時，Postgres 在 describe 階段會把 $1 的型別
+           判成 timestamptz(1184)，postgres.js 於是拿它的 timestamptz 序列化器去處理
+           這個字串 —— 而那條路會先變成 JS 的 Date，**毫秒以下全部丟掉**。
+           上面 listed_at_text 那段註解特地撈全精度字串來組游標，就是為了不丟微秒；
+           少了這個 ::text，精度在回程又被丟一次，前功盡棄。
+
+           後果不是抽象的：游標值被截到毫秒之後，
+           (listed_at, id) < (被截短的值, id) 會把「跟分頁邊界同一毫秒」的掛單
+           全部排除掉 —— 那幾筆不是排到後面，是**永遠不會出現**。
+           實測（48 筆同一個 now() 的掛單）第二頁直接回 0 筆。
+           先轉 text 就讓 $1 的型別是 text(25)，字串原封送到資料庫，由 Postgres 自己轉。 */
+        where: after ? sql`and (listed_at, id) < (${after[0]}::text::timestamptz, ${after[1]}::text)` : sql``,
         key: (r: Row) => String(r.listed_at_text)
       }
     case 'cheap':
@@ -169,9 +231,18 @@ const toListing = (r: Row) => ({
 pub.get('/listings', async c => {
   const parsed = ListingQuery.safeParse(c.req.query())
   if (!parsed.success) {
-    return c.json({ error: 'BAD_REQUEST', message: '分頁參數不合法（limit 介於 1 到 100）' }, 400)
+    /* 分開講：兩種錯誤的下一步完全不同（一個是改網址、一個是少打幾個字），
+       混成同一句話等於要使用者自己猜。 */
+    const tooLongQ = parsed.error.issues.some(i => i.path[0] === 'q')
+    return c.json({
+      error: 'BAD_REQUEST',
+      message: tooLongQ ? `搜尋字數上限 ${Q_MAX} 個字` : '分頁參數不合法（limit 介於 1 到 100）'
+    }, 400)
   }
   const { limit, cursor, sort } = parsed.data
+  /* zod 已經 trim 過，這裡再一次是為了讓「只有空白」明確等於「沒有搜尋」。
+     全形空白 U+3000 也在 JS 的 trim 範圍內。 */
+  const q = (parsed.data.q ?? '').trim()
 
   let after: [string, string] | null = null
   if (cursor) {
@@ -180,15 +251,31 @@ pub.get('/listings', async c => {
     after = [p[0]!, p[1]!]
   }
   const spec = sortSpec(sort, after)
+  /* 搜尋是「過濾」，排序與游標完全不受影響：同一組排序鍵、同一組游標比較，
+     只是候選集合變小。所以搜尋與四種排序天生可以並存，不必為搜尋另開排序。 */
+  const search = searchWhere(q)
 
   const rows = await sql<Row[]>`
     select *, listed_at::text as listed_at_text, ${DEAL_RATIO} as deal_ratio
-    from listings where status = 'live' ${spec.where}
+    from listings where status = 'live' ${search} ${spec.where}
     ${spec.order}
     limit ${limit + 1}
   `
   const page = slicePage(rows, limit, r => encodeCursor([spec.key(r), r.id]))
-  return c.json({ items: page.items.map(toListing), nextCursor: page.nextCursor })
+
+  /* 搜尋時多回一個總筆數，而且**只在第一頁算**。
+     為什麼要有它：查無結果與「這一批剛好沒有」在畫面上長得一樣，使用者需要
+     一個能相信的數字。而它必須是整個市場的數字 —— 從已載入的清單數出來的
+     「2 筆」正是這個功能要避免的那個錯誤答案。
+     為什麼只在第一頁：捲動時每一批都算一次是白花的，數字也不會變。 */
+  let total: number | undefined
+  if (q && !cursor) {
+    const [n] = await sql<{ n: string }[]>`
+      select count(*)::text as n from listings where status = 'live' ${search}
+    `
+    total = Number(n?.n ?? 0)
+  }
+  return c.json({ items: page.items.map(toListing), nextCursor: page.nextCursor, total })
 })
 
 /**

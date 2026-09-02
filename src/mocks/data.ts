@@ -651,9 +651,6 @@ export interface NewPoolInput {
    */
   prizes: {
     tier: Tier; card: CardItem; qty: number; buyback: number
-    /* 賣家已確認「PSA 查到的卡就是我挑的這張」。只在 PSA 查得到但卡號對不上時
-       才需要（PSA 英文、目錄日文，卡名無法字串相等）。見 server/src/routes/pools.ts。 */
-    certConfirmed?: boolean
   }[]
 }
 

@@ -17,19 +17,12 @@
  *                        （接管那支端點用的字是 CERT_ALREADY_YOURS，
  *                          意思相同，兩個都要收）
  *
- * 加上第五種，它跟前四種不一樣：
- *   CERT_MISMATCH        PSA 查到的卡號跟填的對不上。這一種**不是拒絕**，
- *                        是「系統沒把握，要你來判斷」。所以畫面要做的不是
- *                        重複那句錯誤訊息，而是把**兩邊的值並排攤開**，
- *                        再給一個確認控制項。少了任何一半都是死路：
- *                        沒有控制項＝叫人做畫面上做不到的事（連按三次三個
- *                        一樣的 409）；有控制項但看不到差異＝要人替一件
- *                        他不知道內容的事簽名。
  */
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import CardPicker from '@/components/CardPicker.vue'
-import { cardbookApi, type CertMismatch } from '@/lib/api'
+import CardFrontUpload from '@/components/CardFrontUpload.vue'
+import { cardbookApi } from '@/lib/api'
 import { ApiError } from '@/lib/http'
 import type { PickedCard } from '@/lib/card-pick'
 import type { Grader } from '@/types/models'
@@ -42,6 +35,13 @@ const router = useRouter()
    鑑定編號一張一個，批次表單只會讓編號跟卡對不上。 */
 const picked = ref<PickedCard[]>([])
 const pick = computed(() => picked.value[0] ?? null)
+const entryMode = ref<'catalog' | 'manual'>('catalog')
+const manualName = ref('')
+const manualSetCode = ref('')
+const manualCardNo = ref('')
+const manualLanguage = ref<'JP' | 'EN'>('JP')
+const frontFileId = ref<string | null>(null)
+const frontReady = ref(false)
 
 /* ---- 鑑定資訊 ----
    選項照開池動線的既有集合（shared/domain.ts 的 Grader）。
@@ -65,12 +65,41 @@ const graded = computed(() => grader.value !== 'RAW')
    身分本來就完整），錯誤訊息一併清掉 —— 那是上一張卡的事。 */
 watch(pick, c => {
   clearErrors()
-  resetCertConfirm()
-  if (!c) return
+  if (!c) {
+    /* 沒有挑卡＝這幾格沒有來源。不清掉的話，切到手動模式之後
+       上一張卡的鑑定資訊會原封不動留著，而挑卡器已經藏起來，
+       使用者看不到那些值是從哪來的。 */
+    grader.value = 'RAW'
+    grade.value = null
+    certNo.value = ''
+    refPrice.value = null
+    return
+  }
   grader.value = (c.card.grader as Grader) || 'RAW'
   grade.value = c.card.grade ?? null
   certNo.value = c.card.certNo ?? ''
   refPrice.value = c.card.refPrice ?? null
+})
+
+/**
+ * 換模式＝換一種「這是哪一張卡」的說法，前一種說法要整個放掉。
+ *
+ * 這裡原本什麼都沒做（切換鈕只叫了 clearErrors()，而那支只清錯誤訊息）。
+ * 後果不是「多留了一點狀態」，是**送出的內容整個換人**：
+ * submit() 寫的是 `pick.value?.card` 加 `?? manualName`，只要之前挑過目錄卡，
+ * 那個 c 就是真值，手填的卡名／系列／卡號三格全部被 ?? 短路掉。
+ * 而 watch(pick) 帶進來的鑑定編號、等級、參考價也一起被繼承 ——
+ * 使用者填的是「手填卡名XYZ」，登記進卡冊的卻是他放棄的那張目錄卡。
+ *
+ * 挑卡器在手動模式是隱藏的，所以這些值在畫面上沒有任何來源可循。
+ * 唯一說得通的行為就是：切到手動就把挑好的卡放掉。
+ */
+watch(entryMode, mode => {
+  clearErrors()
+  if (mode === 'manual') {
+    // watch(pick) 會跟著把鑑定資訊清回預設值
+    picked.value = []
+  }
 })
 
 /* ---- 送出 ---- */
@@ -80,10 +109,6 @@ const error = ref('')
 const takeover = ref<{ certNo: string; grader: string } | null>(null)
 /** ALREADY_IN_BOOK：那句「現在是什麼狀態」的訊息。它是提醒不是錯誤 */
 const yoursMsg = ref('')
-/** CERT_MISMATCH：PSA 那邊查到的東西。有值就代表畫面上要攤開差異 */
-const certMismatch = ref<CertMismatch | null>(null)
-/** 使用者看過差異之後勾的「確實是同一張卡」。勾了才會把 certConfirmed 送出去 */
-const certConfirmed = ref(false)
 
 function clearErrors() {
   error.value = ''
@@ -91,76 +116,51 @@ function clearErrors() {
   yoursMsg.value = ''
 }
 
-/**
- * 卡片身分改了 ＝ 上一次確認的對象已經不存在，確認狀態必須跟著作廢。
- *
- * 不作廢的話會發生這件事：使用者對 A 卡勾了「確實是同一張」，
- * 然後把編號改成 B 卡的，勾勾還在 —— 系統就拿他對 A 的確認替 B 放行。
- * 責任轉移只在他看過的那一組值上成立。
- */
-function resetCertConfirm() {
-  certMismatch.value = null
-  certConfirmed.value = false
-}
-
 const canSubmit = computed(() =>
-  !!pick.value && !busy.value
-  && (!graded.value || certNo.value.trim().length > 0)
-  /* 已經被要求確認、卻還沒勾：送出去只會拿到一模一樣的 409。
-     擋在這裡是為了讓 missing 那一行有機會講出「還差什麼」。 */
-  && (!certMismatch.value || certConfirmed.value))
+  !busy.value
+  && (entryMode.value === 'catalog' ? !!pick.value : !!(
+    manualName.value.trim() && manualSetCode.value.trim() && manualCardNo.value.trim() && frontReady.value && frontFileId.value
+  ))
+  && (!graded.value || certNo.value.trim().length > 0))
 
 /** 送出鈕不能按時，缺的那件事講出來（禁用的按鈕解釋不了自己） */
 const missing = computed(() => {
-  if (!pick.value) return '先挑一張卡'
+  if (entryMode.value === 'catalog' && !pick.value) return '先挑一張卡'
+  if (entryMode.value === 'manual' && (!manualName.value.trim() || !manualSetCode.value.trim() || !manualCardNo.value.trim())) return '請填卡名、系列與卡號'
+  if (entryMode.value === 'manual' && !frontReady.value) return '請先上傳卡片正面圖片'
   if (graded.value && !certNo.value.trim()) return '鑑定卡要填鑑定編號（卡殼上那串號碼）'
-  if (certMismatch.value && !certConfirmed.value) return '先看一下上面的比對，確認是同一張卡再勾選'
   return ''
 })
 
 async function submit() {
-  if (!canSubmit.value || !pick.value) return
+  if (!canSubmit.value) return
   clearErrors()
   busy.value = true
   track('cardbook_upload_submit')
   try {
-    const c = pick.value.card
+    /* 明確依模式取值，不靠「pick 是不是 null」。
+       ?? 的短路是隱性的：只要 pick 不小心有值，手填的欄位就會被吃掉，
+       而畫面上完全看不出來。模式是使用者按出來的，那就照它讀。 */
+    const c = entryMode.value === 'catalog' ? pick.value?.card : undefined
     const { prize } = await cardbookApi.upload({
-      name: c.name,
-      setCode: c.setCode,
-      cardNo: c.cardNo,
-      artId: c.artId ?? null,
-      language: c.language,
+      name: c?.name ?? manualName.value.trim(),
+      setCode: c?.setCode ?? manualSetCode.value.trim(),
+      cardNo: c?.cardNo ?? manualCardNo.value.trim(),
+      artId: c?.artId ?? null,
+      language: c?.language ?? manualLanguage.value,
       grader: grader.value,
       grade: graded.value ? grade.value : null,
       certNo: graded.value ? (certNo.value.trim() || null) : null,
-      variantId: c.variantId ?? null,
+      variantId: c?.variantId ?? null,
       refPrice: refPrice.value || null,
-      /* 勾過才送。沒有這一個旗標的話，PSA 卡號對不上的卡永遠登記不進來 ——
-         而「PSA 給裸號、目錄給編號/總數」這種對不上是常態不是例外。 */
-      certConfirmed: certConfirmed.value || undefined
+      frontFileId: entryMode.value === 'manual' ? frontFileId.value : null
     })
     track('cardbook_upload_success')
     /* 成功導回卡冊，網址帶剛登記那張的 id —— 卡冊靠它把「剛收進卡冊」
        標出來（跟抽卡、市場成交同一條回家路） */
     router.push({ name: 'cards', query: { new: prize.id } })
   } catch (e) {
-    if (e instanceof ApiError && e.code === 'CERT_MISMATCH') {
-      /* PSA 查到了這個編號，但它說的卡號跟使用者填的不一樣。
-         系統在這裡沒有能力判斷（PSA 是英文、目錄是日文，卡名比不了），
-         所以把判斷交給看得到實體卡的那個人 —— 但要先把材料給他：
-         PSA 說的卡號、PSA 說的卡片主體、以及他自己填的卡號，三個並排。 */
-      const list = (e.data as { mismatches?: CertMismatch[] } | null)?.mismatches ?? []
-      const m = list[0] ?? null
-      certMismatch.value = m
-        ? { ...m, cardNo: m.cardNo ?? pick.value?.card.cardNo ?? null }
-        /* 後端沒帶 mismatches（不該發生，但不能因此把使用者留在死路上）：
-           至少把他自己填的那一邊顯示出來，勾選一樣走得通。 */
-        : { certNo: certNo.value.trim(), cardNo: pick.value?.card.cardNo ?? null, psaCardNumber: null, psaSubject: null }
-      certConfirmed.value = false
-      error.value = e.message
-      track('cardbook_upload_cert_mismatch')
-    } else if (e instanceof ApiError && e.code === 'CERT_ALREADY_LISTED') {
+    if (e instanceof ApiError && e.code === 'CERT_ALREADY_LISTED') {
       /* 使用者做對了事卻被擋住：卡在他手上，編號掛在別人名下。
          出口（申請接管）要接在被擋住的當下 —— 比照開池表單的做法，
          帶著編號跳開單頁預填，他要做的只剩「說明怎麼拿到這張卡」。 */
@@ -203,15 +203,27 @@ async function submit() {
          送出會被擋下來並講清楚（那正是 ALREADY_IN_BOOK 的意思） -->
     <section class="panel card">
       <h2>這是哪一張卡</h2>
-      <p class="hint muted">從目錄挑出正確的版本 —— 同一組卡號可能有價差極大的不同版本。</p>
+      <div class="entryTabs" role="radiogroup" aria-label="卡片來源">
+        <button type="button" role="radio" :aria-checked="entryMode === 'catalog'" :class="{ on: entryMode === 'catalog' }" @click="entryMode = 'catalog'; clearErrors()">搜尋卡片目錄</button>
+        <button type="button" role="radio" :aria-checked="entryMode === 'manual'" :class="{ on: entryMode === 'manual' }" @click="entryMode = 'manual'; clearErrors()">目錄沒有這張卡</button>
+      </div>
+      <p v-if="entryMode === 'catalog'" class="hint muted">從目錄挑出正確的版本 —— 同一組卡號可能有價差極大的不同版本。</p>
       <!-- on-upload-page：挑卡器空狀態的出路裡有一條「去登記一張卡」，
            在這一頁上它指的就是這一頁（P9 的死連結）。告訴它自己在哪，
            它會改成講「你已經在對的地方了，往上打字」 -->
-      <CardPicker v-model="picked" :max="1" default-source="catalog" on-upload-page />
+      <CardPicker v-if="entryMode === 'catalog'" v-model="picked" :max="1" default-source="catalog" on-upload-page />
+
+      <div v-else class="manualFields">
+        <label class="fld"><span>卡片名稱</span><input v-model.trim="manualName" type="text" maxlength="120" placeholder="例：皮卡丘"></label>
+        <label class="fld"><span>系列／彈別</span><input v-model.trim="manualSetCode" type="text" maxlength="40" placeholder="例：SV2a"></label>
+        <label class="fld"><span>卡號</span><input v-model.trim="manualCardNo" type="text" maxlength="40" placeholder="例：025/165"></label>
+        <label class="fld"><span>語言</span><select v-model="manualLanguage"><option value="JP">日文</option><option value="EN">英文</option></select></label>
+        <CardFrontUpload v-model:file-id="frontFileId" v-model:ready="frontReady" />
+      </div>
 
       <!-- 挑好的那張。挑卡器的貼底列只報數字，這裡把完整身分攤開 ——
            登記寫進系統的就是這一行，送出前要看得到 -->
-      <div v-if="pick" class="pickedRow">
+      <div v-if="entryMode === 'catalog' && pick" class="pickedRow">
         <img
           v-if="pick.artUrl" class="pickedArt" :src="pick.artUrl" :alt="pick.card.name"
           loading="lazy" decoding="async">
@@ -232,7 +244,7 @@ async function submit() {
           v-for="g in GRADERS" :key="g.k"
           type="button" role="radio" :aria-checked="grader === g.k"
           class="gTab" :class="{ on: grader === g.k }"
-          @click="grader = g.k; clearErrors(); resetCertConfirm()"
+          @click="grader = g.k; clearErrors()"
         >{{ g.label }}</button>
       </div>
 
@@ -242,9 +254,9 @@ async function submit() {
           <span>鑑定編號</span>
           <input
             v-model="certNo" type="text" inputmode="numeric" autocomplete="off"
-            placeholder="卡殼標籤上的號碼" @input="clearErrors(); resetCertConfirm()">
+            placeholder="卡殼標籤上的號碼" @input="clearErrors()">
           <span class="fldWhy muted">
-            編號是這張卡在系統裡的身分證 —— 會拿去向鑑定機構查證，也用來防止同一張卡被登記兩次。
+            編號是這張卡在系統裡的身分識別，也用來防止同一張卡被登記兩次。
           </span>
         </label>
         <label class="fld">
@@ -267,59 +279,8 @@ async function submit() {
       </label>
     </section>
 
-    <!-- 一般錯誤（含 CERT_NOT_FOUND / CERT_INVALID / CERT_ALREADY_LISTED 的訊息） -->
+    <!-- 一般錯誤（含 CERT_ALREADY_LISTED 的訊息） -->
     <p v-if="error" class="err" role="alert">{{ error }}</p>
-
-    <!-- PSA 查到的卡號跟挑的卡對不上。
-         這一塊要回答的是「系統覺得哪裡對不上」，不是「你錯了」——
-         所以主體是一張兩邊並排的比對表，勾選框放在看得完之後的位置。
-         沒有這張表的勾選框等於要人替一件他不知道內容的事簽名。 -->
-    <div v-if="certMismatch" class="mismatch" data-testid="cert-mismatch-box">
-      <p class="mmT">這是同一張卡嗎？</p>
-      <p class="mmP">
-        這個編號在鑑定機構查得到，但它登記的卡號跟你挑的卡不一樣。
-        機構的資料是英文、我們的目錄是日文，卡名沒辦法直接比對，
-        所以卡號是唯一能自動核對的欄位 —— 它對不上的時候，只有你看得到實體卡。
-      </p>
-
-      <dl class="mmGrid">
-        <div class="mmRow">
-          <dt>機構登記的卡號</dt>
-          <dd class="mono" data-testid="mm-psa-no">{{ certMismatch.psaCardNumber || '未提供' }}</dd>
-        </div>
-        <div class="mmRow">
-          <dt>你挑的卡號</dt>
-          <dd class="mono" data-testid="mm-my-no">{{ certMismatch.cardNo || '—' }}</dd>
-        </div>
-        <div v-if="certMismatch.psaSubject" class="mmRow">
-          <dt>機構登記的卡片</dt>
-          <dd data-testid="mm-psa-subject">{{ certMismatch.psaSubject }}</dd>
-        </div>
-        <div class="mmRow">
-          <dt>你挑的卡片</dt>
-          <dd>{{ pick?.card.name || '—' }}</dd>
-        </div>
-        <div class="mmRow">
-          <dt>鑑定編號</dt>
-          <dd class="mono">{{ certMismatch.certNo }}</dd>
-        </div>
-      </dl>
-
-      <p class="mmWhy muted">
-        日版鑑定卡常常這樣：卡殼標籤上印的是流水號（像 331），
-        卡面與目錄寫的是「編號／總數」（像 331/190）。只是寫法不同的話，就是同一張卡。
-      </p>
-
-      <!-- 觸控目標：整塊 label 可點，min-height 44px -->
-      <label class="mmConfirm">
-        <input v-model="certConfirmed" type="checkbox" data-testid="cert-confirm">
-        <span>我核對過卡殼上的資訊，確認這就是同一張卡</span>
-      </label>
-      <p class="mmNote muted">
-        勾選之後由你為這張卡的身分負責。登記完之後被發現不是同一張卡，
-        這張卡會被下架並交由客服處理。
-      </p>
-    </div>
 
     <!-- 編號登記在別人名下：出路接在被擋住的當下（比照開池表單） -->
     <div v-if="takeover" class="takeover" data-testid="takeover-box">
@@ -361,6 +322,12 @@ h2 { font-size: 15.5px; margin: 0 0 4px; }
 .mono { font-family: var(--font-mono); }
 
 .panel { min-width: 0; padding: 16px; margin-bottom: 14px; display: grid; gap: 10px; }
+.entryTabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 4px; border-radius: 8px; background: var(--surface-2); }
+/* 44px 是觸控下限（原本 40px）。這兩顆是整頁的第一個決策點，
+   按不準的代價是使用者留在錯的模式裡填完整張表 */
+.entryTabs button { min-height: 44px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; }
+.entryTabs button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
+.manualFields { display: grid; gap: 12px; }
 
 /* ---- 挑好的卡 ---- */
 .pickedRow {
@@ -407,14 +374,20 @@ h2 { font-size: 15.5px; margin: 0 0 4px; }
 .fields { min-width: 0; display: grid; gap: 12px; }
 .fld { min-width: 0; display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--muted); }
 .fld > span:first-child { font-weight: 600; color: var(--ink); }
-.fld input {
+/* select 一起吃這組樣式。
+   原本只寫了 `.fld input`，於是手動模式那顆「語言」下拉是瀏覽器預設外觀 ——
+   量到的高度只有 24px，連 44px 觸控下限的一半都不到，
+   而且字級小於 16px 會讓 iOS Safari 在點下去時自動放大整頁。 */
+.fld input, .fld select {
   min-width: 0;
   /* 16px 是底線：iOS Safari 對小於 16px 的輸入框會自動放大整頁 */
   padding: 11px 12px; font: inherit; font-size: 16px;
   border: 1px solid var(--line); border-radius: 10px;
   background: var(--field, var(--surface-2)); color: var(--ink);
 }
-.fld input:focus { outline: none; border-color: var(--gold); }
+.fld select { min-height: 44px; appearance: none; background-image: none; }
+.fld input:focus, .fld select:focus { outline: none; border-color: var(--gold); }
+.fld select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .fldWhy { font-size: 11.5px; line-height: 1.6; min-width: 0; }
 
 /* ---- 錯誤與兩種 409 ---- */

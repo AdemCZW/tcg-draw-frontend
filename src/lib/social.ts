@@ -77,7 +77,7 @@ const mockNotifications: Notification[] = [
   { id: 6, kind: 'trade-result', title: '你的出價被接受了', body: '「謎擬Ｑ SAR」以 26,000 點成交，卡片已入卡冊。', link: '/me/offers', ref_id: 'to-5', read_at: null, created_at: now - 95 * 60_000 },
   { id: 3, kind: 'listing-sold', title: '你的卡賣出了', body: '「月亮伊布 ex SAR」以 4,200 點成交，點數已入帳。', link: '/me/wallet', ref_id: 'l-1', read_at: null, created_at: now - 5 * 3600_000 },
   { id: 2, kind: 'shipment', title: '你的卡已經寄出', body: '物流單號 SMOKE12345678', link: '/me/cards', ref_id: 'sh-1', read_at: new Date(now - 26 * 3600_000).toISOString(), created_at: now - 28 * 3600_000 },
-  { id: 1, kind: 'system', title: '測試點數已入帳', body: 'LINE 登入送 1,000,000 點，可以直接開始抽卡。', link: '/me/wallet', ref_id: 'u-1', read_at: new Date(now - 70 * 3600_000).toISOString(), created_at: now - 72 * 3600_000 }
+  { id: 1, kind: 'system', title: '測試點數已入帳', body: '平台已撥入 1,000,000 點測試點數。', link: '/me/wallet', ref_id: 'u-1', read_at: new Date(now - 70 * 3600_000).toISOString(), created_at: now - 72 * 3600_000 }
 ]
 let mockShare: ShareSettings = { public: false, slug: null }
 

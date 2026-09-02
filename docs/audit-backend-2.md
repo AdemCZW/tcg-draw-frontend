@@ -12,6 +12,9 @@
 
 > 稽核期間有另一支 agent 同時在改 `server/src/psa.ts` 與 `routes/pools.ts`（PSA 驗證），
 > 本文所有結論以當時的 HEAD（671ee6f）為準，煙霧測試 278 項在含該改動的工作樹上仍全綠。
+>
+> **後記**：`server/src/psa.ts` 與整套 PSA 查證之後已全部移除（見 open-issues X-1）。
+> 本文提到 psa.ts 的段落是當時的歷史紀錄，不是現況。
 
 ---
 

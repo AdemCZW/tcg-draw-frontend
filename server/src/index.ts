@@ -5,6 +5,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { serve } from '@hono/node-server'
+import { timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 import { corsOrigins, env } from './env.js'
 import { sql } from './db.js'
@@ -21,7 +22,6 @@ import { pub } from './routes/public.js'
 import { files } from './routes/files.js'
 import { social, socialPublic } from './routes/social.js'
 import { sellers } from './routes/sellers.js'
-import { psa } from './routes/psa.js'
 import { tickets } from './routes/tickets.js'
 import { sweep } from './orders-service.js'
 import { sweepPools, sweepStashExpiry } from './pools-service.js'
@@ -41,10 +41,20 @@ app.get('/health', async c => {
 })
 
 /* 開發用登入：給 handle 就發 token。
-   只在 DEV_LOGIN=1 時開 —— smoke 測試靠它建立測試身分。正式環境不設這個變數就沒有這條路。 */
-if (process.env.DEV_LOGIN === '1') {
+   啟用時除了 DEV_LOGIN=1，還要附上沒有進前端 bundle 的私密 header；少設
+   DEV_LOGIN_SECRET 時 env.ts 會拒絕啟動，避免單一部署旗標誤設就暴露這些路由。 */
+if (env.DEV_LOGIN === '1') {
+  const requireDevSecret: import('hono').MiddlewareHandler = async (c, next) => {
+    const provided = c.req.header('x-dev-login-secret')
+    const expected = env.DEV_LOGIN_SECRET!
+    if (!provided || provided.length !== expected.length || !timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) {
+      return c.json({ error: 'UNAUTHORIZED', message: '開發端點需要有效憑證' }, 401)
+    }
+    await next()
+  }
+  app.use('/v1/dev/*', requireDevSecret)
   const LoginBody = z.object({ handle: z.string().min(2).max(32), name: z.string().min(1).max(32) })
-  app.post('/v1/auth/dev-login', async c => {
+  app.post('/v1/auth/dev-login', requireDevSecret, async c => {
     const parsed = LoginBody.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'BAD_REQUEST', message: '參數不合法' }, 400)
     const id = await ensureUser(parsed.data.handle, parsed.data.name)
@@ -163,9 +173,6 @@ app.route('/v1/share', socialPublic)
    （GET /v1/sellers 賣家列表、GET /v1/sellers/:id 賣家頁，兩個都是公開的）。
    這支有 use('*', requireAuth)，掛同一個前綴會把那兩個公開端點一起變成要登入。 */
 app.route('/v1/seller', sellers)
-/* PSA 鑑定編號查證。要登入（查證吃 PSA 每天 100 次配額，不開放匿名）。
-   真正的把關在建池 API，這支只是讓前端在送出前先問一次。 */
-app.route('/v1/psa', psa)
 /* 客服工單（使用者端）。客服端在 /v1/admin/tickets，走既有的 requireAdmin。
    掛在 /v1/tickets 而不是 /v1 底下：這支有 use('*', requireAuth)，
    掛同一個前綴會把 public.ts 那些公開端點一起變成要登入（同 /v1/seller 那條的理由）。 */

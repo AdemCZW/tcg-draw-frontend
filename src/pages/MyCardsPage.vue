@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, type PrizeSummary } from '@/lib/api'
+import { api, type Page, type PrizeSort, type PrizeSummary } from '@/lib/api'
 import type { Tier, UserPrize } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 import Tilt3D from '@/components/Tilt3D.vue'
@@ -20,7 +20,7 @@ import { ApiError, http } from '@/lib/http'
 import { MOCK } from '@/lib/config'
 import { useAuthStore } from '@/stores/auth'
 import { refPriceText, refPriceNum } from '@/lib/refprice'
-import { mergeByCard, certTailOf, type MergeGroup } from '@/lib/card-merge'
+import { cardMergeKey, certTailOf, type MergeGroup } from '@/lib/card-merge'
 
 const wallet = useWalletStore()
 const auth = useAuthStore()
@@ -46,7 +46,11 @@ const justGot = computed(() => new Set(
    使用者會看到「寄存中 0 張」而真正的寄存中卡片躺在第 3 批。現在 tab 直接
    當成 API 參數送出去，由 SQL 過濾。 */
 const list = useInfiniteList<UserPrize>((cursor, signal) =>
-  api.myPrizes({ cursor, signal, status: tab.value === 'all' ? undefined : tab.value }))
+  api.myPrizes({
+    cursor, signal,
+    status: tab.value === 'all' ? undefined : tab.value,
+    sort: sort.value
+  }))
 const sentinelRef = list.sentinel
 const prizes = list.items
 
@@ -73,6 +77,11 @@ const total = computed(() => summary.value?.total ?? 0)
 const ownedCount = computed(() => summary.value?.owned ?? 0)
 const totalValue = computed(() => summary.value?.totalValue ?? 0)
 const bestCard = computed(() => summary.value?.best ?? null)
+/* 重複的卡有幾款、共幾張。**這兩個數字的用途是讓「同款集中」被看見** ——
+   沒有人會去點一個他不知道自己需要的排序，但「你有 10 款重複的卡」會讓他去點。
+   同樣由後端算：前端數已載入的那 24 張，會告訴使用者「重複 1 款」。 */
+const dupGroups = computed(() => summary.value?.dupGroups ?? 0)
+const dupCards = computed(() => summary.value?.dupCards ?? 0)
 /* 曲線需要每一張卡的「時間 + 金額」才畫得出來，聚合不掉。
    後端那支只投影三個純量欄位（不含 card 這個 jsonb），整頁只取一次。 */
 const curvePrizes = computed(() =>
@@ -132,17 +141,106 @@ const tabs = computed(() => TABS.filter(t => countOf(t.k) > 0))
    status === tab，它會在「寄存中」分頁裡當場消失，使用者看不到入帳提示。 */
 const shown = prizes
 
+/* ---- 排序 ----
+   使用者原話：「假設我想整理重複的卡片拿去出售，現在卡片順序比較分散，
+   就會需要一張一張確認哪些有重複、哪些已經上架了。」
+
+   ⚠️ **排序與分組都在後端做**，理由跟上面的狀態過濾一模一樣，而且更嚴重：
+   前端只排得到已載入的那 24 張，捲一頁就整個重排；前端分組更會直接說謊 ——
+   同一款卡的 10 張裡有 3 張在第 1 批、7 張在第 3 批，前端數出來的是「×3」，
+   而使用者正是要靠那個數字決定「這款我可以賣掉幾張」。
+   （實測過這份資料就是 3 + 0 + 7 的分佈，見 server/src/routes/prizes.ts。）
+
+   三個選項為什麼是這三個、為什麼沒有「賞別」與「卡名」，
+   寫在 server/src/routes/prizes.ts 的 SORTS 上（判斷的依據在後端資料那一側）。 */
+const sort = ref<PrizeSort>('acquired')
+const SORT_TABS: { k: PrizeSort; label: string }[] = [
+  { k: 'acquired', label: '取得時間' },
+  { k: 'dupes', label: '同款集中' },
+  { k: 'value', label: '參考價' }
+]
+/* 只有這兩種排序保證「同款卡必然相鄰」（order by 裡夾著分組鍵），
+   前端才敢把連續同鍵的卡併成一格。取得時間是一條時間軸，
+   把 9 張舊卡拉到新卡旁邊就不再是時間軸了，所以它刻意不分組。
+
+   第二個條件是**後端真的回了 group_key** 才分組。前後端不是同時上線的
+   （前端在 GitHub Pages、後端在 Railway），中間那段時間舊後端會把不認得的
+   ?sort= 直接忽略、照取得時間回一批卡。那時候如果照樣分組，畫面會把
+   「剛好相鄰的兩張同款卡」併成一格、其餘散在別處 —— 那是**錯的數字**，
+   比不分組糟得多。偵測不到就退回逐張顯示，也就是這個改動之前的樣子。 */
+const serverGroups = computed(() => shown.value[0]?.groupKey !== undefined)
+const grouped = computed(() => sort.value !== 'acquired' && serverGroups.value)
+
+/**
+ * 這張卡屬於哪一款。
+ *
+ * 值來自後端（server/src/routes/prizes.ts 的 GROUP_KEY），**前端不重算** ——
+ * 分組必須跟後端的 order by 是同一份定義，不然「同款相鄰」這個前提就不成立。
+ * cardMergeKey 是舊後端還沒有 group_key 時的退路，兩邊產生的字串逐字相同。
+ */
+const groupKeyOf = (p: UserPrize) => p.groupKey ?? cardMergeKey(p.card)
+
+/* 正在跟後端要哪一組的其餘卡片（卡牆的上架選取與出貨面板共用一個）。
+   為什麼它一開就把**所有**分組的控制項停用，而不是只停用那一組：
+   兩支呼叫端在抓的時候都會 `if (groupBusy) return` 直接放掉這一下 ——
+   按鈕還亮著、按下去卻什麼都沒發生，是最難懂的一種壞掉。
+   一次只會有一個請求在飛，那一瞬間全部停用是誠實的說法。 */
+const groupBusy = ref<string | null>(null)
+
+/** 畫面上的一格。沒分組時就是一張卡，分組時是「同一款卡的一疊」 */
+interface CardRow {
+  key: string
+  /** 拿來顯示卡圖、卡名、狀態的代表卡 */
+  head: UserPrize
+  /** **已經載進來**的成員。可能少於 total —— 其餘的在還沒捲到的批次裡 */
+  members: UserPrize[]
+  /** 整本卡冊裡這一款有幾張（後端用 window function 算的，不是這一頁的數量） */
+  total: number
+  /** 其中還能上架的有幾張。「哪些已經上架了」就是靠這個數字回答的 */
+  sellable: number
+}
+
+/**
+ * 把連續同鍵的卡併成一格。
+ *
+ * **只把「相鄰」的併起來，不做任何重排**，因為排序（也就是相鄰性）是後端
+ * 保證的。這一點是刻意的紀律：如果這裡改成「掃一遍全部再依鍵分堆」，
+ * 那就是在前端分組了 —— 第 3 批才載進來的同款卡會另外自成一堆，
+ * 使用者會在同一個畫面上看到「皮卡丘 ×3」與「皮卡丘 ×7」兩格。
+ * 現在跨批的成員會自然接進同一格，因為它們在 shown 這個陣列裡本來就相鄰。
+ *
+ * 張數（total）也不從 members.length 來 —— 那是「載了幾張」不是「有幾張」。
+ */
+const rows = computed<CardRow[]>(() => {
+  const out: CardRow[] = []
+  for (const p of shown.value) {
+    const key = groupKeyOf(p)
+    const last = out[out.length - 1]
+    if (grouped.value && last && last.key === key) { last.members.push(p); continue }
+    out.push({
+      key: grouped.value ? key : p.id,
+      head: p, members: [p],
+      total: grouped.value ? (p.groupTotal ?? 1) : 1,
+      sellable: grouped.value ? (p.groupSellable ?? (canSell(p) ? 1 : 0)) : (canSell(p) ? 1 : 0)
+    })
+  }
+  return out
+})
+
 const listRef = ref<HTMLElement | null>(null)
-/* 換分頁＝換一組查詢：游標歸零、清空既有卡片、重抓第一批。
+function backToTop() {
+  const top = listRef.value?.getBoundingClientRect().top ?? 0
+  if (top < 0) listRef.value?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+}
+/* 換分頁／換排序＝換一組查詢：游標歸零、清空既有卡片、重抓第一批。
    過期回應由 composable 的世代編號擋掉（快速連按不會錯位）。
    同時把清單頂端捲回視野：內容整批換掉了，停在原本的捲動位置會落在
    一個比舊清單短得多的新清單的中間，看起來像「載不出來」。 */
-watch(tab, () => {
+watch([tab, sort], () => {
   openCard.value = null
   confirmPrize.value = null
   list.reset()
-  const top = listRef.value?.getBoundingClientRect().top ?? 0
-  if (top < 0) listRef.value?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  backToTop()
 })
 
 /* 卡圖上的膠囊放不下「市場販售中」五個字（兩欄格線下整張卡才 145px 寬），
@@ -270,10 +368,26 @@ function flash(msg: string) {
    注意這裡的哨兵在面板自己的捲動容器裡：IntersectionObserver 的 root 是視窗，
    哨兵被 .sheet 的 overflow 裁掉時就不算相交，所以判斷仍然正確，
    只是 400px 的提前量沒有作用（要真的捲到面板底部才觸發）。這份清單短，可以接受。 */
+/* sort: 'dupes' —— 出貨面板裡同款卡也要疊在一起。
+   這份清單原本是一列一張的扁平勾選表：手上有 10 張一樣的卡時，
+   面板上是十列長得一模一樣的字，使用者要一列一列點，而且點完數不出來自己
+   點了幾張。用同一套分組之後那十列變成一列「×10」，勾一下就是十張。 */
 const shipList = useInfiniteList<UserPrize>((cursor, signal) =>
-  api.myPrizes({ cursor, signal, status: 'stashed' }))
+  api.myPrizes({ cursor, signal, status: 'stashed', sort: 'dupes' }))
 const shipSentinelRef = shipList.sentinel
 const stashed = shipList.items
+
+/** 出貨面板的分組。規則跟卡牆同一份（相鄰同鍵才併，不重排） */
+const shipRows = computed<CardRow[]>(() => {
+  const out: CardRow[] = []
+  for (const p of stashed.value) {
+    const key = groupKeyOf(p)
+    const last = out[out.length - 1]
+    if (last && last.key === key) { last.members.push(p); continue }
+    out.push({ key, head: p, members: [p], total: p.groupTotal ?? 1, sellable: p.groupTotal ?? 1 })
+  }
+  return out
+})
 const stashedCount = computed(() => summary.value?.counts.stashed ?? 0)
 /* 上架入口看的是「可上架的張數」：canSell 收 stashed 與 in_book 兩種，
    只數 stashed 的話，卡冊裡全是自己登記的卡（in_book）時上架鍵不會出現，
@@ -311,10 +425,22 @@ const shipBlockWhy = computed(() => {
 /* 收件資料從會員資料帶過來，讓人不用每次重打。
    但仍然可以改 —— 「這次要寄到哪」跟「我的預設地址」是兩件事
    （後端 prizes.ts 的註解也是這樣說的）。 */
-async function openShip(p: UserPrize) {
+/**
+ * 開出貨面板。
+ *
+ * ⚠️ p 是選填的，這一改就是「批次出貨為什麼找不到」的答案本身。
+ *
+ * 合併出貨一直都在（後端 /v1/prizes/ship 收的就是一個陣列，會合成一張出貨單），
+ * 但它**唯一的入口**是某一張卡的「操作」→「申請出貨」—— 也就是要先在卡牆上
+ * 挑一張寄存中的卡、展開它、再按裡面的按鈕，勾選其他卡的清單才會出現。
+ * 使用者要先做對三步、而且要先選中一張，才會知道原來可以一次寄很多張。
+ * 那不是「沒有這個功能」，是把它藏在一張隨便哪張卡的第三層裡。
+ * 現在卡冊層級直接有一顆「合併出貨」，跟「上架出售」同一排。
+ */
+async function openShip(p?: UserPrize) {
   track('click_ship_request')
   shipErr.value = ''
-  shipPick.value = [p.id]
+  shipPick.value = p ? [p.id] : []
   shipOpen.value = true
   // 每次打開都重抓：上一次打開之後可能已經送出過幾張，那些不該再出現在清單裡
   shipList.reset()
@@ -336,6 +462,44 @@ function toggleShipPick(id: string) {
   const i = shipPick.value.indexOf(id)
   if (i === -1) shipPick.value.push(id)
   else shipPick.value.splice(i, 1)
+}
+
+/** 這一款卡在出貨清單裡勾了幾張 */
+const shipPickedIn = (row: CardRow) =>
+  row.members.reduce((n, p) => n + (shipPick.value.includes(p.id) ? 1 : 0), 0)
+
+/**
+ * 出貨面板的「這一款勾幾張」。
+ *
+ * 跟上架那邊同一套（含跨批載入時跟後端要整組），但這裡刻意**只有全選／全不選**，
+ * 沒有 − ＋：出貨的問題是「把我的卡寄給我」，幾乎不會有人想「這 10 張裡寄 4 張」，
+ * 而每多一組 − ＋ 就多一組要在 393px 上排開的觸控目標。要挑張數的人仍然
+ * 可以逐張勾（分組沒有拿掉單張勾選，只是把同款疊起來）。
+ *
+ * 後端 /v1/prizes/ship 一次最多 50 張（ShipBody），超過的話送出時會被擋下來
+ * 並照實顯示，不在這裡默默截斷 —— 截斷等於替使用者決定哪幾張不寄。
+ */
+async function toggleShipRow(row: CardRow) {
+  if (shipPickedIn(row) >= row.total) {
+    const drop = new Set(row.members.map(p => p.id))
+    shipPick.value = shipPick.value.filter(id => !drop.has(id))
+    return
+  }
+  let pool = row.members
+  if (pool.length < row.total) {
+    if (groupBusy.value) return
+    groupBusy.value = row.key
+    try {
+      pool = (await api.myPrizes({ group: row.key, status: 'stashed', limit: 100 })).items
+    } catch {
+      shipErr.value = '這一款卡的其餘幾張載入失敗了，請稍後再試一次。'
+      return
+    } finally {
+      groupBusy.value = null
+    }
+  }
+  const have = new Set(shipPick.value)
+  shipPick.value = shipPick.value.concat(pool.filter(p => !have.has(p.id)).map(p => p.id))
 }
 
 async function submitShip() {
@@ -416,6 +580,87 @@ function toggleSell(p: UserPrize) {
   else sellPicked.value.splice(i, 1)
 }
 
+/* ---- 一次選 N 張 ----
+   使用者原話：「例如同一張卡我有 10 張想出售，如果現在要一張一張按上架，
+   就要重複操作 10 次」。
+
+   同款卡併成一格之後這件事才做得起來 —— 在扁平清單上「這一組」根本不存在，
+   十張同樣的卡散落在三個批次裡，沒有任何一個東西可以掛「全選」。
+
+   ⚠️ 這裡有一個一定要處理的坑：畫面上寫著「×10」，但**手上可能只有 3 張的
+   資料**（其餘 7 張在還沒捲到的批次）。兩條偷懶的路都不能走 ——
+     假裝選了 10 張、實際只送 3 個 id：使用者要到定價頁才發現少了 7 張；
+     把上限降成「已載入的 3 張」：那等於把分頁這個實作細節丟給使用者，
+       而且畫面上那個「10」會變成一個按不動的數字。
+   所以缺的時候就跟後端要整組（?group=），要到了再選。 */
+/** 這一款卡目前選了幾張 */
+const pickedInGroup = (key: string) =>
+  sellPicked.value.reduce((n, p) => n + (groupKeyOf(p) === key ? 1 : 0), 0)
+
+/**
+ * 把整組的成員都拿回來。
+ *
+ * 一次抓 100 張（後端 limit 的上限），還有下一頁就繼續 —— 同一款卡超過
+ * 100 張是極端情況，但「抓一頁就當作全部」會安靜地少選幾張，
+ * 那正是這整段程式要避免的錯誤。上限 500 是防呆，不是預期會走到的路。
+ */
+async function fetchGroup(key: string): Promise<UserPrize[]> {
+  const out: UserPrize[] = []
+  let cursor: string | null = null
+  do {
+    const page: Page<UserPrize> = await api.myPrizes({
+      group: key, limit: 100, cursor,
+      status: tab.value === 'all' ? undefined : tab.value
+    })
+    out.push(...page.items)
+    cursor = page.nextCursor
+  } while (cursor && out.length < 500)
+  return out
+}
+
+/**
+ * 把這一組的選取張數調成剛好 n 張。
+ *
+ * 減少時移除**最後選進來的那幾張**（跟「已選的卡」面板的 removeOne 同一個
+ * 直覺：手誤多按一下，撤銷的就是剛剛那一下）。
+ */
+async function setGroupPick(row: CardRow, n: number) {
+  const want = Math.max(0, Math.min(n, row.sellable))
+  const cur = sellPicked.value.filter(p => groupKeyOf(p) === row.key)
+  if (want === cur.length) return
+
+  if (want < cur.length) {
+    const drop = new Set(cur.slice(want).map(p => p.id))
+    sellPicked.value = sellPicked.value.filter(p => !drop.has(p.id))
+    return
+  }
+
+  let pool = row.members.filter(canSell)
+  if (pool.length < want) {
+    if (groupBusy.value) return          // 同一組連按時只跑一次
+    groupBusy.value = row.key
+    try {
+      pool = (await fetchGroup(row.key)).filter(canSell)
+    } catch {
+      /* 照實說。安靜地只選到 3 張，使用者會以為自己選了 10 張 */
+      flash('這一款卡的其餘幾張載入失敗了，請稍後再試一次。')
+      return
+    } finally {
+      groupBusy.value = null
+    }
+  }
+  const have = new Set(sellPicked.value.map(p => p.id))
+  const add = pool.filter(p => !have.has(p.id)).slice(0, want - cur.length)
+  sellPicked.value = sellPicked.value.concat(add)
+}
+
+/* 點卡面＝這一組全選／全不選。逐張加減交給旁邊的 − ＋，
+   而「我要賣掉這一款全部」是最常見的那一種，值得只按一下。 */
+function toggleRow(row: CardRow) {
+  if (!row.sellable) return
+  void setGroupPick(row, pickedInGroup(row.key) >= row.sellable ? 0 : row.sellable)
+}
+
 const sellPickValue = computed(() =>
   sellPicked.value.reduce((a, p) => a + refPriceNum(p.card.refPrice), 0))
 
@@ -441,7 +686,20 @@ function closeChosen() { chosenOpen.value = false }
    有鑑定編號的卡永遠各自一格 —— PSA #82345671 與 #82345672 是兩張
    可以各自查證的卡，併成 ×2 之後「取消的是哪一張」就講不清楚了。 */
 type PickGroup = MergeGroup<UserPrize>
-const sellGroups = computed<PickGroup[]>(() => mergeByCard(sellPicked.value, p => p.card))
+/* 鍵用 groupKeyOf（後端算的那個），不是自己再跑一次 cardMergeKey ——
+   卡牆上說「×10」而這裡拆成兩格，是使用者最沒有辦法自己和好的那種矛盾。
+   規則本身仍然只有一份：後端的 GROUP_KEY 產生的字串跟 cardMergeKey 逐字相同，
+   而 cardMergeKey 留給建池挑卡器（那份清單不分頁，手上沒有 group_key）。 */
+const sellGroups = computed<PickGroup[]>(() => {
+  const by = new Map<string, PickGroup>()
+  for (const p of sellPicked.value) {
+    const k = groupKeyOf(p)
+    const g = by.get(k)
+    if (g) g.members.push(p)
+    else by.set(k, { key: k, members: [p], head: p })
+  }
+  return [...by.values()]
+})
 
 /** 這一格代表幾張卡就顯示 ×N；沒有鑑定編號的同款卡才會併到一起 */
 const certTail = (p: UserPrize) => certTailOf(p.card)
@@ -742,6 +1000,25 @@ async function copyLink() {
 
     <p class="muted note">寄存中的卡可合併出貨（省運費），寄存期限 90 天。</p>
 
+    <!-- ---- 「你有重複的卡」----
+         這一行是整個功能的入口。使用者原話是「需要一張一張確認哪些有重複」——
+         那件事之所以要一張一張做，是因為畫面上從來沒有任何地方說過「你有幾款
+         重複的」。而排序膠囊本身也解不了這件事：沒有人會去點一個他不知道
+         自己需要的排序。所以先把事實講出來，再把控制項的名字寫進同一句話。
+
+         數字來自 /summary（整本卡冊）而不是已載入的那 24 張 —— 從陣列數出來的
+         「重複 1 款」正是這個功能要消滅的那個假答案。
+
+         已經切到「同款集中」時就不再出現：那時候畫面自己就在講這件事，
+         再放一行等於重複，而且會把卡牆再往下推一行。 -->
+    <p v-if="dupGroups && sort !== 'dupes'" class="dupNote">
+      你有 <b class="mono">{{ dupGroups }}</b> 款重複的卡（共 {{ dupCards }} 張）。
+      <button type="button" class="linkBtn" @click="sort = 'dupes'; backToTop()">
+        切到「同款集中」
+      </button>
+      可以把它們排在一起。
+    </p>
+
     <div v-if="list.ready.value && !total" class="empty card">
       <p>卡冊還是空的。</p>
       <RouterLink :to="{ name: 'home' }" class="btn primary">去抽第一張</RouterLink>
@@ -758,6 +1035,17 @@ async function copyLink() {
         v-if="sellableCount && !selecting"
         type="button" class="btn primary sellCta" @click="startSell"
       >上架出售</button>
+
+      <!-- 合併出貨：這顆按鈕**在這一輪之前根本不存在**。
+           批次出貨的能力一直都在（後端 /v1/prizes/ship 收陣列、合成一張出貨單），
+           但唯一的入口是「在卡牆上挑一張寄存中的卡 → 展開操作 → 申請出貨」，
+           勾選其他卡的清單要走完那三步才會出現。使用者要先隨便選中一張，
+           才會發現原來可以一次寄很多張 —— 那不是功能不存在，是入口藏在
+           某一張卡的第三層裡。提到跟「上架出售」同一排才對得起「合併」兩個字。 -->
+      <button
+        v-if="stashedCount && !selecting"
+        type="button" class="btn sellCta" @click="openShip()"
+      >合併出貨</button>
 
       <!-- 登記卡片：把手上的實體卡登記進卡冊。跟「上架出售」同一層級 ——
            兩者都是「讓卡冊多／少一批卡」的入口，不是某一張卡的操作。
@@ -778,6 +1066,23 @@ async function copyLink() {
       </div>
     </div>
 
+    <!-- ---- 排序 ----
+         自己一列，不跟狀態分頁併排：兩者回答的是不同的問題（「看哪一批」
+         與「怎麼排」），而且 393px 上狀態分頁本身就已經要橫向捲了，
+         再塞三顆膠囊進去等於兩排都看不完。
+
+         這一列只有在卡片多到需要排序時才出現：一頁裝得下的卡冊排不排都一樣，
+         而每一列固定出現的控制項都會把卡牆往下推一屏。 -->
+    <div v-if="total > 6 && summary?.dupGroups !== undefined" class="sorts" role="tablist" aria-label="排序方式">
+      <span class="sortLabel">排序</span>
+      <button
+        v-for="s in SORT_TABS" :key="s.k"
+        type="button" role="tab" :aria-selected="sort === s.k"
+        class="tab" :class="{ on: sort === s.k }"
+        @click="sort = s.k"
+      >{{ s.label }}</button>
+    </div>
+
     <!-- 選取模式的說明另起一行：塞進上面那列會把分頁擠到看不見 -->
     <!-- canSell 收兩種狀態（stashed 與 in_book），文案要跟它一致：
          自己登記進卡冊的卡就是 in_book，說「只有寄存中」會讓人以為登記的卡賣不了 -->
@@ -785,14 +1090,19 @@ async function copyLink() {
       點卡片挑要賣的，可以複選。<strong>寄存中</strong>與<strong>在卡冊</strong>的卡能上架。
     </p>
 
+    <!-- 一格＝一張卡（取得時間排序）或一疊同款卡（同款集中／參考價排序）。
+         v-for 跑的是 rows 不是 shown：分組是把**相鄰**的同鍵卡併起來，
+         而「相鄰」是後端 order by 保證的，前端不重排也不掃全表 ——
+         掃全表就是在前端分組，第 3 批才載進來的同款卡會另外自成一格。 -->
     <div ref="listRef" class="grid">
       <div
-        v-for="p in shown" :key="p.id" class="item card"
+        v-for="g in rows" :key="g.key" class="item card"
         :class="{
-          dim: p.status === 'recycled',
-          sel: sellPick.includes(p.id),
-          off: selecting && !canSell(p),
-          fresh: justGot.has(p.id)
+          dim: g.head.status === 'recycled',
+          sel: pickedInGroup(g.key) > 0,
+          part: selecting && g.total > 1 && pickedInGroup(g.key) > 0 && pickedInGroup(g.key) < g.sellable,
+          off: selecting && !g.sellable,
+          fresh: g.members.some(m => justGot.has(m.id))
         }"
       >
         <!-- 卡圖與疊在它上面的東西共用這一層定位容器。
@@ -805,31 +1115,64 @@ async function copyLink() {
           <!-- 賞別、狀態、卡名、市值全部疊回卡圖上：卡圖本來就佔著這塊面積，
                把字放上去等於不花額外高度。可讀性靠底部的漸層遮罩撐 -->
           <Tilt3D :max="10" radius="12px">
-            <CardArt :image="p.card.image" :alt="p.card.name" :tier="p.tier" :cert-no="p.card.certNo" :art-id="p.card.artId" />
+            <CardArt
+              :image="g.head.card.image" :alt="g.head.card.name" :tier="g.head.tier"
+              :art-id="g.head.card.artId"
+            />
             <div class="scrim">
               <div class="sTags">
-                <TierBadge :tier="p.tier" />
-                <span class="sChip">{{ statusShort[p.status] }}</span>
+                <!-- ---- 賞別與狀態只在「一格＝一張卡」時說得準 ----
+                     兩個都是**單張實體卡**的事實，一疊卡摘要不了：
+                       狀態：3 張寄存中、7 張已經在市場上，掛一個「寄存中」在
+                             整疊上是說錯話 —— 改由下面那行的「可上架 N／總」講。
+                       賞別：tier 是「這張卡在那個池裡被當成第幾賞」，是池的屬性
+                             不是卡的屬性；同一款卡在 A 池是 A 賞、在 B 池可能是
+                             C 賞。拿代表卡的賞別去標整疊，同樣是拿一張的事實
+                             講十張。整本卡冊的賞別組成上面的總覽卡已經有一條
+                             堆疊條連張數一起講完了。
+                     空出來的位置給「×N」—— 一疊卡真正要回答的是「幾張」。 -->
+                <template v-if="g.total === 1">
+                  <TierBadge :tier="g.head.tier" />
+                  <span class="sChip">{{ statusShort[g.head.status] }}</span>
+                </template>
+                <template v-else>
+                  <span class="sChip qty mono">×{{ g.total }}</span>
+                  <!-- 使用者原話：「需要一張一張確認…哪些已經上架了」。
+                       這一格就是那個答案。只有「不是全部都還能上架」時才出現 ——
+                       兩個數字一樣的時候這句話沒有資訊，而卡圖上每多一個膠囊
+                       就少一分卡面。
+                       為什麼放這裡而不是卡片底下那一行：底下那一行同時是
+                       「操作」鈕與數量選擇器的位置，一疊寄存中的卡兩個都要，
+                       擠不下第三個。這裡本來就是講「這一格現在是什麼狀況」的地方。 -->
+                  <span v-if="g.sellable < g.total" class="sChip mono">可上架 {{ g.sellable }}</span>
+                </template>
               </div>
               <div class="sMain">
-                <strong class="sName">{{ p.card.name }}</strong>
-                <span class="sVal mono">{{ refPriceText(p.card.refPrice) }}</span>
+                <strong class="sName">{{ g.head.card.name }}</strong>
+                <span class="sVal mono">{{ refPriceText(g.head.card.refPrice) }}</span>
               </div>
             </div>
 
             <!-- 選取模式的熱區疊在卡面上。.scrim 是 pointer-events: none，
                  點擊會落到這顆按鈕，所以不必為了「可選取」再複製一份卡面出來。
                  它是 absolute 不是 fixed —— Tilt3D 的 .plane 帶著 transform，
-                 裡面任何 fixed 的定位基準都會變成那張卡而不是視窗 -->
+                 裡面任何 fixed 的定位基準都會變成那張卡而不是視窗。
+
+                 點一下＝這一款**全選／全不選**。使用者原話是「同一張卡我有 10 張
+                 想出售…要一張一張按上架，就要重複操作 10 次」——「整款都要」
+                 是最常見的那一種，值得只按一下；要挑張數的走下面的 − ＋。 -->
             <button
               v-if="selecting"
               type="button" class="hit"
-              :disabled="!canSell(p)"
-              :aria-pressed="sellPick.includes(p.id)"
-              :aria-label="`選取 ${p.card.name}`"
-              @click="toggleSell(p)"
+              :disabled="!g.sellable || !!groupBusy"
+              :aria-pressed="pickedInGroup(g.key) >= g.sellable && g.sellable > 0 ? 'true'
+                : pickedInGroup(g.key) ? 'mixed' : 'false'"
+              :aria-label="g.total > 1
+                ? `選取全部 ${g.sellable} 張 ${g.head.card.name}`
+                : `選取 ${g.head.card.name}`"
+              @click="toggleRow(g)"
             >
-              <span v-if="canSell(p)" class="tick" aria-hidden="true"></span>
+              <span v-if="g.sellable" class="tick" aria-hidden="true"></span>
             </button>
           </Tilt3D>
 
@@ -850,60 +1193,105 @@ async function copyLink() {
                卡名放在面板第一行 —— 卡圖下半部的 .scrim（賞別／卡名／市值）
                會被蓋掉，不補一行的話展開之後就認不出這是哪一張卡了。 -->
           <div
-            v-if="openCard === p.id && p.status === 'stashed' && !selecting"
-            :id="`cardpop-${p.id}`"
+            v-if="openCard === g.head.id && g.head.status === 'stashed' && !selecting"
+            :id="`cardpop-${g.head.id}`"
             data-pop="panel"
-            class="pop" role="group" :aria-label="`${p.card.name} 的操作`" tabindex="-1"
+            class="pop" role="group" :aria-label="`${g.head.card.name} 的操作`" tabindex="-1"
           >
-            <p class="popName">{{ p.card.name }}</p>
+            <p class="popName">{{ g.head.card.name }}</p>
+            <!-- 一疊同款卡時，這裡的動作作用在其中一張。講出來，不要讓人以為
+                 按下去會把 10 張一起送走。同款卡在定義上彼此無法區分
+                 （分組鍵一致），所以「哪一張」這個問題本身沒有意義 ——
+                 真正會被誤解的是「幾張」，那才是要寫在畫面上的。
+                 要一次處理多張走上面的「合併出貨」或「上架出售」。 -->
+            <p v-if="g.total > 1" class="popQty">
+              這一款共 <b class="mono">{{ g.total }}</b> 張，以下動作只作用在其中 1 張。
+            </p>
             <!-- 鑑定編號與寄存期限：決定要不要出貨／回收時才需要，所以收在這裡 -->
-            <CertTag :card="p.card" />
-            <span class="mono muted exp">寄存至 {{ p.stashExpiresAt }}</span>
+            <CertTag :card="g.head.card" />
+            <span class="mono muted exp">寄存至 {{ g.head.stashExpiresAt }}</span>
 
             <div class="acts">
-              <button type="button" class="btn primary sm" @click="openShip(p)">申請出貨</button>
+              <button type="button" class="btn primary sm" @click="openShip(g.head)">申請出貨</button>
               <!-- 文案刻意不寫「回收 +N 點」：那句話讀起來像平台保證收購，
                    而實際上這是**賣家掛出來的報價**，錢從賣家那個池的保留額出，
                    接受之後卡片歸還賣家。不是保證成交 —— 賣家的保留額不足時
                    會被擋下來，所以按鈕講的是「提出」不是「換到」。 -->
               <button
-                v-if="quoteOf(p).eligible"
-                type="button" class="btn sm" @click="askRecycle(p)"
+                v-if="quoteOf(g.head).eligible"
+                type="button" class="btn sm" @click="askRecycle(g.head)"
               >
-                按宣告買回價換回 {{ quoteOf(p).points.toLocaleString() }} 點
+                按宣告買回價換回 {{ quoteOf(g.head).points.toLocaleString() }} 點
               </button>
-              <span v-else class="muted no-offer">{{ quoteOf(p).reason }}</span>
+              <span v-else class="muted no-offer">{{ quoteOf(g.head).reason }}</span>
             </div>
           </div>
         </div>
 
-        <p v-if="justGot.has(p.id)" class="fresh-tag" role="status">剛收進卡冊</p>
+        <p v-if="g.members.some(m => justGot.has(m.id))" class="fresh-tag" role="status">剛收進卡冊</p>
 
-        <p v-if="justRecycled?.id === p.id" class="got" role="status">
+        <p v-if="justRecycled && g.members.some(m => m.id === justRecycled!.id)" class="got" role="status">
           已入帳 <strong class="mono">+{{ justRecycled.points.toLocaleString() }}</strong> 點
         </p>
+
+        <!-- ---- 這一格底下那一行 ----
+             三種身分，同一個位置，所以格線的列高不會因為狀態不同而跳動：
+               選取模式 + 一疊  → 數量選擇器（− N/可上架 ＋）
+               寄存中 + 沒在選取 → 「操作」
+               其餘             → 取得日期
+             「這一疊有幾張已經上架」不放這裡，放卡圖上的膠囊那一排 ——
+             一疊寄存中的卡在這個位置本來就已經要放「操作」了。 -->
+
+        <!-- 數量選擇器。使用者原話：「不知道能不能做成一次選擇『要上架／出貨
+             幾張』的功能」。分組之後這件事才有地方掛 —— 在扁平清單上
+             「這一組」根本不存在，十張同樣的卡散落在三個批次裡。
+
+             − 與 ＋ 各自 44px（觸控下限），中間的數字本身也是按鈕：
+             按它＝在「全選」與「全不選」之間切換，跟點卡面同一件事，
+             因為手指最常落在中間。 -->
+        <div v-if="selecting && g.total > 1 && g.sellable > 1" class="qtyBar">
+          <button
+            type="button" class="qtyBtn"
+            :disabled="!pickedInGroup(g.key) || !!groupBusy"
+            :aria-label="`少選一張 ${g.head.card.name}`"
+            @click="setGroupPick(g, pickedInGroup(g.key) - 1)"
+          >−</button>
+          <button
+            type="button" class="qtyNum mono"
+            :disabled="!!groupBusy"
+            :aria-label="`${g.head.card.name}：已選 ${pickedInGroup(g.key)} 張，可上架 ${g.sellable} 張`"
+            @click="toggleRow(g)"
+          >{{ pickedInGroup(g.key) }}<span class="qtyOf">/{{ g.sellable }}</span></button>
+          <button
+            type="button" class="qtyBtn"
+            :disabled="pickedInGroup(g.key) >= g.sellable || !!groupBusy"
+            :aria-label="`多選一張 ${g.head.card.name}`"
+            @click="setGroupPick(g, pickedInGroup(g.key) + 1)"
+          >＋</button>
+        </div>
 
         <!-- 寄存中才有動作可做，收成一顆按鈕；其餘狀態只留一行取得日期，
              讓每一列的高度不會被「有按鈕的那張」整列撐高 -->
         <button
-          v-if="p.status === 'stashed' && !selecting"
-          type="button" class="more" :class="{ on: openCard === p.id }"
+          v-else-if="g.head.status === 'stashed' && !selecting"
+          type="button" class="more" :class="{ on: openCard === g.head.id }"
           data-pop="trigger"
-          :aria-expanded="openCard === p.id"
-          :aria-controls="`cardpop-${p.id}`"
-          :aria-label="`${p.card.name} 的操作`"
-          @click="toggleCard(p.id, $event)"
+          :aria-expanded="openCard === g.head.id"
+          :aria-controls="`cardpop-${g.head.id}`"
+          :aria-label="`${g.head.card.name} 的操作`"
+          @click="toggleCard(g.head.id, $event)"
         >
-          <span>{{ openCard === p.id ? '收起' : '操作' }}</span>
+          <span>{{ openCard === g.head.id ? '收起' : '操作' }}</span>
           <span class="chev" aria-hidden="true"></span>
         </button>
-        <p v-else class="meta mono">取得 {{ wonDay(p.acquiredAt) }}</p>
+
+        <p v-else class="meta mono">取得 {{ wonDay(g.head.acquiredAt) }}</p>
       </div>
     </div>
 
     <!-- 這個分頁一張卡也沒有。整本卡冊是空的時候由上面那塊空狀態負責，
          這裡講的是「這個分頁沒有」，兩句話不一樣 -->
-    <p v-if="list.ready.value && total && !shown.length && !list.error.value" class="empty muted noneTab">
+    <p v-if="list.ready.value && total && !rows.length && !list.error.value" class="empty muted noneTab">
       這個分頁目前沒有卡片。
     </p>
 
@@ -915,7 +1303,7 @@ async function copyLink() {
       :done="list.done.value"
       :error="list.error.value"
       :manual="list.manual.value"
-      :empty="!shown.length"
+      :empty="!rows.length"
       done-text="已經是全部的卡片了"
       @retry="list.retry()"
       @more="list.load()"
@@ -997,7 +1385,7 @@ async function copyLink() {
                 <span class="pickArt">
                   <CardArt
                     :image="g.head.card.image" :alt="g.head.card.name"
-                    :cert-no="g.head.card.certNo" :art-id="g.head.card.artId"
+                    :art-id="g.head.card.artId"
                   />
                   <span class="pickX" aria-hidden="true">
                     <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
@@ -1081,14 +1469,30 @@ async function copyLink() {
         <h2>申請出貨</h2>
         <p class="muted fine">勾選要一起寄出的卡。合併成一張出貨單，只算一次運費。</p>
 
+        <!-- 同款卡疊成一列。原本是一列一張的扁平勾選表：手上有 10 張一樣的卡時，
+             面板上是十列長得一模一樣的字，要一列一列點，而且點完數不出來
+             自己點了幾張 —— 這正是使用者說的「要重複操作 10 次」。
+             疊起來之後勾一下就是十張，右邊的 N／總 隨時回答勾了幾張。 -->
         <ul class="pickList">
-          <li v-for="p in stashed" :key="p.id">
+          <li v-for="g in shipRows" :key="g.key">
             <label>
-              <input type="checkbox" :checked="shipPick.includes(p.id)" @change="toggleShipPick(p.id)">
-              <span class="pn">{{ p.card.name }}</span>
+              <input
+                type="checkbox"
+                :checked="shipPickedIn(g) >= g.total"
+                :indeterminate="shipPickedIn(g) > 0 && shipPickedIn(g) < g.total"
+                :disabled="!!groupBusy"
+                @change="g.total > 1 ? toggleShipRow(g) : toggleShipPick(g.head.id)"
+              >
+              <span class="pn">{{ g.head.card.name }}</span>
+              <!-- 鑑定編號的尾碼。有編號的卡合併不掉（每一張自成一組），
+                   兩張同款鑑定卡在這張清單上並排時字完全一樣，看起來像系統
+                   重複列了一筆 —— 這個標是它們唯一看得出來的差別。
+                   跟卡冊的「已選的卡」面板用同一支 certTailOf。 -->
+              <span v-if="certTail(g.head)" class="mono muted certTail">{{ certTail(g.head) }}</span>
+              <span v-if="g.total > 1" class="mono pickN">{{ shipPickedIn(g) }}/{{ g.total }}</span>
               <!-- 自己登記的卡沒有賞別，顯示「—」而不是空白：
                    空白讀起來像少載了資料 -->
-              <span class="mono muted">{{ p.tier ?? '—' }}</span>
+              <span class="mono muted">{{ g.head.tier ?? '—' }}</span>
             </label>
           </li>
         </ul>
@@ -1359,6 +1763,14 @@ async function copyLink() {
   font-size: 13.5px; cursor: pointer;
 }
 .pickList .pn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 「3/10」：這一款勾了幾張。一疊同款卡才會出現 —— 一張的時候
+   checkbox 本身就把話講完了，再放一個「1/1」只是噪音 */
+.pickList .certTail { flex: none; font-size: 11px; }
+.pickList .pickN {
+  flex: none; font-size: 11.5px; font-weight: 700; color: var(--ink);
+  padding: 2px 7px; border-radius: var(--pill); background: var(--surface-3);
+  font-variant-numeric: tabular-nums;
+}
 
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 4px; }
 /* min-width: 0 不是可有可無的。grid 子元素預設是 min-width: auto ——
@@ -1520,6 +1932,33 @@ async function copyLink() {
 .tab.on .tabN { opacity: .8; }
 @media (hover: hover) { .tab:not(.on):hover { color: var(--ink); border-color: var(--line); } }
 
+/* ---- 排序 ----
+   跟狀態分頁共用 .tab 的外觀（同一種東西就該長一樣），但自己一列：
+   兩者回答的是不同的問題，而 393px 上狀態分頁本身就已經要換行了，
+   再塞三顆進去等於兩排都讀不完。
+   一樣用 flex-wrap 不用橫向捲 —— 這一頁的紀律是「看得到的才點得到」，
+   而且 wrap 之後 scrollWidth 恆等於 clientWidth。 */
+.sorts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; margin: -6px 0 16px; }
+.sortLabel { flex: none; font-size: 12px; color: var(--faint); }
+
+/* ---- 「你有 N 款重複的卡」----
+   這是整個功能的入口，所以用 --info-wash 從一般的說明文字裡分出來 ——
+   但只有一行、不畫外框：它是一句話不是一張卡片。 */
+.dupNote {
+  margin: -14px 0 16px; padding: 9px 12px; border-radius: 10px;
+  background: var(--info-wash); color: var(--muted);
+  font-size: 12.5px; line-height: 1.7; min-width: 0;
+}
+.dupNote b { color: var(--ink); font-weight: 700; }
+/* 句子裡的按鈕。做成連結的樣子而不是膠囊：它在一句話的中間，
+   膠囊會把那句話斷成三截。44px 的觸控門檻靠 padding 與行高一起撐 —— */
+.linkBtn {
+  padding: 6px 2px; border: 0; background: none;
+  color: var(--info-ink); font: inherit; font-size: 12.5px; font-weight: 600;
+  text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+}
+.linkBtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
 @media (max-width: 720px) {
   .overview { padding: 14px; gap: 11px; }
 
@@ -1632,6 +2071,9 @@ h1 { font-size: 22px; margin: 0 0 6px; }
   color: #fff; background: rgba(255, 255, 255, .24);
   white-space: nowrap;
 }
+/* 「×10」。狀態膠囊的位置與大小完全一樣（同一格資訊），只是換成實心 ——
+   它講的是數量不是狀態，兩者在同一個位置輪流出現時要看得出差別。 */
+.sChip.qty { background: rgba(255, 255, 255, .82); color: #17161a; font-variant-numeric: tabular-nums; }
 .sMain { display: flex; align-items: baseline; gap: 6px; }
 .sName {
   flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; line-height: 1.3;
@@ -1665,6 +2107,45 @@ h1 { font-size: 22px; margin: 0 0 6px; }
 .more.on .chev { transform: translateY(2px) rotate(-135deg); }
 /* 不能操作的卡沒有按鈕，改放取得日期 —— 剛好也是曲線圖上的橫軸 */
 .meta { margin: 0; min-height: 20px; display: flex; align-items: center; font-size: 11px; color: var(--faint); }
+
+/* ---- 數量選擇器 ----
+   佔的是「操作／取得日期」那一行的同一個位置，所以格線的列高不會因為
+   進出選取模式而跳動 —— 這一頁前幾輪修的都是這件事。
+
+   高度跟 .more 一樣 44px；− 與 ＋ 各自也是 44px 寬（觸控下限），
+   中間吃掉剩下的寬度。兩欄格線下整格才 172px，44+44 之後中間還有 84px，
+   放得下「10/10」而且不會擠。 */
+/* 46px 不是打錯：外框那 1px 上下各吃掉一格，min-height: 44px 的話裡面
+   三顆按鈕就只剩 42px，剛好低於觸控門檻。門檻要成立在**按得到的那個東西**
+   身上，不是它的容器 —— 所以 44 給按鈕，外框自己往外長 2px。
+   格線是 align-items: start，這 2px 不會推動任何其他卡片。 */
+.qtyBar {
+  display: flex; align-items: stretch; min-height: 46px;
+  border: 1px solid var(--line); border-radius: var(--pill);
+  background: var(--surface-2); overflow: hidden;
+}
+.qtyBtn {
+  flex: none; width: 44px; min-height: 44px; border: 0; background: none;
+  color: var(--ink); font: inherit; font-size: 17px; line-height: 1; cursor: pointer;
+}
+.qtyBtn:disabled { color: var(--faint); cursor: not-allowed; }
+.qtyNum {
+  flex: 1; min-width: 0; min-height: 44px; border: 0; background: none;
+  color: var(--ink); font-size: 13px; font-weight: 700; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+/* 分母小一級、淡一點：使用者要讀的是「我選了幾張」，
+   「總共幾張」只是它的參照 */
+.qtyOf { font-weight: 500; color: var(--muted); }
+.qtyBtn:focus-visible, .qtyNum:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (hover: hover) {
+  .qtyBtn:not(:disabled):hover, .qtyNum:not(:disabled):hover { background: var(--surface-3); }
+}
+
+/* 選了一部分的那一疊：外框改成虛線。實線（.sel）＝「這一款全都選了」，
+   虛線＝「選了幾張但不是全部」—— 捲到一半時底下那條列只講得出總數，
+   回答不了眼前這一疊到底選滿了沒有。 */
+.item.part { outline-style: dashed; }
 
 /* ---- 疊在卡圖上的操作面板 ----
    .artBox 只做一件事：當這個面板的定位基準（見 template 的說明）。
@@ -1717,6 +2198,16 @@ h1 { font-size: 22px; margin: 0 0 6px; }
   line-clamp: 2;
   overflow-wrap: anywhere;
 }
+/* 「這一款共 10 張，以下動作只作用在其中 1 張」。
+   為什麼多這一行不會把面板撐爆：**一疊（total > 1）的卡在定義上一定沒有
+   鑑定編號** —— 有編號的卡每一張自成一組（分組鍵是 `one:` 開頭），
+   所以 total > 1 的時候 CertTag 一定是空的。這一行剛好補上那個位置，
+   面板高度的最壞情況（量過 211.8px，卡圖 220px）不變。 */
+.popQty {
+  margin: 0; min-width: 0;
+  font-size: 10.5px; line-height: 1.45; color: var(--muted);
+}
+.popQty b { color: var(--ink); }
 /* 面板寬度就是卡圖寬度（手機 157.5px），兩顆按鈕並排一定放不下 */
 .pop .acts { flex-direction: column; align-items: stretch; justify-self: stretch; width: 100%; margin-top: 2px; }
 /* 44px 是 touch.css 的觸控門檻。面板裡的按鈕是這張卡唯一要按的東西，寧可給滿 */

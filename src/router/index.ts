@@ -32,7 +32,7 @@ export const router = createRouter({
     {
       /* 形象頁：極簡、登入／註冊。已登入者由 beforeEach 直接送進大廳 */
       path: '/', name: 'landing',
-      // LINE 登入完成後後端導回 /login#token=…；同一個元件，讓 fragment 原樣到達
+      // LINE 登入完成後後端導回 /login#code=…；同一個元件，讓 fragment 原樣到達
       alias: '/login',
       component: () => import('@/pages/LandingPage.vue'),
       meta: { depth: 0, chrome: 'none', title: '鑑定卡線上抽選' }

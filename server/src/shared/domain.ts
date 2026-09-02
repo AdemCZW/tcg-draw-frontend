@@ -50,18 +50,6 @@ export interface CardItem {
    * 本來就不需要它；目錄卡沒有變體資料時也是空的。
    */
   variantId?: string | null
-  /**
-   * PSA 鑑定編號的查證狀態。**後端在開池時填，前端不送**（見 server/src/psa.ts）。
-   *
-   *   'verified'  已向 PSA 查證，且卡號對得上（或賣家確認過是同一張）
-   *   'pending'   有 certNo 但暫時無法查證（API 待核准／未設定）—— 顯示「未驗證」
-   *   null        這張卡沒有 certNo，不需要驗證
-   *
-   * **刻意不進 manifest**（src/shared/fairness.ts 只序列化卡片身分那幾欄）：
-   * 它是會變的附註，今天 pending、明天 API 通了重驗就變 verified，
-   * 綁進承諾會讓一次誠實的重新查證看起來像竄改。
-   */
-  psaStatus?: 'verified' | 'pending' | null
 }
 
 /**

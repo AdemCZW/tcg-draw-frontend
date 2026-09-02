@@ -8,7 +8,7 @@
  *
  *   npx tsx src/regress-upload.ts http://localhost:8060
  *
- * 伺服器要 DEV_LOGIN=1、PSA_STUB=1。
+ * 伺服器要 DEV_LOGIN=1 與 DEV_LOGIN_SECRET。
  *
  * ⚠️ **要有自己的乾淨資料庫，不能跟 smoke 共用一個。**
  * 理由同 regress-pledge：兩邊都會消耗種子資料而且互相干擾
@@ -21,6 +21,11 @@
  * 污染上（實測 6 條假失敗）。反過來也一樣。
  */
 const base = (process.argv[2] ?? 'http://localhost:8060').replace(/\/$/, '')
+const devSecret = process.env.DEV_LOGIN_SECRET
+const devHeaders = () => {
+  if (!devSecret) throw new Error('regress-upload 需要 DEV_LOGIN_SECRET，請與開發伺服器設定相同的值')
+  return { 'x-dev-login-secret': devSecret }
+}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any
 const json = (r: Response): Promise<Any> => r.json()
@@ -32,7 +37,7 @@ const head = (s: string) => console.log(`\n── ${s} ${'─'.repeat(Math.max(0
 
 async function login(handle: string, name: string) {
   const r = await fetch(`${base}/v1/auth/dev-login`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
     body: JSON.stringify({ handle, name })
   })
   if (!r.ok) throw new Error(`login ${handle}: ${r.status}`)
@@ -53,7 +58,8 @@ await call(platform, '/v1/admin/grant', { userId: 'u-seller', points: 5_000_000,
 /* 帶時間戳讓這支可以重複跑：編號一旦登記過就永遠佔著（那正是防線本身），
    固定編號第二次跑就會被自己上一輪擋住。
    stub 的卡號取 split('-')[2]，所以 'STUB-OK-777-<ts>' 回的 CardNumber 是 '777' ——
-   上傳的卡號直接填 '777' 讓 cardNumbersAgree 對得上，不用 certConfirmed。 */
+   卡號填 '777' 只是要一個穩定的值 —— 平台已經不查證編號真偽，
+   所以沒有「對得上／對不上」這回事了。 */
 const RUN = String(Date.now()).slice(-8)
 const upCard = (certNo: string | null, cardNo = '777') => ({
   name: '噴火龍 ex SAR', setCode: 'sv4a', cardNo,
@@ -62,8 +68,7 @@ const upCard = (certNo: string | null, cardNo = '777') => ({
   certNo, refPrice: 26000
 })
 
-/* 建池用的卡（重用押記那條路要靠 grader+cert_no 對上；卡號帶系列尾碼，
-   跟 stub 回的 '349' 對不上，所以要 certConfirmed —— 同 regress-pledge）。 */
+/* 建池用的卡：重用押記那條路要靠 grader+cert_no 對上同一列。 */
 const certCard = (certNo: string) => ({
   id: 'c-SV4a-349', name: '噴火龍 ex SAR', artId: 'SV4a-349', cardNo: '349/190',
   setCode: 'sv4a', language: 'JP', grader: 'PSA', grade: 10, certNo, refPrice: 26000
@@ -75,7 +80,7 @@ const plainCard = {
 const makePool = (title: string, certNo: string) => call(seller, '/v1/pools', {
   mode: 'muteki', title, ticketPrice: 2000, totalTickets: 4, days: 7,
   prizes: [
-    { tier: 'A', card: certCard(certNo), total: 1, certConfirmed: true },
+    { tier: 'A', card: certCard(certNo), total: 1 },
     { tier: 'D', card: plainCard, total: 3 }
   ],
   tierBuyback: { A: 3000, D: 200 }
@@ -90,7 +95,6 @@ const CERT = `STUB-OK-777-${RUN}`
   const b = await json(r.clone())
   ck('上傳成功', r.ok, `${r.status} ${JSON.stringify(b).slice(0, 200)}`)
   ck('回應帶新列的 id', typeof b.prize?.id === 'string' && b.prize.id.length > 0, JSON.stringify(b.prize).slice(0, 120))
-  ck('回應帶 psaStatus=verified（STUB-OK）', b.prize?.psaStatus === 'verified', `psaStatus=${b.prize?.psaStatus}`)
 
   const mine = (await bookOf(seller)).find((x: Any) => x.card?.certNo === CERT)
   ck('卡冊裡出現那張卡', !!mine, `找不到 certNo=${CERT}`)
@@ -145,53 +149,18 @@ head('裸卡照收（登記進自己的卡冊沒有欺騙任何人）')
   const b = await json(r.clone())
   ck('裸卡上傳成功', r.ok, `${r.status} ${JSON.stringify(b).slice(0, 160)}`)
   ck('狀態是 in_book', b.prize?.status === 'in_book', `status=${b.prize?.status}`)
-  ck('沒有 psaStatus（沒東西可驗）', b.prize?.psaStatus === null, `psaStatus=${b.prize?.psaStatus}`)
 }
 
-head('假編號（stub 查無此卡）→ 400 講清楚')
-{
-  /* 純數字、沒有 STUB-OK 前綴 → stubExchange 的安全預設是 No data found */
-  const r = await call(seller, '/v1/cardbook/upload', { card: upCard(`99${RUN}`, '777') })
-  const b = await json(r.clone())
-  ck('被擋成 400', r.status === 400, `${r.status}`)
-  ck('錯誤是 CERT_NOT_FOUND', b.error === 'CERT_NOT_FOUND', JSON.stringify(b).slice(0, 160))
-}
+/* 「假編號 → 400 CERT_NOT_FOUND」這一段已刪除。
+   平台不再查證編號真偽，捏造的編號（例如 `00000001`）現在會被收下、回 200。
+   這是移除查證要付的代價，條款頁與隱私頁已照實寫進去（TermsPage.vue / PrivacyPage.vue）。
+   擋住重複的仍然是下面那一段的唯一性約束，跟真偽無關。 */
 
-head('卡號比對：PSA 的裸號對得上「編號/總數」；真的對不上時走得完確認')
-{
-  /* 日版鑑定卡的常態：PSA 的 CardNumber 是流水號（331），
-     我們的目錄用的是卡面印的「編號/總數」（331/190）。
-     這一條**不能**要求 certConfirmed —— 它要是還要人確認，
-     等於每一張日版鑑定卡都要人手動放行一次，那個確認框就沒有意義了。 */
-  const CERT_OK = `STUB-OK-331-${RUN}`
-  const r = await call(seller, '/v1/cardbook/upload', { card: upCard(CERT_OK, '331/190') })
-  ck('PSA 的 331 對得上目錄的 331/190，不用任何確認就登記得進來',
-    r.ok, `${r.status} ${JSON.stringify(await json(r.clone())).slice(0, 200)}`)
-
-  /* 真的是另一張卡：PSA 說 999、使用者挑的是 25/190。 */
-  const CERT_BAD = `STUB-OK-999-${RUN}`
-  const m = await call(seller, '/v1/cardbook/upload', { card: upCard(CERT_BAD, '25/190') })
-  const mj = await json(m.clone())
-  ck('卡號真的不同 → 409 CERT_MISMATCH', m.status === 409 && mj.error === 'CERT_MISMATCH',
-    `${m.status} ${JSON.stringify(mj).slice(0, 200)}`)
-  /* 畫面要靠這三個值把差異攤開。少了它們，使用者只會看到一句
-     「請確認是不是同一張卡」而沒有任何可以拿來確認的東西。 */
-  const hit = (mj.mismatches ?? [])[0]
-  ck('409 帶得出 PSA 查到的卡號', hit?.psaCardNumber === '999', JSON.stringify(hit))
-  ck('409 也帶回使用者自己填的卡號（畫面要並排顯示）', hit?.cardNo === '25/190', JSON.stringify(hit))
-  ck('409 帶得出 PSA 登記的卡片主體', typeof hit?.psaSubject === 'string', JSON.stringify(hit))
-
-  const again = await call(seller, '/v1/cardbook/upload', { card: upCard(CERT_BAD, '25/190') })
-  ck('不帶確認再送一次還是同一個 409（所以畫面一定要有確認控制項）',
-    again.status === 409, `${again.status}`)
-
-  const ok = await call(seller, '/v1/cardbook/upload',
-    { card: upCard(CERT_BAD, '25/190'), certConfirmed: true })
-  const okj = await json(ok.clone())
-  ck('使用者確認之後同一張卡登記得進來', ok.ok, `${ok.status} ${JSON.stringify(okj).slice(0, 200)}`)
-  ck('而且照樣標成 verified（PSA 真的查得到這個編號）',
-    okj.prize?.psaStatus === 'verified', `psaStatus=${okj.prize?.psaStatus}`)
-}
+/* 「卡號比對」整段已刪除（原本 8 條）：PSA 回的 CardNumber 與賣家挑的卡號
+   對不對得上、CERT_MISMATCH 的 409 要帶出哪些欄位、確認後放行並標 verified ——
+   這些全部建立在「有一個外部來源說得出這張卡是什麼」之上，那個來源已經沒了。
+   card-cert.ts 的 cardNumbersAgree 因此在正式路徑上不再有呼叫者，
+   目前只剩 selftest.ts 還在驗它。 */
 
 head('整條路：上傳 → 開池重用同一列（tier 被寫上）→ 抽走 → 過戶')
 {

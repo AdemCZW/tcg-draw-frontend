@@ -210,7 +210,7 @@ SSE 端點 `GET /v1/social/notifications/stream` 把訊號推給該使用者的�
   **使用者已拍板兩條規則**：(1) 保障跟著卡走 —— 過戶時 `buyer_id` 改成新主人；
   (2) 出貨中的卡（awaiting_ship / shipped）不能上架轉手。
   另注意 `public.ts` 上架時 `pz.status === 'shipped'` 目前會被當成可上架，要一起收緊。
-  **這是上線前必修。** 等 PSA 與前端體檢那批 commit 落地後就可以開修（避免撞
+  **這是上線前必修。** 等前端體檢那批 commit 落地後就可以開修（避免撞
   `routes/pools.ts`）。
 
 ### 剛完成（已 push）
@@ -219,12 +219,16 @@ SSE 端點 `GET /v1/social/notifications/stream` 把訊號推給該使用者的�
 - 示範池換世代（`GEN='-g2'`，見 `seed-gen.ts`）— 正式環境舊池沒有買回價、
   抽到的卡回收不了，用換世代 + retireStalePools 收攤舊的、開帶買回價的新的。
   **不刪**（prizes.pool_id 是 not null 外鍵，刪池會毀掉使用者卡冊裡的卡）。
-- PSA 鑑定編號驗證（`server/src/psa.ts`）— 程式做好但 **API 待核准（403）**。
-  預設「暫不驗證」，卡標 pending，池照開。明天兩步啟用、都不動碼：
-  (1) PSA 把帳號改 approved → 自動開始回 ok；
-  (2) Railway 設 `PSA_VERIFY_ENFORCE=1` → 切成「查不到就擋」。
-  測試用 `PSA_STUB=1`。**EULA 尚未確認能不能顯示 PSA 資料給買家**，使用者要自己
-  登入 PSA 讀 API End User Agreement。
+- **PSA 鑑定編號驗證 — 已整組移除**（工作樹，未 commit）。`server/src/psa.ts`、
+  `server/src/routes/psa.ts`、`src/lib/psa.ts`、`src/lib/psa-dev.ts`、
+  `src/components/PsaBadge.vue`、`docs/psa-api-access.md` 全部刪除；
+  migration 029 刪掉 `psa_certs` 快取表；`PSA_STUB` 與 `PSA_VERIFY_ENFORCE`
+  兩個環境變數已不存在（`server/src/env.ts` 查無）。
+  **現在平台不做任何鑑定編號真偽查證**，沒有 pending／verified 標記。
+  代價：捏造的編號會被收下（`00000001` 現在回 200，以前是 400 `CERT_NOT_FOUND`）。
+  條款頁與隱私頁已照實改寫。詳見 `docs/open-issues.md` 的 X-1。
+  **唯一性不受影響**：`prizes_cert_alive`（`unique(grader, cert_no)`，由
+  `server/src/preflight.ts` 啟動時建）仍然擋同一個編號登記兩次 —— 那跟查證是兩件事。
 - 假登出修正 — `auth.refresh()` 原本把網路失敗也當登入失效，後端冷啟動會把人
   踢回登入頁。改成只有 token 被 401 清掉才登出。
 
@@ -389,11 +393,11 @@ cd server && npm run build
 
 **不要用 `tsc --noEmit` 代替 `npm run build`**，而且**不要接 pipe** —— 接了 pipe 讀到的是 pipe 的 exit code。
 
-### 煙霧測試（目前 295 項）
+### 煙霧測試（實跑 383 項，0 FAIL）
 
-> PSA 相關（+17 項，含「PSA 鑑定編號查證」整段與挑鑑定卡開池那條的 verified 檢查）
-> 要伺服器設 `PSA_STUB=1` 才會實跑，否則整段自動跳過（不打正式 PSA）。
-> 見 docs/psa-api-access.md 第 9 節。
+> PSA 查證那 18 項（「PSA 鑑定編號查證」整段 17 條，加上挑鑑定卡開池那條的
+> verified 檢查）已隨查證一起刪除，見上面「剛完成」那一節。
+> **鑑定編號唯一性的檢查全部留著** —— 那是不同的一件事。
 
 需要本機 PostgreSQL 與一個跑著的 server：
 
