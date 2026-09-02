@@ -818,7 +818,71 @@ d.record("現況", "平台還在測試階段，尚未正式營運。",
           "本簡報沒有出現任何使用者數、交易量或成長率：平台還沒營運，那些數字現在都不存在。"])
 
 # ══════════════════════════════════════════════════════════════════════
-# 14 聯絡方式
+# 14 客人從哪裡來（行銷計畫）
+#
+# 刻意排在「現況」之後：讀者先知道平台還沒營運、簡報裡沒有任何實績數字，
+# 再看這一頁，它就讀成「我們知道現況，這是打算」，而不是推銷。放在 13 之前
+# 會變成先賣願景、再補上「其實還沒上線」，那個順序會把前面十三頁的可信度賠掉。
+#
+# 這一頁一樣不准出現預估數字。查證結果（2026-09，一手政策原文）：
+#   Meta「Online Gambling and Games」把 Taiwan 明列在 unsupported markets，
+#   且需先取得 authorization；Google Ads 的台灣 gambling 清單只開放
+#   State-run / State-hosted Lotteries，且 "Operator must be a state approved
+#   entity."。所以付費投放這條路對民營オリパ在台灣實質是關的 —— 頁面上不能
+#   承諾投得了廣告，那會是對合作對象的空頭支票。
+# ══════════════════════════════════════════════════════════════════════
+MKT_SUB = ("「抽成 0%」講的是你的成本，這一頁講的是流量。它是一份計畫 —— "
+           "沒有預估人數、沒有轉換率，平台還沒營運，那些數字給不出來。")
+MKT_SRC = ("廣告政策查證（政策原文）：Meta「Online Gambling and Games」的不支援市場清單列有台灣；"
+           "Google Ads 台灣 gambling 僅開放國營／國家主辦彩券，且經營者須為國家核准實體。")
+s, y = d.new("客人從哪裡來", "你把庫存投進來，客人從哪裡來？", MKT_SUB)
+
+channels = [
+    ("社群", "靠內容與口碑，不靠買廣告", GOLD, [
+        "付費廣告投不了 —— Meta 把台灣列在博弈類廣告的不支援市場，Google 台灣只開放國營彩券。",
+        "我們發的內容是驗算 —— 完抽後公開種子，「自己算一次」比「開到大獎」的截圖耐看。",
+        "開箱合作一律標示業配 —— 沒揭露的推薦在台灣是公平交易法的射程。要嘛標清楚，要嘛不做。",
+    ]),
+    ("活動", "平台出版位與規則，不出現金", LILAC, [
+        "首發池排程 —— 新賣家的第一個池排進大廳的固定版位，不必一開始就跟老池搶自然排序。",
+        "主題檔期 —— 同一個系列或主題的池集中在同一週開，多個賣家共用一次流量。參不參加你決定。",
+        "不會辦的 —— 抽中送現金、保證回本、平台加碼收購。點數不能提現、平台不能買回自己的獎品。",
+    ]),
+    ("跟店家合作", "你的店與你的池互相帶客", OK, [
+        "賣家頁是你的線上門面 —— 開過的池、已出貨卡片、平均出貨天數、糾紛率，跟你的簡介同一頁。",
+        "池有公開網址 —— 印成 QR 貼在櫃檯、發進你自己的 LINE 群與社團。店裡看到卡，回家抽你的池。",
+        "做不到的 —— 平台不代管卡，寄賣沒有；一個池只屬於一個賣家，聯名池目前也沒有。",
+    ]),
+]
+# 三橫列而不是三直欄：每一條的正文都是一整句，直欄只剩 18 字寬會逼出三行、
+# 行距一撞就疊在一起（實測過）。橫列一行放得下 50 字，正文才讀得順。
+RX = ML + Inches(3.10)              # 右半（條目）起點
+RW = CW - Inches(3.44)
+for i, (t, tag, c, rows) in enumerate(channels):
+    R = Inches(2.70) + int(i * Inches(1.34))
+    card(s, ML, R, CW, Inches(1.22))
+    rule(s, ML + Inches(0.30), R, Inches(0.8), color=c, thickness=Pt(3))
+    tb = textbox(s, ML + Inches(0.32), R + Inches(0.26), Inches(2.6), Inches(0.32))
+    write(tb.text_frame, t, size=16, bold=True, color=TEXT, first=True, space_after=0)
+    tb = textbox(s, ML + Inches(0.32), R + Inches(0.66), Inches(2.6), Inches(0.26))
+    write(tb.text_frame, tag, size=11.5, bold=True, color=c, first=True, space_after=0)
+    for j, body in enumerate(rows):
+        lead, rest = body.split(" —— ", 1)
+        tb = textbox(s, RX, R + Inches(0.22) + int(j * Inches(0.32)), RW, Inches(0.30))
+        write(tb.text_frame,
+              [(lead + " —— ", {"bold": True, "color": TEXT}), (rest, {"color": MUTED})],
+              size=11.5, line=1.35, first=True, space_after=0)
+
+caption(s, ML, Inches(6.66), CW, MKT_SRC)
+
+# outline 的條目直接從 channels 長出來，不另外手打一份 —— 這一頁的資料只有一份。
+d.record("客人從哪裡來", "你把庫存投進來，客人從哪裡來？", MKT_SUB,
+         [f"{t}（{tag}）· {body}" if j == 0 else f"{t} · {body}"
+          for t, tag, _c, rows in channels
+          for j, body in enumerate(rows)] + [MKT_SRC])
+
+# ══════════════════════════════════════════════════════════════════════
+# 15 聯絡方式
 # ══════════════════════════════════════════════════════════════════════
 s, y = d.new("下一步", "想先開一個池試試看？",
              "第一個池上限 100 籤 / 100,000 點，沒有費用、不用保證金、不用審核排隊。")
@@ -870,6 +934,27 @@ d.record("下一步", "想先開一個池試試看？",
           "平台尚未正式營運。本簡報所有數字皆為系統設定值，非營運實績。"])
 
 # ══════════════════════════════════════════════════════════════════════
+# ── 版面檢查：任何形狀跑出頁面就是錯 ────────────────────────────────
+# 文字方塊的高度是「保留給文字的框」，實際文字可能更高，所以這一關只抓
+# 幾何越界；文字有沒有溢出仍要靠 soffice 轉圖逐頁看。
+def audit(prs):
+    bad = []
+    for i, sl in enumerate(prs.slides, 1):
+        for sh in sl.shapes:
+            L, T = sh.left, sh.top
+            R, B = L + sh.width, T + sh.height
+            if L < 0 or T < 0 or R > W + 1 or B > H + 1:
+                bad.append((i, sh.shape_type, sh.name,
+                            round(L / 914400, 2), round(T / 914400, 2),
+                            round(R / 914400, 2), round(B / 914400, 2)))
+    return bad
+
+
+_bad = audit(d.prs)
+for b in _bad:
+    print(f"  越界　第 {b[0]} 頁 {b[2]}：{b[3]},{b[4]} → {b[5]},{b[6]}")
+print(f"版面檢查：越界形狀 {len(_bad)} 個")
+
 d.prs.save(OUT_PPTX)
 print(f"寫出 {OUT_PPTX}（{d.n} 頁）")
 
