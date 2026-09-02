@@ -542,11 +542,18 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
      800–815 正對著導覽帶 795–852」的區間。實測 elementFromPoint 打到的
      是導覽列的 <svg>，連結看得見但按不到；而只差 38px 的捲動量，
      使用者根本不會意識到還能捲。
-     加 40px 之後（20 + 40 + 導覽 56 = 116px）頁尾整段退到摺線下，
+     加到 116px 之後頁尾整段退到摺線下，
      「看得到卻碰不到」變成「還沒捲到」——跟站上其他頁一致。
      不用 min-height 把整頁撐滿視窗：那是上面那段註解拿掉的東西，
-     會在下緣多出一整頁沒有內容的黑。 */
-  .page { padding-top: 12px; padding-bottom: calc(60px + var(--nav-total)); }
+     會在下緣多出一整頁沒有內容的黑。
+
+     ── 為什麼是寫死的 116px，不是 calc(60px + var(--nav-total)) ──────
+     原本那條算式把「導覽的讓位」又算了一次，而文件末端的讓位是
+     App.vue 的 .navClear 全域負責的（規則見 tokens.css）。兩份相加，
+     手機捲到底時內容與頁尾之間多出 74px 的黑帶（實測 393×852：
+     手機 162.5px、桌機只有 88px）。這一頁需要的是「把頁尾推過摺線」，
+     那是這一頁自己的版面需求，跟導覽多高無關 —— 所以它是一個常數。 */
+  .page { padding-top: 12px; padding-bottom: 116px; }
   h1 { font-size: 20px; }
   .sub { font-size: 12.5px; }
   .toggle { font-size: 12.5px; padding: 7px 13px; min-height: 44px; }

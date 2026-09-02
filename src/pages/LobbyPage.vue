@@ -843,9 +843,11 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
 .urgPrice { font-size: 13px; font-weight: 700; color: var(--ink); white-space: nowrap; }
 
 /* ---- 第 4 區：現貨市場 ---- */
+/* 底部導覽的讓位不寫在這裡：全站只有 App.vue 的 .navClear 那一塊
+   （規則見 tokens.css）。這裡的 30px 純粹是這一區自己的視覺留白。 */
 .marketBand {
   margin-top: 30px;
-  padding: 22px 0 calc(30px + var(--nav-total));
+  padding: 22px 0 30px;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--ok) 10%, transparent), transparent 62%),
     var(--surface);
@@ -890,8 +892,9 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
 
 /* ---- 第 3 區：全部抽選池 ---- */
 .all { padding-top: 30px; }
-/* 市場區沒有資料時，目錄就是最後一區，底部讓位改由它負責 */
-.all:last-child { padding-bottom: calc(40px + var(--nav-total)); }
+/* 市場區沒有資料時，目錄就是最後一區。這裡只補視覺留白 ——
+   底部導覽的讓位由 .navClear 統一負責，跟誰是最後一區無關。 */
+.all:last-child { padding-bottom: 40px; }
 
 /* 捲動目標：按下「只看官方池」後要停在格線頂端而不是標頭，
    scroll-margin 把固定頁首的高度讓出來，不然第一列會被蓋住。 */
@@ -1010,7 +1013,7 @@ h1 { font-size: clamp(24px, 3.4vw, 38px); line-height: 1.14; letter-spacing: -.0
   .sk { height: 250px; }
 
   .urgentBand { margin-top: 12px; padding: 16px 0 20px; }
-  .marketBand { margin-top: 24px; padding: 18px 0 calc(26px + var(--nav-total)); }
+  .marketBand { margin-top: 24px; padding: 18px 0 26px; }
   .all { padding-top: 24px; }
   /* 卡寬收到 66vw：375px 上第二張會露出約三分之一，
      「這排可以左右滑」不必靠說明文字，露出來的那一角自己會講。 */

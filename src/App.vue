@@ -66,6 +66,14 @@ const showChrome = computed(() => chrome.value !== 'none')
            正式營運前要放回來，或至少收進會員條款頁。 -->
     </div>
   </footer>
+  <!--
+    底部固定導覽的讓位 —— 全站唯一的一塊。
+
+    跟著 showChrome 走，因為它就是 <AppBottomNav> 的出現條件：
+    有導覽才有東西要讓，沒有導覽（沉浸模式）就連這一塊都不該存在。
+    大廳沒有頁尾，這一塊照樣在 —— 讓位不再跟「有沒有頁尾」綁在一起。
+  -->
+  <div v-if="showChrome" class="navClear" aria-hidden="true" />
 </template>
 
 <style scoped>
@@ -81,25 +89,33 @@ const showChrome = computed(() => chrome.value !== 'none')
 .fine { font-size: 11.5px; color: var(--faint); }
 
 /* ------------------------------------------------------------------
-   底部固定導覽的讓位：有頁尾的頁面只在這裡做一次
+   底部固定導覽的讓位：整份文件只有 .navClear 這一塊
    ------------------------------------------------------------------
-   頁尾是除了大廳以外每一頁文件裡的最後一塊，導覽是 fixed，
-   能遮到的也只有最後一塊 —— 所以讓位只能有這一個來源。
+   導覽是 fixed，它能遮到的永遠只有「文件的最末端」，所以讓位只需要一份。
 
-   之前各頁的根容器也在自己的 padding-bottom 裡加了一次 --nav-total，
-   而它們下面還接著頁尾，那一份讓位永遠沒東西可以讓 —— 兩份相加，
-   手機上（--nav-total = 56px + 安全區）每頁下緣就多出一段捲不到內容的黑。
-   iPhone 上還要再多算一次 34px 的 Home 指示器。
+   ── 上一次為什麼沒修乾淨 ────────────────────────────────────────
+   71beffb 已經把各頁重複的讓位收掉過一次，但當時是把唯一來源設成
+   「全域頁尾的 padding-bottom」。那個選擇有兩個弱點，而它們正是這個問題
+   會再回來的原因：
 
-   大廳（name === 'home'）沒有頁尾，它的讓位由自己的最後一區負責，
-   一樣是只有一個來源。
+     1. 大廳沒有頁尾，所以它必須自己記得再寫一份 var(--nav-total)。
+        「有頁尾的頁面不要寫、沒頁尾的頁面要寫」這種規則，只活在註解裡。
+     2. 頁面容器寫 padding-bottom 是天經地義的事，沒有任何東西擋著
+        下一個人在裡面又加一次 var(--nav-total)。57d2cc6 就是這樣在
+        PlayPage 上加了回來（實測手機比桌機多出 74px 的黑帶）。
+
+   改成一塊獨立的 .navClear 之後，讓位跟「哪個元素剛好在最後」脫鉤：
+   頁面只要管自己的留白，永遠不必碰 --nav-total（規則寫在 tokens.css）。
+   桌機的 --nav-total 是 0，這塊高度就是 0，等於不存在。
 ------------------------------------------------------------------- */
-.foot { padding-bottom: calc(40px + var(--nav-total)); }
+.navClear { height: var(--nav-total); }
+
+.foot { padding-bottom: 40px; }
 
 /* 手機上頁尾只是兩行小字，桌機的留白原封不動搬過來會在每頁最底下
-   堆出快半個螢幕的空白。讓位仍然只靠 --nav-total 一個來源。 */
+   堆出快半個螢幕的空白。這裡是純粹的視覺留白，不含任何讓位。 */
 @media (max-width: 720px) {
-  .foot { margin-top: 28px; padding-top: 20px; padding-bottom: calc(16px + var(--nav-total)); }
+  .foot { margin-top: 28px; padding-top: 20px; padding-bottom: 16px; }
 }
 
 /* 換頁轉場已移除（原因見上方 <main> 裡的說明）。
