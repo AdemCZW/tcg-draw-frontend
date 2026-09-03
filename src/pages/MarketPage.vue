@@ -108,6 +108,31 @@ const SORTS: { k: Sort; label: string }[] = [
   { k: 'cheap', label: '價格低到高' },
   { k: 'pricey', label: '價格高到低' }
 ]
+/* ---- 分段控制（segmented control）的鍵盤操作 ----
+
+   這一頁的三組單選（排序、鑑定、分數）都改成一體式軌道（.segTrack / .segCell）。
+   軌道在無障礙上是 radiogroup 而不是一排各自獨立的按鈕，因為它們**互斥**：
+   一排 aria-pressed 的按鈕在讀螢幕上唸起來是「四個可以各自開關的東西」，
+   跟畫面上剛修好的那個誤會是同一個。
+
+   radiogroup 的慣例是「Tab 只停一站，方向鍵在組內移動」。少了這個處理，
+   使用者光走完排序就要按四次 Tab、走完面板要按十次 —— 所以不是可選的裝飾，
+   是換成 radiogroup 就必須一起補的那一半。
+   焦點要跟著移過去（roving tabindex），不然按了方向鍵值變了但焦點還留在原地。 */
+function segKey(e: KeyboardEvent, n: number, i: number, pick: (next: number) => void) {
+  const k = e.key
+  const step = k === 'ArrowRight' || k === 'ArrowDown' ? 1
+    : k === 'ArrowLeft' || k === 'ArrowUp' ? -1 : 0
+  let next = i
+  if (step) next = (i + step + n) % n          // 環繞：最後一格再往右回到第一格
+  else if (k === 'Home') next = 0
+  else if (k === 'End') next = n - 1
+  else return
+  e.preventDefault()
+  pick(next)
+  const group = (e.currentTarget as HTMLElement).parentElement
+  group?.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus()
+}
 
 /* ---- 篩選：卡片等級與點數區間 ----
 
@@ -147,6 +172,17 @@ const GRADER_LABEL = (k: GraderFilter) => GRADER_OPTS.find(o => o.k === k)?.labe
 /* 只有下限沒有上限：「9.5 分以上」是真實需求，「9.5 分以下」不是 ——
    沒有人在找比較差的卡。 */
 const GRADE_OPTS = [9, 9.5, 10]
+
+/* 「不限」進到選項表裡，成為軌道上的第一格而不是旁邊多出來的一顆。
+
+   舊版是「不限 ＋ N 顆可以各自開關的磚」：磚按第二次會取消，於是存在一個
+   「什麼都沒選中」的狀態，畫面上是六顆一樣灰的磚 —— 但那個狀態的意思就是
+   「不限」，只是沒有任何地方這樣寫。改成軌道之後恆有一格亮著，
+   取消＝把指示塊移回「不限」，狀態與畫面一對一。 */
+const GRADER_SEG: { k: GraderFilter | null; label: string }[] =
+  [{ k: null, label: '不限' }, ...GRADER_OPTS]
+const GRADE_SEG: { v: number | null; label: string }[] =
+  [{ v: null, label: '不限' }, ...GRADE_OPTS.map(v => ({ v, label: `${v} 分以上` }))]
 
 /**
  * 點數輸入的上界。跟後端 server/src/limits.ts 的 POINTS_INPUT_MAX 是同一個數字
@@ -270,13 +306,23 @@ function readQuery() {
     const n = numOf(t)
     return n !== null && n > 0 && n <= PRICE_MAX ? n : null
   }
+  const wasLo = minPrice.value, wasHi = maxPrice.value
   minPrice.value = money(route.query.minPrice)
   maxPrice.value = money(route.query.maxPrice)
   if (minPrice.value !== null && maxPrice.value !== null && minPrice.value > maxPrice.value) {
     maxPrice.value = null
   }
-  minDraft.value = minPrice.value === null ? '' : String(minPrice.value)
-  maxDraft.value = maxPrice.value === null ? '' : String(maxPrice.value)
+  /* 只有金額**真的變了**才回寫草稿。
+
+     這一段原本是無條件回寫，而 readQuery 是被「六個網址參數的任何一個」叫起來的 ——
+     使用者在最低點數打到一半時去按了鑑定，鑑定的變更會 replace 一次網址，
+     那一次 replace 就把還沒去抖動完的金額草稿洗成空字串：**打的字當場消失**。
+     （headless 測試裡穩定重現：按了「未鑑定」再打 999999，最低那格會變回空的。）
+
+     比對「這次讀出來的值跟上次一不一樣」而不是「草稿跟值一不一樣」：
+     後者會把「使用者正在打、還沒送出」也算成不一致，等於還是每次都洗掉。 */
+  if (minPrice.value !== wasLo) minDraft.value = minPrice.value === null ? '' : String(minPrice.value)
+  if (maxPrice.value !== wasHi) maxDraft.value = maxPrice.value === null ? '' : String(maxPrice.value)
 }
 /* 從外面帶著條件進來（分享連結、上一頁）時要跟著走。
    自己 replace 造成的那一次會落在這裡但兩邊相等，是個空操作，不會迴圈。 */
@@ -432,8 +478,15 @@ watch([() => list.ready.value, shown, queryKey], () => {
       </RouterLink>
     </header>
 
-    <!-- 搜尋：放在排序上面。買家「我就是要這張」的意圖比「怎麼排」更前面，
-         而且排序膠囊是可以左右滑的，把搜尋擠進那一排會被滑走看不見 -->
+    <!-- 第一列＝「找什麼」：搜尋框與篩選鍵在同一條欄位裡。
+
+         為什麼把篩選搬進來（原本它跟排序同一列）：搜尋與篩選做的是同一件事
+         —— 把集合縮小；排序做的是另一件事 —— 只換順序。按語意分組之後，
+         整個控制區從「六個各自並排的東西」變成兩個：一條「找」的欄位、
+         一條「排」的軌道。這就是使用者說的「一體」。
+
+         代價是搜尋框變窄。但清除鍵只在**有字**時出現，而佔位字只在**沒字**時
+         顯示，兩者互斥 —— 最窄的那個情況正好是不需要顯示佔位字的情況。 -->
     <form class="search" role="search" @submit.prevent="submitNow">
       <svg class="mag" viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" />
@@ -456,14 +509,10 @@ watch([() => list.ready.value, shown, queryKey], () => {
       <button v-else-if="draft" type="button" class="clear" aria-label="清除搜尋" @click="clearSearch">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
       </button>
-    </form>
 
-    <!-- 控制列：一顆篩選鍵 ＋ 排序膠囊，同一列。
-         篩選沒有鋪成第二排選項，是因為那會讓「排序」與「篩選」在同一片區域裡
-         長得一模一樣（卡冊的控制列剛因為這件事被說「有點亂」）。
-         這裡的視覺編碼刻意分開：排序＝圓角膠囊、選中是實心；
-         篩選＝方角描邊鍵、生效只上淡色底＋數字，比主要動作（我要上架）安靜。 -->
-    <div class="bar">
+      <!-- 欄位內的分隔細線：篩選鍵跟搜尋框同住一條欄位，但不是同一個動作，
+           要有一道看得見的界線才不會被當成搜尋框的一部分 -->
+      <span class="ssep" aria-hidden="true"></span>
       <button
         type="button" class="fbtn" :class="{ on: filterCount > 0 }"
         :aria-expanded="panelOpen" aria-controls="marketFilters"
@@ -478,31 +527,62 @@ watch([() => list.ready.value, shown, queryKey], () => {
              唯一還看得見的訊號 -->
         <span v-if="filterCount" class="fnum">{{ filterCount }}</span>
       </button>
-      <span class="barsep" aria-hidden="true"></span>
-      <div class="sorts" role="tablist" aria-label="排序方式">
+    </form>
+
+    <!-- 第二列＝「怎麼排」：一條軌道，一個指示塊。
+
+         為什麼不再是四顆各自獨立的膠囊：排序**只能選一個**，四顆分開的膠囊
+         在說「四個可以各自開關的東西」，跟真實語意不符 —— 那正是「雜亂」的來源。
+         一條軌道加一個會滑動的指示塊，掃過去是一個東西，而且「目前是哪一個」
+         由指示塊的位置直接講出來，不必逐顆比對誰比較深。
+
+         刻意不是下拉／選單：目前值必須一直看得見，而且四個選項全部在畫面上，
+         使用者不用點開才知道有什麼可選。
+
+         形態與卡冊那一頁（b66a5af 的 .segTrack / .segCell）刻意用同一套：
+         一圈外框、一個圓角、格子貼邊、只用 1px 細線隔開。兩頁是同一個產品，
+         同一種語意（單選）不該長成兩個樣子。
+
+         順帶修掉一個真的壞掉的東西：舊版四顆膠囊在 393px 上是 394px 寬塞進
+         256px 的容器（實測），第四個「價格高到低」要橫向滑才看得到。
+         軌道是等分的 grid，四格永遠都在畫面上。 -->
+    <div class="bar">
+      <div class="segTrack sortTrack" role="radiogroup" aria-label="排序方式" :style="{ '--n': SORTS.length }">
         <button
-          v-for="s in SORTS" :key="s.k"
-          type="button" role="tab" :aria-selected="sort === s.k"
-          class="chip" :class="{ on: sort === s.k }"
+          v-for="(s, i) in SORTS" :key="s.k"
+          type="button" role="radio" :aria-checked="sort === s.k"
+          :tabindex="sort === s.k ? 0 : -1"
+          class="segCell" :class="{ on: sort === s.k }"
           @click="sort = s.k"
+          @keydown="segKey($event, SORTS.length, i, n => { sort = SORTS[n]!.k })"
         >{{ s.label }}</button>
       </div>
     </div>
 
     <!-- 篩選面板。預設收起來 —— 不篩選的人（多數）版面跟以前一模一樣。
-         選項用方角磚，不重複排序膠囊的形狀 -->
+
+         裡面三組條件跟上面的排序用同一種形態：**每一組都是一條軌道**。
+         鑑定與分數是單選，跟排序完全同構；點數是兩個輸入框，形態不同，
+         但也收進同一條有邊框的欄位裡（中間一個 – 分隔），
+         這樣三列讀起來是三個東西，而不是「六顆磚、四顆磚、兩個框」十二個東西。
+
+         三條的外觀跟卡冊那一頁的軌道是同一套（--line 底、1px 細線、13px 圓角、
+         格子鋪 --field），只多一件事：選中的那一格如果是**真的篩選條件**才上
+         強調色淡底，是「不限」就跟卡冊一樣只做中性的浮起。 -->
     <div v-if="panelOpen" id="marketFilters" class="fpanel">
       <div class="frow">
         <span id="fl-grader" class="flabel">鑑定</span>
-        <div class="fopts" role="group" aria-labelledby="fl-grader">
+        <!-- 「不限」那一格帶 .any：選中時走中性的浮起（跟卡冊完全同一套），
+             不上強調色。強調色在這站的語意是「這裡有事情發生」，套在一個
+             什麼都沒篩的預設值上，面板一打開就有兩格紅的在喊 -->
+        <div class="segTrack fTrack" role="radiogroup" aria-labelledby="fl-grader" :style="{ '--n': GRADER_SEG.length }">
           <button
-            type="button" class="tile any" :class="{ on: grader === null }"
-            :aria-pressed="grader === null" @click="grader = null"
-          >不限</button>
-          <button
-            v-for="g in GRADER_OPTS" :key="g.k"
-            type="button" class="tile" :class="{ on: grader === g.k }"
-            :aria-pressed="grader === g.k" @click="grader = grader === g.k ? null : g.k"
+            v-for="(g, i) in GRADER_SEG" :key="g.k ?? 'any'"
+            type="button" role="radio" :aria-checked="grader === g.k"
+            :tabindex="grader === g.k ? 0 : -1"
+            class="segCell" :class="{ on: grader === g.k, any: g.k === null }"
+            @click="grader = g.k"
+            @keydown="segKey($event, GRADER_SEG.length, i, n => { grader = GRADER_SEG[n]!.k })"
           >{{ g.label }}</button>
         </div>
       </div>
@@ -511,22 +591,23 @@ watch([() => list.ready.value, shown, queryKey], () => {
            留一排點了必定 0 件的選項，比沒有這一段更難懂 -->
       <div v-if="grader !== 'raw'" class="frow">
         <span id="fl-grade" class="flabel">分數</span>
-        <div class="fopts" role="group" aria-labelledby="fl-grade">
+        <div class="segTrack fTrack" role="radiogroup" aria-labelledby="fl-grade" :style="{ '--n': GRADE_SEG.length }">
           <button
-            type="button" class="tile any" :class="{ on: minGrade === null }"
-            :aria-pressed="minGrade === null" @click="minGrade = null"
-          >不限</button>
-          <button
-            v-for="g in GRADE_OPTS" :key="g"
-            type="button" class="tile" :class="{ on: minGrade === g }"
-            :aria-pressed="minGrade === g" @click="minGrade = minGrade === g ? null : g"
-          >{{ g }} 分以上</button>
+            v-for="(g, i) in GRADE_SEG" :key="g.v ?? 'any'"
+            type="button" role="radio" :aria-checked="minGrade === g.v"
+            :tabindex="minGrade === g.v ? 0 : -1"
+            class="segCell" :class="{ on: minGrade === g.v, any: g.v === null }"
+            @click="minGrade = g.v"
+            @keydown="segKey($event, GRADE_SEG.length, i, n => { minGrade = GRADE_SEG[n]!.v })"
+          >{{ g.label }}</button>
         </div>
       </div>
       <p v-else class="fnote muted">未鑑定的卡沒有鑑定分數，所以這裡不提供分數條件。</p>
 
       <div class="frow">
         <span class="flabel">點數</span>
+        <!-- 兩個框共用一條邊框，中間只有一個 – ——「一個區間」是一件事，
+             畫成兩個各自描邊的框會讀成兩個獨立的欄位 -->
         <div class="prices">
           <input
             class="pbox mono" type="text" inputmode="numeric" autocomplete="off"
@@ -760,6 +841,32 @@ watch([() => list.ready.value, shown, queryKey], () => {
 /* 底部導覽的讓位交給頁尾（見 App.vue），這裡只留自己的排版留白 */
 .page { padding-top: 26px; padding-bottom: 48px; }
 
+/* ---- 鍵盤焦點 ----
+
+   瀏覽器預設的焦點框是 Chromium 寫死的那個藍（rgb(0, 95, 204)）——
+   跟這站的暖色系不同調，深淺兩套主題也都不是從權杖來的，
+   而且它畫在深色軌道上幾乎看不見。統一改成強調色：兩套主題是同一個橘紅，
+   在 --surface、--accent-wash 與實心墨色三種底上都有對比。
+
+   兩條規則要一起下（作法與卡冊那一頁 b66a5af 一致）：
+     :focus         → outline: none，明確拆掉 UA 的環。只寫 :focus-visible
+                      等於把「滑鼠點完該不該留框」交給各家瀏覽器的啟發式去猜
+                      —— Chromium 猜對（這一頁實測滑鼠點完本來就不留框），
+                      WebKit / Firefox 的判定不一樣。
+     :focus-visible → 補回專案自己的環。鍵盤操作必須看得見焦點，
+                      這是無障礙不是裝飾。
+
+   放在檔案最前面、選擇器刻意留低權重（型別選擇器），
+   下面任何一條更具體的規則（例如 .open）都蓋得過它。 */
+:is(button, a, input):focus { outline: none; }
+:is(button, a, input):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* 輸入框自己不畫外框，改成整條欄位換邊色 —— 框在框裡面很醜，
+   而且使用者的注意力本來就該落在整條欄位上 */
+.qbox:focus-visible, .pbox:focus-visible { outline: none; }
+
 .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .sub { font-size: 13.5px; margin: 5px 0 0; }
@@ -780,12 +887,16 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
    一整條 44px 高的欄位（觸控目標下限），圖示與清除鍵用 grid 分三欄，
    中間那欄 minmax(0, 1fr) 才不會被 input 的預設寬度（size=20）撐破版面。 */
 .search {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  /* 從 grid 換成 flex：欄位裡現在有「圖示／輸入／清除鍵（有條件出現）／
+     分隔線／篩選鍵」五樣，而清除鍵是 v-if 出來的 —— 固定欄數的 grid 會在它
+     消失時讓後面的東西整個往前遞補一格。flex 沒有這個問題，
+     而原本用 grid 要換來的那件事（中間那欄不被 input 的預設寬度撐破）
+     由 .qbox 的 flex: 1 1 auto + min-width: 0 給同樣的保證。 */
+  display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 16px;
-  padding: 0 6px 0 14px;
+  padding: 0 5px 0 14px;
   min-height: 46px;
   border-radius: var(--pill);
   border: 1px solid var(--line-soft);
@@ -795,7 +906,7 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .search:focus-within { border-color: var(--line); background: var(--surface-2); }
 .mag { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; }
 .qbox {
-  min-width: 0;
+  flex: 1 1 auto; min-width: 0;
   border: 0; background: transparent; outline: none;
   color: var(--ink);
   /* 16px 是 iOS 不自動放大頁面的門檻。小於它的話點進輸入框整頁會被縮放，
@@ -846,31 +957,30 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .noneActs { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 6px; }
 .noneActs .btn { min-height: 44px; padding: 10px 20px; font-size: 14px; }
 
-/* ---- 控制列：篩選鍵 + 排序 ----
-   兩者同一列。篩選鍵不捲（釘在左邊，永遠看得到「用了幾個條件」），
-   排序那段自己橫向捲 —— 所以 .sorts 要 min-width: 0，
-   flex 子元素預設不縮到比內容窄，少了它整列會被四顆膠囊撐破版面。 */
-.bar { display: flex; align-items: center; gap: 10px; margin: 12px 0 14px; }
+/* ---- 欄位內的篩選鍵 ----
+   它住在搜尋欄位那條 pill 裡，所以自己不描邊也不上底 —— 兩層邊框套在一起
+   看起來就是「框裡面又有一個框」。跟搜尋的界線交給 .ssep 那條細線。 */
+.ssep { flex: none; align-self: stretch; width: 1px; margin: 9px 1px; background: var(--line-soft); }
 
 .fbtn {
   flex: none;
-  min-height: 44px;              /* 觸控目標下限 */
+  min-height: 44px;              /* 觸控目標下限；外層 pill 內高剛好 44px */
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 13px;
-  /* 方角（10px）而不是膠囊：排序是膠囊，形狀不同才掃得出這是另一種東西 */
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: transparent; color: var(--muted);
+  padding: 0 11px;
+  border-radius: var(--pill);
+  border: 0; background: transparent; color: var(--muted);
   font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer;
-  transition: background .15s, color .15s, border-color .15s;
+  transition: background .15s, color .15s;
 }
-.fbtn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
-.fbtn svg circle { fill: var(--bg); }
+.fbtn svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+/* 三個圓點要蓋掉底下的橫線才看得出是滑桿。填色必須跟「這一刻的底」同色，
+   而這顆鍵有兩種底（透明→吃 --surface，生效→ --accent-wash） */
+.fbtn svg circle { fill: var(--surface); }
 /* 生效時只上淡色底＋強調色字，不做成實心 —— 實心會比頁首那顆主要動作
    （我要上架）更搶眼，那正是使用者說「有點亂」的那種矛盾 */
-.fbtn.on { background: var(--accent-wash); border-color: transparent; color: var(--accent); }
+.fbtn.on { background: var(--accent-wash); color: var(--accent); }
 .fbtn.on svg circle { fill: var(--accent-wash); }
-@media (hover: hover) { .fbtn:hover { color: var(--ink); border-color: var(--line); } .fbtn.on:hover { color: var(--accent); } }
+@media (hover: hover) { .fbtn:hover { color: var(--ink); } .fbtn.on:hover { color: var(--accent); } }
 .fbtn:active { transform: scale(.97); }
 .fnum {
   min-width: 18px; height: 18px; padding: 0 5px;
@@ -879,24 +989,112 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   background: var(--accent); color: var(--on-accent);
   font-size: 11px; font-weight: 700; line-height: 1;
 }
-/* 一條細線把「篩選」與「排序」分開：兩種語意之間要有看得見的界線 */
-.barsep { flex: none; width: 1px; align-self: stretch; margin: 6px 0; background: var(--line-soft); }
 
-/* 右緣淡出：這排是可以左右滑的，但截斷處如果是硬邊，看起來就只是「被切掉」
-   而不是「還有更多」。mask 讓最後一顆膠囊漸隱，滑動的可能性才看得出來。 */
-.sorts {
-  -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 34px), transparent 100%);
-  mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 34px), transparent 100%);
-  flex: 1 1 auto; min-width: 0;
-  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
-.sorts::-webkit-scrollbar { display: none; }
+/* ---- 一體式軌道（.segTrack / .segCell）：排序與兩組篩選共用 ----
+
+   這是這一頁「一體」的核心，而且**刻意跟卡冊那一頁（b66a5af）是同一套**：
+   一圈外框、一個圓角、格子貼邊、只用 1px 細線隔開。兩頁都在做同一件事
+   （一個單選控制項），長成兩個樣子才是錯的。
+
+   細線怎麼畫（作法沿用卡冊）：容器底鋪 --line、格與格之間 gap: 1px、
+   格子自己蓋 --field，露出來的那 1px 就是分隔線。
+   overflow: hidden 讓四個角被外框的圓角切乾淨。
+
+   跟卡冊唯一的差別是排法：卡冊的五個分頁連著計數在 393px 上一列裝不下，
+   要 flex-wrap 換行；這一頁最長的一組是六格純標籤（不限／未鑑定／已鑑定／
+   PSA／BGS／ARS），393px 上等分之後每格 53px 還放得下三個字，所以直接用
+   等分的 grid 一列排完 —— 換行是為了裝不下才做的事，裝得下就不必。
+
+   等分用 grid-auto-columns 而不是 repeat(var(--n), …)：後者要 var() 進到
+   repeat() 的計數位置，那件事在部分瀏覽器上不成立；auto-flow: column
+   ＋ auto-columns 給的是同一個結果，而且不需要知道有幾格。
+   minmax(0, 1fr) 而不是 1fr：1fr 的下限是 min-content，長標籤會把某一格
+   撐寬、其他格被壓扁，「等分」就不成立了（.fpanel 踩過同一個坑）。 */
+.segTrack {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 1px;
+  min-width: 0;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  overflow: hidden;
+}
+.segCell {
+  min-width: 0;
+  min-height: 44px;              /* 觸控目標下限 */
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 6px 8px;
+  border: 0; border-radius: 0;
+  background: var(--field);
+  color: var(--muted);
+  font-size: 12.5px; font-weight: 500; font-family: inherit; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background .15s, color .15s;
+}
+/* 目前值：在凹下去的軌道裡浮起來的那一格。顏色階梯沿用卡冊的結論，
+   不重新發明 —— 深色 field(#0f1115) → surface(#17161a)、
+   淺色 #f6f2f0 → #ffffff，兩套主題都是「軌道凹、目前值浮」。
+   inset ring 而不是外擴陰影：軌道有 overflow: hidden，外擴會被切掉，
+   而且頭尾兩格被切得跟中間格不一樣，正好破壞「一體」。 */
+.segCell.on {
+  background: var(--surface);
+  color: var(--ink); font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+@media (hover: hover) { .segCell:not(.on):hover { background: var(--surface-2); color: var(--ink); } }
+
+/* ---- 焦點框（作法與卡冊逐字一致）----
+   根因：base.css 只給 .btn 寫了 :focus-visible，這些格子不是 .btn，
+   於是掉回瀏覽器預設的焦點環 —— Chrome 是寫死的 rgb(0, 95, 204)，
+   不走任何權杖，在暖色系上就是一圈突兀的藍。
+
+   兩條規則要一起下：:focus 明確拆掉 UA 的環（只靠 :focus-visible 等於把
+   「滑鼠點完該不該留框」交給各家瀏覽器的啟發式去猜）；:focus-visible 補回
+   專案自己的環，鍵盤操作必須看得見焦點，這是無障礙不是裝飾。
+   offset 往內縮：軌道 overflow: hidden，外擴的環會被切掉半圈。 */
+.segCell:focus { outline: none; }
+.segCell:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: -2px;
+  border-radius: 4px; position: relative; z-index: 1;
+}
+
+/* 排序那一條：控制列上唯一一直露在外面的控制項。
+   它**不**做成整片最亮的東西 —— 卡冊那一輪已經下過這個結論（原本 --ink
+   實心的「全部 70」比主要動作還搶眼，而它只是個檢視切換）。
+   同理，這裡最亮的名額留給頁首那顆「我要上架」。 */
+.bar { margin: 12px 0 14px; }
+/* 桌機上四格攤成 1180px 寬不會更像一個控制項，只會更像四塊板子 */
+@media (min-width: 721px) { .sortTrack { max-width: 480px; } }
+
+/* 面板裡那兩條：選中的格子如果是**真的篩選條件**才上強調色淡底 ——
+   「這裡有事情發生」的訊號要留給真的有事情發生的時候。 */
+.fTrack .segCell.on {
+  background: var(--accent-wash);
+  color: var(--accent); font-weight: 700;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+/* 「不限」＝沒有在篩選，退回卡冊那個中性的浮起（.segCell.on 的原樣）：
+   強調色套在一個什麼都沒篩的預設值上，等於面板一打開就有兩格紅的在喊。 */
+.fTrack .segCell.any.on {
+  background: var(--surface);
+  color: var(--ink); font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+/* 桌機上不讓軌道攤到 1180px：六格各 190px 寬的東西已經不是一個控制項，
+   是一條橫幅。上限跟格數綁在一起（--n 就是格數），四格與六格才不會一個
+   剛好、一個太空。手機上這個上限永遠碰不到，版面照舊是滿版等分。 */
+@media (min-width: 721px) {
+  .fTrack { max-width: calc(var(--n) * 100px); }
+  .prices { max-width: 320px; }
+}
 
 /* ---- 篩選面板 ----
-   收起來時這一塊完全不存在，不篩選的人版面跟以前一樣。
-   選項用方角磚（8px），跟排序的圓角膠囊分得開。 */
+   收起來時這一塊完全不存在，不篩選的人版面跟以前一樣。 */
 .fpanel {
   /* minmax(0, 1fr) 不是可有可無：grid 的軌道預設是 auto，也就是最寬那一列的
-     max-content —— 六顆「鑑定」磚會把整條軌道撐成 487px 塞進 353px 的面板裡，
+     max-content —— 六格「鑑定」會把整條軌道撐成遠寬於面板的寬度，
      右半邊（ARS、最高點數、收起）直接被切在螢幕外。實測就是這樣。 */
   display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px;
   margin: -4px 0 16px;
@@ -909,45 +1107,40 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
    不然兩個金額框那一列會把它撐成 max-content，「最高」被切出畫面。 */
 .frow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-width: 0; }
 .flabel { font-size: 12px; font-weight: 600; color: var(--muted); }
-.fopts { display: flex; flex-wrap: wrap; gap: 8px; }
-.tile {
-  min-height: 44px;
-  padding: 8px 13px;
-  border-radius: 8px;
-  border: 1px solid var(--line-soft);
-  background: var(--surface-2); color: var(--muted);
-  font-size: 13px; font-weight: 500; font-family: inherit; cursor: pointer;
-  transition: background .15s, color .15s, border-color .15s;
-}
-/* 選中用淡色底＋強調色字，跟排序膠囊的「實心墨色」不同 —— 兩排東西同時
-   出現在畫面上時，看得出哪一個是排序、哪一個是篩選 */
-.tile.on { background: var(--accent-wash); border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent); font-weight: 700; }
-/* 「不限」是「沒有在篩選」，不能長得跟生效中的條件一樣 ——
-   強調色在這站的語意是「這裡有事情發生」，套在一個什麼都沒篩的預設值上，
-   等於整個面板一打開就有兩個紅框在喊。選中時只做中性的加深。 */
-.tile.any.on { background: var(--surface-3); border-color: var(--line); color: var(--ink); }
-@media (hover: hover) { .tile:not(.on):hover { color: var(--ink); border-color: var(--line); } }
-.tile:active { transform: scale(.97); }
 
-.prices { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 點數區間：兩個框共用**一條**邊框。
+   「500 到 2000 點」是一件事，畫成兩個各自描邊的框會讀成兩個不相干的欄位 ——
+   跟上面兩條軌道同一個道理，只是這一組的形態是輸入不是選擇，
+   所以用「一條欄位」而不是「一條軌道」，圓角與高度跟軌道對齊。 */
+.prices {
+  display: flex; align-items: center; min-width: 0;
+  min-height: 46px;
+  padding: 0 6px;
+  /* 外框與圓角跟上面兩條軌道對齊（--line、13px）：三列讀起來要是同一族的
+     三個東西，只是這一組的形態是輸入不是選擇 */
+  border-radius: 13px;
+  border: 1px solid var(--line);
+  background: var(--field);
+  transition: border-color .15s, background .15s;
+}
 .pbox {
   min-width: 0; flex: 1 1 0;
   min-height: 44px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--line-soft);
-  background: var(--field); color: var(--ink);
+  padding: 10px 6px;
+  border: 0; background: transparent; outline: none;
+  color: var(--ink); text-align: center;
   /* 16px 是 iOS 不自動放大整頁的門檻 —— 小於它的話點進輸入框版面會整個跑掉 */
   font-size: 16px; font-family: var(--font-mono);
 }
+.prices:focus-within { border-color: var(--line); background: var(--surface-2); }
 .pbox::placeholder { color: var(--faint); font-family: var(--font-body); }
-.pbox:focus { outline: none; border-color: var(--line); background: var(--surface-2); }
-.dash { flex: none; color: var(--faint); }
+.dash { flex: none; padding: 0 2px; color: var(--faint); }
 .fnote { margin: -4px 0 0; font-size: 12px; line-height: 1.6; }
 .fnote.bad { color: var(--danger-ink); }
 .fpfoot { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid var(--line-soft); padding-top: 4px; }
 .flink {
-  min-height: 44px; padding: 8px 4px;
+  /* 「收起」只有兩個字，光靠內距撐不到 44px 的觸控下限（實測 34px 寬） */
+  min-height: 44px; min-width: 44px; padding: 8px 6px;
   border: 0; background: transparent; cursor: pointer;
   font-size: 13px; font-family: inherit; color: var(--muted);
 }
@@ -993,19 +1186,6 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .hintN { flex: none; color: var(--ok-ink); font-weight: 700; font-size: 13px; }
 @media (hover: hover) { .hint:hover { border-color: var(--line); background: var(--surface-2); } }
 .hint:active { transform: scale(.98); }
-.chip {
-  flex: none;
-  /* 44px 是觸控目標下限；視覺上仍是細膠囊，靠 padding 撐開可點區域 */
-  min-height: 44px;
-  padding: 8px 16px; border-radius: var(--pill);
-  border: 1px solid var(--line-soft); background: transparent;
-  color: var(--muted); font-size: 13px; font-weight: 500; cursor: pointer;
-  transition: background .15s, color .15s, border-color .15s;
-}
-.chip.on { background: var(--ink); color: var(--bg); border-color: transparent; font-weight: 600; }
-@media (hover: hover) { .chip:not(.on):hover { color: var(--ink); border-color: var(--line); } }
-.chip:active { transform: scale(.96); }
-
 /* ---- 分區 ---- */
 .band { margin-bottom: 22px; }
 .bh { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 11px; }
@@ -1170,7 +1350,7 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 
 /* 撐滿整格的連結：整張卡都可以點進詳情頁，不是只有右下角那顆鍵 */
 .open { position: absolute; inset: 0; z-index: 3; border-radius: var(--radius); }
-.open:focus-visible { outline: 2px solid #fff; outline-offset: -3px; }
+.open:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 
 /* 「買下」現在只是視覺標籤，真正的連結是 .open。
    pointer-events: none 讓點在它身上的手指直接落到那條連結上 */
@@ -1247,4 +1427,10 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   .lotMine { right: 6px; top: 6px; max-width: calc(100% - 12px); }
   .sell { font-size: 12.5px; padding: 8px 13px; }
 }
+
+/* 兩條輸入欄位的「鍵盤焦點」版本。必須放在檔案最後：
+   上面 .search:focus-within / .prices:focus-within 那兩條中性規則權重相同，
+   誰在後面誰贏 —— 寫在前面的話鍵盤焦點會被滑鼠版蓋掉。 */
+.search:has(.qbox:focus-visible) { border-color: var(--accent); }
+.prices:has(.pbox:focus-visible) { border-color: var(--accent); }
 </style>
