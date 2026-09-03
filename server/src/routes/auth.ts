@@ -7,7 +7,7 @@ import { z } from 'zod'
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
 import { sql } from '../db.js'
-import { issueToken, requireAuth } from '../auth.js'
+import { bumpSessionVersion, issueToken, requireAuth } from '../auth.js'
 import { bumpFail, checkLimit, clearFails, clientIp } from '../rate-limit.js'
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number) => Promise<Buffer>
@@ -142,7 +142,43 @@ auth.post('/set-password', requireAuth, async c => {
   }
 
   await sql`update users set email = ${lower}, password_hash = ${await hash(password)} where id = ${me}`
-  return c.json({ ok: true, email: lower })
+
+  /* ---- 改密碼要踢掉其他所有 token（A-1 第一階段的核心）----
+     JWT 一旦簽出去，伺服器沒辦法收回；沒有這一步的話，token 外流之後
+     使用者改密碼也趕不走對方，30 天內對方一直進得來。
+
+     只有「換掉一組已存在的密碼」才遞增：那代表舊憑證要作廢，
+     連帶用舊憑證登入取得的 session 也該作廢。
+     **第一次設密碼（原本 password_hash 是 null，例如純 LINE 註冊）不遞增** ——
+     沒有任何舊憑證被換掉，遞增只會平白把使用者其他裝置踢下線，換不到安全。
+
+     當前這台裝置留著：回一張新 token 給呼叫端換掉手上那張。
+     多數平台都是這個行為（改密碼不會把你自己也登出），
+     而且「改完密碼被自己踢出去」會讓人以為改失敗了。 */
+  let token: string | undefined
+  if (u.password_hash) {
+    const sv = await bumpSessionVersion(me)
+    token = await issueToken(me, sv)
+  }
+  return c.json({ ok: true, email: lower, ...(token ? { token } : {}) })
+})
+
+/* ---- 登出所有裝置 ----
+   把 session 版本 +1，所有已簽發的 token（包含外流的那張）立刻失效。
+   這是使用者自救的唯一手段：懷疑帳號被別人用了，按這個就能一次清掉。
+
+   預設**留下當前這台裝置**（回一張新 token 換掉手上那張）：
+   使用者的意圖幾乎都是「把別人踢掉」，把自己也登出只是多一次重登。
+   真的想連自己一起（例如手機掉了、現在是在別人的電腦上處理），
+   傳 { keepCurrent: false } —— 那就不回新 token，前端清掉本地憑證即可。 */
+const LogoutAll = z.object({ keepCurrent: z.boolean().optional() })
+auth.post('/logout-all', requireAuth, async c => {
+  const me = c.get('userId')
+  const parsed = LogoutAll.safeParse((await c.req.json().catch(() => null)) ?? {})
+  const keepCurrent = parsed.success ? parsed.data.keepCurrent !== false : true
+
+  const sv = await bumpSessionVersion(me)
+  return c.json({ ok: true, ...(keepCurrent ? { token: await issueToken(me, sv) } : {}) })
 })
 
 /** 這個帳號現在有哪些登入方式 */
