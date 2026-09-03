@@ -1171,6 +1171,110 @@ head('8 V-2：SELLER_UNFUNDED 併發 + 完全回滾')
 }
 
 /* ==================================================================
+   9 賣家的保證金：兩個買家同時買，而賣家只押得起一筆
+   ------------------------------------------------------------------
+   建單這條路原本**只鎖買家、只驗買家**：賣家的保證金直接寫進
+   orders.deposit，從來沒有人問過賣家付不付得出來。餘額 0 的賣家照樣
+   成單、available 當場變成 −5,000（DEPOSIT_CAP），逾期未出貨時
+   settle() 照扣，帳本真的變負 —— 而且**單執行緒就做得到**，
+   跟這支平常在找的併發破口不是同一件事。
+
+   修法把賣家也納入 lockSpender 並驗 available >= deposit，於是
+   建單第一次要在同一筆交易裡鎖**兩個**使用者。這一節壓的就是那件事：
+     1 只夠一筆保證金的賣家，兩個買家同時買他的兩張卡 → 只能成一筆
+     2 兩個賣家互買對方的卡（鎖的取得順序若照「先買家後賣家」就是
+       一個現成的死結環）→ 不能出現 40P01
+   ================================================================== */
+head('9 賣家的保證金只夠一筆，兩個買家同時買')
+{
+  const PRICE = 10_000
+  const DEPOSIT = 1_000            // depositFor(10000, 0) = 10%
+  const [anyPool] = await sql<{ id: string }[]>`select id from pools limit 1`
+  if (!anyPool) throw new Error('佈景失敗：沒有池可用')
+
+  /* 需寄送的上架要一張「實體在自己手上」的卡（prizes.status = 'shipped'）。
+     抽籤位拿到的是保管庫裡的卡（stashed，只能走庫內轉移），所以這裡
+     直接寫資料庫造卡 —— 這是佈景，不是被測的行為（同檔頭第三點）。 */
+  let pzSeq = 0
+  async function shipCard(ownerId: string): Promise<string> {
+    const id = `pz-race-${runId}-dep${++pzSeq}`
+    const t = Date.now()
+    await sql`insert into prizes (id, user_id, custodian_id, pool_id, card, tier, status,
+                                  won_at, acquired_at, stash_expires_at)
+              values (${id}, ${ownerId}, ${ownerId}, ${anyPool!.id},
+                      ${sql.json({ name: '保證金壓測卡' })}, 'A', 'shipped', ${t}, ${t}, ${t})`
+    return id
+  }
+
+  const seller = await actor('s9s', 0)   // 一毛都不發，可動用完全由這一節控制
+
+  // 9a 上架端的提前檢查：押不起就上不了架
+  const poor = await call(seller.token, '/v1/listings',
+    { prizeId: await shipCard(seller.id), price: PRICE })
+  ck('餘額 0 的賣家上不了需寄送的架', poor.status === 409 && poor.body?.error === 'INSUFFICIENT_POINTS',
+    `${poor.status} ${poor.text.slice(0, 120)}`)
+  ck('上架的拒絕訊息說得出要押多少', String(poor.body?.message ?? '').includes('1,000'),
+    String(poor.body?.message ?? ''))
+
+  // 9b 剛好一筆保證金 → 兩張卡上得了架，但只成得了一筆訂單
+  await grant(seller.id, DEPOSIT)
+  const ls: string[] = []
+  for (let i = 0; i < 2; i++) {
+    const r = await call(seller.token, '/v1/listings', { prizeId: await shipCard(seller.id), price: PRICE })
+    if (r.status !== 200) throw new Error(`佈景失敗：上架 ${r.status} ${r.text}`)
+    ls.push(r.body.listing.id as string)
+  }
+  ck('押得起一筆時兩張都上得了架（上架不是防線，只是提前告知）', ls.length === 2)
+
+  const b1 = await actor('s9b1', PRICE * 2), b2 = await actor('s9b2', PRICE * 2)
+  const shots = await together([
+    { label: 'buy0', run: () => call(b1.token, '/v1/orders', { listingId: ls[0]!, idempotencyKey: `race-${runId}-s9-0` }) },
+    { label: 'buy1', run: () => call(b2.token, '/v1/orders', { listingId: ls[1]!, idempotencyKey: `race-${runId}-s9-1` }) }
+  ])
+  const won = shots.filter(s => s.value?.status === 200)
+  const blocked = shots.filter(s => s.value?.body?.error === 'LISTING_UNAVAILABLE')
+  ck('只成得了一筆（賣家的保證金沒有被花兩次）', won.length === 1,
+    `成交 ${won.length} 筆：${shots.map(s => `${s.value?.status}/${s.value?.body?.error ?? 'ok'}`).join('、')}`)
+  ck('另一筆被擋成 LISTING_UNAVAILABLE', blocked.length === 1,
+    shots.map(s => String(s.value?.body?.error)).join('、'))
+  ck('擋下來的訊息不提賣家的財務狀態（不洩漏）',
+    !/保證金|餘額|點數不足/.test(String(blocked[0]?.value?.body?.message ?? '')),
+    String(blocked[0]?.value?.body?.message ?? ''))
+  const sw = await availableOf(seller.id)
+  ck('賣家的可動用沒有變成負的', sw.available >= 0, JSON.stringify(sw))
+  const st9 = new Stat()
+  st9.round(shots, won.length === 1 ? '1成交1擋' : `異常(成交${won.length})`)
+  st9.report('保證金只夠一筆')
+
+  // 9c 兩個賣家互買 —— 鎖的取得順序若不固定，這裡就是死結環
+  const dl0 = await deadlocks()
+  const x = await actor('s9x', PRICE * 4), y = await actor('s9y', PRICE * 4)
+  const lx: string[] = [], ly: string[] = []
+  for (let i = 0; i < 6; i++) {
+    const rx = await call(x.token, '/v1/listings', { prizeId: await shipCard(x.id), price: PRICE })
+    const ry = await call(y.token, '/v1/listings', { prizeId: await shipCard(y.id), price: PRICE })
+    if (rx.status !== 200 || ry.status !== 200) throw new Error(`佈景失敗：互買上架 ${rx.text} ${ry.text}`)
+    lx.push(rx.body.listing.id as string); ly.push(ry.body.listing.id as string)
+  }
+  const stX = new Stat()
+  let errors5xx = 0
+  for (let round = 0; round < 6; round++) {
+    const sh = await together([
+      { label: 'x→y', run: () => call(x.token, '/v1/orders', { listingId: ly[round]!, idempotencyKey: `race-${runId}-s9x-${round}` }) },
+      { label: 'y→x', run: () => call(y.token, '/v1/orders', { listingId: lx[round]!, idempotencyKey: `race-${runId}-s9y-${round}` }) }
+    ])
+    for (const s of sh) if ((s.value?.status ?? 500) >= 500) errors5xx++
+    stX.round(sh, sh.filter(s => s.value?.status === 200).length + ' 成交')
+  }
+  const dl1 = await deadlocks()
+  ck('互買沒有任何 5xx（沒有交易被砍掉）', errors5xx === 0, `${errors5xx} 筆`)
+  ck('互買沒有增加資料庫的死鎖計數', dl1 === dl0, `${dl0} → ${dl1}`)
+  stX.report('兩個賣家互買')
+
+  await invariants('9 保證金')
+}
+
+/* ==================================================================
    收尾
    ================================================================== */
 head('收尾：全站對帳')

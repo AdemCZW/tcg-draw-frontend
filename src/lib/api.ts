@@ -204,6 +204,22 @@ function toLedger(rows: Any[], endBalance: number): LedgerEntry[] {
 export interface Page<T> { items: T[]; nextCursor: string | null }
 export interface PageOpts { cursor?: string | null; limit?: number; signal?: AbortSignal }
 export type MarketSort = 'deal' | 'new' | 'cheap' | 'pricey'
+/**
+ * 市場的等級篩選。`raw`（未鑑定）與 `graded`（不分家、只要鑑定過）是兩個
+ * 明確的類別，不是「有沒有填鑑定公司」的副作用 —— 裸卡是市場上最常見的一類，
+ * 而且是兩種相反意圖的目標（撿便宜／排除它）。
+ * 值與後端 routes/public.ts 的 GRADER_FILTERS 一一對應。
+ */
+export type MarketGrader = 'raw' | 'graded' | 'psa' | 'bgs' | 'ars'
+/** 市場列表的篩選條件。四個都是「過濾」，跟排序互不相干，可以任意並用 */
+export interface MarketFilters {
+  q?: string
+  grader?: MarketGrader
+  /** 分數下限（含）。只有下限沒有上限 —— 沒有人在找比較差的卡 */
+  minGrade?: number
+  minPrice?: number
+  maxPrice?: number
+}
 
 export interface PrizeSummary {
   total: number
@@ -498,7 +514,7 @@ export const api = {
    * total 只有在有關鍵字、而且是第一批時後端才會給（見同一支路由的說明）。
    */
   async listMarket(
-    opts: PageOpts & { sort?: MarketSort; q?: string } = {}
+    opts: PageOpts & { sort?: MarketSort } & MarketFilters = {}
   ): Promise<Page<Listing> & { total?: number }> {
     if (MOCK) {
       await delay(160)
@@ -507,8 +523,22 @@ export const api = {
          不然本機看起來會的東西接上後端就不會 —— 那種落差最難查。
          這裡只搜卡名、系列、卡號三欄，也跟 031 的 search_text 一致。 */
       const q = normalizeSearch(opts.q ?? '')
-      const hit = (l: Listing) =>
-        !q || normalizeSearch(`${l.card.name}|${l.card.setCode}|${l.card.cardNo}`).includes(q)
+      /* 等級的判斷也要跟後端同一套：未鑑定在資料上有三種寫法（'RAW'、空字串、
+         整個欄位沒有），三種都是同一件事。只比對 === 'RAW' 會把後兩種漏成
+         「不屬於任何類別」—— 那正是「把 RAW 當成 null」的那個錯誤。 */
+      const graderOf = (l: Listing) => (l.card.grader || 'RAW').toUpperCase()
+      const gradeOf = (l: Listing) => (typeof l.card.grade === 'number' ? l.card.grade : null)
+      const hit = (l: Listing) => {
+        if (q && !normalizeSearch(`${l.card.name}|${l.card.setCode}|${l.card.cardNo}`).includes(q)) return false
+        const g = graderOf(l)
+        if (opts.grader === 'raw' && g !== 'RAW') return false
+        if (opts.grader === 'graded' && g === 'RAW') return false
+        if (opts.grader && !['raw', 'graded'].includes(opts.grader) && g !== opts.grader.toUpperCase()) return false
+        if (opts.minGrade !== undefined && (gradeOf(l) ?? -1) < opts.minGrade) return false
+        if (opts.minPrice !== undefined && l.price < opts.minPrice) return false
+        if (opts.maxPrice !== undefined && l.price > opts.maxPrice) return false
+        return true
+      }
       const found = live.filter(hit)
       // 沒有標示參考價的排在最後：沒有基準可比，不是「零折價」
       const d = (l: Listing) => refDiscount(l) ?? Number.POSITIVE_INFINITY
@@ -518,7 +548,11 @@ export const api = {
         : opts.sort === 'new' ? () => 0            // mock 已依上架時間排好
         : (a, b) => d(a) - d(b))
       const page = mockPage(sorted, l => l.id, opts)
-      return { ...page, ...(q && !opts.cursor ? { total: found.length } : {}) }
+      /* 有任何條件在作用時才回總筆數，跟後端同一個規則：那個數字講的是
+         「整個市場符合的有幾件」，不是「這一批載進來幾件」。 */
+      const filtering = !!q || !!opts.grader || opts.minGrade !== undefined
+        || opts.minPrice !== undefined || opts.maxPrice !== undefined
+      return { ...page, ...(filtering && !opts.cursor ? { total: found.length } : {}) }
     }
     const r = await http<{ items: Any[]; nextCursor: string | null; total?: number }>(
       `/v1/listings${qs({ ...opts, sort: opts.sort, q: opts.q })}`, { signal: opts.signal })

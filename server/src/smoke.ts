@@ -1426,6 +1426,78 @@ async function run() {
     check('市場不認得的排序被拒',
       (await fetch(`${base}/v1/listings?sort=random`)).status === 400)
 
+    /* ---- 市場篩選：卡片等級與點數區間 ----
+
+       這幾條驗的是「篩選在後端」這件事本身。前端過濾只濾得到已載入的那一批，
+       而市場是游標分頁的 —— 符合條件的有 N 筆、第一批裡只有兩三筆時，
+       前端會回答那兩三筆，而且看起來完全合理。所以這裡一律
+       **翻完所有分頁再比對**，不看第一批。 */
+    {
+      const allWith = async (qs: string): Promise<string[]> => {
+        const out: string[] = []
+        let c: string | null = null
+        do {
+          const u = new URLSearchParams(qs)
+          u.set('limit', '3')          // 刻意用很小的批次，逼出跨分頁的錯誤
+          if (c) u.set('cursor', c)
+          const r = await json(await fetch(`${base}/v1/listings?${u}`))
+          out.push(...(r.items ?? []).map((l: { id: string }) => l.id))
+          c = r.nextCursor ?? null
+        } while (c)
+        return out
+      }
+      const live = await allListings()
+      /* 未鑑定的判斷要跟後端同一套：'RAW'、空字串、整個欄位不存在都是未鑑定。
+         只比對 === 'RAW' 會把後兩種漏掉 —— 那正是「把 RAW 當成 null」的錯誤。 */
+      const graderOf = (l: Any) => String(l.card?.grader ?? '').trim().toUpperCase() || 'RAW'
+      const gradeOf = (l: Any) => (typeof l.card?.grade === 'number' ? l.card.grade : null)
+
+      const raw = await allWith('grader=raw')
+      const graded = await allWith('grader=graded')
+      check('市場 grader=raw 與資料一致',
+        raw.length === live.filter(l => graderOf(l) === 'RAW').length,
+        `${raw.length} vs ${live.filter(l => graderOf(l) === 'RAW').length}`)
+      check('市場 grader=graded 與資料一致',
+        graded.length === live.filter(l => graderOf(l) !== 'RAW').length)
+      check('未鑑定 + 已鑑定 = 全部有效掛單（沒有人被漏成「不屬於任何類別」）',
+        raw.length + graded.length === live.length, `${raw.length}+${graded.length} vs ${live.length}`)
+
+      const psa10 = await allWith('grader=psa&minGrade=10')
+      const psa10Truth = live.filter(l => graderOf(l) === 'PSA' && (gradeOf(l) ?? -1) >= 10)
+      check('市場 PSA 10 翻完所有分頁的筆數正確（不是第一批裡的那幾筆）',
+        psa10.length === psa10Truth.length, `${psa10.length} vs ${psa10Truth.length}`)
+      check('市場 PSA 10 翻頁不重複', new Set(psa10).size === psa10.length)
+      const first = await json(await fetch(`${base}/v1/listings?grader=psa&minGrade=10&limit=1`))
+      check('第一頁回的 total 是全市場符合的筆數，不是這一批的數量',
+        first.total === psa10Truth.length, `${first.total} vs ${psa10Truth.length}`)
+
+      const cheapHalf = await allWith('maxPrice=3000')
+      check('市場 maxPrice 與資料一致',
+        cheapHalf.length === live.filter(l => Number(l.price) <= 3000).length)
+      const band = await allWith('minPrice=1000&maxPrice=5000&sort=cheap')
+      check('市場點數區間 + 排序並用仍然正確',
+        band.length === live.filter(l => Number(l.price) >= 1000 && Number(l.price) <= 5000).length)
+
+      /* 金額參數要跟站上既有的八個金額欄位一樣嚴：使用者多打幾個零、
+         或手動組了一個荒謬的網址，回的必須是 400 加一句中文，不是 500。 */
+      for (const bad of ['-1', '0', '1.5', '1e308', '1e999', 'abc', 'null',
+        '9007199254740992', '1000000001', '9.9e18']) {
+        const r = await fetch(`${base}/v1/listings?minPrice=${encodeURIComponent(bad)}`)
+        const body = r.status === 400 ? await json(r) : null
+        check(`市場 minPrice=${bad} 被擋下且訊息可讀`,
+          r.status === 400 && /點數/.test(String(body?.message ?? '')),
+          `${r.status} ${JSON.stringify(body)}`)
+      }
+      const flipped = await fetch(`${base}/v1/listings?minPrice=5000&maxPrice=1000`)
+      check('市場 minPrice > maxPrice 被擋下（不是默默回 0 筆）', flipped.status === 400)
+      const rawGrade = await fetch(`${base}/v1/listings?grader=raw&minGrade=9`)
+      check('未鑑定 + 分數下限這種矛盾組合被擋下', rawGrade.status === 400)
+      check('市場不認得的鑑定公司被拒',
+        (await fetch(`${base}/v1/listings?grader=PSA10`)).status === 400)
+      check('市場空字串的篩選參數當成沒給（不是 0）',
+        (await fetch(`${base}/v1/listings?minPrice=&grader=&minGrade=`)).status === 200)
+    }
+
     const hl = await json(await fetch(`${base}/v1/listings/highlights`))
     check('精選區是有界的 top-N', hl.deals.length <= 6 && hl.graded.length <= 4)
     check('精選區帶出整個市場的總筆數', hl.total === (await allListings()).length)

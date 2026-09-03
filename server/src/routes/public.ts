@@ -10,6 +10,8 @@ import { requireAuth } from '../auth.js'
 import { PageQuery, decodeCursor, encodeCursor, slicePage } from '../pagination.js'
 import { POINTS_INPUT_MAX, pointsInputMaxText } from '../limits.js'
 import { publicCard } from '../card-public.js'
+import { walletOf } from '../money.js'
+import { depositFor } from '../shared/escrow.js'
 
 export const pub = new Hono()
 
@@ -130,9 +132,98 @@ type Sort = (typeof SORTS)[number]
  * 那是在使用者不知情的狀況下回答另一個問題。
  */
 const Q_MAX = 80
+
+/**
+ * 卡片等級的篩選維度。
+ *
+ * ── 為什麼是「鑑定公司 ＋ 分數下限」兩格，不是「PSA 10 / PSA 9.5 / …」一長串 ──
+ *
+ * 卡片上的等級其實是兩個欄位：`grader`（PSA / BGS / ARS / RAW）與 `grade`
+ * （10、9.5、9…）。**PSA 10 與 BGS 10 不是同一件事**，所以不能只留分數；
+ * 但把兩者相乘列成選項（4 家 × 10 級 = 40 個）在 393px 上是災難，
+ * 而且實際資料極度稀疏（本機種子資料只有 PSA 10 與 RAW 兩種組合），
+ * 使用者會看到 38 個永遠 0 筆的選項。
+ *
+ * 拆成兩格之後，「PSA 且 ≥10」還是表達得出 PSA 10，「BGS 且 ≥10」是另一件事，
+ * 兩者不會被混為一談；而「不分家、≥9.5」這種真實需求（想要高分卡、不在乎哪一家）
+ * 用一長串逐級選項反而表達不出來。
+ *
+ * ── RAW 是一個類別，不是「沒有值」 ──
+ *
+ * 裸卡是市場上最常見的一類，而且是兩種相反意圖的目標：想撿便宜的人專挑它，
+ * 只要鑑定過的人要排除它。所以 `raw` 與 `graded` 都是明確的選項，
+ * 不是「沒有選鑑定公司」的副作用。
+ *
+ * 判斷寫成 coalesce(upper(btrim(grader)), 'RAW') = 'RAW'：
+ * 卡片是 jsonb 而且建池端是 passthrough 收進來的，實務上「未鑑定」有三種寫法
+ * ——「RAW」、空字串、整個鍵不存在。三種都是同一件事，
+ * 只比對 `= 'RAW'` 會把後兩種漏成「不屬於任何類別」，
+ * 那正是「把 RAW 當成 null」的那個錯誤。
+ *
+ * ── 為什麼不用 tier（賞別） ──
+ *
+ * 賞別是「這張卡在某個池裡被當成第幾賞」，是**池的屬性不是卡的屬性**：
+ * 同一張卡在別的池是別的賞。拿它當卡片等級會給出隨池而異的答案。
+ */
+const GRADER_FILTERS = ['raw', 'graded', 'psa', 'bgs', 'ars'] as const
+type GraderFilter = (typeof GRADER_FILTERS)[number]
+
+/** 未鑑定的三種寫法（'RAW' / 空字串 / 沒有這個鍵）收斂成同一個值 */
+const GRADER_NORM = sql`coalesce(upper(nullif(btrim(card->>'grader'), '')), 'RAW')`
+
+/**
+ * 分數要當數字比，但 card 是 passthrough 的 jsonb —— 裡面的 grade 完全可能是
+ * `"很棒"` 或 `""`。直接 `(card->>'grade')::numeric` 碰到那種列會回 22P02，
+ * Hono 把它翻成 500：**一筆髒資料就讓整個市場的篩選變成伺服器故障**。
+ * 先用正規表示式確認它長得像數字，不像的當成「沒有分數」（NULL），
+ * NULL >= 9 是 unknown，那一列自然落在結果外，不會炸也不會被誤收。
+ */
+const GRADE_NUM = sql`(case when card->>'grade' ~ '^[0-9]+(\.[0-9]+)?$'
+                            then (card->>'grade')::numeric end)`
+
+/**
+ * 空字串當成「沒有給這個參數」。
+ *
+ * 網址上留著一個空的 `?minPrice=` 是真的會發生的（分享連結、前端清掉輸入框、
+ * 使用者手動刪值），而 z.coerce.number() 會把 '' 變成 0 —— 那會撞上
+ * `.positive()` 回 400，對使用者來說是「我什麼都沒填卻被說參數錯」。
+ * 沒填就是沒填，不是 0。
+ */
+const emptyToUndef = (v: unknown) => (v === '' || v === undefined || v === null ? undefined : v)
+
+/**
+ * 點數區間的兩個端點。
+ *
+ * 驗證要跟站上既有的八個金額欄位一樣嚴（見 limits.ts）：負數、0、小數、
+ * `1e308`、`1e999`、`MAX_SAFE+1`、上界 +1 全部 400 而且訊息是中文可讀的。
+ * 少了 `.max()` 的話 1e308 會一路撞進 bigint 的比較變成 22P02 → 500，
+ * 把使用者多打的幾個零講成伺服器故障 —— 那正是 limits.ts 存在的理由。
+ * `.int()` 順便擋掉小數與 Infinity（Number.isInteger(Infinity) 是 false）。
+ */
+const PriceParam = z.preprocess(
+  emptyToUndef,
+  z.coerce.number().int().positive().max(POINTS_INPUT_MAX).optional()
+)
+
 const ListingQuery = PageQuery.extend({
   sort: z.enum(SORTS).default('deal'),
-  q: z.string().trim().max(Q_MAX).optional()
+  q: z.string().trim().max(Q_MAX).optional(),
+  grader: z.preprocess(emptyToUndef, z.enum(GRADER_FILTERS).optional()),
+  /* 只有下限沒有上限：「9.5 分以上」是真實需求，「9.5 分以下」不是 ——
+     沒有人在找比較差的卡。多一個上限等於多一個永遠不會被用到的輸入框。 */
+  minGrade: z.preprocess(emptyToUndef, z.coerce.number().min(1).max(10).optional()),
+  minPrice: PriceParam,
+  maxPrice: PriceParam
+}).superRefine((v, ctx) => {
+  /* 矛盾組合要當場說清楚，不要回一個「剛好 0 筆」的空清單 ——
+     空清單長得跟「市場上真的沒有這種卡」一模一樣，使用者會去找不存在的卡，
+     而不是去修自己的輸入。 */
+  if (v.minPrice !== undefined && v.maxPrice !== undefined && v.minPrice > v.maxPrice) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['range'], message: 'min > max' })
+  }
+  if (v.grader === 'raw' && v.minGrade !== undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rawGrade'], message: 'raw + grade' })
+  }
 })
 
 /**
@@ -161,7 +252,45 @@ const normQ = (q: string) => sql`regexp_replace(lower(normalize(${q}::text, NFKC
  *
  * 代價是 B-tree 索引用不上；為什麼現在不需要索引、之後怎麼辦，見 031 的說明。
  */
-const searchWhere = (q: string) => (q ? sql`and strpos(search_text, ${normQ(q)}) > 0` : sql``)
+/**
+ * 關鍵字 ＋ 等級 ＋ 點數區間，全部收在同一個 where 片段。
+ *
+ * 這一整包都是「過濾」：它只讓候選集合變小，不碰排序鍵也不碰游標比較，
+ * 所以四種排序、關鍵字、三個篩選維度天生可以任意組合，不必為誰另開一條路。
+ *
+ * **而且它一定要在這裡（資料庫），不能在前端。** 市場是游標分頁的：
+ * 前端只濾得到已經載進來的那 24 筆。實測造 48 筆掛單、符合條件的有 15 筆而
+ * 第一批裡只有 2 筆 —— 前端過濾會回答「2」。價格區間尤其危險，因為
+ * 「2」看起來完全合理，沒有任何跡象顯示它是錯的。同一個坑卡冊的狀態分頁
+ * 與市場搜尋已經各踩過一次。
+ */
+type Filters = {
+  q: string
+  grader?: GraderFilter
+  minGrade?: number
+  minPrice?: number
+  maxPrice?: number
+}
+
+function listingWhere(f: Filters) {
+  let w = sql``
+  if (f.q) w = sql`${w} and strpos(search_text, ${normQ(f.q)}) > 0`
+  if (f.grader === 'raw') w = sql`${w} and ${GRADER_NORM} = 'RAW'`
+  else if (f.grader === 'graded') w = sql`${w} and ${GRADER_NORM} <> 'RAW'`
+  else if (f.grader) w = sql`${w} and ${GRADER_NORM} = ${f.grader.toUpperCase()}`
+  /* ::text::numeric 而不是 ::numeric：跟同一支路由的 new 排序游標同一個理由 ——
+     讓 Postgres 在 describe 階段把參數判成 numeric，postgres.js 就會拿它自己的
+     numeric 序列化器去處理這個值；先轉 text 則是把字串原封送過去由 Postgres 轉。
+     9.5 這種值在這條路上不會有任何轉手損失。 */
+  if (f.minGrade !== undefined) w = sql`${w} and ${GRADE_NUM} >= ${String(f.minGrade)}::text::numeric`
+  if (f.minPrice !== undefined) w = sql`${w} and price >= ${f.minPrice}::bigint`
+  if (f.maxPrice !== undefined) w = sql`${w} and price <= ${f.maxPrice}::bigint`
+  return w
+}
+
+/** 有沒有任何一個條件在作用。決定要不要多算一次總筆數，也決定畫面上要不要收起精選區 */
+const anyFilter = (f: Filters) =>
+  !!f.q || !!f.grader || f.minGrade !== undefined || f.minPrice !== undefined || f.maxPrice !== undefined
 
 /** 回傳 [order by 片段, 游標比較片段, 從一列取出游標值] 三件一組 */
 function sortSpec(sort: Sort, after: [string, string] | null) {
@@ -231,12 +360,23 @@ const toListing = (r: Row) => ({
 pub.get('/listings', async c => {
   const parsed = ListingQuery.safeParse(c.req.query())
   if (!parsed.success) {
-    /* 分開講：兩種錯誤的下一步完全不同（一個是改網址、一個是少打幾個字），
-       混成同一句話等於要使用者自己猜。 */
-    const tooLongQ = parsed.error.issues.some(i => i.path[0] === 'q')
+    /* 每一個參數各講各的：這些錯誤的下一步完全不同（改網址／少打幾個字／
+       把最低價改小），混成同一句「參數不合法」等於要使用者自己猜是哪一格。
+       金額那兩格的訊息要帶出上界的中文寫法 —— 使用者多打了三個零時，
+       他需要看到的是「上限是十億」，不是「不合法」。 */
+    const MSG: Record<string, string> = {
+      q: `搜尋字數上限 ${Q_MAX} 個字`,
+      grader: '卡片等級不合法（可用 raw / graded / psa / bgs / ars）',
+      minGrade: '分數下限要是 1 到 10 之間的數字',
+      minPrice: `最低點數要是 1 到 ${pointsInputMaxText()} 之間的整數`,
+      maxPrice: `最高點數要是 1 到 ${pointsInputMaxText()} 之間的整數`,
+      range: '最低點數不能高於最高點數',
+      rawGrade: '未鑑定的卡沒有鑑定分數，不能同時指定分數下限'
+    }
+    const hit = parsed.error.issues.map(i => MSG[String(i.path[0] ?? '')]).find(Boolean)
     return c.json({
       error: 'BAD_REQUEST',
-      message: tooLongQ ? `搜尋字數上限 ${Q_MAX} 個字` : '分頁參數不合法（limit 介於 1 到 100）'
+      message: hit ?? '分頁參數不合法（limit 介於 1 到 100）'
     }, 400)
   }
   const { limit, cursor, sort } = parsed.data
@@ -251,27 +391,37 @@ pub.get('/listings', async c => {
     after = [p[0]!, p[1]!]
   }
   const spec = sortSpec(sort, after)
-  /* 搜尋是「過濾」，排序與游標完全不受影響：同一組排序鍵、同一組游標比較，
-     只是候選集合變小。所以搜尋與四種排序天生可以並存，不必為搜尋另開排序。 */
-  const search = searchWhere(q)
+  /* 過濾與排序是兩件互不相干的事：同一組排序鍵、同一組游標比較，
+     只是候選集合變小。所以關鍵字、三個篩選維度與四種排序天生可以並存，
+     不必為任何一種組合另開一條路。 */
+  const filters: Filters = {
+    q,
+    grader: parsed.data.grader,
+    minGrade: parsed.data.minGrade,
+    minPrice: parsed.data.minPrice,
+    maxPrice: parsed.data.maxPrice
+  }
+  const where = listingWhere(filters)
 
   const rows = await sql<Row[]>`
     select *, listed_at::text as listed_at_text, ${DEAL_RATIO} as deal_ratio
-    from listings where status = 'live' ${search} ${spec.where}
+    from listings where status = 'live' ${where} ${spec.where}
     ${spec.order}
     limit ${limit + 1}
   `
   const page = slicePage(rows, limit, r => encodeCursor([spec.key(r), r.id]))
 
-  /* 搜尋時多回一個總筆數，而且**只在第一頁算**。
+  /* 有條件在作用時多回一個總筆數，而且**只在第一頁算**。
      為什麼要有它：查無結果與「這一批剛好沒有」在畫面上長得一樣，使用者需要
      一個能相信的數字。而它必須是整個市場的數字 —— 從已載入的清單數出來的
      「2 筆」正是這個功能要避免的那個錯誤答案。
-     為什麼只在第一頁：捲動時每一批都算一次是白花的，數字也不會變。 */
+     為什麼只在第一頁：捲動時每一批都算一次是白花的，數字也不會變。
+     為什麼不只在搜尋時算：篩選跟搜尋一樣會把清單縮到看不出全貌，
+     「PSA 10 有幾件」跟「伊布有幾件」是同一種問題。 */
   let total: number | undefined
-  if (q && !cursor) {
+  if (anyFilter(filters) && !cursor) {
     const [n] = await sql<{ n: string }[]>`
-      select count(*)::text as n from listings where status = 'live' ${search}
+      select count(*)::text as n from listings where status = 'live' ${where}
     `
     total = Number(n?.n ?? 0)
   }
@@ -387,6 +537,37 @@ pub.post('/listings', requireAuth, async c => {
     const delivery = pz.status === 'stashed' ? 'vault'
       : pz.status === 'shipped' || pz.status === 'in_book' ? 'ship' : null
     if (!delivery) return { error: 'WRONG_STATE', message: '這張卡目前不能上架', status: 409 }
+    /* ── 需寄送的卡：先看賣家付不付得出保證金 ────────────────────────
+       成交時 routes/orders.ts 會要求賣家有足額的可動用點數當押品，
+       付不出來的話買家會被擋在建單那一步。那道才是防線（餘額會變，
+       只驗上架擋不住「上架時有錢、成交時沒錢」）；這裡這一道純粹是
+       **提前告知**：讓賣家在自己的上架流程裡就看到金額與差額，
+       而不是把卡掛上去、等到有人來買才在對方的畫面上失敗。
+
+       刻意不呼叫 lockSpender：這裡不承諾任何錢，鎖了也保證不了之後
+       還在。而且上架這條路已經先鎖了 prizes 那一列，再去鎖 users 會
+       跟建單那條路（先鎖 users 再改 prizes）形成相反的取得順序，
+       換來一個真的會發生的死結，只為了一個本來就不保證的檢查。
+
+       用 depositFor 與 orders.ts 同一個公式、用 walletOf 同一個口徑，
+       不另外發明一套算法 —— 兩邊算出不同的數字比不檢查更難懂。 */
+    if (delivery === 'ship') {
+      const [done] = await tx<{ count: string }[]>`
+        select count(*)::text as count from orders where seller_id = ${me} and status = 'completed'
+      `
+      const deposit = depositFor(price, Number(done?.count ?? 0))
+      const w = await walletOf(me, tx)
+      if (deposit > 0 && w.available < deposit) {
+        return {
+          error: 'INSUFFICIENT_POINTS',
+          message: `需寄送的卡要押 ${deposit.toLocaleString('zh-TW')} 點保證金（逾期未出貨會被沒收），`
+            + `你目前可動用 ${Math.max(0, w.available).toLocaleString('zh-TW')} 點。`
+            + '請先儲值或等進行中的訂單結案再上架。',
+          status: 409
+        }
+      }
+    }
+
     const [u] = await tx`select name, handle from users where id = ${me}`
     const id = 'l-' + randomBytes(5).toString('hex')
     const card = pz.card as { certNo?: string | null }
