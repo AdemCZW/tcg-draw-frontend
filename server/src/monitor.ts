@@ -28,6 +28,9 @@
  */
 import { sql } from './db.js'
 import { notify } from './notify.js'
+/* 「還開著的訂單」用 money.ts 那一份定義，不要在這裡再抄一次陣列 ——
+   兩份狀態清單遲早會有一份忘了改。 */
+import { OPEN } from './money.js'
 import {
   POOL_INSPECT_MS, POOL_SHIP_DEADLINE_MS, POOL_VAULT_ACCEPT_MS
 } from './shared/pool-settlement.js'
@@ -113,8 +116,17 @@ async function checkNegativeBalance(): Promise<CheckResult> {
   `
   return {
     findings: finding('negative-balance', 'critical', rows,
-      '有帳戶餘額是負的。lockSpender 的併發防線被繞過了 —— '
-      + '找出這個帳戶最近的分錄，看哪兩筆是同時成立的。')
+      '有帳戶餘額是負的 —— 有一筆錢在沒有人確認「這個帳戶付得出來」的情況下被扣走。'
+      + '兩種成因，先分清楚是哪一種：'
+      + '（一）**有人根本沒問過。** 某條扣款路徑寫進 points_ledger 之前'
+      + '沒有走 lockSpender + walletOf 的 available 檢查，或檢查的是別人的錢包'
+      + '（歷史前例：建單只驗買家的貨款，賣家的保證金從頭到尾沒人問過，'
+      + '逾期沒收時就直接扣成負的）。這一種**單執行緒就重現得出來**，'
+      + '照時間順序讀這個帳戶的分錄，找第一筆讓餘額轉負的 reason，'
+      + '再回去看那條路徑有沒有驗過**這個人**的 available。'
+      + '（二）併發把防線繞過了：兩筆同時成立的扣款各自讀到同一個 available。'
+      + '這一種會看到兩筆時間幾乎相同、金額都合法的分錄。'
+      + '先照（一）查 —— 那是比較常見也比較好修的一種。')
   }
 }
 
@@ -141,7 +153,25 @@ async function checkSettlementPrizeSync(): Promise<CheckResult> {
   }
 }
 
-/** 市場掛單與卡片的上架狀態要互相對得上 —— 錯開就是可以賣掉不存在的卡，或卡被鎖住下不了架 */
+/**
+ * 市場掛單與卡片的上架狀態要互相對得上 —— 錯開就是可以賣掉不存在的卡，或卡被鎖住下不了架。
+ *
+ * ── 第二個 union 為什麼要放行「掛單已 sold 但訂單還開著」 ──────────
+ * 需寄送的卡成交時掛單就變 sold，而 prizes 仍然停在 'listed'：
+ * orders-service.ts 的 releasePrize() **刻意**等到訂單結案
+ * （completed / refunded / cancelled）才把那一列收回去 —— 託管期間
+ * 那張卡不該被賣家拿去做別的事，'listed' 就是那把鎖。
+ * 舊的寫法只認 status='live'，於是**每一筆 escrow 中的訂單**都會被
+ * 判成脫鉤，而託管一筆最長 72 小時～21 天，`alertFindings` 的 refId
+ * 又是日期桶 —— 等於每天發一則 high 給所有管理員，內容還全是假的。
+ * 這個檔案開頭自己寫了「警報疲勞會讓真的警報也被忽略」，這條就是
+ * 那個機制最大的來源，而會被它淹掉的正是 negative-balance 那則 critical。
+ *
+ * 所以「這張卡是不是有正當理由停在 listed」的判準改成：
+ * 存在一筆 live 掛單，**或**存在一筆 sold 掛單而它的訂單還開著。
+ * 訂單一結案（不管哪種結局）就不再豁免 —— releasePrize 這時該跑完了，
+ * 沒跑完正是要抓的那種漏。
+ */
 async function checkListingPrizeSync(): Promise<CheckResult> {
   const rows = await sql<{ id: string }[]>`
     select l.id from listings l join prizes pz on pz.id = l.prize_id
@@ -149,14 +179,25 @@ async function checkListingPrizeSync(): Promise<CheckResult> {
     union all
     select pz.id from prizes pz
      where pz.status = 'listed'
-       and not exists (select 1 from listings l where l.prize_id = pz.id and l.status = 'live')
+       and not exists (
+         select 1 from listings l
+          where l.prize_id = pz.id
+            and (
+              l.status = 'live'
+              or (l.status = 'sold' and exists (
+                    select 1 from orders o
+                     where o.listing_id = l.id and o.status = any(${OPEN as unknown as string[]})
+                  ))
+            )
+       )
      limit 20
   `
   return {
     findings: finding('listing-prize-desync', 'high', rows,
-      '有效掛單指著一張不在上架狀態的卡，或一張標著上架的卡沒有任何有效掛單。'
-      + '前者可以成交一張不該賣的卡；後者的卡被鎖在 listed 出不來。'
-      + '看樣本那幾筆是掛單先死還是卡先變。')
+      '有效掛單指著一張不在上架狀態的卡，或一張標著上架的卡既沒有有效掛單、'
+      + '也沒有還開著的託管訂單。前者可以成交一張不該賣的卡；'
+      + '後者的卡被鎖在 listed 出不來（託管中的卡是正常的，已經排除）。'
+      + '看樣本那幾筆是掛單先死還是卡先變 —— 後者多半是 releasePrize 沒跑到。')
   }
 }
 

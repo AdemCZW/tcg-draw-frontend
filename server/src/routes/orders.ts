@@ -109,12 +109,82 @@ orders.post('/', async c => {
     }
 
     const price = Number(l.price)
-    /* 先鎖住買家的帳戶再算餘額。少了這一行，同一個人同時買兩張不同的卡
+    const seller = l.seller_id as string
+    const isShip = l.delivery !== 'vault'
+
+    /* ── 保證金也要先問賣家有沒有這筆錢 ──────────────────────────────
+       需寄送的訂單會把 depositFor() 算出來的保證金寫進 orders.deposit，
+       而 money.ts 的 walletOf 把賣家進行中訂單的 deposit 算進 locked。
+       在這之前**沒有任何一處驗過賣家付不付得出來**：餘額 0 的人照樣
+       成單，available 當場變成 −5000（DEPOSIT_CAP），逾期未出貨時
+       orders-service.ts 的 settle() 照扣，帳本真的變負 ——
+       單執行緒、免費帳號，每個帳號可以製造一筆 5,000 點的呆帳。
+
+       完成 count 與保證金金額要在鎖之前先算出來，因為要不要鎖賣家
+       取決於這筆金額。 */
+    const done = isShip
+      ? await tx<{ count: string }[]>`
+          select count(*)::text as count from orders where seller_id = ${seller} and status = 'completed'
+        `
+      : []
+    const completedCount = Number(done[0]?.count ?? 0)
+    const deposit = isShip ? depositFor(price, completedCount) : 0
+
+    /* 先鎖住帳戶再算餘額。少了這一行，同一個人同時買兩張不同的卡
        會鎖到兩列不同的 listings、互不阻擋，兩邊各自讀到同一個 available
-       都判定「夠」，於是花掉兩份同一筆錢（見 money.ts 的 lockSpender）。 */
-    await lockSpender(tx, me)
+       都判定「夠」，於是花掉兩份同一筆錢（見 money.ts 的 lockSpender）。
+
+       這裡是全站唯一一筆交易要鎖**兩個**使用者的地方（買家出貨款、
+       賣家出押品），所以 money.ts 檔頭那句「每筆交易只鎖一個使用者，
+       所以不會形成死結環」在這條路上不再成立。改用固定的取得順序
+       （依 id 排序）維持同一個保證：所有交易都照同一個全域順序拿鎖，
+       就形成不了環。不要改成「先鎖買家再鎖賣家」—— A 買 B 的卡、
+       B 同時買 A 的卡，那樣兩邊互等，Postgres 會砍掉其中一筆（40P01）。 */
+    for (const u of (deposit > 0 ? [me, seller].sort() : [me])) await lockSpender(tx, u)
+
     const w = await walletOf(me, tx)
     if (w.available < price) return fail('INSUFFICIENT_POINTS', '可動用點數不足')
+
+    if (deposit > 0) {
+      const sw = await walletOf(seller, tx)
+      if (sw.available < deposit) {
+        /* ── 檢查放在這一步（建單）而不是只放在上架 ──────────────────
+           這裡是錢真的被承諾出去的那一刻，也是唯一擋得住的地方：
+           上架時驗過的餘額之後還會變（賣家可以上架完再去買別的東西，
+           或同時賣五張卡、每一張都要各自的保證金），只驗上架等於留一個
+           「上架時有錢、成交時沒錢」的窗口，而那個窗口正好是這個漏洞。
+           上架端（routes/public.ts）另外有一道**提前**的檢查，那一道是
+           為了讓賣家在自己的畫面上早點知道，不是防線。
+
+           代價：這個拒絕會讓買家知道「這個賣家現在有問題」，等於洩漏賣家
+           的財務狀態。所以訊息刻意只說掛單不能買、不說原因與金額 ——
+           對買家而言跟「剛被買走」「賣家下架了」是同一類事實。
+           真正的原因用通知送給賣家本人（refId 綁掛單，同一筆掛單只吵一次）。
+           refId 另外加了前綴：notifications 的唯一索引是
+           (user_id, kind, ref_id)，直接用 listingId 的話會跟庫內轉移那則
+           「你的卡賣出了」（同樣是 kind='listing-sold'、同樣的 refId）
+           共用一格 —— 今天兩條路不會撞在同一筆掛單上（庫內轉移不收保證金），
+           但那是巧合不是設計，一格一件事比較不會在之後被人踩到。
+
+           評估過但放棄的另外兩種：
+           1 **只在上架擋**：不洩漏任何東西，但擋不住餘額後來變動，
+             漏洞仍在 —— 這條是會賠錢的，不能只做 UX。
+           2 **在這裡順手把掛單下架**：買家看到的變成單純的「已下架」，
+             洩漏更少；但賣家會因為一次暫時性的餘額不足失去掛單
+             （還要把 prizes 從 listed 收回去），而他可能只是同時有另一筆
+             訂單佔著額度。掛單留著、賣家補足點數後就能成交，代價小得多。 */
+        await notify({
+          userId: seller, kind: 'listing-sold',
+          title: '有人想買，但你的保證金不足',
+          body: `「${(l.card as { name?: string }).name ?? '卡片'}」有買家要下單，`
+            + `需要 ${deposit.toLocaleString('zh-TW')} 點可動用點數當保證金，`
+            + `你目前只有 ${Math.max(0, sw.available).toLocaleString('zh-TW')} 點。`
+            + '補足之後這筆掛單就能正常成交；在那之前買家會被擋下來。',
+          link: '/me/wallet', refId: 'deposit-short:' + listingId
+        }, tx)
+        return fail('LISTING_UNAVAILABLE', '這張卡目前無法購買，請稍後再試或看看其他掛單')
+      }
+    }
 
     await tx`update listings set status = 'sold' where id = ${listingId}`
 
@@ -140,10 +210,6 @@ orders.post('/', async c => {
       return { order: null, stashId: String(l.prize_id) }
     }
 
-    const done = await tx<{ count: string }[]>`
-      select count(*)::text as count from orders where seller_id = ${l.seller_id} and status = 'completed'
-    `
-    const completedCount = Number(done[0]?.count ?? 0)
     const now = Date.now()
     const id = 'o-' + now.toString(36) + '-' + Math.random().toString(36).slice(2, 8)
     const [buyer] = await tx`select name from users where id = ${me}`
@@ -153,7 +219,7 @@ orders.post('/', async c => {
         id, listing_id, card, price, deposit,
         buyer_id, buyer_name, seller_id, seller_name, status, created_at
       ) values (
-        ${id}, ${listingId}, ${l.card as never}, ${price}, ${depositFor(price, completedCount)},
+        ${id}, ${listingId}, ${l.card as never}, ${price}, ${deposit},
         ${me}, ${buyer?.name ?? '我'}, ${l.seller_id}, ${l.seller_name}, 'escrowed', ${now}
       ) returning *
     `

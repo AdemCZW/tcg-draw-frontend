@@ -136,6 +136,19 @@ async function run() {
     w1.wallet.locked === w0.wallet.locked + order.price && w1.wallet.points === w0.wallet.points,
     `locked ${w0.wallet.locked}→${w1.wallet.locked}, points ${w0.wallet.points}→${w1.wallet.points}`)
 
+  /* 託管中的卡**刻意**停在 prizes.status = 'listed'（掛單這時已經是 'sold'）——
+     orders-service.ts 的 releasePrize() 要等到訂單結案才收回那一列，
+     託管期間那張卡不能被賣家拿去做別的事，'listed' 就是那把鎖。
+     自我檢測的 listing-prize-desync 一度只認 status='live' 的掛單，於是
+     **每一筆進行中的需寄送訂單**都被判成脫鉤：一筆最長 72 小時～21 天，
+     警報的 refId 又是日期桶，等於每天發一則假的 high 給所有管理員，
+     把真的（例如負餘額那則 critical）淹掉。這裡剛好有一筆 escrowed 的訂單，
+     就地釘住「託管中不算脫鉤」。 */
+  const mon = await json(await call(platform, '/v1/admin/monitor'))
+  const desync = (mon.findings ?? []).find((f: Any) => f.check === 'listing-prize-desync')
+  check('託管中的訂單不會被自我檢測誤報成掛單脫鉤',
+    !desync, `count=${desync?.count} sample=${JSON.stringify(desync?.sample)}`)
+
   // 重複送出同一把 key 不該再成立一張
   const dupKey = 'smoke-dup-' + Date.now()
   const d1 = await call(buyer, '/v1/orders', { listingId: ship.id, idempotencyKey: dupKey })
@@ -528,6 +541,39 @@ async function run() {
     check('seller-doc 本人可以讀', ownerRead.ok)
     const adminRead = await call(platform, `/v1/files/${docId}`)
     check('seller-doc 平台帳號可以讀', adminRead.ok)
+
+    /* card-front：目錄外自訂卡的正面照。整條路（presign → PUT → 登記 →
+       /raw 看得到圖）與「拿別人的／沒傳完的 file id」的拒絕，
+       完整版驗在 regress-upload.ts；這裡只確認這個用途在 smoke 這一層
+       活著 —— 它之前在 smoke 出現次數是 0。 */
+    const frontPre = await call(buyer, '/v1/files/presign', { purpose: 'card-front', mime: 'image/png', bytes: png1x1.length })
+    check('card-front presign 拿得到通行證', frontPre.ok, `${frontPre.status} ${await frontPre.clone().text()}`)
+    const { fileId: frontId, uploadUrl: frontUrl } = await json(frontPre)
+    /* 8MB 上限在儲存層唯一的強制力：content-length 被簽進通行證，
+       宣告 1 個位元組再 PUT 一個大檔，簽章對不上，R2 自己拒收。 */
+    check('通行證把 content-length 簽進去（宣告大小才有強制力）',
+      (new URL(String(frontUrl)).searchParams.get('X-Amz-SignedHeaders') ?? '').includes('content-length'),
+      String(new URL(String(frontUrl)).searchParams.get('X-Amz-SignedHeaders')))
+    const frontPut = await fetch(frontUrl, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: png1x1 })
+    check('card-front 的位元組 PUT 得上去', frontPut.ok, `${frontPut.status}`)
+    /* card-front 是公開用途（卡面本來就要能顯示），但 /raw 才是 <img src>
+       指得動的那一條 —— /:id 回的是 JSON，塞進 img 一定是破圖。 */
+    const frontRaw = await fetch(`${base}/v1/files/${frontId}/raw`, { redirect: 'follow' })
+    const frontBytes = new Uint8Array(await frontRaw.arrayBuffer())
+    check('/v1/files/:id/raw 取得實際圖片（位元組一致）',
+      frontRaw.ok && frontBytes.length === png1x1.length && frontBytes.every((b, i) => b === png1x1[i]),
+      `${frontRaw.status} ${frontBytes.length}B`)
+  }
+
+  /* 目錄外的卡沒有正面照 → 後端擋。這條不需要 R2，所以放在 if 外面：
+     缺口正是「前端擋、後端沒擋」，而直接打 API 的呼叫端不經過前端。 */
+  {
+    const ghost = await call(buyer, '/v1/cardbook/upload', {
+      card: { name: '無圖幽靈卡', setCode: 'sv0z', cardNo: 'G-smoke', artId: null, frontFileId: null }
+    })
+    check('目錄外的卡沒有正面照被擋（400 CARD_IMAGE_REQUIRED）',
+      ghost.status === 400 && (await json(ghost.clone())).error === 'CARD_IMAGE_REQUIRED',
+      `${ghost.status} ${await ghost.clone().text()}`)
   }
 
   /* ---- 後台：出貨與調閱 ----
