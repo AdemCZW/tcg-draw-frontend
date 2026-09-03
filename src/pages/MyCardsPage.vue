@@ -1069,28 +1069,45 @@ async function copyLink() {
          前面那個詞（顯示／排序）負責講，那比再加一個外框便宜得多。
 
          分頁仍然是換行不是橫捲（aab073f 修的就是「三個分頁一個像素都看不到」），
-         排序仍然只在卡片多到需要排序時才出現。 -->
+         排序仍然只在卡片多到需要排序時才出現。
+
+         ---- 這一輪改的：八顆膠囊 → 兩條軌道 ----
+         上一版把「動作」跟「檢視」分層了，方向對，但面板裡仍然是
+         5 顆篩選 + 3 顆排序 = 8 顆各自帶著間距、各自有圓角的獨立膠囊。
+         八個互相分離的形狀在視覺上說的是「八個可以各自開關的東西」，
+         可是它們其實只是**兩個單選控制項**（顯示只能選一個、排序也只能選一個）。
+         形狀跟語意對不上，掃過去就是雜亂。
+
+         所以把每一組收成一條**連續的軌道**：一圈外框、一個圓角、格與格之間
+         只有 1px 的細線，格子彼此貼邊沒有間距。掃過去是「一條有刻度的軌道 +
+         一個亮起來的目前值」，不是 N 個並排的東西。這是 segmented control 的
+         語彙，只是允許它換行 —— 換行之後仍然是同一塊連續的板子（就像鍵盤或
+         表格有很多列，但它還是一個鍵盤、一張表格）。
+
+         不做成下拉／選單：使用者明講不要。軌道的每一個選項都一直看得見，
+         目前值也一直看得見，這是選單做不到的。 -->
     <div v-if="tabs.length > 1 || showSorts" class="viewBar">
       <div v-if="tabs.length > 1" class="viewRow">
         <span class="viewLabel" aria-hidden="true">顯示</span>
-        <!-- 每個分頁後面的數字是使用者決定「該點哪一個」的依據，不是裝飾 -->
-        <div class="tabs" role="tablist" aria-label="顯示哪一批卡">
+        <!-- 每個分頁後面的數字是使用者決定「該點哪一個」的依據，不是裝飾。
+             計數留在格子裡而不是另外找地方擺 —— 393px 上擺得下，見樣式裡的實測。 -->
+        <div class="segTrack" role="tablist" aria-label="顯示哪一批卡">
           <button
             v-for="t in tabs" :key="t.k"
             type="button" role="tab" :aria-selected="tab === t.k"
-            class="tab" :class="{ on: tab === t.k }"
+            class="segCell" :class="{ on: tab === t.k }"
             @click="tab = t.k"
-          >{{ t.label }}<span class="tabN mono">{{ countOf(t.k) }}</span></button>
+          >{{ t.label }}<span class="segN mono">{{ countOf(t.k) }}</span></button>
         </div>
       </div>
 
       <div v-if="showSorts" class="viewRow">
         <span class="viewLabel" aria-hidden="true">排序</span>
-        <div class="sorts" role="tablist" aria-label="排序方式">
+        <div class="segTrack" role="tablist" aria-label="排序方式">
           <button
             v-for="s in SORT_TABS" :key="s.k"
             type="button" role="tab" :aria-selected="sort === s.k"
-            class="tab" :class="{ on: sort === s.k }"
+            class="segCell" :class="{ on: sort === s.k }"
             @click="sort = s.k"
           >{{ s.label }}</button>
         </div>
@@ -1967,60 +1984,89 @@ async function copyLink() {
   font-size: 12px; color: var(--faint); letter-spacing: .04em;
 }
 
-/* ---- 狀態分頁 ----
-   換行，不橫向捲。
+/* ---- 一體式軌道（.segTrack / .segCell）：狀態分頁與排序共用 ----
+   （不叫 .seg —— 這一頁上面的 tier 分佈條已經佔走那個名字了）
 
-   原本是 `overflow-x: auto` + 右緣漸隱遮罩，遮罩負責說「還能往右捲」。
-   那個提示只有在**下一個 chip 露出半截**的時候才成立，而這一列在手機上
-   跟「上架出售 / 登記卡片」擠同一行，捲軸窗口只剩 150px、內容 442px：
-   實測「在卡冊 / 待出貨 / 已出貨」三個 chip 的可見寬度都是 0px，
-   第一個被藏起來的 chip 起點在 x=395（視窗才 393 寬），連半截都露不出來。
-   使用者看到的是一列只有兩個分頁的控制項——他不知道有東西可以捲。
+   為什麼從「一排膠囊」改成「一條軌道」：
+   膠囊有自己的圓角、自己的邊、彼此之間還有 8px 的縫 —— 那是「N 個獨立物件」
+   的形狀，而它其實是**一個單選控制項**。形狀在說謊，使用者掃過去就得
+   一個一個讀才知道現在選的是哪個。軌道相反：一圈外框、一個圓角、
+   格子貼邊、只用 1px 細線隔開，整條讀起來是「一把刻度尺 + 一個亮起來的位置」。
 
-   分頁最多 8 個、每個約 85px，換行最壞情況也只多兩列；
-   拿兩列高度換「每一個分頁都看得到」是划算的。
-   換行之後 scrollWidth 恆等於 clientWidth，這一列不可能再藏東西。
-   這一點不准改回橫捲，它修的就是「三個分頁一個像素都看不到」。 */
-.tabs {
-  display: flex; flex-wrap: wrap; gap: 8px; min-width: 0;
-  flex: 1 1 auto; margin: 0;
+   細線怎麼畫：容器底色鋪 --line，格與格之間留 gap: 1px，格子自己蓋 --field。
+   露出來的那 1px 就是分隔線。這樣做的好處是**換行時橫向與縱向都自動有線**，
+   不必為「哪一格是列尾」寫任何規則 —— 換行之後它變成一張表格，
+   而表格仍然是一個物件。overflow: hidden 讓四個角被外框的圓角切乾淨。
+
+   格子的底色刻意跟外面的面板同一階（都是 --field），不再往上疊一層填色 ——
+   面板裡再套一個有自己底色的盒子就是「盒中盒」，那是雜亂的另一個來源。
+   軌道只多了「一圈框 + 幾條細線」，資訊量剛好等於「這幾格是同一件事」。
+
+   換行不橫捲：這一點延續 aab073f，不准改回去。原本是 overflow-x: auto +
+   右緣漸隱，實測「在卡冊 / 待出貨 / 已出貨」三個 chip 的可見寬度都是 0px，
+   使用者根本不知道有東西可以捲。換行之後 scrollWidth 恆等於 clientWidth。 */
+.segTrack {
+  /* 桌機：軌道收到內容寬，不要撐滿一整條 1000px —— 三個排序各佔 330px
+     不會更像一個控制項，只會更像三塊板子。 */
+  flex: 0 1 auto; min-width: 0;
+  display: flex; flex-wrap: wrap; gap: 1px; margin: 0;
+  background: var(--line);
+  border: 1px solid var(--line); border-radius: 13px;
+  overflow: hidden;
 }
-/* 排序跟狀態分頁共用 .tab 的外觀，也共用同一個容器樣式 ——
-   它們在新的分法裡是同一組（都只換一個看法），長得不一樣才是錯的。
-   兩者的差別由左邊那個詞負責講，不由膠囊的外觀負責。 */
-.sorts { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; flex: 1 1 auto; }
-.tab {
-  flex: none; min-height: 44px;
-  display: inline-flex; align-items: center; gap: 7px;
-  /* 沒選中的膠囊現在沒有邊（邊留給選中的那顆去對比），所以左右內距可以收到
-     12px —— 省下來的寬度讓 393px 上每一列多裝得下一顆，篩選少一列就是少 48px。
-     border 保留成 transparent 而不是 0：切換時才不會整排跳動。 */
-  padding: 8px 12px; border-radius: var(--pill);
-  border: 1px solid transparent; background: transparent;
-  color: var(--muted); font-size: 13px; font-weight: 500; cursor: pointer;
-  transition: background .15s, color .15s, border-color .15s, box-shadow .15s;
+.segCell {
+  /* 桌機不撐、手機撐滿（見底下 max-width: 720px）。
+     min-width: 0 是這個 repo 的老規矩：預設 auto 會讓內容把軌道撐破。 */
+  flex: 0 1 auto; min-width: 0; min-height: 44px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  /* 沒有間距也沒有各自的圓角之後，左右內距從 12 收到 10 就夠把字撐開，
+     而每一格省下的 4px + 少掉的 7px 縫，是 393px 上「計數還擺得下」的來源。 */
+  padding: 6px 10px; border: 0; border-radius: 0;
+  background: var(--field);
+  color: var(--muted); font-size: 12.5px; font-weight: 500; cursor: pointer;
+  white-space: nowrap; overflow: hidden;
+  transition: background .15s, color .15s;
 }
-/* 選中的膠囊：中性色的浮起晶片，不是白底實心。
+/* 目前值：在凹下去的軌道裡浮起來的那一格。
 
-   改版前 .tab.on 是 `background: var(--ink)`（深色主題下就是亮白）。那讓
-   「全部 70」變成整片控制區裡最亮的東西 —— 比「合併出貨」還搶眼，
-   而它只是個篩選。視覺份量跟語意是反的，使用者每次都要重新推理一遍。
+   顏色階梯沿用上一版的結論，不重新發明：深色 field(#0f1115) → surface(#17161a)，
+   淺色 #f6f2f0 → #ffffff，兩套主題都是「軌道凹、目前值浮」。
+   強調色與最高亮度仍然只屬於上面那組動作 —— 這一格只要在軌道內部贏過
+   隔壁就夠了，它不必、也不該跟「合併出貨」搶。
 
-   現在強調色與最高亮度都只屬於上面那組動作。這顆晶片只要在面板內部贏過
-   旁邊沒選中的膠囊就夠了，而它是在凹陷的底上浮起來：--surface 底 + 實心邊
-   + 陰影 + 600 字重 + ink 字色，五個線索一起講，夠明確也絕不喧賓奪主。 */
-.tab.on {
-  /* 無邊、只有填色與陰影 —— 動作那組的次要按鈕（.btn）是「填色 + --line 的邊」，
-     選中的晶片刻意少掉那道邊，兩者在同一頁上就不會是同一個東西。
-     少了邊之後它靠的是「比面板底亮一階」：bg(#0d0c0f) < field(#0f1115) <
-     surface(#17161a) 這道階梯在深色下成立，淺色下是 #fdfbfa < #f6f2f0(凹) <
-     #ffffff(晶片) —— 兩套主題都是「面板凹下去、選中的晶片浮起來」。 */
-  background: var(--surface); border-color: transparent;
-  color: var(--ink); font-weight: 600; box-shadow: var(--shadow-sm);
+   inset ring 而不是 box-shadow：軌道有 overflow: hidden，外擴的陰影會被切掉，
+   而且第一格與最後一格會被切得跟中間幾格不一樣 —— 那正好破壞「一體」。
+   內描邊不佔版面、每一格被切的方式都一樣。
+   （上一版刻意讓選中的晶片沒有邊，是為了跟浮在頁面上的 .btn 區分開。
+     那個顧慮在這裡不成立：.btn 是自由浮動的膠囊，這一格貼死在軌道格線裡，
+     兩者的形狀本來就不可能看錯。） */
+.segCell.on {
+  background: var(--surface);
+  color: var(--ink); font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--line);
 }
-.tabN { font-size: 11px; opacity: .65; }
-.tab.on .tabN { opacity: .8; }
-@media (hover: hover) { .tab:not(.on):hover { color: var(--ink); border-color: var(--line); } }
+.segN { font-size: 11px; opacity: .6; font-weight: 400; }
+.segCell.on .segN { opacity: .75; font-weight: 500; }
+@media (hover: hover) { .segCell:not(.on):hover { background: var(--surface-2); color: var(--ink); } }
+
+/* ---- 焦點框 ----
+   根因：base.css 只給 .btn 寫了 :focus-visible，這些格子不是 .btn，
+   於是掉回瀏覽器的預設焦點環 —— Chrome 是寫死的 rgb(0, 95, 204)，
+   不走任何權杖，在暖色系的深色主題上就是一圈突兀的藍。截圖裡那圈藍是它。
+
+   兩條規則要一起下，缺一不可：
+     :focus       → outline: none，明確拆掉 UA 的環。只靠 :focus-visible
+                    是把「滑鼠點完該不該留框」交給各家瀏覽器的啟發式去猜
+                    （Chromium 猜對，WebKit / Firefox 的判定不一樣）。
+     :focus-visible → 補回專案自己的環。鍵盤操作**必須**看得見焦點，
+                    這是無障礙，不是裝飾；顏色走 --accent 跟全站一致。
+   outline-offset 給 -2px（往內縮）而不是 +3px：軌道 overflow: hidden，
+   外擴的環會被切掉半圈。 */
+.segCell:focus { outline: none; }
+.segCell:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: -2px;
+  border-radius: 4px; position: relative; z-index: 1;
+}
 
 /* ---- 「你有 N 款重複的卡」----
    面板裡的一句話，不是橫幅。它貼在排序那一列底下，講的就是正上方那顆
@@ -2042,6 +2088,22 @@ async function copyLink() {
      這裡只把面板的內距收窄一階，手機上一列多擠得下半顆膠囊。 */
   .viewBar { padding: 9px 10px; }
   .viewLabel { font-size: 11.5px; }
+
+  /* 手機上軌道撐滿整列、每一格平分該列剩下的寬。
+
+     為什麼是「撐滿 + 換行」而不是「一列裝完」：393px 上軌道的可用寬只有
+     ~300px（頁面內距 + 面板內距 + 左邊那個詞），而五個篩選連著計數
+     （全部 69 / 寄存中 54 / 在卡冊 1 / 市場販售中 13 / 已回收 1）
+     自然寬加起來 360px 以上 —— 一列裝不下是事實，不是排版沒調好。
+     另外兩條路都已經被否掉：橫捲（後面的分頁一個像素都看不到）、
+     把計數收起來（那是使用者判斷該點哪一個的依據）。
+     所以讓它換行，並且靠「貼邊 + 細線 + 一圈外框」讓換行後的兩三列
+     仍然是同一塊板子。
+
+     flex: 1 1 auto 讓每一列的格子把該列撐滿 —— 這一條同時解掉
+     「最後一列只剩一格會留下一塊空洞」：那一格自己會長成整列寬。 */
+  .segTrack { flex: 1 1 auto; }
+  .segCell { flex: 1 1 auto; }
 }
 
 
