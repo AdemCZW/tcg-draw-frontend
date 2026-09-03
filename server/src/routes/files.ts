@@ -92,7 +92,10 @@ files.post('/presign', requireAuth, async c => {
   await sql`insert into files (id, owner_id, purpose, key, mime, bytes)
             values (${id}, ${me}, ${purpose}, ${key}, ${mime}, ${bytes})`
 
-  const uploadUrl = await presignPut(key, mime)
+  /* bytes 一併簽進通行證（ContentLength）：上面那道 maxBytes 只擋得住
+     「宣告」的大小，實際傳多少 R2 才是最終權威。宣告與實傳對不上時
+     簽章驗不過，R2 直接拒收 —— 上限這才在儲存層有強制力。 */
+  const uploadUrl = await presignPut(key, mime, bytes)
   return c.json({ fileId: id, uploadUrl, key })
 })
 

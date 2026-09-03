@@ -137,7 +137,13 @@ function putDirect(
     xhr.open('PUT', url)
     /* content-type 一定要跟 presign 當時簽的 mime 一模一樣。
        R2 的簽章把 ContentType 算進去了，少送或送錯會被退 403，
-       而那個 403 看起來像「沒權限」，其實是標頭對不上。 */
+       而那個 403 看起來像「沒權限」，其實是標頭對不上。
+
+       **大小同理**：簽章現在也把 ContentLength 算進去（見 server/src/r2.ts
+       的 presignPut —— 沒有它，後端宣告的 8MB 上限在儲存層毫無強制力）。
+       所以送出去的必須就是 presign 當下那個 file，不能中途換一個或改內容；
+       換了就是 403。裁切／壓縮都發生在 presign **之前**（start() 讀的是
+       blobs 裡當下那一份），這條路徑是對得上的。 */
     xhr.setRequestHeader('content-type', file.type)
     xhr.upload.onprogress = e => {
       if (e.lengthComputable) onProgress(Math.min(99, Math.round((e.loaded / e.total) * 100)))

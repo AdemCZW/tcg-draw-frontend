@@ -29,10 +29,13 @@ const devHeaders = () => {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any
 const json = (r: Response): Promise<Any> => r.json()
-let pass = 0, fail = 0
+let pass = 0, fail = 0, skipped = 0
 const ck = (n: string, ok: boolean, d = '') => {
   if (ok) { pass++; console.log(`  ok   ${n}`) } else { fail++; console.error(` FAIL ${n}${d ? ' — ' + d : ''}`) }
 }
+/* 沒有 R2 就驗不了的那幾條**明說跳過**，不要為了讓輸出變綠而放寬斷言 ——
+   一條被悄悄放寬的斷言，比一條寫著「這件事今天沒驗到」的紀錄危險得多。 */
+const skip = (n: string, why: string) => { skipped++; console.log(`  SKIP ${n} — ${why}`) }
 const head = (s: string) => console.log(`\n── ${s} ${'─'.repeat(Math.max(0, 52 - s.length))}`)
 
 async function login(handle: string, name: string) {
@@ -222,7 +225,131 @@ head('整條路：上傳 → 直接上架市場（in_book 走需寄送）')
   ck('卡冊那一列進 listed', listed?.status === 'listed', `status=${listed?.status}`)
 }
 
-console.log(`\n${pass} passed, ${fail} failed`)
+head('目錄外的卡沒有正面照 → 後端擋（I-1；這一段不需要 R2）')
+{
+  /* 前端 canSubmit 早就擋了，但規則要在後端才算數：直接打 API 的
+     呼叫端不會經過那顆按鈕。改掉之前這三種請求全部回 200。 */
+  const noArt = { name: `無圖幽靈卡 ${RUN}`, setCode: 'sv0z', cardNo: `G${RUN}`, refPrice: 1234 }
+
+  const r1 = await call(seller, '/v1/cardbook/upload', { card: { ...noArt, artId: null, frontFileId: null } })
+  const b1 = await json(r1.clone())
+  ck('artId 與 frontFileId 都給 null → 400', r1.status === 400, `${r1.status} ${JSON.stringify(b1).slice(0, 200)}`)
+  ck('代號是 CARD_IMAGE_REQUIRED', b1.error === 'CARD_IMAGE_REQUIRED', JSON.stringify(b1).slice(0, 200))
+  ck('訊息說得出使用者該做什麼（上傳正面照）', String(b1.message ?? '').includes('正面'), String(b1.message))
+
+  const r2 = await call(seller, '/v1/cardbook/upload', { card: noArt })
+  ck('兩個鍵都不送也一樣被擋', (await json(r2.clone())).error === 'CARD_IMAGE_REQUIRED', `${r2.status}`)
+
+  const r3 = await call(seller, '/v1/cardbook/upload', { card: { ...noArt, artId: '   ' } })
+  ck('artId 只有空白也算沒有', (await json(r3.clone())).error === 'CARD_IMAGE_REQUIRED', `${r3.status}`)
+
+  /* 反向那半條同樣重要：目錄卡本來就沒有正面照，不能被這道規則掃到。 */
+  const ok = await call(seller, '/v1/cardbook/upload', {
+    card: { name: '目錄卡（有 artId）', setCode: 'sv4a', cardNo: `C${RUN}`, artId: 'SV4a-349', refPrice: 26000 }
+  })
+  ck('有 artId 的目錄卡不受影響，照樣收', ok.ok, `${ok.status} ${(await ok.clone().text()).slice(0, 160)}`)
+}
+
+head('正面照流程（I-2 / I-3；沒設 R2 的環境會逐條標 SKIP）')
+{
+  // 1×1 PNG，位元組寫死 —— 這支測試不該依賴任何外部檔案
+  const PNG = Buffer.from(
+    '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489'
+    + '0000000a49444154789c6360000002000100ffff03000006000557bfabd4000000'
+    + '0049454e44ae426082', 'hex')
+
+  const presign = (t: string, purpose: string) => call(t, '/v1/files/presign', {
+    purpose, mime: 'image/png', bytes: PNG.length
+  })
+  const manualCard = (tag: string, frontFileId: string | null) => ({
+    name: `手填卡 ${tag} ${RUN}`, setCode: 'sv0z', cardNo: `${tag}${RUN}`, artId: null, frontFileId
+  })
+
+  const p0 = await presign(seller, 'card-front')
+  const b0 = await json(p0.clone())
+
+  if (p0.status === 503 && b0.error === 'NOT_CONFIGURED') {
+    /* R2 沒設定（本機常見）。跟 presign 有關的四條全部驗不到 ——
+       逐條列出來，讓「今天沒驗到什麼」是一筆紀錄而不是一片空白。
+       要跑完整版：設好 R2_* 四項，或把 R2_ENDPOINT 指到本機的
+       S3 相容伺服器（見 r2.ts 那個開關的說明）。 */
+    const why = 'R2 未設定（R2_ACCOUNT_ID / R2_BUCKET / 金鑰四項），presign 回 503'
+    skip('card-front presign 拿得到通行證', why)
+    skip('本人圖片真的傳上去後可以入庫', why)
+    skip('他人／錯誤用途的 file ID 回 BAD_CARD_IMAGE', why)
+    skip('/v1/files/:id/raw 取得實際圖片', why)
+    skip('presign 後沒 PUT（物件不存在）回 BAD_CARD_IMAGE', why)
+  } else {
+    ck('card-front presign 拿得到通行證', p0.ok && typeof b0.fileId === 'string' && typeof b0.uploadUrl === 'string',
+      `${p0.status} ${JSON.stringify(b0).slice(0, 200)}`)
+    /* 8MB 上限在儲存層的強制力就靠這個：content-length 有被簽進去，
+       宣告 bytes: 1 再 PUT 一個大檔，簽章對不上，R2 直接拒收。 */
+    ck('通行證把 content-length 簽進去了（宣告大小才有強制力）',
+      (new URL(String(b0.uploadUrl)).searchParams.get('X-Amz-SignedHeaders') ?? '').includes('content-length'),
+      String(new URL(String(b0.uploadUrl)).searchParams.get('X-Amz-SignedHeaders')))
+
+    /* A：拿到通行證但**沒有** PUT —— 正是「取得 URL 後取消／逾時」那個情境。
+       這裡要的是 400 BAD_CARD_IMAGE；回 503 就代表 R2 問不到，
+       那是另一種情況（見下面），兩種混在一起等於沒修。 */
+    const ra = await call(seller, '/v1/cardbook/upload', { card: manualCard('A', b0.fileId) })
+    const ba = await json(ra.clone())
+    if (ra.status === 503) {
+      skip('presign 後沒 PUT（物件不存在）回 BAD_CARD_IMAGE',
+        'R2 這一刻問不到（回 IMAGE_CHECK_UNAVAILABLE），分不出物件在不在')
+    } else {
+      ck('presign 後沒 PUT（物件不存在）回 BAD_CARD_IMAGE',
+        ra.status === 400 && ba.error === 'BAD_CARD_IMAGE', `${ra.status} ${JSON.stringify(ba).slice(0, 200)}`)
+      ck('而且說得出該做什麼（重新上傳）', String(ba.message ?? '').includes('重新'), String(ba.message))
+    }
+
+    // B：真的把位元組 PUT 上去 → 入庫成功
+    const pb = await json(await presign(seller, 'card-front'))
+    const put = await fetch(String(pb.uploadUrl), {
+      method: 'PUT', headers: { 'content-type': 'image/png', 'content-length': String(PNG.length) }, body: PNG
+    })
+    if (!put.ok) {
+      const why = `PUT 到 R2 失敗（${put.status}）`
+      skip('本人圖片真的傳上去後可以入庫', why)
+      skip('/v1/files/:id/raw 取得實際圖片', why)
+    } else {
+      const rb = await call(seller, '/v1/cardbook/upload', { card: manualCard('B', pb.fileId) })
+      const bb = await json(rb.clone())
+      ck('本人圖片真的傳上去後可以入庫', rb.ok, `${rb.status} ${JSON.stringify(bb).slice(0, 200)}`)
+      ck('卡的 image 指到那個檔案', bb.prize?.card?.image === `/v1/files/${pb.fileId}`,
+        `image=${bb.prize?.card?.image}`)
+
+      /* 卡冊、市場、開池存進資料庫的就是這個字串，<img src> 直接指它。
+         這一條驗的是「使用者最後看不看得到圖」，不是「資料列在不在」。 */
+      const raw = await fetch(`${base}/v1/files/${pb.fileId}/raw`, { redirect: 'follow' })
+      const got = Buffer.from(await raw.arrayBuffer())
+      ck('/v1/files/:id/raw 取得實際圖片（位元組一致）',
+        raw.ok && got.equals(PNG), `${raw.status} ${got.length}B vs ${PNG.length}B`)
+    }
+
+    // C：別人的 file id
+    const other = await login('uploader3', '第三個人')
+    const pc = await json(await presign(other, 'card-front'))
+    await fetch(String(pc.uploadUrl), { method: 'PUT', headers: { 'content-type': 'image/png', 'content-length': String(PNG.length) }, body: PNG })
+    const rc = await call(seller, '/v1/cardbook/upload', { card: manualCard('C', pc.fileId) })
+    const bc = await json(rc.clone())
+    ck('別人上傳的 file ID 回 BAD_CARD_IMAGE', rc.status === 400 && bc.error === 'BAD_CARD_IMAGE',
+      `${rc.status} ${JSON.stringify(bc).slice(0, 200)}`)
+
+    // D：用途不是 card-front（拿頭像的 file id 來當卡面）
+    const pd = await json(await presign(seller, 'avatar'))
+    await fetch(String(pd.uploadUrl), { method: 'PUT', headers: { 'content-type': 'image/png', 'content-length': String(PNG.length) }, body: PNG })
+    const rd = await call(seller, '/v1/cardbook/upload', { card: manualCard('D', pd.fileId) })
+    const bd = await json(rd.clone())
+    ck('錯誤用途的 file ID 回 BAD_CARD_IMAGE', rd.status === 400 && bd.error === 'BAD_CARD_IMAGE',
+      `${rd.status} ${JSON.stringify(bd).slice(0, 200)}`)
+
+    // E：不存在的 file id
+    const re = await call(seller, '/v1/cardbook/upload', { card: manualCard('E', 'f-000000000000') })
+    ck('查無此 file ID 也回 BAD_CARD_IMAGE', (await json(re.clone())).error === 'BAD_CARD_IMAGE', `${re.status}`)
+  }
+}
+
+console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}`)
 process.exit(fail ? 1 : 0)
 
 export {}

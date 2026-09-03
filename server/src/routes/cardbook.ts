@@ -22,6 +22,7 @@ import { sql, Rollback } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { REF_PRICE_MAX } from '../card-cert.js'
 import { STASH_DAYS } from '../pools-service.js'
+import { configured as r2configured, objectState } from '../r2.js'
 
 export const cardbook = new Hono()
 cardbook.use('*', requireAuth)
@@ -68,24 +69,59 @@ cardbook.post('/upload', async c => {
   }
   const { card } = parsed.data
 
+  /* ── 目錄外的卡一定要有正面照 ──────────────────────────────
+     artId 是「這張卡在卡片目錄裡的身分」：有它，卡面圖從目錄推導得出來。
+     沒有它（使用者手填卡名／系列／卡號的那條路），正面照就是這張卡
+     **唯一**可辨識的證據 —— 少了它，卡冊裡是一張沒有人能確認是什麼的卡，
+     而它照樣進得了開池與交易流程，最後看到空白卡面的是買家。
+
+     前端已經把送出鈕鎖住了（CardUploadPage.vue 的 canSubmit），
+     但那只是體驗；規則要在後端才算數 —— 直接打這支 API 的呼叫端
+     不會經過那顆按鈕。artId 是空白字串也算沒有（送空字串跟沒送是同一件事）。 */
+  const artIdRaw = typeof card.artId === 'string' ? card.artId.trim() : ''
+  if (!artIdRaw && !card.frontFileId) {
+    return c.json({
+      error: 'CARD_IMAGE_REQUIRED',
+      message: '目錄裡沒有這張卡的話，請先上傳一張卡片正面照片再登記 —— '
+        + '那是這張卡在卡冊裡唯一能被認出來的依據。'
+    }, 400)
+  }
+
   let frontImage: string | null = null
   if (card.frontFileId) {
-    const [front] = await sql`select owner_id, purpose from files where id = ${card.frontFileId}`
+    const [front] = await sql`select owner_id, purpose, key from files where id = ${card.frontFileId}`
     if (!front || front.owner_id !== me || front.purpose !== 'card-front') {
       return c.json({ error: 'BAD_CARD_IMAGE', message: '請上傳自己的卡片正面圖片後再登記' }, 400)
     }
-    /* ⚠️ 已知缺口：files 有一列**不等於** R2 上真的有那個物件。
-       presign 一成功就先寫 files，位元組是瀏覽器另外 PUT 上去的 ——
-       PUT 失敗（斷線、逾時、簽章過期）那一列照樣留著，拿那個 id 來登記，
-       卡就會帶著一個永遠 404 的 image 進卡冊。
 
-       r2.ts 有一支 objectExists() 正是為此而寫，而且從定義至今全站沒有
-       任何地方呼叫過。這裡沒有接上去是**刻意**的：objectExists() 把所有
-       例外都吞成 false，所以它分不出「物件確實不在」與「這一刻問不到 R2」。
-       拿它當關卡，一次網路抖動就會把一張圖好好傳完的登記擋成
-       「你的圖沒傳完」—— 那比現在的缺口更糟。
-       要接上去得先讓 objectExists 把「找不到」跟「問不到」分開回報，
-       那要改 r2.ts，不在這條工作線的檔案範圍內。 */
+    /* files 有一列**不等於** R2 上真的有那個物件：presign 一成功就先寫 files，
+       位元組是瀏覽器另外 PUT 上去的。PUT 失敗（斷線、逾時、使用者取消）
+       那一列照樣留著，拿那個 id 來登記，卡就會帶著一個永遠 404 的 image
+       進卡冊 —— 而卡冊、開池、市場都照樣收它。
+
+       關鍵是 objectState() 的**三態**：布林版本（舊的 objectExists）
+       把「問不到 R2」也回成 false，拿它當關卡的話一次網路抖動就會把
+       一張傳好的圖擋成「你的圖沒傳完」，比不檢查更糟。
+       所以只有 R2 明確說 404（missing）才拒絕呼叫端；
+       問不到（unavailable）是我們這邊的狀況，回可重試的 503，
+       不要求使用者重傳他明明已經傳好的圖。 */
+    const state = r2configured() ? await objectState(front.key as string) : 'unavailable'
+    if (state === 'missing') {
+      return c.json({
+        error: 'BAD_CARD_IMAGE',
+        message: '這張正面照沒有上傳完成（圖片檔本身不在），請重新選一次照片、等上傳跑完再登記。'
+      }, 400)
+    }
+    if (state === 'unavailable') {
+      /* 明確告訴呼叫端「等一下再來」—— 503 沒有 Retry-After 的話，
+         自動重試的客戶端只能亂猜間隔。 */
+      c.header('retry-after', '5')
+      return c.json({
+        error: 'IMAGE_CHECK_UNAVAILABLE',
+        message: '目前無法確認你的照片，這是我們這邊的問題 —— 你的卡片資料還沒有送出，請稍後再試一次。'
+      }, 503)
+    }
+
     frontImage = `/v1/files/${card.frontFileId}`
   }
 
