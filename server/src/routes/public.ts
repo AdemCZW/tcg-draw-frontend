@@ -492,9 +492,28 @@ const ListBody = z.object({
  * 定價打錯）都沒有出路，而且卡會一直卡在 prizes.status = 'listed'，
  * 出貨與回收也一起被鎖住。
  *
- * 卡要放回上架前的狀態：庫內轉移的回 'stashed'、需寄送的回 'shipped'
- * （那就是它上架前的樣子，見上架時的 delivery 判斷）。
+ * 卡要放回**上架前的那個狀態**，而且是照著上架時抄下來的值放回去
+ * （listings.previous_status，migration 032），不是從 delivery 反推。
+ *
+ * ── 為什麼不能反推（A-5）──────────────────────────────────────────
+ * delivery 只有 vault / ship 兩個值，而可上架的狀態有三個：
+ * stashed → vault，shipped 與 in_book 都 → ship。ship 這一格是多對一，
+ * 反推時只能挑一個，原本挑的是 'shipped'，於是每一張 in_book 的卡
+ * 上架再下架就變成 shipped。而建池只收 in_book（pools.ts 的押記重用分支），
+ * 所以那張卡明明還在使用者手上，卻永遠不能再開池，而且全程沒有錯誤訊息。
+ * 反推法沒有「修對」這個選項：只要 ship 對應到一個以上的來源狀態，
+ * 挑哪一個都會錯掉另一種，而且之後每多一種可上架的狀態就多錯一種。
  */
+/**
+ * 允許被還原的狀態白名單。
+ *
+ * previous_status 是上架時抄下來的，理論上只會是上架端允許的那三個值之一；
+ * 但它是一個可以被舊資料、回填、或之後某次手動修資料寫進任何字串的欄位，
+ * 而這一行的下游是 prizes.status —— 寫進一個沒人認得的值會讓那張卡
+ * 從所有清單裡消失（每一支查詢都是列舉狀態的），比原本的 bug 更難查。
+ * 不在白名單裡就當作沒有這個資訊，退回下面那條保守的老路。
+ */
+const RESTORABLE = new Set(['stashed', 'shipped', 'in_book'])
 pub.post('/listings/:id/delist', requireAuth, async c => {
   const me = c.get('userId')
   const id = c.req.param('id') ?? ''
@@ -507,7 +526,18 @@ pub.post('/listings/:id/delist', requireAuth, async c => {
     }
     await tx`update listings set status = 'delisted' where id = ${id}`
     if (l.prize_id) {
-      const back = l.delivery === 'vault' ? 'stashed' : 'shipped'
+      /* 舊掛單（032 之前上架、而且回填也證明不了它上架前是什麼）沒有
+         previous_status，只能退回原本的 delivery 反推。這條路**已知會在
+         ship 上猜錯**，留著只是因為對那幾列沒有更好的資訊了；
+         猜 'shipped' 而不是 'in_book' 是刻意的保守方向：猜成 in_book 會讓
+         一張可能真的已經寄出去的卡被拿去開池，那比不能開池嚴重得多。 */
+      const prev = typeof l.previous_status === 'string' ? l.previous_status : null
+      const back = prev && RESTORABLE.has(prev)
+        ? prev
+        : (l.delivery === 'vault' ? 'stashed' : 'shipped')
+      /* `and status = 'listed'` 不能拿掉：那是「這張卡確實是被這筆掛單鎖住的」
+         的證明。少了它，一筆早就該死掉的掛單被下架時，會把卡從它現在真正的
+         狀態（可能已經在別的池裡、或在出貨流程中）硬拉回上架前的樣子。 */
       await tx`update prizes set status = ${back} where id = ${l.prize_id} and status = 'listed'`
     }
     return { ok: true }
@@ -572,9 +602,13 @@ pub.post('/listings', requireAuth, async c => {
     const id = 'l-' + randomBytes(5).toString('hex')
     const card = pz.card as { certNo?: string | null }
     try {
-      await tx`insert into listings (id, card, price, seller_id, seller_name, delivery, cert_no, prize_id)
+      /* previous_status 抄的是**這一刻**的 pz.status（上面那個 for update
+         的快照），不是等一下寫進去的 'listed'。它是下架時唯一能把卡放回
+         原狀的依據 —— delivery 反推不出來（in_book 與 shipped 共用 'ship'），
+         見 delist 那一段與 migration 032。 */
+      await tx`insert into listings (id, card, price, seller_id, seller_name, delivery, cert_no, prize_id, previous_status)
                values (${id}, ${pz.card as never}, ${price}, ${me}, ${(u?.name as string) ?? (u?.handle as string) ?? '我'},
-                       ${delivery}, ${card.certNo ?? null}, ${prizeId})`
+                       ${delivery}, ${card.certNo ?? null}, ${prizeId}, ${pz.status as string})`
     } catch (e) {
       /* 依撞到的是哪一條索引分開講。
          原本這個 catch 把所有錯誤都說成「這張卡已經在市場上了」，

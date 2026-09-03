@@ -14,6 +14,7 @@ import { walletOf } from '../money.js'
 import { commitPool, draw, tryOpenPool, revealPool, STASH_DAYS } from '../pools-service.js'
 import { REF_PRICE_MAX } from '../card-cert.js'
 import { POINTS_INPUT_MAX, pointsInputMaxText } from '../limits.js'
+import { publicCard } from '../card-public.js'
 import {
   BUYBACK_MAX, BUYBACK_MIN,
   FIRST_POOL_TICKET_CAP, FIRST_POOL_VALUE_CAP, PLATFORM_FEE_RATE,
@@ -61,8 +62,15 @@ function toPublic(p: Row, prizes: Row[], taken: number[], publicTaken: number) {
     shiteiTier: p.shitei_tier ?? undefined,
     /* buyback 要在**抽卡前**就看得到。抽完才知道能買回多少就是釣魚 ——
        這是這個欄位出現在公開池快照裡的全部理由。 */
+    /* card 走 publicCard() 白名單（A-6）：這是**展示**用的池快照，不用登入、
+       全站可見，整包 jsonb 直出等於把每一張獎品的鑑定編號送給所有人 ——
+       一卡多賣的防線（同一個編號全站只能登記一次）正是綁在那個編號上。
+       ⚠️ revealed 的 manifest（下面 /:id/reveal）**不能**照做：certNo 是
+       manifest v2 以上的序列化輸入，既有池的 commit hash 就是拿它算出來的，
+       遮掉它會讓現有每一個池的驗算全部失敗。展示與公平性證據是兩件事，
+       這裡分開處理就是那一條界線。 */
     prizes: prizes.map(x => ({
-      id: x.id, tier: x.tier, card: x.card,
+      id: x.id, tier: x.tier, card: publicCard(x.card),
       total: Number(x.total), remaining: Number(x.remaining),
       buyback: x.buyback == null ? null : Number(x.buyback)
     })),

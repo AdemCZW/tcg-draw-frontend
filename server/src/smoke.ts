@@ -1055,8 +1055,37 @@ async function run() {
     if (gj.poolId) {
       const snap = await json(await fetch(`${base}/v1/pools/${gj.poolId}`))
       const a = (snap.pool?.prizes ?? []).find((x: Any) => x.tier === 'A')?.card
-      check('鑑定資訊（grader / grade / certNo）完整保留',
-        a?.grader === 'PSA' && a?.grade === 10 && a?.certNo === 'STUB-OK-349', JSON.stringify(a))
+      /* ── 展示那一半（A-6）────────────────────────────────────────
+         grader / grade 要留著：那是**商品描述**（這是 PSA 10 的噴火龍），
+         公開池不顯示它等於把功能關掉。
+         certNo 要拿掉：那是**身分憑據** —— 拿著編號就能到別處主張這張卡，
+         而平台的一卡多賣防線正是綁在那個編號上。公開池不用登入、
+         連結到處轉貼，整包 jsonb 直出等於把每一張獎品的編號免費送人。
+         這條原本斷言 certNo === 'STUB-OK-349'，也就是把洩漏當成了正確答案。 */
+      check('展示用的鑑定資訊（grader / grade）完整保留',
+        a?.grader === 'PSA' && a?.grade === 10, JSON.stringify(a))
+      check('但公開池詳情不帶 certNo（身分憑據不是展示資料）',
+        a?.certNo === undefined, JSON.stringify(a))
+
+      /* ── 反向那一半（A-6）：manifest 必須留著 certNo ──────────────
+         這兩條要並排放。只留上面那條的話，下一個人很容易「順手」把
+         manifest 的 certNo 一起遮掉 —— 而 certNo 是 manifest v2 以上的
+         序列化輸入，既有池的 commit hash 就是拿它算出來的，
+         遮掉它會讓**現有每一個池的驗算全部失敗**。
+         展示與公平性證據是兩件事，這一對測試就是那條界線。 */
+      await fetch(`${base}/v1/dev/expire-pool`, {
+        method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
+        body: JSON.stringify({ poolId: gj.poolId })
+      })
+      for (let i = 0; i < 4; i++) {
+        await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST', headers: devHeaders() })
+        const st = await json(await fetch(`${base}/v1/pools/${gj.poolId}`))
+        if (st.pool?.status === 'revealed') break
+      }
+      const rvg = await json(await fetch(`${base}/v1/pools/${gj.poolId}/reveal`))
+      const mA = (rvg.manifest ?? []).find((m: Any) => m.tier === 'A')
+      check('revealed 的 manifest 仍然帶 certNo（commit 的重算材料）',
+        mA?.certNo === 'STUB-OK-349', JSON.stringify(mA))
     }
 
     const dup = await call(seller, '/v1/pools', {
