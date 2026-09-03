@@ -168,6 +168,14 @@ const SORT_TABS: { k: PrizeSort; label: string }[] = [
    ?sort= 直接忽略、照取得時間回一批卡。那時候如果照樣分組，畫面會把
    「剛好相鄰的兩張同款卡」併成一格、其餘散在別處 —— 那是**錯的數字**，
    比不分組糟得多。偵測不到就退回逐張顯示，也就是這個改動之前的樣子。 */
+/* 排序列（連同它底下那句重複卡提示）什麼時候出現。
+   條件跟改版前一模一樣，只是從 template 的行內判斷抽成具名的一條 ——
+   viewBar 這塊面板的「要不要整塊畫出來」也要問同一個問題，
+   兩處各寫一次的話遲早會分岔（面板出現、裡面兩列卻都是空的）。
+     total > 6：一頁裝得下的卡冊排不排都一樣，而固定出現的控制項會把卡牆往下推
+     dupGroups !== undefined：舊後端不回這個欄位，那時候排序是無效的 */
+const showSorts = computed(() => total.value > 6 && summary.value?.dupGroups !== undefined)
+
 const serverGroups = computed(() => shown.value[0]?.groupKey !== undefined)
 const grouped = computed(() => sort.value !== 'acquired' && serverGroups.value)
 
@@ -1000,25 +1008,6 @@ async function copyLink() {
 
     <p class="muted note">寄存中的卡可合併出貨（省運費），寄存期限 90 天。</p>
 
-    <!-- ---- 「你有重複的卡」----
-         這一行是整個功能的入口。使用者原話是「需要一張一張確認哪些有重複」——
-         那件事之所以要一張一張做，是因為畫面上從來沒有任何地方說過「你有幾款
-         重複的」。而排序膠囊本身也解不了這件事：沒有人會去點一個他不知道
-         自己需要的排序。所以先把事實講出來，再把控制項的名字寫進同一句話。
-
-         數字來自 /summary（整本卡冊）而不是已載入的那 24 張 —— 從陣列數出來的
-         「重複 1 款」正是這個功能要消滅的那個假答案。
-
-         已經切到「同款集中」時就不再出現：那時候畫面自己就在講這件事，
-         再放一行等於重複，而且會把卡牆再往下推一行。 -->
-    <p v-if="dupGroups && sort !== 'dupes'" class="dupNote">
-      你有 <b class="mono">{{ dupGroups }}</b> 款重複的卡（共 {{ dupCards }} 張）。
-      <button type="button" class="linkBtn" @click="sort = 'dupes'; backToTop()">
-        切到「同款集中」
-      </button>
-      可以把它們排在一起。
-    </p>
-
     <div v-if="list.ready.value && !total" class="empty card">
       <p>卡冊還是空的。</p>
       <RouterLink :to="{ name: 'home' }" class="btn primary">去抽第一張</RouterLink>
@@ -1026,61 +1015,105 @@ async function copyLink() {
       <RouterLink :to="{ name: 'upload-card' }" class="btn">登記手上的卡</RouterLink>
     </div>
 
-    <!-- 上架入口與狀態分頁同一組：兩者都是「要看／要動哪一批卡」的控制項。
-         桌機併成一列；手機上分頁換到自己那一列（見 .listHead .tabs 的說明）——
-         擠在同一列時分頁只分得到 150px，後面三個分頁一個像素都看不到。
-         沒有寄存中的卡就不出現上架鍵：按了也沒有東西可選。 -->
-    <div v-if="total || stashedCount || tabs.length > 1" class="listHead">
+    <!-- ================= 控制區：兩組，不是十一個 =================
+
+         這一片之前是十一個長得一模一樣的膠囊排成好幾列，裡面混著三種語意：
+         會改資料的動作、換一批卡看的篩選、換順序的排序。使用者每次掃過去
+         都要重新推理哪個是哪個，而視覺編碼還是反的：「全部」是白底實心，
+         在畫面上比「合併出貨」還搶眼，可是它只是個篩選。
+
+         現在只剩兩組，靠三個互相加強的線索分開，不是靠一條線：
+
+           1. 容器：動作是幾顆浮在頁面底色上的實心膠囊，沒有容器；篩選與排序
+              關在一塊凹陷的面板裡。「浮起來的按下去會發生事、凹進去的只是
+              儀表板」是實體隱喻，不需要圖例。
+           2. 文字：面板的每一列前面都有一個詞（顯示／排序）。那兩個詞自己
+              就在說「這裡只換一個看法」。動作那一列不需要標籤，動詞
+              （上架／出貨／登記）本來就是標籤。
+           3. 顏色：整片區域裡只有動作列碰得到強調色，也只有它有最高亮度。
+              面板裡選中的膠囊改成中性色的浮起晶片 —— 這就是在修
+              「全部比合併出貨還亮」那個反過來的視覺份量。
+    ================================================================= -->
+
+    <!-- ---- 第一組：動作 ----
+         三顆都會改變資料或帶去另一頁。選取模式下整組收起來：
+         那時候整個畫面只該有「挑卡」這一件事。 -->
+    <div v-if="(total || stashedCount) && !selecting" class="actions">
+      <!-- 沒有寄存中／在卡冊的卡就不出現上架鍵：按了也沒有東西可選。 -->
       <button
-        v-if="sellableCount && !selecting"
+        v-if="sellableCount"
         type="button" class="btn primary sellCta" @click="startSell"
       >上架出售</button>
 
-      <!-- 合併出貨：這顆按鈕**在這一輪之前根本不存在**。
+      <!-- 合併出貨：這顆按鈕在上一輪之前根本不存在。
            批次出貨的能力一直都在（後端 /v1/prizes/ship 收陣列、合成一張出貨單），
            但唯一的入口是「在卡牆上挑一張寄存中的卡 → 展開操作 → 申請出貨」，
-           勾選其他卡的清單要走完那三步才會出現。使用者要先隨便選中一張，
-           才會發現原來可以一次寄很多張 —— 那不是功能不存在，是入口藏在
-           某一張卡的第三層裡。提到跟「上架出售」同一排才對得起「合併」兩個字。 -->
+           使用者要先隨便選中一張，才會發現原來可以一次寄很多張。
+           它是刻意常駐的入口，重排不准把它收回抽屜或選單裡 —— 那是走回頭路。 -->
       <button
-        v-if="stashedCount && !selecting"
+        v-if="stashedCount"
         type="button" class="btn sellCta" @click="openShip()"
       >合併出貨</button>
 
-      <!-- 登記卡片：把手上的實體卡登記進卡冊。跟「上架出售」同一層級 ——
-           兩者都是「讓卡冊多／少一批卡」的入口，不是某一張卡的操作。
-           選取模式下藏起來：那時候整個畫面只該有「挑卡」這一件事。 -->
+      <!-- 登記卡片：把手上的實體卡登記進卡冊。跟上架出售同一層級 ——
+           兩者都是「讓卡冊多／少一批卡」的入口，不是某一張卡的操作。 -->
       <RouterLink
-        v-if="!selecting"
         :to="{ name: 'upload-card' }" class="btn sellCta"
       >登記卡片</RouterLink>
-
-      <!-- 狀態分頁：三種狀態的下一步動作完全不同，分開才不用每張卡重新判斷 -->
-      <div v-if="tabs.length > 1" class="tabs" role="tablist">
-        <button
-          v-for="t in tabs" :key="t.k"
-          type="button" role="tab" :aria-selected="tab === t.k"
-          class="tab" :class="{ on: tab === t.k }"
-          @click="tab = t.k"
-        >{{ t.label }}<span class="tabN mono">{{ countOf(t.k) }}</span></button>
-      </div>
     </div>
 
-    <!-- ---- 排序 ----
-         自己一列，不跟狀態分頁併排：兩者回答的是不同的問題（「看哪一批」
-         與「怎麼排」），而且 393px 上狀態分頁本身就已經要橫向捲了，
-         再塞三顆膠囊進去等於兩排都看不完。
+    <!-- ---- 第二組：檢視 ----
+         篩選與排序併成同一塊面板，不各自一組。理由：它們回答的是同一個層級的
+         問題（「我現在要看的是哪一批、照什麼順序」），兩者都不改任何資料。
+         切成兩塊面板等於又要使用者分辨三種東西。子集與順序的差別由每一列
+         前面那個詞（顯示／排序）負責講，那比再加一個外框便宜得多。
 
-         這一列只有在卡片多到需要排序時才出現：一頁裝得下的卡冊排不排都一樣，
-         而每一列固定出現的控制項都會把卡牆往下推一屏。 -->
-    <div v-if="total > 6 && summary?.dupGroups !== undefined" class="sorts" role="tablist" aria-label="排序方式">
-      <span class="sortLabel">排序</span>
-      <button
-        v-for="s in SORT_TABS" :key="s.k"
-        type="button" role="tab" :aria-selected="sort === s.k"
-        class="tab" :class="{ on: sort === s.k }"
-        @click="sort = s.k"
-      >{{ s.label }}</button>
+         分頁仍然是換行不是橫捲（aab073f 修的就是「三個分頁一個像素都看不到」），
+         排序仍然只在卡片多到需要排序時才出現。 -->
+    <div v-if="tabs.length > 1 || showSorts" class="viewBar">
+      <div v-if="tabs.length > 1" class="viewRow">
+        <span class="viewLabel" aria-hidden="true">顯示</span>
+        <!-- 每個分頁後面的數字是使用者決定「該點哪一個」的依據，不是裝飾 -->
+        <div class="tabs" role="tablist" aria-label="顯示哪一批卡">
+          <button
+            v-for="t in tabs" :key="t.k"
+            type="button" role="tab" :aria-selected="tab === t.k"
+            class="tab" :class="{ on: tab === t.k }"
+            @click="tab = t.k"
+          >{{ t.label }}<span class="tabN mono">{{ countOf(t.k) }}</span></button>
+        </div>
+      </div>
+
+      <div v-if="showSorts" class="viewRow">
+        <span class="viewLabel" aria-hidden="true">排序</span>
+        <div class="sorts" role="tablist" aria-label="排序方式">
+          <button
+            v-for="s in SORT_TABS" :key="s.k"
+            type="button" role="tab" :aria-selected="sort === s.k"
+            class="tab" :class="{ on: sort === s.k }"
+            @click="sort = s.k"
+          >{{ s.label }}</button>
+        </div>
+      </div>
+
+      <!-- ---- 「你有重複的卡」----
+           原本這是控制區最上面一條藍色橫幅，裡面還有一顆會去按排序的連結鈕。
+           在只有兩組的版面裡它是第三種東西，而且那顆連結鈕是這一片區域裡
+           唯一不到 44px 的觸控目標（實測 33.3px）。
+
+           它存在的理由是「沒有人會去點一個他不知道自己需要的排序」。那個理由
+           針對的是「事實沒被說出來」，不是「橫幅這個形式」。所以事實留著、
+           橫幅拿掉：同一句話搬進面板、貼在「同款集中」那顆膠囊底下，
+           連結鈕也拿掉 —— 它要人去按的那顆膠囊就在正上方，
+           指過去比再放一顆按鈕誠實，也順手教會使用者控制項在哪裡。
+           （原本那顆鈕另外做的 backToTop() 不會漏掉：watch([tab, sort]) 本來就會做。）
+
+           數字來自 /summary（整本卡冊）而不是已載入的那 24 張。
+           已經切到「同款集中」時不出現：那時候畫面自己就在講這件事。 -->
+      <p v-if="showSorts && dupGroups && sort !== 'dupes'" class="dupHint">
+        你有 <b class="mono">{{ dupGroups }}</b> 款重複的卡（共 {{ dupCards }} 張），
+        切「同款集中」可以把它們排在一起。
+      </p>
     </div>
 
     <!-- 選取模式的說明另起一行：塞進上面那列會把分頁擠到看不見 -->
@@ -1552,13 +1585,15 @@ async function copyLink() {
 </template>
 
 <style scoped>
-/* ---- 上架入口 ----
-   卡冊層級的一顆按鈕，選取模式開著時換成一行說明 ——
-   兩者不會同時出現，這一列的高度才不會跳動。 */
-.listHead { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; margin: 4px 0 16px; }
+/* ---- 第一組：動作 ----
+   會做事的按鈕，浮在頁面底色上、沒有容器。
+   這是分組的第一個線索：底下那組被關在一塊面板裡，這組沒有 ——
+   同一片區域裡一眼看得出「這排是自由的按鈕、那排是儀表板」。
+
+   刻意跟狀態分頁分家（改版前它們擠在同一個 .listHead 裡，桌機上還併成一列，
+   於是「合併出貨」跟「已回收 1」在視覺上是同一種東西）。 */
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; margin: 4px 0 10px; }
 .sellCta { flex: none; min-height: 44px; padding: 9px 18px; font-size: 13.5px; }
-/* 桌機一列裝得下，分頁就跟兩顆按鈕併排，吃剩下的寬度 */
-.listHead .tabs { flex: 1 1 auto; min-width: 0; margin: 0; }
 .sellHint { margin: -8px 0 16px; min-width: 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
 .sellHint strong { color: var(--ink); font-weight: 600; }
 
@@ -1902,6 +1937,36 @@ async function copyLink() {
 }
 .bVal { margin-left: auto; flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+/* ---- 第二組：檢視面板（篩選＋排序）----
+   一塊凹陷的面板，把「只是換一個看法」的控制項全部收在裡面。
+
+   為什麼是面板而不是一條分隔線：一條線只說「這裡有個接縫」，它不說接縫兩邊
+   分別是什麼。一個有底色、有內距、每一列前面還寫著「顯示 / 排序」的容器，
+   說的是「這是一組刻度」—— 使用者不必讀說明就知道扳它不會有事發生。
+
+   --field 是既有權杖，語意就是「比底色再深一階的凹陷輸入區」
+   （深色 #0f1115 對底色 #0d0c0f，淺色 #f6f2f0 對底色 #fdfbfa）。
+   深色主題下那個色差很小，所以再補一道 --line-soft 的邊；淺色主題下底色差
+   夠明顯而邊幾乎看不見。兩套主題各由其中一個線索撐著，不會兩邊同時失效。 */
+.viewBar {
+  /* gap 4 而不是 8：每一列本身就是 44px 高的觸控列，列與列之間再拉開 8px
+     只會讓面板更高，而面板一高就把卡牆推下去 —— 這一頁最貴的就是垂直空間。 */
+  display: flex; flex-direction: column; gap: 4px; min-width: 0;
+  margin: 0 0 16px; padding: 8px 10px;
+  border-radius: 16px;
+  background: var(--field); border: 1px solid var(--line-soft);
+}
+/* align-items: flex-start —— 膠囊換行成兩三列時，左邊那個詞要對齊第一列。
+   置中的話它會飄到三列的中間，看起來像在標一個不存在的東西。 */
+.viewRow { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+/* 高度跟一顆膠囊一樣（44px），文字才會跟第一列的膠囊在同一條基線上。
+   aria-hidden：每個 role="tablist" 已經有自己的 aria-label，
+   讀螢幕的人聽到的是完整的一句，不是「顯示」這兩個孤字。 */
+.viewLabel {
+  flex: none; display: inline-flex; align-items: center; min-height: 44px;
+  font-size: 12px; color: var(--faint); letter-spacing: .04em;
+}
+
 /* ---- 狀態分頁 ----
    換行，不橫向捲。
 
@@ -1914,60 +1979,69 @@ async function copyLink() {
 
    分頁最多 8 個、每個約 85px，換行最壞情況也只多兩列；
    拿兩列高度換「每一個分頁都看得到」是划算的。
-   換行之後 scrollWidth 恆等於 clientWidth，這一列不可能再藏東西。 */
+   換行之後 scrollWidth 恆等於 clientWidth，這一列不可能再藏東西。
+   這一點不准改回橫捲，它修的就是「三個分頁一個像素都看不到」。 */
 .tabs {
   display: flex; flex-wrap: wrap; gap: 8px; min-width: 0;
-  margin: 4px 0 16px;
+  flex: 1 1 auto; margin: 0;
 }
+/* 排序跟狀態分頁共用 .tab 的外觀，也共用同一個容器樣式 ——
+   它們在新的分法裡是同一組（都只換一個看法），長得不一樣才是錯的。
+   兩者的差別由左邊那個詞負責講，不由膠囊的外觀負責。 */
+.sorts { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; flex: 1 1 auto; }
 .tab {
   flex: none; min-height: 44px;
   display: inline-flex; align-items: center; gap: 7px;
-  padding: 8px 15px; border-radius: var(--pill);
-  border: 1px solid var(--line-soft); background: transparent;
+  /* 沒選中的膠囊現在沒有邊（邊留給選中的那顆去對比），所以左右內距可以收到
+     12px —— 省下來的寬度讓 393px 上每一列多裝得下一顆，篩選少一列就是少 48px。
+     border 保留成 transparent 而不是 0：切換時才不會整排跳動。 */
+  padding: 8px 12px; border-radius: var(--pill);
+  border: 1px solid transparent; background: transparent;
   color: var(--muted); font-size: 13px; font-weight: 500; cursor: pointer;
-  transition: background .15s, color .15s, border-color .15s;
+  transition: background .15s, color .15s, border-color .15s, box-shadow .15s;
 }
-.tab.on { background: var(--ink); color: var(--bg); border-color: transparent; font-weight: 600; }
+/* 選中的膠囊：中性色的浮起晶片，不是白底實心。
+
+   改版前 .tab.on 是 `background: var(--ink)`（深色主題下就是亮白）。那讓
+   「全部 70」變成整片控制區裡最亮的東西 —— 比「合併出貨」還搶眼，
+   而它只是個篩選。視覺份量跟語意是反的，使用者每次都要重新推理一遍。
+
+   現在強調色與最高亮度都只屬於上面那組動作。這顆晶片只要在面板內部贏過
+   旁邊沒選中的膠囊就夠了，而它是在凹陷的底上浮起來：--surface 底 + 實心邊
+   + 陰影 + 600 字重 + ink 字色，五個線索一起講，夠明確也絕不喧賓奪主。 */
+.tab.on {
+  /* 無邊、只有填色與陰影 —— 動作那組的次要按鈕（.btn）是「填色 + --line 的邊」，
+     選中的晶片刻意少掉那道邊，兩者在同一頁上就不會是同一個東西。
+     少了邊之後它靠的是「比面板底亮一階」：bg(#0d0c0f) < field(#0f1115) <
+     surface(#17161a) 這道階梯在深色下成立，淺色下是 #fdfbfa < #f6f2f0(凹) <
+     #ffffff(晶片) —— 兩套主題都是「面板凹下去、選中的晶片浮起來」。 */
+  background: var(--surface); border-color: transparent;
+  color: var(--ink); font-weight: 600; box-shadow: var(--shadow-sm);
+}
 .tabN { font-size: 11px; opacity: .65; }
 .tab.on .tabN { opacity: .8; }
 @media (hover: hover) { .tab:not(.on):hover { color: var(--ink); border-color: var(--line); } }
 
-/* ---- 排序 ----
-   跟狀態分頁共用 .tab 的外觀（同一種東西就該長一樣），但自己一列：
-   兩者回答的是不同的問題，而 393px 上狀態分頁本身就已經要換行了，
-   再塞三顆進去等於兩排都讀不完。
-   一樣用 flex-wrap 不用橫向捲 —— 這一頁的紀律是「看得到的才點得到」，
-   而且 wrap 之後 scrollWidth 恆等於 clientWidth。 */
-.sorts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; margin: -6px 0 16px; }
-.sortLabel { flex: none; font-size: 12px; color: var(--faint); }
-
 /* ---- 「你有 N 款重複的卡」----
-   這是整個功能的入口，所以用 --info-wash 從一般的說明文字裡分出來 ——
-   但只有一行、不畫外框：它是一句話不是一張卡片。 */
-.dupNote {
-  margin: -14px 0 16px; padding: 9px 12px; border-radius: 10px;
-  background: var(--info-wash); color: var(--muted);
-  font-size: 12.5px; line-height: 1.7; min-width: 0;
+   面板裡的一句話，不是橫幅。它貼在排序那一列底下，講的就是正上方那顆
+   「同款集中」—— 所以它不需要自己的底色、外框，也不需要一顆連結鈕
+   （那顆鈕原本是這一片區域裡唯一不到 44px 的觸控目標）。 */
+.dupHint {
+  margin: 0; padding: 0 2px 2px; min-width: 0;
+  color: var(--faint); font-size: 12px; line-height: 1.6;
 }
-.dupNote b { color: var(--ink); font-weight: 700; }
-/* 句子裡的按鈕。做成連結的樣子而不是膠囊：它在一句話的中間，
-   膠囊會把那句話斷成三截。44px 的觸控門檻靠 padding 與行高一起撐 —— */
-.linkBtn {
-  padding: 6px 2px; border: 0; background: none;
-  color: var(--info-ink); font: inherit; font-size: 12.5px; font-weight: 600;
-  text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
-}
-.linkBtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* 只有那兩個數字用 ink —— 這一句的重點就是「7」，句子本身是襯詞 */
+.dupHint b { color: var(--ink); font-weight: 700; }
 
 @media (max-width: 720px) {
   .overview { padding: 14px; gap: 11px; }
 
-  /* 手機上分頁自己佔滿一列。
-     跟兩顆按鈕併排的話，扣掉「上架出售 91px + 登記卡片 91px + 兩道 10px 的縫」
-     只剩 150px 給五個分頁——就算會換行，一列也只塞得下一個半，
-     整條會被撐成四五列。獨佔一列（353px）之後兩列就排得完。
-     省下來的那一列高度，換的是三個原本 0px 可見的分頁。 */
-  .listHead .tabs { flex: 1 0 100%; }
+  /* 「分頁跟兩顆動作鈕擠同一列」這個問題已經從根上消失：它們現在不在同一個
+     容器裡，分頁永遠有整列寬。（舊註解記的是那個 bug —— 扣掉「上架出售 91px
+     + 登記卡片 91px + 兩道 10px 的縫」只剩 150px 給五個分頁，一列塞得下一個半。）
+     這裡只把面板的內距收窄一階，手機上一列多擠得下半顆膠囊。 */
+  .viewBar { padding: 9px 10px; }
+  .viewLabel { font-size: 11.5px; }
 }
 
 
