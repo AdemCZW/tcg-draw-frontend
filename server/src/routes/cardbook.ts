@@ -20,6 +20,7 @@ import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
 import { sql, Rollback } from '../db.js'
 import { requireAuth } from '../auth.js'
+import { bumpAttempt, checkLimit, clientIp } from '../rate-limit.js'
 import { REF_PRICE_MAX } from '../card-cert.js'
 import { STASH_DAYS } from '../pools-service.js'
 import { configured as r2configured, objectState } from '../r2.js'
@@ -62,6 +63,36 @@ const STATUS_LABEL: Record<string, string> = {
 
 cardbook.post('/upload', async c => {
   const me = c.get('userId')
+
+  /* ── 速率限制（A-2）────────────────────────────────────────
+     帶編號的登記是平台內對一張實體卡的**所有權宣告**：搶下一個編號之後，
+     真正的持有人就只剩「申請接管」這條要人工審的路。所以這支不是
+     普通的寫入端點，爆量寫進來的代價是 DB 加上一堆人工客服。
+
+     **兩個獨立的桶**，都不共用登入失敗的 ip:（M-1 的教訓：共用計數的話，
+     同一個網路裡有人登入打錯幾十次，隔壁的人連卡都登記不了）：
+       card-upload-user:  這個帳號登記了幾張
+       card-upload-ip:    這台機器（含換帳號）登記了幾張
+
+     **不做 cert-claim:<grader>:<certNo> 的桶。** 同一個編號本來就只能
+     首次成功一次（prizes_cert_alive 唯一索引），限制「重複失敗」擋不住
+     「第一次搶註」—— 搶註是所有權驗證與人工審核的問題，
+     加一個 per-cert 的計數只會讓人以為它被修好了。 */
+  const limitKeys = [`card-upload-user:${me}`, `card-upload-ip:${clientIp(c)}`]
+  const limit = await checkLimit(limitKeys)
+  if (limit.blocked) {
+    /* 訊息刻意不提「你已經登記了幾張」「上限是幾張」：那是在告訴人
+       怎麼貼著上限走，對正常使用者也沒有用。只講「等多久」。
+       429 一定帶 Retry-After —— 沒有它，自動重試的客戶端只能亂猜間隔，
+       而猜錯的那一方會一直撞牆（同這支 503 那條的理由）。 */
+    return c.json(
+      { error: 'TOO_MANY_UPLOADS',
+        message: `短時間內登記的卡片太多了，請於 ${Math.max(1, Math.ceil(limit.retryAfter / 60))} 分鐘後再登記。`
+          + '（如果你正在整理一整批收藏，分幾次登記就好，已經登記進去的不會不見。）' },
+      429, { 'retry-after': String(limit.retryAfter) }
+    )
+  }
+
   const parsed = UploadBody.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) {
     const msg = parsed.error.issues.find(i => i.code === 'too_big')?.message ?? '卡片資料不完整（至少要卡名、系列、卡號）'
@@ -86,6 +117,17 @@ cardbook.post('/upload', async c => {
         + '那是這張卡在卡冊裡唯一能被認出來的依據。'
     }, 400)
   }
+
+  /* 在真正動手之前先計數，**成功也算**（同註冊那條的理由，M-1）：
+     這個桶計的是「這個帳號／這台機器登記了幾張」，只在失敗時記的話，
+     一路成功的爆量寫入永遠觸發不了限制。
+     代價講明：後面那個 503（問不到 R2）也已經吃掉一次額度 ——
+     那是我們這邊的問題卻算在使用者頭上。上限 40 張/15 分鐘之下這是
+     可以接受的；如果哪天要退還額度，要的是「單獨扣掉一次」的能力，
+     不是 clearFails（那會把整個桶清成 0，等於送人一次繞過限制的機會）。
+     格式不合的請求（上面那些 400）**刻意不計數**：它們連一次 DB 寫入
+     都沒發生，計進去只會讓打錯欄位的人被自己的錯誤鎖住。 */
+  await bumpAttempt(limitKeys)
 
   let frontImage: string | null = null
   if (card.frontFileId) {

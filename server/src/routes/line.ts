@@ -18,6 +18,8 @@ import { z } from 'zod'
 import { env } from '../env.js'
 import { sql } from '../db.js'
 import { issueToken, requireAuth } from '../auth.js'
+import { bumpAttempt, checkLimit, clientIp } from '../rate-limit.js'
+import type { Context } from 'hono'
 
 export const line = new Hono()
 
@@ -49,9 +51,74 @@ async function authorizationUrl(linkUserId: string | null) {
   return u.toString()
 }
 
+/* ── 起始端點的速率限制與過期清理（A-7）──────────────────────
+   這條**不是安全修補**：重放已經被「一次性消耗 + 10 分鐘期限」處理掉了，
+   多打幾次 start 拿到的只是幾個沒有人會去用的 state。
+   要防的是**可用性**：start 可以匿名呼叫，每呼叫一次就往 oauth_states
+   多寫一列，而那些列在沒人回來 callback 時不會有任何東西去刪 ——
+   表會一直長。
+
+   所以要兩半，缺一半都沒有用：
+     1) 起始端點自己的 IP 桶（oauth-start-ip:）—— 限制長多快。
+        獨立的桶：跟 A-2 的卡冊登記、跟登入失敗的 ip: 都不共用。
+        OAuth start 被擋住不該連帶讓人登不了入，反過來也一樣。
+     2) 過期 state 的清理 —— 限流只是讓表長得慢一點，沒有清理，
+        它終究還是單調成長。
+
+   清理掛在 start 這條路上（順手做，不是排程）：
+     - 這裡是**唯一**會往 oauth_states 寫的地方，寫得越勤要清的越多，
+       清理的頻率自然跟著壓力走（同 repo 既有「掛在讀清單路徑上的 sweep」
+       那個做法）。
+     - 五分鐘一次的排程在 index.ts，那支檔案不歸這條線動；而且把
+       「這張表的維護」放在寫這張表的那支檔案旁邊，改 state 規則的人
+       才會同時看到清理規則。
+   節流成一個行程每分鐘最多一次：不然每一次 start 都多跑一次 DELETE。
+   節流狀態放記憶體是刻意的 —— 它掉了最壞的情況只是多清一次，
+   而清理本身是冪等的。 */
+let lastStateSweep = 0
+const STATE_SWEEP_EVERY_MS = 60_000
+function sweepOauthStatesSoon() {
+  const now = Date.now()
+  if (now - lastStateSweep < STATE_SWEEP_EVERY_MS) return
+  lastStateSweep = now
+  /* 不 await：清理是維護工作，不該讓使用者的登入多等一個 DELETE，
+     失敗了也只是下一分鐘再清一次（所以 catch 掉，不讓它變成
+     unhandled rejection 打掛整個行程）。
+     刪的門檻是 1 小時，不是 10 分鐘：callback 認的期限是 10 分鐘，
+     過了就是死列，但留一段餘裕，讓「剛好過期」的人拿到的是
+     line=state（我們自己判的）而不是一列被刪掉之後語意相同、
+     但更難從資料庫裡回溯的狀況。 */
+  void sql`delete from oauth_states where created_at < now() - interval '1 hour'`
+    .catch(e => console.error('[line] 清理過期 oauth_states 失敗', e))
+  /* 登入交換碼是同一類的東西（一次性、有期限、沒人來換就留著），
+     順手一起清 —— 它有 expires_at，照它自己的期限算。 */
+  void sql`delete from oauth_login_codes where expires_at < now() - interval '1 hour'`
+    .catch(e => console.error('[line] 清理過期 oauth_login_codes 失敗', e))
+}
+
+/** 起始端點共用的 IP 限流。擋下來回 429 + Retry-After。 */
+async function startLimited(c: Context): Promise<Response | null> {
+  const keys = [`oauth-start-ip:${clientIp(c)}`]
+  const limit = await checkLimit(keys)
+  if (limit.blocked) {
+    return c.json(
+      { error: 'TOO_MANY_REQUESTS',
+        message: `LINE 登入的嘗試太頻繁了，請於 ${Math.max(1, Math.ceil(limit.retryAfter / 60))} 分鐘後再試。` },
+      429, { 'retry-after': String(limit.retryAfter) }
+    )
+  }
+  /* 成功也計數：這個桶算的是「發出了幾個 state」，也就是這張表長多快，
+     不是「失敗了幾次」。 */
+  await bumpAttempt(keys)
+  return null
+}
+
 /* 一般 LINE 登入不需要身份，直接導向 LINE。 */
 line.get('/start', async c => {
   if (!configured()) return c.json({ error: 'NOT_CONFIGURED', message: 'LINE 登入尚未設定' }, 503)
+  const blocked = await startLimited(c)
+  if (blocked) return blocked
+  sweepOauthStatesSoon()
   return c.redirect(await authorizationUrl(null), 302)
 })
 
@@ -59,6 +126,11 @@ line.get('/start', async c => {
    因為 query 會進代理與伺服器日誌。前端取得 URL 後才整頁導向 LINE。 */
 line.post('/link/start', requireAuth, async c => {
   if (!configured()) return c.json({ error: 'NOT_CONFIGURED', message: 'LINE 登入尚未設定' }, 503)
+  /* 綁定雖然要登入，寫的仍然是同一張 oauth_states，所以走同一個 IP 桶 ——
+     這條限的是「這張表長多快」，跟呼叫端有沒有身分無關。 */
+  const blocked = await startLimited(c)
+  if (blocked) return blocked
+  sweepOauthStatesSoon()
   return c.json({ url: await authorizationUrl(c.get('userId')) })
 })
 

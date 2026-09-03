@@ -34,13 +34,48 @@ const WINDOW_MS = 15 * 60_000
 const MAX_REG_IP = 5
 const REG_WINDOW_MS = 24 * 60 * 60_000
 
+/* 卡冊登記（card-upload-user: / card-upload-ip:）也是**自己的桶**，
+   同樣不共用登入失敗的 ip:（A-2；M-1 已經為「兩件不相干的事共用一個計數」
+   付過一次代價）。這個桶計的是「登記了幾張」而不是「失敗了幾次」——
+   跟註冊一樣，成功也要計數，否則一路成功的大量寫入永遠觸發不了限制。
+
+   數字是照**實際登記節奏**定的，不是憑感覺：
+   前端沒有批次登記（src/pages/CardUploadPage.vue）——
+   一次送一張，而且送出成功就 router.push 回卡冊，要再登記下一張得
+   重新進表單、重挑目錄卡或手填卡名／系列／卡號再傳一張正面照。
+   即使是熟練、只挑目錄卡的人，一張也要十幾二十秒；
+   40 張/15 分鐘 ≈ 每 22 秒一張連續不斷，已經在真人的上限之上。
+   真的在整理一整箱收藏的人不會被擋：他一小時可以登記 160 張，
+   而那個量體本來就要花掉他一個下午。 */
+const MAX_CARD_UPLOAD_USER = 40
+/* IP 是**兜底**，不是主要防線：/upload 要登入，攻擊者得先有帳號，
+   而開帳號已經被 reg-ip:（5 個/天/IP）擋著。這個桶擋的是
+   「同一台機器輪流換帳號寫」。放成個人上限的三倍：卡店、社團
+   同一條網路後面本來就可能有好幾個人同時在登記（NAT，同 ip: 那條的理由），
+   抓太緊會變成打到真實使用者。 */
+const MAX_CARD_UPLOAD_IP = 120
+
+/* OAuth 起始端點（A-7）。這條**純粹是可用性防護**，不是安全修補 ——
+   重放已經被一次性消耗 + 10 分鐘期限處理掉了，這裡要的只是
+   「別讓 oauth_states 被匿名呼叫無止境地灌大」。
+   所以門檻要寬：正常人一次登入按一次，重試個幾次頂多個位數；
+   40 次/15 分鐘容得下整個 NAT 後面的人同時登入，
+   卻仍讓灌表的人每 15 分鐘只能長 40 列。
+   一樣是獨立的桶：OAuth start 被擋不該連帶鎖住登入或卡冊登記。 */
+const MAX_OAUTH_START_IP = 40
+
 const maxFor = (key: string) =>
   key.startsWith('email:') ? MAX_FAILS_EMAIL
   : key.startsWith('reg-ip:') ? MAX_REG_IP
+  : key.startsWith('card-upload-user:') ? MAX_CARD_UPLOAD_USER
+  : key.startsWith('card-upload-ip:') ? MAX_CARD_UPLOAD_IP
+  : key.startsWith('oauth-start-ip:') ? MAX_OAUTH_START_IP
   : MAX_FAILS_IP
 
 /* 桶不同、時間窗也不同：登入是短窗（打錯了 15 分鐘後再試），
-   註冊是日配額（灌帳號的攻擊本來就是以天為尺度在算產能） */
+   註冊是日配額（灌帳號的攻擊本來就是以天為尺度在算產能）。
+   卡冊登記與 OAuth start 用的是同一個 15 分鐘短窗 —— 它們防的是
+   「一陣爆量」，不是日產能，被擋住的人等一下就好。 */
 const windowFor = (key: string) => key.startsWith('reg-ip:') ? REG_WINDOW_MS : WINDOW_MS
 
 export function clientIp(c: Context): string {
@@ -84,7 +119,10 @@ export async function checkLimit(keys: string[]): Promise<LimitResult> {
   return { blocked: false, retryAfter: 0 }
 }
 
-/** 記一次計數（登入失敗、或一次註冊）。超過該桶的時間窗就從頭算起 */
+/** 記一次計數（登入失敗、一次註冊、一次卡冊登記、一次 OAuth start）。
+    超過該桶的時間窗就從頭算起。
+    名字裡的 fail 是歷史包袱：有些桶計的是「做了幾次」而不是「失敗幾次」，
+    要計數的時機由呼叫端決定（見 bumpAttempt 這個別名）。 */
 export async function bumpFail(keys: string[]) {
   for (const key of keys) {
     const win = `${windowFor(key)} milliseconds`
@@ -108,6 +146,10 @@ export async function bumpFail(keys: string[]) {
 export async function clearFails(keys: string[]) {
   await sql`delete from login_attempts where key = any(${keys})`
 }
+
+/** bumpFail 的別名，給「成功也要計數」的桶用（註冊、卡冊登記、OAuth start）。
+    同一個實作 —— 分兩個名字只是為了讓呼叫端讀起來不像在記錄失敗。 */
+export const bumpAttempt = bumpFail
 
 /** 定期清掉過期紀錄，這張表不需要保留歷史。
     依桶分開清：註冊桶的窗是 24 小時，用登入的 1 小時門檻去清會把
