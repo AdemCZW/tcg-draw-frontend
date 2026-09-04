@@ -157,9 +157,15 @@ const paths: Record<string, string> = {
             </svg>
           </span>
           <strong>{{ r.t }}</strong>
-          <!-- 還不能做卡的人在這裡就知道要先做什麼。這一行只有這一格會有，
-               所以不動其他格子的高度（.cell 是 min-height，多一行自己長高） -->
-          <span v-if="r.name === 'trainer-card' && trainerNote" class="note">{{ trainerNote }}</span>
+          <!-- 還不能做卡的人：右上角一個提醒點，**不進版面流**。
+               原本是格子裡多一行「先登記一張卡」，但那一行會把這一格撐得比
+               同排其他格子高，整片格狀選單就歪了 —— 一格的狀態不該改變版面。
+               文字改由 aria-label（螢幕閱讀器）與 title（桌機停留）承載，
+               而按下去本來就是登記頁，下一步不會不見。 -->
+          <span
+            v-if="r.name === 'trainer-card' && trainerNote"
+            class="dot" aria-hidden="true" :title="trainerNote"
+          ></span>
           <!-- 進行中的筆數。只在有東西的時候出現：常駐一顆「0」等於教使用者
                忽略這個位置，之後真的有訂單時他也不會看見 -->
           <span v-if="r.name === 'orders' && orders.openCount" class="badge">{{ orders.openCount }}</span>
@@ -323,9 +329,13 @@ h1 {
 
 /* 「先登記一張卡」那一行。字級比標題小一階、用 muted，
    看得出來是說明而不是第二個標題；格子本來就是置中的，跟著置中。 */
-.cell .note {
-  font-size: 11px; line-height: 1.3; color: var(--muted);
-  max-width: 100%; overflow-wrap: anywhere;
+/* 提醒點。跟 .badge 同一個角落、同一個顏色語言，差別是它不帶數字 ——
+   數字是「有幾件事」，這一點是「這一格現在還做不了，按下去會告訴你為什麼」。
+   position: absolute 是重點：它一進版面流就會把格子撐高，同排就歪了。 */
+.cell .dot {
+  position: absolute; top: 10px; right: 10px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent);
 }
 
 /* 後台列跟一般功能區隔開：它是平台營運用的，不是使用者功能 */
