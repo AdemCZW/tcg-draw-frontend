@@ -98,12 +98,27 @@ export const useAuthStore = defineStore('auth', {
       window.location.href = `${API_URL}/v1/auth/line/start`
     },
 
-    /** 從 URL fragment 收下單次交換碼（LINE 回來時）。先清掉網址，再向後端交換 JWT。 */
+    /** Google：跟 LINE 完全同一條路，只換 provider 段。 */
+    loginWithGoogle() {
+      window.location.href = `${API_URL}/v1/auth/google/start`
+    },
+
+    /**
+     * 從 URL fragment 收下單次交換碼（社群登入回來時）。先清掉網址，再向後端交換 JWT。
+     *
+     * fragment 會多帶一個 `provider=…`，決定要打哪一條 exchange。
+     * **沒帶就是 line**：既有的 LINE 流程一個位元組都沒變 —— 已經在路上的
+     * 舊網址（使用者按了上一頁、或分頁停在那裡）回來時仍然走得完。
+     * 而且 provider 只認白名單裡的值，不直接串進網址：那是一段
+     * 從網址來的字串，照抄進 path 等於讓人指定我們去打哪個端點。
+     */
     async consumeToken(): Promise<boolean> {
       const m = /[#&]code=([^&]+)/.exec(window.location.hash)
       if (!m) return false
+      const p = /[#&]provider=([a-z]+)/.exec(window.location.hash)?.[1]
+      const provider = p === 'google' ? 'google' : 'line'
       history.replaceState(null, '', window.location.pathname + window.location.search)
-      const r = await http<{ token: string }>('/v1/auth/line/exchange', {
+      const r = await http<{ token: string }>(`/v1/auth/${provider}/exchange`, {
         method: 'POST', json: { code: decodeURIComponent(m[1]!) }
       })
       token.set(r.token)

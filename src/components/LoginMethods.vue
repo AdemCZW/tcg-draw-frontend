@@ -33,6 +33,19 @@ const alsoThisDevice = ref(false)
 const loggingOut = ref(false)
 
 const hasLine = computed(() => methods.value?.providers.includes('line') ?? false)
+const hasGoogle = computed(() => methods.value?.providers.includes('google') ?? false)
+
+/* 這台伺服器有沒有設定 Google 登入。憑證還沒申請下來時就是沒有，
+   那一列整個不畫 —— 畫了但按下去撞 503 的「綁定」比沒有這個選項糟。
+   已經綁過的人例外（hasGoogle）：那一列要照樣顯示「已綁定」，
+   不然他會以為自己的綁定不見了。
+   問不到就當作沒設定，跟登入頁同一個 fail-closed 方向。 */
+const googleReady = ref(false)
+async function loadGoogleStatus() {
+  if (MOCK) return
+  try { googleReady.value = (await http<{ configured: boolean }>('/v1/auth/google/status')).configured }
+  catch { googleReady.value = false }
+}
 
 /* ---- 送不出去的時候要說得出是哪幾項 ----
    這顆「儲存」原本被三個條件擋著，畫面上一個字都沒講：Email 的格式、
@@ -122,17 +135,20 @@ async function save() {
   }
 }
 
-/* 綁 LINE：先以 Authorization header 向後端取得授權網址，再整頁導向 LINE。
-   JWT 不進 URL，才不會被代理或伺服器存取日誌收走。 */
-async function linkLine() {
+/* 綁社群帳號：先以 Authorization header 向後端取得授權網址，再整頁導向。
+   JWT 不進 URL，才不會被代理或伺服器存取日誌收走。
+   兩家共用同一支：兩條路的形狀完全一樣（POST /link/start → { url } → 整頁導向），
+   各寫一份只會讓其中一份之後長歪。 */
+async function linkSocial(provider: 'line' | 'google') {
   if (!token.get() || busy.value) return
   busy.value = true
   err.value = ''
+  const label = provider === 'line' ? 'LINE' : 'Google'
   try {
-    const { url } = await http<{ url: string }>('/v1/auth/line/link/start', { method: 'POST' })
+    const { url } = await http<{ url: string }>(`/v1/auth/${provider}/link/start`, { method: 'POST' })
     window.location.href = url
   } catch (e) {
-    err.value = e instanceof ApiError ? e.message : 'LINE 綁定沒有完成，請再試一次'
+    err.value = e instanceof ApiError ? e.message : `${label} 綁定沒有完成，請再試一次`
     busy.value = false
   }
 }
@@ -205,11 +221,17 @@ useKeyboardInset()
 
 onMounted(() => {
   load()
+  loadGoogleStatus()
   window.addEventListener('keydown', onEsc)
   const r = typeof route.query.line === 'string' ? route.query.line : ''
   if (r === 'linked') okMsg.value = '已綁定 LINE。之後用 LINE 登入會進到這個帳號。'
   else if (r === 'taken') err.value = '這個 LINE 帳號已經綁在別的帳號上了'
   else if (r === 'badtoken') err.value = '登入狀態已過期，請重新登入再試一次'
+  /* Google 綁定回來時帶的是同一組參數名，只換 key。 */
+  const g = typeof route.query.google === 'string' ? route.query.google : ''
+  if (g === 'linked') okMsg.value = '已綁定 Google。之後用 Google 登入會進到這個帳號。'
+  else if (g === 'taken') err.value = '這個 Google 帳號已經綁在別的帳號上了'
+  else if (g === 'badtoken') err.value = '登入狀態已過期，請重新登入再試一次'
 })
 onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
 </script>
@@ -235,10 +257,30 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
           <strong>LINE</strong>
           <span class="muted small">{{ hasLine ? '已綁定' : '尚未綁定' }}</span>
         </div>
-        <button v-if="!hasLine" type="button" class="btn sm" @click="linkLine">綁定</button>
+        <button v-if="!hasLine" type="button" class="btn sm" @click="linkSocial('line')">綁定</button>
         <!-- 已綁定的狀態左邊那行字已經講過了，這裡只補一個圖形訊號。
              用 inline SVG 不用符號字元：勾號在各家字型裡粗細差很多，
              而站上的圖示一律是 SVG（見 NotifyBell 的同一條理由）。 -->
+        <svg v-else class="tick" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </li>
+
+      <!-- Google。伺服器沒設定憑證時整列不畫（已經綁過的人例外，見 googleReady）。 -->
+      <li v-if="googleReady || hasGoogle" class="item">
+        <span class="ico google" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+          </svg>
+        </span>
+        <div class="txt">
+          <strong>Google</strong>
+          <span class="muted small">{{ hasGoogle ? '已綁定' : '尚未綁定' }}</span>
+        </div>
+        <button v-if="!hasGoogle" type="button" class="btn sm" @click="linkSocial('google')">綁定</button>
         <svg v-else class="tick" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
@@ -394,6 +436,9 @@ h2 { font-size: 16px; margin: 0 0 6px; }
 .ico svg { width: 19px; height: 19px; }
 .ico.line { background: #06C755; color: #fff; }
 .ico.line svg { fill: currentColor; }
+/* Google 的規範是白底四色 G，不染色。深色主題下白底方塊也讀得出來，
+   淺色主題下靠 --line 的細邊界跟卡片底色分開。 */
+.ico.google { background: #fff; border: 1px solid var(--line); }
 .ico.mail { background: var(--surface-3); color: var(--muted); }
 .txt { display: grid; gap: 1px; flex: 1; min-width: 0; }
 .txt strong { font-size: 14px; }

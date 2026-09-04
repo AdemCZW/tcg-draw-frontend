@@ -19,7 +19,15 @@ const Env = z.object({
      兩個都沒填時 LINE 登入端點回 503，其他功能照常 —— 本機開發不一定要設。 */
   LINE_CHANNEL_ID: z.string().default('2011159689'),
   LINE_CHANNEL_SECRET: z.string().optional(),
-  /** 後端對外的網址，組 LINE 的 redirect_uri 用。Railway 上要填自己的網址 */
+  /* Google Login（OpenID Connect）。兩個都沒填時 Google 登入端點回 503，
+     前端也不會畫出那顆按鈕（問 /v1/auth/google/status）—— 憑證還沒申請下來時
+     的正確樣子是「站上沒有這個選項」，不是「有一顆按了會壞的按鈕」。
+     Client ID 會出現在授權網址裡、本來就是公開值；Secret 只能從環境變數來。
+     兩個都是 optional 而不是 default：LINE 的 Channel ID 有預設值是因為
+     那組憑證早就存在，Google 這邊還沒申請，寫任何預設值都只是假的。 */
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  /** 後端對外的網址，組 LINE 與 Google 的 redirect_uri 用。Railway 上要填自己的網址 */
   PUBLIC_URL: z.string().url().default('http://localhost:8080'),
   /** 登入完成後導回前端的網址 */
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),

@@ -99,15 +99,14 @@ import KineticTitle from '@/components/KineticTitle.vue'
 import { canonicalArt } from '@/lib/tcgdex'
 import { haptic } from '@/lib/haptics'
 import { FAIRNESS_UI, MOCK } from '@/lib/config'
-import { ApiError } from '@/lib/http'
+import { ApiError, http } from '@/lib/http'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
-const busy = ref<'login' | 'register' | 'line' | null>(null)
+const busy = ref<'login' | 'register' | 'line' | 'google' | null>(null)
 
 /* API 模式的登入表單。mock 模式不顯示，一鍵進站照舊 */
-const showEmail = ref(false)
 const email = ref('')
 const password = ref('')
 const loginErr = ref('')
@@ -135,6 +134,26 @@ onMounted(async () => {
   }
   const why = typeof route.query.line === 'string' ? route.query.line : ''
   if (why) loginErr.value = why === 'denied' ? '你取消了 LINE 登入' : 'LINE 登入沒有完成，請再試一次'
+  /* Google 用同一組參數名（?google=denied|bad|state|token|verify），訊息同樣不分細節：
+     使用者能做的事只有「再試一次」，把 state／token／verify 的差別講給他聽
+     只是把內部狀態洩漏出去，對他一點用都沒有。細節在伺服器 log 裡。 */
+  const gWhy = typeof route.query.google === 'string' ? route.query.google : ''
+  if (gWhy) loginErr.value = gWhy === 'denied' ? '你取消了 Google 登入' : 'Google 登入沒有完成，請再試一次'
+})
+
+/* 這台伺服器有沒有設定 Google 登入（憑證還沒申請下來時就是沒有）。
+   一定要問過才畫那顆按鈕：畫了但按下去撞 503 的按鈕，使用者的結論是
+   「這個站壞了」，比沒有這個選項糟得多。
+   問不到（後端冷啟動、離線）就當作沒有 —— 失敗要往「少一個選項」倒，
+   不是往「多一顆會壞的按鈕」倒。LINE 不需要這一步：那組憑證早就設好了。 */
+const googleReady = ref(false)
+onMounted(async () => {
+  if (MOCK) return
+  try {
+    googleReady.value = (await http<{ configured: boolean }>('/v1/auth/google/status')).configured
+  } catch {
+    googleReady.value = false
+  }
 })
 
 /* ================= 進場節拍 =================
@@ -291,6 +310,13 @@ function goLine() {
   busy.value = 'line'
   auth.loginWithLine()   // 整頁導向，不會回來這裡
 }
+
+function goGoogle() {
+  if (busy.value) return
+  haptic('tap')
+  busy.value = 'google'
+  auth.loginWithGoogle()  // 同上，整頁導向
+}
 </script>
 
 <template>
@@ -419,27 +445,60 @@ function goLine() {
         <p class="demo mono">展示版：登入與註冊皆為模擬，按下即進站</p>
       </template>
 
-      <!-- API：LINE 為主、Email 為備援 -->
+      <!-- API：社群登入是主路，Email + 密碼是次要但**不收起來**的選項
+           ================================================================
+           為什麼社群優先：這個站不做忘記密碼（平台沒有寄信管道，
+           寄不出去的重設信等於沒有那條路）。所以每多一個人用密碼註冊，
+           就多一個「忘記密碼＝永久進不來」的人。把 LINE／Google 放在
+           最上面、最大、最先看到，是在減少之後那條死路上的人數。
+
+           為什麼 Email 那組**不折疊**（這是這次改動最容易做錯的一點）：
+           折疊起來省的是版面，付的代價卻是「已經有密碼帳號的人找不到
+           自己的登入方式」。那不是美感問題，是他當下進不來 —— 比版面
+           擁擠嚴重得多，而且受害的正好是最沒有退路的那群人（沒綁社群、
+           只有密碼）。所以改的是**視覺份量**不是**可見性**：
+             1 LINE      實心品牌色，最高對比 —— 一眼就是「按這裡」
+             2 Google    同樣實心、同樣尺寸（沒設定憑證時整顆不存在）
+             ── 或用 Email ──  一條有字的分隔線，明說下面是另一類
+             3 Email 表單 低對比描邊、字級小一級、按鈕不用主色
+             4 登入不了？ 文字連結，指向人工客服
+             5 先逛逛     不登入直接看，另一種動作，離最遠
+           五層各差一級，眼睛由上往下自然遞減，不需要展開任何東西。 -->
       <template v-else>
-        <!-- 兩個登入入口是同一組決定，做成一樣寬高並列；
-             「先逛逛」是不登入直接看，屬於另一種動作，所以留在外面當唯一的文字連結 -->
         <div class="authBox">
           <button type="button" class="btn auth line" :disabled="!!busy" @click="goLine">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3C6.5 3 2 6.6 2 11c0 3.9 3.5 7.2 8.2 7.9.3.1.8.2.9.5.1.3.1.7 0 1l-.1.9c0 .3-.2 1 .9.6s5.9-3.5 8.1-6c1.5-1.6 2-3.3 2-4.9C22 6.6 17.5 3 12 3z"/></svg>
             {{ busy === 'line' ? '前往 LINE…' : '用 LINE 登入' }}
           </button>
-          <button v-if="!showEmail" type="button" class="btn auth email" @click="showEmail = true">
-            用 Email 登入或註冊
+
+          <!-- 只有伺服器真的設定了憑證才畫出來（見上面 googleReady）。
+               標準的四色 G 直接畫成 SVG，跟站上其他圖示一致，不外連圖檔：
+               外連會多一趟第三方請求，而且那個網域還得進 CSP 白名單。 -->
+          <button
+            v-if="googleReady" type="button" class="btn auth google"
+            :disabled="!!busy" @click="goGoogle"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+            </svg>
+            {{ busy === 'google' ? '前往 Google…' : '用 Google 登入' }}
           </button>
 
-          <form v-if="showEmail" class="emailForm" @submit.prevent="goIn('login')">
+          <!-- 有字的分隔線。純線條只會讀成「排版留白」，寫上字才說得出
+               下面是另一類入口，而不是上面那組的延伸。 -->
+          <p class="orLine"><span>或用 Email</span></p>
+
+          <form class="emailForm" @submit.prevent="goIn('login')">
             <input v-model="email" type="email" autocomplete="email" placeholder="Email" required />
             <input v-model="password" type="password" autocomplete="current-password" placeholder="密碼（至少 8 碼）" required minlength="8" />
             <div class="formRow">
-              <button type="submit" class="btn auth primary" :disabled="!!busy">
+              <button type="submit" class="btn auth sub" :disabled="!!busy">
                 {{ busy === 'login' ? '登入中…' : '登入' }}
               </button>
-              <button type="button" class="btn auth" :disabled="!!busy" @click="goIn('register')">
+              <button type="button" class="btn auth sub" :disabled="!!busy" @click="goIn('register')">
                 {{ busy === 'register' ? '建立中…' : '註冊' }}
               </button>
             </div>
@@ -447,6 +506,16 @@ function goLine() {
         </div>
 
         <p v-if="loginErr" class="loginErr" role="alert">{{ loginErr }}</p>
+
+        <!-- 進不來的人唯一的出口。
+             這個站不做忘記密碼：平台沒有寄信服務，寄不出去的重設信只是
+             一條看起來存在、實際上走不通的路（docs/open-issues.md A-1b）。
+             但「用 Email + 密碼註冊、又沒綁社群、然後忘記密碼」的人
+             確實會存在，而他在畫面上必須看得到下一步 —— 否則他的下一步
+             就是放棄，或是到處找不到人。所以出口不是自動化的重設信，
+             是人工客服，而且是**不需要先登入**就進得去的那條（/contact）。 -->
+        <RouterLink to="/contact" class="stuck">登入不了？聯絡客服</RouterLink>
+
         <RouterLink :to="{ name: 'home' }" class="peek solo">先逛逛 →</RouterLink>
       </template>
     </main>
@@ -924,19 +993,44 @@ function goLine() {
 }
 .btn.auth.line { background: #06C755; border-color: #06C755; color: #fff; }
 .btn.auth.line svg { width: 19px; height: 19px; fill: currentColor; flex: none; }
-.btn.auth.email {
-  background: color-mix(in srgb, #cdbdf0 9%, transparent);
-  border-color: color-mix(in srgb, #cdbdf0 40%, transparent);
-  color: #e8e2f4;
+/* Google 的按鈕規範是白底深字 + 四色 G，不要染成站上的紫。
+   跟 LINE 並列時兩顆都是實心、同尺寸 —— 它們是同一層級的選擇，
+   誰在上面只是「哪個使用者比較多」，不是主次。
+   白底在這張深色頁上對比極高，這正是社群優先要的重量。 */
+.btn.auth.google { background: #fff; border-color: #fff; color: #1f1f1f; font-weight: 600; }
+/* fill 寫在各 path 上（四色），這裡只給尺寸，不能用 currentColor 覆蓋 */
+.btn.auth.google svg { width: 19px; height: 19px; flex: none; }
+/* 次要按鈕：描邊、低對比、不用主色。跟上面兩顆實心的差一級，
+   但仍然是按鈕形狀 —— 它是真的入口，不是連結。 */
+.btn.auth.sub {
+  background: color-mix(in srgb, #cdbdf0 8%, transparent);
+  border-color: color-mix(in srgb, #cdbdf0 32%, transparent);
+  color: #cdbdf0;
+  font-size: 14px;
+  /* 44px 是觸控門檻的底線；社群那兩顆 50px，差 6px 讀得出層級又不失手感 */
+  min-height: 46px;
 }
 @media (hover: hover) {
   .btn.auth.line:hover { background: #05b34c; border-color: #05b34c; box-shadow: 0 10px 26px rgba(6, 199, 85, .3); }
-  .btn.auth.email:hover { background: color-mix(in srgb, #cdbdf0 12%, transparent); border-color: color-mix(in srgb, #cdbdf0 46%, transparent); }
+  .btn.auth.google:hover { background: #f1f1f1; border-color: #f1f1f1; box-shadow: 0 10px 26px rgba(255, 255, 255, .18); }
+  .btn.auth.sub:hover { background: color-mix(in srgb, #cdbdf0 13%, transparent); border-color: color-mix(in srgb, #cdbdf0 45%, transparent); color: #e8e2f4; }
+}
+
+/* 有字的分隔線。兩條線由 ::before / ::after 撐開剩餘寬度，
+   中間的字自己佔位 —— 不用固定寬度，換文案不會歪。 */
+.orLine {
+  display: flex; align-items: center; gap: 12px;
+  margin: 6px 0 2px;
+  font-size: 12px; letter-spacing: .08em; color: color-mix(in srgb, #cdbdf0 62%, transparent);
+}
+.orLine::before, .orLine::after {
+  content: ''; flex: 1; height: 1px;
+  background: color-mix(in srgb, #cdbdf0 22%, transparent);
 }
 
 .emailForm { display: grid; gap: 10px; }
 .emailForm input {
-  width: 100%; min-height: 50px; padding: 10px 16px; font-size: 15px;
+  width: 100%; min-height: 46px; padding: 10px 16px; font-size: 15px;
   background: color-mix(in srgb, #0b0716 55%, transparent);
   border: 1px solid color-mix(in srgb, #cdbdf0 22%, transparent);
   border-radius: var(--pill); color: #e8e2f4;
@@ -954,6 +1048,29 @@ function goLine() {
 .formRow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 
 .loginErr { margin: 12px 0 0; font-size: 13px; color: var(--danger); }
+
+/* 「登入不了？」—— 帳號進不來的人的出口。
+   刻意排在錯誤訊息底下、Email 那組的正下方：會需要它的人，
+   是剛剛在上面那組打了密碼卻進不來的人，視線本來就停在那裡。
+   比「先逛逛」重（它是求助，不是閒逛），但仍然是文字連結不是按鈕 ——
+   做成按鈕會跟上面三個真正的入口搶層級。
+   觸控目標一樣用內距長出 44px、負外距把版面收回來（同 .peek、同頁尾）。 */
+.stuck {
+  display: inline-block;
+  margin: 14px 0 -12px;
+  padding: 12px 10px;
+  font-size: 13.5px; color: #cdbdf0;
+  /* 底線用 text-decoration 不用 border-bottom：border 會跟著上面那 10px
+     左右內距一起拉長，變成一條比字還寬、看起來像分隔線的橫槓
+     （觸控目標是靠內距長出來的，那段內距不該被畫出來）。 */
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, #cdbdf0 45%, transparent);
+  text-underline-offset: 4px;
+  transition: color .18s, text-decoration-color .18s;
+}
+@media (hover: hover) {
+  .stuck:hover { color: #fff; text-decoration-color: #fff; }
+}
 .btn.big { padding: 14px 32px; font-size: 16px; }
 /* 本來主鈕有一支 breathe 光暈（box-shadow 無限迴圈）。拿掉了：
    box-shadow 動畫是每一幀主執行緒重繪，而且是永遠 —— 實測它是整頁
