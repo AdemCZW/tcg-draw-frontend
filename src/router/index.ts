@@ -127,6 +127,16 @@ export const router = createRouter({
       meta: { depth: 1, title: '開卡演出試看' }
     },
     {
+      /* 訓練家卡。跟 /fx、/dev/card-picker 同一個性質：這一輪先不掛進導覽，
+         知道網址的人才進得來 —— 入口要放哪還沒決定，而它的第一步是
+         「請允許相機」，那種頁面不適合在導覽列上被誤觸。
+         整頁 lazy-load（跟這裡每一條路由一樣），它的透視變換、樣板圖與
+         遮罩都只會出現在自己的 chunk 裡，主 bundle 不受影響。 */
+      path: '/trainer-card', name: 'trainer-card',
+      component: () => import('@/pages/TrainerCardPage.vue'),
+      meta: { depth: 1, title: '訓練家卡' }
+    },
+    {
       /* 卡片挑選器的試跑頁。跟 /fx 同一個性質：開發與驗收用，不掛進導覽。
          挑選器要接進開池表單之前，先在這裡單獨驗它帶回的卡片身分對不對。 */
       path: '/dev/card-picker', name: 'dev-card-picker',
