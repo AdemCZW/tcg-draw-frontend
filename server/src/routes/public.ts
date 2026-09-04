@@ -767,42 +767,24 @@ pub.post('/listings', requireAuth, async c => {
     const [u] = await tx`select name, handle from users where id = ${me}`
     const id = 'l-' + randomBytes(5).toString('hex')
     const card = pz.card as { certNo?: string | null }
-    try {
-      /* previous_status 抄的是**這一刻**的 pz.status（上面那個 for update
-         的快照），不是等一下寫進去的 'listed'。它是下架時唯一能把卡放回
-         原狀的依據 —— delivery 反推不出來（in_book 與 shipped 共用 'ship'），
-         見 delist 那一段與 migration 032。 */
-      await tx`insert into listings (id, card, price, seller_id, seller_name, delivery, cert_no, prize_id, previous_status)
-               values (${id}, ${pz.card as never}, ${price}, ${me}, ${(u?.name as string) ?? (u?.handle as string) ?? '我'},
-                       ${delivery}, ${card.certNo ?? null}, ${prizeId}, ${pz.status as string})`
-    } catch (e) {
-      /* 依撞到的是哪一條索引分開講。
-         原本這個 catch 把所有錯誤都說成「這張卡已經在市場上了」，
-         而那句話對其中一種情況是假的：
-
-         listings_cert_live 是 unique(cert_no) where status='live'，
-         它擋的是「鑑定編號」不是「這一列卡」。同一個 pool_prizes 列如果
-         total > 1 而 card 又帶了 certNo（種子資料的「全 PSA 10」池就是這樣，
-         例如 flareonPSA 一個編號開 15 籤），那 15 位得主的卡在資料上
-         共用同一個鑑定編號 —— 第一個人上架之後，其餘 14 個人上架都會被擋，
-         而且被告知「這張卡已經在市場上了」。他們的卡根本沒上架過，
-         照著這句話去市場也找不到自己的卡，等於一個無解又指錯方向的錯誤。
-
-         真正的病灶在開池那一端（一個鑑定編號只對應一張實體卡，
-         不該允許 certNo + total > 1），那要在 pools 的建池驗證補。
-         這裡至少要說實話，並且不要把其他錯誤（連線斷、資料格式）
-         一起冒充成 409 —— 那會把伺服器的問題講成使用者的問題。 */
-      const pg = e as { code?: string; constraint_name?: string }
-      if (pg.code !== '23505') throw e
-      if (pg.constraint_name === 'listings_cert_live') {
-        return {
-          error: 'WRONG_STATE',
-          message: '這個鑑定編號目前已經有一筆有效掛單，同一個編號同時只能上架一張',
-          status: 409
-        }
-      }
-      return { error: 'WRONG_STATE', message: '這張卡已經在市場上了', status: 409 }
-    }
+    /* cert_no 寫**正規化過**的值，而且優先用 prizes 那一欄。
+       理由是唯一索引比對的是欄位原值：卡冊那側存的是 nullif(btrim(...))
+       之後的 '12345678'，這裡若原樣搬 card jsonb 裡的 ' 12345678'，
+       同一張實體卡在兩張表就是兩個不同的鍵，市場那條防線等於漏掉一格。
+       prizes.grader / prizes.cert_no 是 021 加、由抽卡與卡冊登記兩條路
+       正規化後寫入的欄位；021 之前的舊列那兩欄可能是 null，
+       所以退回 card jsonb 現算（跟 preflight.ts 的掃描同一套規則）。
+       listings.grader 不在這裡寫 —— 它是 migration 038 的產生欄位，
+       值一律由 card jsonb 算出來，物理上不可能忘記填或跟 card 不一致。 */
+    const certNo = (pz.cert_no as string | null)
+      ?? (typeof card.certNo === 'string' ? card.certNo.trim() || null : null)
+    /* previous_status 抄的是**這一刻**的 pz.status（上面那個 for update
+       的快照），不是等一下寫進去的 'listed'。它是下架時唯一能把卡放回
+       原狀的依據 —— delivery 反推不出來（in_book 與 shipped 共用 'ship'），
+       見 delist 那一段與 migration 032。 */
+    await tx`insert into listings (id, card, price, seller_id, seller_name, delivery, cert_no, prize_id, previous_status)
+             values (${id}, ${pz.card as never}, ${price}, ${me}, ${(u?.name as string) ?? (u?.handle as string) ?? '我'},
+                     ${delivery}, ${certNo}, ${prizeId}, ${pz.status as string})`
     /* 兩種交付方式都要把卡標成已上架。原本只有 vault 標 —— 需寄送的卡
        上架後 prizes.status 還是 'shipped'，而上面那個 delivery 判斷正好
        允許 'shipped' 上架，所以同一張卡可以一直重複上架。
@@ -812,6 +794,33 @@ pub.post('/listings', requireAuth, async c => {
     await tx`update prizes set status = 'listed' where id = ${prizeId}`
     const [l] = await tx`select * from listings where id = ${id}`
     return { listing: l }
+  }).catch(e => {
+    /* ── 為什麼這個 catch 在交易**外面** ────────────────────────────
+       原本它包在 tx 裡（`try { insert } catch { return 409 }`）。
+       實測那條路根本走不到：唯一約束一撞，交易在 Postgres 那端就已經
+       中止，postgres.js 讓整個 sql.begin 連同這個被接住的錯誤一起 reject
+       —— 呼叫端拿到的是 **500 Internal Server Error**，連訊息都沒有。
+       routes/cardbook.ts 的 23505 是在 sql.begin 外面接的，那條是對的，
+       這裡改成同一個形狀。
+
+       依撞到的是哪一條索引分開講，而且不把其他錯誤（連線斷、資料格式）
+       冒充成 409 —— 那會把伺服器的問題講成使用者的問題。 */
+    const pg = e as { code?: string; constraint_name?: string }
+    if (pg.code !== '23505') throw e
+    if (pg.constraint_name === 'listings_cert_live') {
+      /* 唯一鍵是 (grader, cert_no)（migration 038）。訊息要點名鑑定公司：
+         「這個編號已經有人上架了」對拿著另一家同號卡的人是假的，而他
+         沒有任何自救的路 —— 他改不了印在殼上的號碼。現在同一家同一個
+         編號才會走到這裡，訊息就要說得出是哪一家。 */
+      return {
+        error: 'WRONG_STATE',
+        message: '這張卡（同一家鑑定公司的同一個鑑定編號）目前已經有一筆有效掛單 ——'
+          + '同一張實體卡同時只能上架一次。不同鑑定公司的同號卡不受影響；'
+          + '如果這張卡確實在你手上，請到客服中心（/support）申請接管。',
+        status: 409
+      }
+    }
+    return { error: 'WRONG_STATE', message: '這張卡已經在市場上了', status: 409 }
   })
   if ('error' in r) return c.json(r, r.status as 404 | 409)
   const l = r.listing!

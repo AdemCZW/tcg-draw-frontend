@@ -172,9 +172,19 @@ async function scan(): Promise<{ prizes: Dupes; poolPrizes: Dupes; listings: Dup
        —— 一張卡在站內轉手三次就是三列 sold，那是正常的交易歷史，
        不是一卡多賣。把它算成髒資料，索引就再也建不起來了。
 
-       這張表理論上已經有 listings_cert_live 擋著，掃它是為了兩件事：
-       那條索引沒有 grader（不同鑑定公司撞號會被誤擋，也代表它的
-       唯一性語意跟我們要的不一樣），以及萬一哪天它被刪掉要有人發現。 */
+       這張表已經有 listings_cert_live 擋著，而且 migration 038 之後
+       它的唯一鍵跟這裡（也跟 prizes_cert_alive）**是同一個** ——
+       (grader, cert_no)，只是多了 status='live' 的述詞。038 之前它是
+       unique(cert_no)：少了 grader，PSA 與 BGS 的同號卡會被誤擋（U-2）。
+       兩側對齊之後仍然要掃它，理由剩下兩個：市場的述詞只管 live，
+       跨越 sold／delisted 的重複它管不到；以及萬一哪天索引被刪掉
+       要有人發現。
+
+       這裡的 grader 現算 nullif(upper(btrim(card->>'grader')), '')，
+       跟 038 那個產生欄位是同一個運算式（那一欄就是它 stored 起來的）。
+       刻意不直接讀 listings.grader：預檢是在啟動時跑的，萬一有人
+       沒跑遷移就啟動，讀一個不存在的欄位會讓整支預檢連 prizes 那條
+       索引一起放棄。現算的版本在新舊 schema 上都跑得起來。 */
     const [listings] = await tx`
       with eff as (
         select nullif(upper(btrim(card->>'grader')), '') as g,
@@ -288,6 +298,9 @@ export async function certUniquenessPreflight(): Promise<void> {
       log(`附註：有 ${noGrader} 列有鑑定編號卻沒有鑑定公司(grader)。`)
       log('      唯一鍵是 (grader, cert_no)，grader 為空的列不受索引保護（null 不等於 null），')
       log('      也就是說這些卡目前仍然可以被登記第二次。')
+      log('      市場那側（listings_cert_live，migration 038）用的是同一個鍵，破口也一樣 ——')
+      log('      兩側現在至少會給出同一個答案。新進來的資料不會再有這種列：')
+      log('      routes/cardbook.ts 的 GRADER_REQUIRED 擋住「有編號沒有鑑定公司」的登記。')
     }
   } catch (e) {
     /* 這裡是最後一道：預檢再怎麼失敗都不能影響伺服器。
