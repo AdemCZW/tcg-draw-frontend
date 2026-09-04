@@ -412,7 +412,13 @@ function goGoogle() {
 
            不用「寶可夢」當主標：那是別人的商標，放成自己的招牌會讀起來
            像官方授權或聯名，跟「我們賣寶可夢卡」這種描述性使用不是同一件事。
-           主標講的是這個站是什麼（鑑定卡的交易場），品類留在說明行。
+           主標講的是這個站在做什麼（抽卡 + 交易），品類留在說明行。
+           2026-09-04 從 GRADED / CARD EXCHANGE 換掉，兩個理由：
+           (1) **不準確** —— 裸卡在這站是一等公民（市場篩選有「未鑑定」、
+               開池收裸卡、A-4 整輪就是裸卡的庫存防線）。首屏第一個字打
+               GRADED 等於告訴人「這裡只賣鑑定卡」，把一半的商品擋在門外。
+           (2) GRADED 單獨一行是**形容詞**，自己不成句 —— 手機上第一眼
+               看到的就是它，而它什麼都沒說。
 
            標題只演一次（本來綁 :key="cycle"，每輪 30 秒重演一遍）。
            shine="once" 與 glitch-every="0" 關掉待機時的無限迴圈 ——
@@ -420,8 +426,8 @@ function goGoogle() {
            delay 對齊門開的那一拍：字是被門讓開之後才升起來的。 -->
       <h1 class="title">
         <KineticTitle
-          :lines="['GRADED', 'CARD EXCHANGE']"
-          label="Graded card exchange"
+          :lines="['CARD', 'DRAW &amp; MARKET']"
+          label="Card draw and market"
           :stagger="24"
           :delay="190"
           shine="once"
@@ -949,7 +955,7 @@ function goGoogle() {
   letter-spacing: -.028em;
 }
 .title :deep(.r1) {
-  /* 15 個字 × 寬字距，在 375px 上必須夠小才不會爆行 —— 這一行的角色是
+  /* 13 個字 × 寬字距，在 375px 上必須夠小才不會爆行 —— 這一行的角色是
      襯托主標的細長副標，小反而對 */
   font-size: clamp(11px, 2.9vw, 24px);
   font-weight: 600;
@@ -961,13 +967,15 @@ function goGoogle() {
 }
 /* 中文那一行才是真的要讀的資訊 */
 .zh {
-  margin: 14px 0 0;
+  /* 6px 而不是 14px：這兩行是主標的說明，不是另一段。離太遠會讀成
+     「標題」跟「一段獨立的文案」兩塊；靠近才會讀成同一組。 */
+  margin: 6px 0 0;
   font-size: clamp(15px, 3.6vw, 18px);
   font-weight: 500;
   color: #e8e2f4;
   letter-spacing: .02em;
 }
-.tag { margin: 6px 0 0; font-size: 13.5px; letter-spacing: .06em; }
+.tag { margin: 4px 0 0; font-size: 13.5px; letter-spacing: .06em; }
 
 .acts { display: grid; grid-auto-flow: column; gap: 12px; align-items: center; margin-top: 8px; }
 
