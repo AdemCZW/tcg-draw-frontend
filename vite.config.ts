@@ -54,8 +54,17 @@ function cspPlugin(env: Record<string, string | undefined>): Plugin {
            少了它整條卡面上傳在正式建置下會被 CSP 直接擋掉 —— 而且後端有沒有那條路由
            完全無關，症狀是破圖加一行 CSP 違規，跟「端點壞了」長得一模一樣。
            （下一行的 connect-src 一直都有 api，這一行漏掉。）
-           r2Public 也一定要設：/raw 是 302 導到 R2，目的地同樣受這條規則管。 */
-        ...[`img-src ${has(`'self'`, 'data:', 'blob:', api, 'https://assets.tcgdex.net', r2Public).join(' ')}`],
+
+           **R2 的兩個網域都要放進 img-src，因為 /raw 是 302 導到 R2，目的地同樣
+           受這條規則管，而「導去哪裡」取決於 bucket 有沒有開公開讀取：**
+             有公開網域（R2_PUBLIC_URL 有設）→ 導到 r2Public
+             沒有（正式環境現況）           → publicUrlOf() 回 null，退回簽名網址，
+                                              導到 r2Upload（<帳號>.r2.cloudflarestorage.com）
+           2026-09-04 實測 Railway：R2_ACCOUNT_ID/BUCKET/金鑰都有值，唯獨
+           R2_PUBLIC_URL 沒設 —— 也就是走的正是第二條。而 r2Upload 當時只在
+           connect-src，於是每一張使用者上傳的圖都被 img-src 擋掉。
+           兩個都列進來，bucket 之後開不開公開讀取都不會再壞。 */
+        ...[`img-src ${has(`'self'`, 'data:', 'blob:', api, 'https://assets.tcgdex.net', r2Public, r2Upload).join(' ')}`],
         ...[`connect-src ${has(`'self'`, api, 'https://api.tcgdex.net', r2Upload).join(' ')}`],
         /* 這三條是低成本高價值的：沒有 <object>／<embed>、
            <base> 不能被改寫（防止相對路徑被劫持）、表單只能送回自己站上。 */

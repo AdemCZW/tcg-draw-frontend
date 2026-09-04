@@ -59,11 +59,11 @@ jobs:
           VITE_R2_PUBLIC_URL: ${{ vars.VITE_R2_PUBLIC_URL }}
           VITE_R2_UPLOAD_ORIGIN: ${{ vars.VITE_R2_UPLOAD_ORIGIN }}
           CSP_EXPECT_API: 'true'
-          # 2026-09-04：正式站實測 CSP 本來就沒有 R2 網域，池的資料裡也沒有任何 R2
-          # 來源 —— R2 從來沒在正式環境用起來過。所以這次刻意宣告「不預期有 R2」。
-          # 代價：目錄外的自訂卡登記不了（需要 card-front 上傳，presign 會回 503）。
-          # 接上 R2 的那一天：填好兩個 Variable，把這行改回 'true' 並 commit。
-          CSP_EXPECT_R2: 'false'
+          # 2026-09-04：查了 Railway，R2_ACCOUNT_ID / R2_BUCKET / 兩把金鑰都有值，
+          # bucket 也已經有物件 —— R2 一直是接好的，壞的是前端 CSP。改回 'true'。
+          # 註：只有 VITE_R2_UPLOAD_ORIGIN 是必要的。VITE_R2_PUBLIC_URL 刻意留空，
+          # 因為 bucket 不開公開讀取（出貨照與開箱影片含個資），/raw 走簽名網址。
+          CSP_EXPECT_R2: 'true'
 
       # 404.html（SPA 深層連結的退回）現在由 scripts/seo.mjs 產生，
       # build:pages 裡已經包含。這裡原本有一行 cp dist/index.html dist/404.html，

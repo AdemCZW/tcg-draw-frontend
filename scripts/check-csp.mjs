@@ -155,28 +155,47 @@ if (EXPECT_API && !api) {
   }
 }
 
-/* ── 3. R2：公開讀取網域要在 img-src，上傳網域要在 connect-src ───────
-   /v1/files/:id/raw 是 302 導到 R2，導過去的目的地一樣受 img-src 管；
-   直傳是對 <帳號>.r2.cloudflarestorage.com 的預簽名 PUT，受 connect-src 管。
-   這兩個是不同主機，少任何一個就是「圖破掉」或「上傳永遠失敗」。 */
-const r2Checks = [
-  ['VITE_R2_PUBLIC_URL', r2Public, 'img-src', '卡片圖片（/raw 會 302 導到這裡）'],
-  ['VITE_R2_UPLOAD_ORIGIN', r2Upload, 'connect-src', 'R2 預簽名直傳 PUT']
-]
-for (const [varName, value, dir, why] of r2Checks) {
-  if (!value) {
-    if (EXPECT_R2) {
-      fail(
-        `CSP_EXPECT_R2=true 但 ${varName} 是空的 —— CSP 的 ${dir} 因此少了 R2 網域，` +
-        `${why} 會被瀏覽器靜靜擋掉。請到 GitHub repo 的 Settings → Secrets and variables → Actions → Variables 設定 ${varName}。`
-      )
-    } else {
-      skip(`${varName} 沒有值，且這次建置沒有宣告 CSP_EXPECT_R2 —— 視為「本機／尚未接 R2 的環境」，不檢查 ${dir} 的 R2 網域`)
-    }
-    continue
+/* ── 3. R2 ─────────────────────────────────────────────────────────
+   兩個網域是不同主機，用途也不同：
+
+     VITE_R2_UPLOAD_ORIGIN  <帳號>.r2.cloudflarestorage.com
+       · connect-src —— 預簽名直傳 PUT
+       · img-src     —— bucket **沒有**公開讀取網域時，/raw 會 302 導到
+                        這個主機上的簽名網址（見下）
+       **必要。** 沒有它，上傳一定壞；而在目前的正式設定下圖也一定破。
+
+     VITE_R2_PUBLIC_URL     公開讀取網域（r2.dev 或自訂網域）
+       · img-src     —— bucket 有開公開讀取時，/raw 導到這裡
+       **選填。** 2026-09-04 實測 Railway：R2_ACCOUNT_ID/BUCKET/金鑰都有值，
+       唯獨 R2_PUBLIC_URL 沒設 —— routes/files.ts 的
+       `publicUrlOf(key) ?? await presignGet(key)` 於是一律退回簽名網址。
+       而那是**刻意的**：ship-photo 拍得到面單上的姓名電話地址、unbox-video
+       拍得到家裡，開公開讀取等於那些物件只要 key 外流就永久可讀。
+       所以這裡不能要求它一定有值 —— 逼人去開公開 bucket 才能過檢查，
+       是拿隱私換一條綠燈。 */
+if (!r2Upload) {
+  if (EXPECT_R2) {
+    fail(
+      'CSP_EXPECT_R2=true 但 VITE_R2_UPLOAD_ORIGIN 是空的 —— CSP 的 connect-src 與 img-src 因此都少了 R2 網域，' +
+      'R2 預簽名直傳 PUT 會失敗，而且（在沒有公開讀取網域時）使用者上傳的圖會被瀏覽器靜靜擋掉。' +
+      '請到 GitHub repo 的 Settings → Secrets and variables → Actions → Variables 設定 VITE_R2_UPLOAD_ORIGIN。'
+    )
+  } else {
+    skip('VITE_R2_UPLOAD_ORIGIN 沒有值，且這次建置沒有宣告 CSP_EXPECT_R2 —— 視為「本機／尚未接 R2 的環境」，不檢查 R2 網域')
   }
-  if (has(dir, value)) ok(`${dir} 含有 ${varName} ${value}`)
-  else fail(`${dir} 少了 ${varName} 的網域 ${value}（變數有值卻沒進 CSP，代表 cspPlugin 或建置環境有問題）。目前：${dir} ${list(dir)}`)
+} else {
+  for (const dir of ['connect-src', 'img-src']) {
+    if (has(dir, r2Upload)) ok(`${dir} 含有 VITE_R2_UPLOAD_ORIGIN ${r2Upload}`)
+    else fail(`${dir} 少了 VITE_R2_UPLOAD_ORIGIN 的網域 ${r2Upload}（變數有值卻沒進 CSP，代表 cspPlugin 或建置環境有問題）。目前：${dir} ${list(dir)}`)
+  }
+}
+
+if (!r2Public) {
+  skip('VITE_R2_PUBLIC_URL 沒有值 —— bucket 沒有公開讀取網域，/raw 會退回簽名網址（正式環境現況，刻意如此：出貨照與開箱影片含個資，不該公開可讀）')
+} else if (has('img-src', r2Public)) {
+  ok(`img-src 含有 VITE_R2_PUBLIC_URL ${r2Public}`)
+} else {
+  fail(`img-src 少了 VITE_R2_PUBLIC_URL 的網域 ${r2Public}（變數有值卻沒進 CSP，代表 cspPlugin 或建置環境有問題）。目前：img-src ${list('img-src')}`)
 }
 
 /* ── 4. 其他 HTML 入口要有一模一樣的 CSP ────────────────────────────
