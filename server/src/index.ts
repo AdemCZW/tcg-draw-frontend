@@ -17,6 +17,7 @@ import { pools } from './routes/pools.js'
 import { prizes } from './routes/prizes.js'
 import { cardbook } from './routes/cardbook.js'
 import { line } from './routes/line.js'
+import { google } from './routes/google.js'
 import { admin } from './routes/admin.js'
 import { pub } from './routes/public.js'
 import { files } from './routes/files.js'
@@ -159,6 +160,9 @@ app.route('/v1/prizes', prizes)
    把公開端點一起變成要登入（同 /v1/seller 那條的理由）。 */
 app.route('/v1/cardbook', cardbook)
 app.route('/v1/auth/line', line)
+/* Google 登入。憑證（GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET）沒設時整條路回
+   503 NOT_CONFIGURED，前端問過 /status 才畫按鈕 —— 掛上去不等於開啟。 */
+app.route('/v1/auth/google', google)
 app.route('/v1/admin', admin)
 /* 自我檢測（獨立檔案的理由見 routes/monitor.ts 檔頭） */
 app.route('/v1/admin/monitor', monitor)

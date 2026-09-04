@@ -64,12 +64,27 @@ const MAX_CARD_UPLOAD_IP = 120
    一樣是獨立的桶：OAuth start 被擋不該連帶鎖住登入或卡冊登記。 */
 const MAX_OAUTH_START_IP = 40
 
+/* 公開聯絡表單（contact-ip:）。它跟上面幾個都不同：那些防的是「機器人灌表」，
+   這一支還要防「客服被垃圾訊息淹掉」—— 而且它是全站唯一給**沒有帳號的人**
+   的出口，所以誤擋的代價特別高：擋掉的人沒有第二條路可以找我們。
+
+   10 次／15 分鐘：一個需要幫忙的人送 1 則、講不清楚再補 1–2 則就到頂了；
+   NAT 後面要有 10 個不同的人在同一個 15 分鐘內各自來找客服才會撞到，
+   而客服訊息的發生率遠低於卡冊登記（那件事一個下午 40 次是常態）。
+
+   為什麼要特地寫這一行：contact-ip: 原本沒有進這張表，於是落到 MAX_FAILS_IP
+   的 40 —— 那個數字是**繼承來的不是挑的**，而繼承一個為登入失敗設計的門檻
+   來管客服表單，只是剛好還沒出事。真正的第二道防線是 routes/contact.ts 的
+   日配額（10 則／24 小時），這一層擋的是同一個 15 分鐘內的爆量。 */
+const MAX_CONTACT_IP = 10
+
 const maxFor = (key: string) =>
   key.startsWith('email:') ? MAX_FAILS_EMAIL
   : key.startsWith('reg-ip:') ? MAX_REG_IP
   : key.startsWith('card-upload-user:') ? MAX_CARD_UPLOAD_USER
   : key.startsWith('card-upload-ip:') ? MAX_CARD_UPLOAD_IP
   : key.startsWith('oauth-start-ip:') ? MAX_OAUTH_START_IP
+  : key.startsWith('contact-ip:') ? MAX_CONTACT_IP
   : MAX_FAILS_IP
 
 /* 桶不同、時間窗也不同：登入是短窗（打錯了 15 分鐘後再試），
