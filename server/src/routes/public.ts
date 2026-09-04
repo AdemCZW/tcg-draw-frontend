@@ -7,7 +7,7 @@ import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
-import { PageQuery, decodeCursor, encodeCursor, slicePage } from '../pagination.js'
+import { MAX_LIMIT, PageQuery, decodeCursor, encodeCursor, slicePage } from '../pagination.js'
 import { POINTS_INPUT_MAX, pointsInputMaxText } from '../limits.js'
 import { publicCard } from '../card-public.js'
 import { walletOf } from '../money.js'
@@ -18,33 +18,134 @@ export const pub = new Hono()
 /** 得主代號遮罩：VD-3F2A → VD-3F** */
 const mask = (handle: string) => handle.replace(/^(VD-..).*$/, '$1**')
 
-async function sellerView(id: string) {
-  const [s] = await sql`select s.*, u.handle as user_handle from sellers s join users u on u.id = s.id where s.id = ${id}`
-  if (!s) return null
-  const [st] = await sql<{ pools_run: string; draws_settled: string; top_hits: string; top_advertised: string }[]>`
-    select
-      (select count(*) from pools where seller_id = ${id} and status in ('open','sold_out','revealed'))::text as pools_run,
-      (select count(*) from draws d join pools p on p.id = d.pool_id where p.seller_id = ${id})::text as draws_settled,
-      (select count(*) from prizes pz join pools p on p.id = pz.pool_id
-         where p.seller_id = ${id} and pz.tier in ('A','LAST'))::text as top_hits,
-      (select coalesce(sum(pp.total),0) from pool_prizes pp join pools p on p.id = pp.pool_id
-         where p.seller_id = ${id} and pp.tier in ('A','LAST') and p.status in ('open','sold_out','revealed'))::text as top_advertised
-  `
-  const [ship] = await sql<{ shipped: string; disputes: string; orders: string }[]>`
-    select
-      (select count(*) from orders where seller_id = ${id} and status = 'completed')::text as shipped,
-      (select count(*) from orders where seller_id = ${id} and closed_by in ('dispute-buyer','dispute-seller'))::text as disputes,
-      (select count(*) from orders where seller_id = ${id} and status not in ('escrowed','shipped','delivered','disputed'))::text as orders
-  `
-  const past = await sql`
-    select pz.card, pz.tier, p.title, pz.won_at, u.handle
-    from prizes pz join pools p on p.id = pz.pool_id join users u on u.id = pz.user_id
-    where p.seller_id = ${id} and pz.tier in ('A','LAST') order by pz.won_at desc limit 8
-  `
-  const [tot] = await sql<{ n: string }[]>`
-    select coalesce(sum(total_tickets),0)::text as n from pools where seller_id = ${id} and status in ('open','sold_out','revealed')
-  `
-  const totalTickets = Number(tot?.n ?? 0)
+/* =====================================================================
+   賣家列表（A-3）
+   ===================================================================== */
+
+/**
+ * 一位賣家的公開檢視。
+ *
+ * ── 為什麼統計是「一次查一批」而不是「一位一位查」（A-3）──────────────
+ *
+ * 改之前 `/v1/sellers` 是先撈全部賣家 id，再對每一位 `await sellerView()`，
+ * 而每一位又跑五條統計查詢 —— 而且是**循序**的，不是並行的。
+ * 本機實測（loopback、無網路延遲）：5 位 26 條／3.8ms，50 位 251 條／29ms，
+ * 200 位 1001 條／205ms，完全是 5N+1 的直線。正式環境每條查詢多 1–2ms 的
+ * 往返，200 位就是一兩秒，而且那一兩秒裡連線池被這一個請求佔著 ——
+ * 慢的不只是它自己，是同時間所有人的請求。
+ *
+ * 所以統計改成「給一批 id，回一批結果」：查詢條數與賣家數脫鉤（固定 4 條），
+ * 而且四條互不相依，用 Promise.all 一起送。
+ *
+ * ── 為什麼單筆那條路也走這裡 ────────────────────────────────────────
+ * `/v1/sellers/:id`（賣家頁）呼叫的是同一支，只是陣列裡只有一個 id。
+ * 不另寫一份的理由是**兩份實作會分岔**：統計的定義（哪些池算數、
+ * 爭議率的分母是什麼）只要有一邊改了，列表跟賣家頁就會給出不同的數字，
+ * 而那種不一致沒有任何測試會抓到，只有使用者會發現。
+ *
+ * 批次化沒有拖累單筆：`= any(array[一個 id])` 走的索引跟 `= id` 一樣，
+ * 而且原本那五條是循序 await，現在是四條並行 —— 單筆反而變快（實測見下）。
+ */
+
+/** 池／獎品／抽卡側的統計。一條查詢拿完，避免對同一組池重複掃描 */
+type PoolAgg = {
+  seller_id: string; pools_run: string; total_tickets: string
+  top_advertised: string; draws_settled: string; top_hits: string
+}
+type OrderAgg = { seller_id: string; shipped: string; disputes: string; orders: string }
+type PastRow = { seller_id: string; card: unknown; tier: string; title: string; won_at: string; handle: string }
+
+/** 「算得進統計」的池狀態。草稿與取消的池不該讓賣家的數字變好看，也不該變難看 */
+const LIVE_POOL = sql`p.status in ('open','sold_out','revealed')`
+
+async function sellerViews(ids: string[]) {
+  const out = new Map<string, ReturnType<typeof compose>>()
+  if (!ids.length) return out
+
+  /* 四條查詢彼此不相依，一起送。
+     `= any(${ids}::text[])` 的 ::text[] 是明寫的：不寫的話 postgres.js 也送得出去，
+     但參數型別留給 describe 階段去推斷正是這支路由的 new 排序游標踩過的坑
+     （見 sortSpec 的註解），這裡不重蹈覆轍。 */
+  const [rows, pools, orders, past] = await Promise.all([
+    /* join users 不是為了取欄位（handle 用的是 sellers 自己那份），
+       是為了保留改前的過濾語意：沒有對應 users 列的賣家不出現。 */
+    sql`select s.* from sellers s join users u on u.id = s.id where s.id = any(${ids}::text[])`,
+
+    /* 池側五個數字一次算完。
+       lateral 裡三個相關子查詢各自走 pool_id 索引（035 補上 prizes 那條），
+       比起「四條各自 join 一次 pools」少掃三遍池表。
+       filter (where ...) 讓「只算上線過的池」與「所有池」兩種分母共存於同一次掃描：
+       draws_settled / top_hits 的分母是**全部**的池（改前就是如此，
+       它們算的是已經發生的事實，不因為池後來被取消而消失）。 */
+    sql<PoolAgg[]>`
+      select p.seller_id,
+             count(*) filter (where ${LIVE_POOL})::text                         as pools_run,
+             coalesce(sum(p.total_tickets) filter (where ${LIVE_POOL}), 0)::text as total_tickets,
+             coalesce(sum(x.adv) filter (where ${LIVE_POOL}), 0)::text           as top_advertised,
+             coalesce(sum(x.draws), 0)::text                                     as draws_settled,
+             coalesce(sum(x.hits), 0)::text                                      as top_hits
+      from pools p
+      left join lateral (
+        select (select coalesce(sum(pp.total), 0) from pool_prizes pp
+                 where pp.pool_id = p.id and pp.tier in ('A','LAST'))  as adv,
+               (select count(*) from draws d where d.pool_id = p.id)   as draws,
+               (select count(*) from prizes pz
+                 where pz.pool_id = p.id and pz.tier in ('A','LAST'))  as hits
+      ) x on true
+      where p.seller_id = any(${ids}::text[])
+      group by p.seller_id
+    `,
+
+    sql<OrderAgg[]>`
+      select seller_id,
+             count(*) filter (where status = 'completed')::text                            as shipped,
+             count(*) filter (where closed_by in ('dispute-buyer','dispute-seller'))::text as disputes,
+             count(*) filter (where status not in ('escrowed','shipped','delivered','disputed'))::text as orders
+      from orders where seller_id = any(${ids}::text[])
+      group by seller_id
+    `,
+
+    /* 每位賣家最近 8 筆大獎。
+       改前是「一位賣家一條 limit 8」；批次版用 row_number() 在同一次掃描裡
+       各自取前 8。**partition by 一定要是 p.seller_id**——這裡正是批次聚合
+       最容易出錯的地方：少了它就變成「全體最近 8 筆」，第一位賣家看起來很威風，
+       其餘的人整欄空白。regress-sellers.ts 逐位比對就是為了守住這一點。
+
+       排序多帶一個 pz.id desc：改前只有 `order by won_at desc`，同一毫秒的
+       兩筆誰在前是未定義的，換一次查詢就可能換一個順序。加上主鍵當第二鍵
+       不改變任何「哪 8 筆」的答案，只是讓答案穩定、可比對。 */
+    sql<PastRow[]>`
+      select seller_id, card, tier, title, won_at, handle from (
+        select p.seller_id, pz.card, pz.tier, p.title, pz.won_at, u.handle,
+               row_number() over (partition by p.seller_id order by pz.won_at desc, pz.id desc) as rn
+        from prizes pz
+        join pools p on p.id = pz.pool_id
+        join users u on u.id = pz.user_id
+        where p.seller_id = any(${ids}::text[]) and pz.tier in ('A','LAST')
+      ) t where rn <= 8 order by seller_id, rn
+    `
+  ])
+
+  const poolBy = new Map(pools.map(r => [r.seller_id, r]))
+  const orderBy = new Map(orders.map(r => [r.seller_id, r]))
+  const pastBy = new Map<string, PastRow[]>()
+  for (const r of past) {
+    const list = pastBy.get(r.seller_id)
+    if (list) list.push(r); else pastBy.set(r.seller_id, [r])
+  }
+
+  for (const s of rows) {
+    const id = String(s.id)
+    out.set(id, compose(s, poolBy.get(id), orderBy.get(id), pastBy.get(id) ?? []))
+  }
+  return out
+}
+
+/** 把四份原料組成回應。這裡刻意不碰資料庫 —— 算式與查詢分開才驗得動 */
+function compose(
+  s: Record<string, unknown>, st: PoolAgg | undefined, ship: OrderAgg | undefined, past: PastRow[]
+) {
+  const totalTickets = Number(st?.total_tickets ?? 0)
   const drawsSettled = Number(st?.draws_settled ?? 0)
   const closedOrders = Number(ship?.orders ?? 0)
   return {
@@ -68,12 +169,74 @@ async function sellerView(id: string) {
   }
 }
 
-pub.get('/sellers', async c => {
-  const rows = await sql`select id from sellers order by joined_at`
-  const out = []
-  for (const r of rows) { const v = await sellerView(r.id as string); if (v) out.push(v) }
-  return c.json({ sellers: out })
+async function sellerView(id: string) {
+  return (await sellerViews([id])).get(id) ?? null
+}
+
+/**
+ * 賣家列表的分頁。
+ *
+ * ── 預設 20、上限 100 ──
+ * 上限沿用 pagination.ts 的 MAX_LIMIT（市場、卡冊都是同一條線），
+ * 只把預設從 24 調成 20 —— A-3 指定的數字，而且賣家卡片比掛單高，
+ * 一頁 20 張在 393px 上就是一屏半。
+ *
+ * ── 為什麼是游標不是 offset ──
+ * 理由跟市場同一條（見 pagination.ts 開頭）：賣家是往後加的，
+ * 排序鍵是 joined_at 遞增。多帶一個 id 當第二鍵是必要的 ——
+ * 改前是 `order by joined_at`，同一微秒進來的兩位賣家順序未定義，
+ * 拿它當游標邊界會漏人或重複。
+ *
+ * ── 這是公開端點 ──
+ * 沒有登入，參數要當成完全不可信：limit 超出範圍回 400 不截斷、
+ * 畸形游標回 400 不是 500。跟 /v1/listings 逐字同一套，不另發明一組。
+ */
+const SELLERS_LIMIT_DEFAULT = 20
+
+const SellersQuery = PageQuery.extend({
+  limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(SELLERS_LIMIT_DEFAULT)
 })
+
+pub.get('/sellers', async c => {
+  const parsed = SellersQuery.safeParse(c.req.query())
+  if (!parsed.success) {
+    return c.json({ error: 'BAD_REQUEST', message: `分頁參數不合法（limit 介於 1 到 ${MAX_LIMIT}）` }, 400)
+  }
+  const { limit, cursor } = parsed.data
+
+  let after: [string, string] | null = null
+  if (cursor) {
+    const p = decodeCursor(cursor, 2)
+    if (!p) return c.json({ error: 'BAD_CURSOR', message: '分頁游標不合法' }, 400)
+    after = [p[0]!, p[1]!]
+    /* 時間戳那一段先自己驗一次：`不是時間`::timestamptz 在資料庫端會拋 22007，
+       Hono 把它翻成 500 —— 使用者改壞一個游標不該被講成伺服器故障。 */
+    if (!/^\d{4}-\d\d-\d\d[ T]/.test(after[0])) {
+      return c.json({ error: 'BAD_CURSOR', message: '分頁游標不合法' }, 400)
+    }
+  }
+
+  /* joined_at 是 timestamptz（微秒），postgres.js 交給 JS 的 Date 只有毫秒 ——
+     拿 Date 組游標會把同一毫秒的相鄰兩位切錯邊。撈一份全精度字串專門給游標用，
+     回程再 ::text::timestamptz 原封送回去（理由同市場的 listed_at_text）。 */
+  const rows = await sql<{ id: string; joined_at_text: string }[]>`
+    select id, joined_at::text as joined_at_text from sellers
+    where true ${after ? sql`and (joined_at, id) > (${after[0]}::text::timestamptz, ${after[1]}::text)` : sql``}
+    order by joined_at asc, id asc
+    limit ${limit + 1}
+  `
+  const page = slicePage(rows, limit, r => encodeCursor([r.joined_at_text, r.id]))
+  const views = await sellerViews(page.items.map(r => r.id))
+
+  /* 回應鍵仍然叫 sellers（不是 items）：前端 stores/sellers.ts 讀的是 `r.sellers`，
+     改名就是當場把賣家膠囊弄不見。nextCursor 是新增欄位，舊前端讀不到它，
+     行為等同「只拿第一頁」——降級而不是壞掉。 */
+  return c.json({
+    sellers: page.items.map(r => views.get(r.id)).filter(Boolean),
+    nextCursor: page.nextCursor
+  })
+})
+
 pub.get('/sellers/:id', async c => c.json({ seller: await sellerView(c.req.param('id') ?? '') }))
 
 /** 最近的得獎動態，匿名化 */
