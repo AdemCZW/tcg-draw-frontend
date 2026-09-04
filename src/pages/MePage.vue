@@ -15,7 +15,8 @@ import { useOrdersStore } from '@/stores/orders'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { hapticsEnabled, hapticsSupported, setHaptics } from '@/lib/haptics'
 import { FAIRNESS_UI } from '@/lib/config'
-import { ref } from 'vue'
+import { trainerCardApi } from '@/lib/api'
+import { computed, ref } from 'vue'
 
 const router = useRouter()
 
@@ -29,9 +30,20 @@ const wallet = useWalletStore()
    看起來跟其他八格一樣是靜態入口，剛買完卡的人不會知道裡面有東西在等他。
    讀失敗就不顯示徽章，不擋整頁 —— 入口本身不依賴這次請求。 */
 const orders = useOrdersStore()
+/* 訓練家卡的資格。三態，而且三態各有各的落點（見下面 trainerTo）：
+     null   還沒問到（載入中，或這次請求壞了）
+     true   自己登記過卡 → 直接進做卡頁
+     false  還沒登記過   → 帶去登記頁，而不是進去被擋
+   讀失敗維持 null（**倒向放行**）：資格的裁判是做卡頁自己會再問一次的
+   後端，這裡只是決定要把人送到哪一頁。倒向擋住的話，一次網路抖動就會
+   讓一個明明符合資格的人看到「你還沒登記過卡」—— 那是憑空的指控。 */
+const trainerEligible = ref<boolean | null>(null)
 onMounted(() => {
   wallet.loadLedger()
   orders.load().catch(() => {})
+  trainerCardApi.eligibility()
+    .then(r => { trainerEligible.value = r.eligible })
+    .catch(() => {})
 })
 
 function logout() {
@@ -60,6 +72,14 @@ const rows = [
   { name: 'topup', t: '儲值', icon: 'plus' },
   { name: 'offers', t: '交易邀約', icon: 'swap' },
   { name: 'profile', t: '會員資料', icon: 'user' },
+  /* 訓練家卡。擺在「會員資料」後面：它跟那一格是同一類東西（我是誰、
+     我長什麼樣），不是交易動線的一步 —— 插在訂單／錢包／儲值中間會把
+     「錢的事」那一串切斷。也不放底部導覽：導覽四格是每天要用的功能，
+     做卡是一次性的紀念品，佔一格會把常用的擠掉。
+     （規劃文件當初的理由是「第一步要相機權限、不該被誤觸」，那條理由
+     現在弱掉了 —— 卡片改成從卡冊挑，不一定要開相機。位置是照使用頻率
+     重新判斷的，不是沿用舊理由。） */
+  { name: 'trainer-card', t: '訓練家卡', icon: 'idcard' },
   { name: 'seller-new', t: '我要開池', icon: 'box' },
   /* 出貨緊接著開池：那是同一個賣家身分的下一步，而且是**有時限的**那一步。
      藏在別的地方等於讓賣家在逾期之後才發現有東西該寄，
@@ -81,6 +101,15 @@ const rows = [
    「我的」是手機上真的找得到後台的地方。 */
 const adminRow = { name: 'admin', t: '平台後台', icon: 'shield' } as const
 
+/* 不符合資格的人**照樣看得到這一格**，只是落點換成登記頁。
+   三種做法裡選這一個：整格不顯示的話，他永遠不會知道站上有這個功能；
+   顯示但按下去說「你不符合資格」是把人帶到死路。第三種是顯示、而且
+   當場說得出下一步 —— 格子裡多一行「先登記一張卡」，按下去就是登記頁。 */
+const trainerTo = computed(() =>
+  trainerEligible.value === false ? { name: 'upload-card' } : { name: 'trainer-card' })
+const trainerNote = computed(() =>
+  trainerEligible.value === false ? '先登記一張卡' : '')
+
 const paths: Record<string, string> = {
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 20a8 8 0 0 1 16 0',
   swap: 'M4 8h13l-3-3M20 16H7l3 3',
@@ -90,6 +119,7 @@ const paths: Record<string, string> = {
   truck: 'M3 7h10v9H3zM13 10h4l3 3v3h-7zM7.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z',
   shield: 'M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-3z',
   chat: 'M4 5h16v11H9l-5 4V5z',
+  idcard: 'M3 6h18v12H3zM8.5 12.2a1.8 1.8 0 1 0 0-3.6 1.8 1.8 0 0 0 0 3.6zM5.6 15.8c.5-1.4 1.7-2.1 2.9-2.1s2.4.7 2.9 2.1M14 10h4.5M14 13.5h4.5',
   receipt: 'M6 3.5h12v17l-2.5-1.6-2.5 1.6-2.5-1.6L8 20.5l-2-1.4v-15.6zM9.5 8h5M9.5 12h5'
 }
 </script>
@@ -116,13 +146,20 @@ const paths: Record<string, string> = {
 
     <ul class="menu">
       <li v-for="r in rows" :key="r.name">
-        <RouterLink :to="{ name: r.name }" class="cell">
+        <RouterLink
+          :to="r.name === 'trainer-card' ? trainerTo : { name: r.name }"
+          class="cell"
+          :aria-label="r.name === 'trainer-card' && trainerNote ? `${r.t}：${trainerNote}` : undefined"
+        >
           <span class="ic" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none">
               <path :d="paths[r.icon]" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </span>
           <strong>{{ r.t }}</strong>
+          <!-- 還不能做卡的人在這裡就知道要先做什麼。這一行只有這一格會有，
+               所以不動其他格子的高度（.cell 是 min-height，多一行自己長高） -->
+          <span v-if="r.name === 'trainer-card' && trainerNote" class="note">{{ trainerNote }}</span>
           <!-- 進行中的筆數。只在有東西的時候出現：常駐一顆「0」等於教使用者
                忽略這個位置，之後真的有訂單時他也不會看見 -->
           <span v-if="r.name === 'orders' && orders.openCount" class="badge">{{ orders.openCount }}</span>
@@ -282,6 +319,13 @@ h1 {
   border-radius: var(--pill);
   background: var(--accent); color: var(--on-accent);
   font-family: var(--font-mono); font-size: 11px; font-weight: 700; line-height: 1;
+}
+
+/* 「先登記一張卡」那一行。字級比標題小一階、用 muted，
+   看得出來是說明而不是第二個標題；格子本來就是置中的，跟著置中。 */
+.cell .note {
+  font-size: 11px; line-height: 1.3; color: var(--muted);
+  max-width: 100%; overflow-wrap: anywhere;
 }
 
 /* 後台列跟一般功能區隔開：它是平台營運用的，不是使用者功能 */

@@ -1357,3 +1357,88 @@ export const contactApi = {
     return { id: r.id, duplicate: r.duplicate }
   }
 }
+
+/* ==================================================================
+   訓練家卡（/trainer-card）的資格判斷
+
+   跟工單、客服那兩段同一個理由獨立成一個物件：這個檔案同時有多支
+   agent 在動，附加一整塊比插進既有物件安全。
+================================================================== */
+
+/** 做訓練家卡可以用的一張卡。形狀對齊 server/src/routes/trainer-card.ts。 */
+export interface TrainerCardSource {
+  /** prizes.id */
+  id: string
+  name: string
+  setCode: string | null
+  cardNo: string | null
+  /**
+   * 圖是哪來的 —— **這一欄決定前端要不要跑透視校正**：
+   *   'catalog' 目錄卡，artId 一定有值，圖從 TCGdex 取（artUrlById）。
+   *             那是掃描圖，本來就正面方正 —— **不要校正**。
+   *   'photo'   使用者自己拍的正面照，imageUrl 一定有值。
+   *             那是手持照片，會有梯形變形 —— **要校正**。
+   */
+  source: 'catalog' | 'photo'
+  artId: string | null
+  /** 自拍正面照的網址（/v1/files/…）。目錄卡通常是 null */
+  imageUrl: string | null
+  /** 卡片現在的狀態。**只能拿來顯示，不是資格判斷** —— 資格跟狀態無關 */
+  status: string
+}
+
+export interface TrainerCardEligibility {
+  eligible: boolean
+  /** 只有不符合資格時才有。目前只有一種：沒有自己登記過的卡 */
+  reason?: 'NO_REGISTERED_CARD'
+  cards: TrainerCardSource[]
+}
+
+export const trainerCardApi = {
+  /**
+   * 我能不能做訓練家卡，以及可以用哪幾張卡。
+   *
+   * 資格是「自己親手登記進卡冊過至少一張卡」—— 抽中的、市場買來的都不算
+   * （後端怎麼分辨見 server/src/routes/trainer-card.ts 的檔頭）。
+   * 沒登入是 401，由 http() 丟成 ApiError，呼叫端自己決定要不要顯示。
+   */
+  async eligibility(): Promise<TrainerCardEligibility> {
+    if (MOCK) {
+      await delay(180)
+      /* 展示模式沒有後端，而 mock 的卡冊**沒有 origin 這一維** ——
+         假資料裡分不出哪張是自己登記的。與其憑卡片長相亂猜一個資格，
+         不如明說：展示模式一律當作符合，卡片就用卡冊裡現有的那些。
+         真後端才是資格的唯一裁判。 */
+      return {
+        eligible: mock.userPrizes.length > 0,
+        ...(mock.userPrizes.length === 0 ? { reason: 'NO_REGISTERED_CARD' as const } : {}),
+        cards: mock.userPrizes.map(p => ({
+          id: p.id,
+          name: p.card.name,
+          setCode: p.card.setCode ?? null,
+          cardNo: p.card.cardNo ?? null,
+          source: p.card.artId ? ('catalog' as const) : ('photo' as const),
+          artId: p.card.artId ?? null,
+          imageUrl: p.card.image || null,
+          status: p.status
+        }))
+      }
+    }
+    const r = await http<{ eligible: boolean; reason?: string; cards: Any[] }>(
+      '/v1/trainer-card/eligibility')
+    return {
+      eligible: !!r.eligible,
+      ...(r.reason ? { reason: r.reason as 'NO_REGISTERED_CARD' } : {}),
+      cards: (r.cards ?? []).map(x => ({
+        id: String(x.id),
+        name: String(x.name ?? ''),
+        setCode: (x.setCode ?? null) as string | null,
+        cardNo: (x.cardNo ?? null) as string | null,
+        source: x.source === 'catalog' ? 'catalog' : 'photo',
+        artId: (x.artId ?? null) as string | null,
+        imageUrl: (x.imageUrl ?? null) as string | null,
+        status: String(x.status ?? '')
+      }))
+    }
+  }
+}

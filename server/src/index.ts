@@ -16,6 +16,7 @@ import { wallet } from './routes/wallet.js'
 import { pools } from './routes/pools.js'
 import { prizes } from './routes/prizes.js'
 import { cardbook } from './routes/cardbook.js'
+import { trainerCard } from './routes/trainer-card.js'
 import { line } from './routes/line.js'
 import { google } from './routes/google.js'
 import { admin } from './routes/admin.js'
@@ -159,6 +160,10 @@ app.route('/v1/prizes', prizes)
    這支整組要登入（use('*', requireAuth)），不能掛在 /v1 底下
    把公開端點一起變成要登入（同 /v1/seller 那條的理由）。 */
 app.route('/v1/cardbook', cardbook)
+/* 訓練家卡的資格判斷。自己一個前綴，理由同 /v1/cardbook：
+   這支整組要登入（use('*', requireAuth)），掛在 /v1 底下會把
+   public.ts 那些公開端點一起變成要登入。 */
+app.route('/v1/trainer-card', trainerCard)
 app.route('/v1/auth/line', line)
 /* Google 登入。憑證（GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET）沒設時整條路回
    503 NOT_CONFIGURED，前端問過 /status 才畫按鈕 —— 掛上去不等於開啟。 */
