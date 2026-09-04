@@ -71,8 +71,17 @@ export async function http<T>(path: string, init: RequestInit & { json?: unknown
 
   if (!res.ok) {
     const d = (data ?? {}) as { error?: string; message?: string }
-    // 401 一律當作登入失效：清掉 token，讓 router guard 把人送回登入
-    if (res.status === 401) token.clear()
+    /* 401 幾乎都代表「手上這張 token 不能用了」（沒帶、過期、或被撤銷 ——
+       改密碼與「登出所有裝置」都會讓舊 token 變這樣），清掉 token 讓
+       router guard 把人送回登入。
+
+       但 BAD_CREDENTIALS 不是那個意思：它說的是「你**剛剛填的那組帳密**不對」，
+       token 本身好好的。/v1/auth/set-password 驗舊密碼失敗回的就是這個碼 ——
+       一律清掉的話，「變更密碼時舊密碼打錯一次」會直接把人登出，
+       而且畫面上只寫「目前的密碼不正確」，使用者完全不知道自己已經被登出，
+       要等下一個請求 401 才發現。/v1/auth/login 也回這個碼，那裡本來就還沒登入，
+       不清也沒有差別。判準因此是錯誤碼，不是 HTTP status。 */
+    if (res.status === 401 && d.error !== 'BAD_CREDENTIALS') token.clear()
     throw new ApiError(d.error ?? `HTTP_${res.status}`, d.message ?? `請求失敗（${res.status}）`, res.status, data)
   }
   /* 成功才套用。失敗的回應不帶 wallet，而且失敗代表那筆交易在後端整筆

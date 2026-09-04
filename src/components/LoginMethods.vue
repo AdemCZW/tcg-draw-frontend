@@ -7,9 +7,10 @@
  * 這件事不講明白，沒有人敢按。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { MOCK, API_URL } from '@/lib/config'
 import { http, token, ApiError } from '@/lib/http'
+import { useAuthStore } from '@/stores/auth'
 import { useKeyboardInset } from '@/composables/useKeyboardInset'
 
 interface Methods { email: string | null; hasPassword: boolean; providers: string[] }
@@ -23,6 +24,13 @@ const email = ref('')
 const password = ref('')
 const currentPassword = ref('')
 const busy = ref(false)
+
+/* 登出所有裝置：二次確認面板 + 「連這台裝置也登出」的選項。
+   預設不勾（keepCurrent: true）—— 使用者的意圖幾乎都是「把別人踢掉」，
+   把自己也登出只是多一次重登，而且會讓人以為操作失敗。 */
+const showLogoutAll = ref(false)
+const alsoThisDevice = ref(false)
+const loggingOut = ref(false)
 
 const hasLine = computed(() => methods.value?.providers.includes('line') ?? false)
 
@@ -81,12 +89,28 @@ async function save() {
   if (!canSubmit.value || busy.value) return
   busy.value = true
   err.value = ''
+  /* 先記下「這次之前有沒有密碼」：下面 load() 會把 methods 換成新的狀態，
+     而收尾訊息要講的是「剛才做的是變更還是第一次設定」。 */
+  const wasSet = !!methods.value?.hasPassword
   try {
-    await http('/v1/auth/set-password', { method: 'POST', json: {
+    const r = await http<{ ok: true; email: string; token?: string }>('/v1/auth/set-password', { method: 'POST', json: {
       email: email.value.trim(), password: password.value,
-      ...(methods.value?.hasPassword ? { currentPassword: currentPassword.value } : {})
+      ...(wasSet ? { currentPassword: currentPassword.value } : {})
     } })
-    okMsg.value = '已加上 Email 登入。之後兩種方式都會進到這個帳號。'
+    /* ---- 一定要換掉手上這張 token ----
+       後端在「換掉一組已存在的密碼」時會把 users.session_version +1，
+       所有已簽發的 token（包含我們手上這張）立刻失效，並在回應裡附一張新的。
+       不接的話，改完密碼的下一個請求就 401，使用者被自己登出 ——
+       原本是安全動作，變成把自己踢下線，比不做還糟。
+
+       **不能假設一定有 token**：第一次設密碼（原本 password_hash 是 null，
+       例如純 LINE 註冊）後端刻意不遞增版本 —— 沒有舊憑證被換掉，遞增只會
+       平白把自己其他裝置踢下線。那條路回應裡沒有 token，手上這張仍然有效，
+       這裡什麼都不用做。所以用 optional 判斷，不是 `token.set(r.token)`。 */
+    if (r.token) token.set(r.token)
+    okMsg.value = wasSet
+      ? '已更新 Email 與密碼。其他裝置上的登入已失效，這台裝置不受影響。'
+      : '已加上 Email 登入。之後兩種方式都會進到這個帳號。'
     showForm.value = false
     password.value = ''
     currentPassword.value = ''
@@ -113,8 +137,65 @@ async function linkLine() {
   }
 }
 
+/* ---- 登出所有裝置 ----
+   後端把 session 版本 +1，所有已簽發的 token（包含外流的那張）立刻失效。
+   這是懷疑帳號被別人用了的時候，使用者唯一的自救手段。
+
+   要二次確認：它影響的是**別的裝置**，按下去的人在這台裝置上看不到任何後果，
+   誤觸的代價卻是家裡那台平板、公司電腦全部要重登。 */
+function openLogoutAll() {
+  alsoThisDevice.value = false
+  err.value = ''
+  showLogoutAll.value = true
+  // 跟設定面板同一條理由：aria-modal 要把焦點帶進去，不然 Tab 會走到背後
+  void nextTick(() => document.getElementById('logoutAllSheet')?.focus())
+}
+function closeLogoutAll() {
+  if (loggingOut.value) return
+  showLogoutAll.value = false
+}
+
+const router = useRouter()
+const auth = useAuthStore()
+
+async function doLogoutAll() {
+  if (loggingOut.value) return
+  loggingOut.value = true
+  err.value = ''
+  // 勾了「連這台也登出」＝ keepCurrent: false。後端預設是 true，這裡照樣明寫，
+  // 免得預設值哪天改了，這個畫面的語意跟著默默反轉。
+  const keepCurrent = !alsoThisDevice.value
+  try {
+    const r = await http<{ ok: true; token?: string }>(
+      '/v1/auth/logout-all', { method: 'POST', json: { keepCurrent } }
+    )
+    if (r.token) {
+      /* keepCurrent: true —— 後端已經把版本推進，手上這張舊 token 這一刻就死了，
+         換上回應裡的新張才能繼續操作。跟改密碼是同一個道理。 */
+      token.set(r.token)
+      showLogoutAll.value = false
+      okMsg.value = '已登出其他所有裝置。這台裝置維持登入。'
+    } else {
+      /* keepCurrent: false —— 後端不回 token，手上這張已經作廢。
+         本地憑證要立刻清掉並導回首頁：留著的話畫面還是「已登入」的樣子，
+         要等使用者下一次操作 401 才會被踢，看起來像功能壞了。
+         這是手機掉了、或人正在別人電腦上處理時要的那條路。 */
+      auth.logout()
+      router.replace({ name: 'landing' })
+    }
+  } catch (e) {
+    /* 失敗就把人留在確認面板裡、按鈕恢復可按，不要關掉面板 ——
+       關掉的話使用者不知道到底踢掉了沒有，只能再按一次碰運氣。 */
+    err.value = e instanceof ApiError ? e.message : '登出其他裝置沒有完成，請再試一次'
+  } finally {
+    loggingOut.value = false
+  }
+}
+
 function onEsc(e: KeyboardEvent) {
-  if (e.key === 'Escape' && showForm.value) closeForm()
+  if (e.key !== 'Escape') return
+  if (showForm.value) closeForm()
+  else if (showLogoutAll.value) closeLogoutAll()
 }
 
 /* 軟鍵盤讓位（--kb）。這張面板有兩到三個輸入框，鍵盤必然會彈出來，
@@ -141,7 +222,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
       只是多一條進得來的路。
     </p>
 
-    <p v-if="err && !showForm" class="msg err" role="alert">{{ err }}</p>
+    <p v-if="err && !showForm && !showLogoutAll" class="msg err" role="alert">{{ err }}</p>
     <p v-if="okMsg" class="msg ok" role="status">{{ okMsg }}</p>
     <p v-if="loading" class="muted small">載入中…</p>
 
@@ -176,6 +257,24 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
         </button>
       </li>
     </ul>
+
+    <!-- 「登出所有裝置」放在這張卡片裡，不另開一區也不放進上面那份清單。
+         上面那份清單的每一列是「一種進得來的路」（LINE、Email），
+         這顆做的是相反的事 —— 把已經進來的連線全部切斷 —— 混進去會讀成
+         第三種登入方式。但它跟「設定密碼」屬於同一組心智：都是帳號安全，
+         而且真的懷疑帳號被盜時，人會做的是「改密碼 + 踢掉別人」這兩件連在
+         一起的事，兩顆按鈕相距一個捲動距離的話第二件會被漏掉。
+         位置上它也緊鄰 MePage 底下那顆「登出」，兩顆「登出」語意相鄰、
+         強弱分明（一台 vs 全部），不會讓人以為是同一顆。 -->
+    <div v-if="methods" class="danger">
+      <!-- 標題是名詞、按鈕是動詞，跟上面 LINE／Email 兩列同一個讀法。
+           兩邊都寫「登出所有裝置」會變成同一句話講兩次，眼睛只會讀到一次。 -->
+      <div class="txt">
+        <strong>其他裝置</strong>
+        <span class="muted small">懷疑帳號被別人使用時，把所有裝置上的登入一次切斷。</span>
+      </div>
+      <button type="button" class="btn sm warnBtn" @click="openLogoutAll">登出所有裝置</button>
+    </div>
 
     <!-- 表單改成貼底覆蓋層，不是就地展開。
          就地展開在這裡是錯的，而且是量得出來的錯：這一區排在「我的」頁最下面，
@@ -232,6 +331,48 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
         </form>
       </div>
     </Teleport>
+
+    <!-- 登出所有裝置的二次確認。沿用同一套貼底面板（第四處），
+         關法同樣三種：點遮罩、取消鍵、Esc；送出中三種都鎖住，
+         免得請求還在路上時面板被關掉，使用者不知道結果如何。 -->
+    <Teleport to="body">
+      <div v-if="showLogoutAll" class="sheetWrap" @click.self="closeLogoutAll">
+        <div
+          id="logoutAllSheet" class="sheet card hasFoot"
+          role="dialog" aria-modal="true" aria-label="登出所有裝置" tabindex="-1"
+        >
+          <h2 class="sheetH">登出所有裝置</h2>
+          <p class="muted fine">
+            所有裝置上的登入都會立刻失效，包含別人可能拿到的那一份。
+            下次要用時重新登入即可，卡片、點數、訂單都不受影響。
+          </p>
+
+          <!-- 「連這台裝置也登出」是手機掉了、或人正在別人的電腦上處理時
+               唯一需要的東西，所以這個選項一定要在。但預設不勾：
+               多數人的意圖是「把別人踢掉」，順手把自己也登出只會讓人
+               以為操作失敗。整列都可以點（label 包住 input），
+               不是只有那顆 14px 的方框。 -->
+          <label class="opt">
+            <input v-model="alsoThisDevice" type="checkbox" class="cb" :disabled="loggingOut" />
+            <span class="optTxt">
+              <strong>連這台裝置也登出</strong>
+              <span class="muted small">手機掉了，或現在人在別人的電腦上時勾選。勾了就要重新登入。</span>
+            </span>
+          </label>
+
+          <div class="sheetFoot">
+            <p v-if="err" class="errLine" role="alert">{{ err }}</p>
+            <div class="acts">
+              <button
+                type="button" class="btn primary sm" :disabled="loggingOut"
+                @click="doLogoutAll"
+              >{{ loggingOut ? '處理中…' : (alsoThisDevice ? '全部登出，包含這台' : '登出其他裝置') }}</button>
+              <button type="button" class="btn sm" :disabled="loggingOut" @click="closeLogoutAll">取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </section>
 </template>
 
@@ -260,6 +401,35 @@ h2 { font-size: 16px; margin: 0 0 6px; }
 .tick { flex: none; width: 20px; height: 20px; color: var(--ok-ink); }
 /* 「設定 / 變更 / 綁定」是這一列唯一的動作，要吃滿觸控門檻 */
 .item .btn.sm { flex: none; min-height: 44px; }
+
+/* 「登出所有裝置」那一列。跟 .item 同一個盒子形狀（同樣的 --surface 與圓角），
+   但不在 .list 裡，中間留一格空白 —— 形狀相同讓它看起來屬於同一張卡片，
+   分開的間距讓它讀得出來不是第三種登入方式。 */
+.danger {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 14px;
+  background: var(--surface); border-radius: var(--radius-lg); padding: 12px 14px;
+}
+.danger .txt span { white-space: normal; line-height: 1.5; }
+/* 用 --warn-ink 不用 --danger-ink：這不是錯誤也不是不可逆的破壞
+   （重新登入就回來了），紅色會讀成「刪除帳號」那種等級。
+   深淺兩套主題的 --warn-ink 都是對比足夠的橘色。 */
+.warnBtn { flex: none; min-height: 44px; color: var(--warn-ink); }
+
+/* 確認面板裡的選項列。整列可點，高度吃滿 44px 觸控門檻 */
+.opt {
+  display: flex; align-items: flex-start; gap: 12px;
+  min-height: 44px; padding: 10px 12px;
+  background: var(--surface-2); border-radius: var(--radius);
+  cursor: pointer;
+}
+.cb {
+  flex: none; width: 22px; height: 22px; margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+.optTxt { display: grid; gap: 2px; min-width: 0; }
+.optTxt strong { font-size: 13.5px; }
+.optTxt .small { line-height: 1.5; }
 
 /* ---- 貼底面板 ----
    跟 MyCardsPage 的出貨／回收覆蓋層、PublicCardbookPage 的出價覆蓋層
