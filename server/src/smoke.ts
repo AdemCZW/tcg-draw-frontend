@@ -90,6 +90,51 @@ async function allListings(sort = 'new'): Promise<Any[]> {
   return out
 }
 
+/**
+ * 把一張卡登記進卡冊，回傳那一列的 id。
+ *
+ * ── 為什麼這支測試突然到處都要先登記卡片 ──────────────────────────
+ * A-4 之後 `prizeId` 是**必填**的：一個籤位背後一定有卡冊裡一張真的
+ * 實體卡（`pool_prizes.card_id`）。原本 smoke 到處直接送內嵌卡片
+ * （沒有 prizeId、total > 1）就能開池，那正是「同一張裸卡可以宣告成
+ * 無限多個池」的那條路。所以建池從此多一個前置步驟：先登記，再挑。
+ *
+ * **每一段原本在測的東西都沒有變**：籤數、金額、賞別、斷言全部照舊，
+ * 只是「這 N 籤背後的卡從哪裡來」從憑空宣告換成了 N 張卡冊裡的列。
+ */
+async function bookCard(tok: string, card: Record<string, unknown>): Promise<string> {
+  const r = await call(tok, '/v1/cardbook/upload', { card })
+  const b = await json(r.clone())
+  if (r.ok) return b.prize.id as string
+  if (b.error === 'ALREADY_IN_BOOK' && b.prizeId) return b.prizeId as string
+  throw new Error(`smoke 登記卡片失敗 ${r.status} ${JSON.stringify(b).slice(0, 200)}`)
+}
+
+let bookSeq = 0
+/** 登記 n 張同一款的裸卡，回傳那 n 列的 id（一張實體卡一個籤位，所以 n 籤要 n 張） */
+async function bookCards(tok: string, n: number, card: Record<string, unknown>): Promise<string[]> {
+  const out: string[] = []
+  /* 名字帶序號只是為了讀資料庫時分得出是哪一張：裸卡沒有編號，
+     卡冊裡本來就可以有很多列同名的卡。 */
+  for (let i = 0; i < n; i++) out.push(await bookCard(tok, { ...card, name: `${card.name} #${++bookSeq}` }))
+  return out
+}
+
+/**
+ * 一個**明顯不是真卡**的 prizeId。
+ *
+ * 下面有十幾條驗的是**建池交易開始之前**的閘（買回價上下限、賞別預設、
+ * 保底回饋率、玩法、賣家狀態、鑑定編號開幾籤）—— 那些閘全部在
+ * routes/pools.ts 走到 sql.begin 之前就回應了，押記那一段根本沒跑到，
+ * 所以 prizeId 只要是個字串就夠。
+ *
+ * 刻意用一個看得出來是假的字串，不拿真的卡去墊：拿真卡的話，
+ * 這一條到底是被它該被擋的那道閘擋下、還是被押記擋下，
+ * 從測試輸出上分不出來 —— 而那正是這幾條要區分的東西。
+ * （「不帶 prizeId 會怎樣」由 regress-inventory 第 0 組專門驗。）
+ */
+const stubPledges = (n: number) => Array.from({ length: n }, (_, i) => `pz-smoke-stub-${i}`)
+
 async function run() {
   console.log(`smoke → ${base}\n`)
 
@@ -868,12 +913,18 @@ async function run() {
      池開不出來，後面抽光跟回收的那一整條路自然不存在。 */
   console.log('\n經濟護欄：')
   {
-    /* 買回價總和 = 9,000 + 700 = 9,700，票收 1,000 —— 970% */
+    /* 買回價總和 = 9,000 + 700 = 9,700，票收 1,000 —— 970%。
+       十籤現在是十列各一張實體卡（A-4），金額一毛沒變，護欄算的是同一個數字。
+       這一條在交易開始前就被擋下，所以 prizeId 用 stub（見 stubPledges）。 */
+    const mintIds = stubPledges(10)
     const mint = await call(seller, '/v1/pools', {
       mode: 'muteki', title: 'smoke-mint', ticketPrice: 100, totalTickets: 10,
       prizes: [
-        { tier: 'A', card: { id: 'c-a', name: '誘餌 A 賞', refPrice: 700 }, buyback: 700, total: 1 },
-        { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 1_000_000 }, buyback: 1_000, total: 9 }
+        { tier: 'A', prizeId: mintIds[0], card: { id: 'c-a', name: '誘餌 A 賞', refPrice: 700 }, buyback: 700, total: 1 },
+        ...mintIds.slice(1).map(id => ({
+          tier: 'BUST' as const, prizeId: id,
+          card: { id: 'c-bust', name: '爆賞', refPrice: 1_000_000 }, buyback: 1_000, total: 1
+        }))
       ]
     })
     const mj = await json(mint)
@@ -883,11 +934,19 @@ async function run() {
     /* 爆賞灌 refPrice 現在**不該**再影響任何金額 —— refPrice 已經降級成純顯示。
        同一組獎品，只把買回價壓回合理值，池就開得出來。
        這一條是「refPrice 真的退出金額計算」最直接的證明。 */
+    /* 這一條要**開得成**，所以十籤要有十張真的卡在卡冊裡。
+       refPrice 照舊由請求帶（那是「這個池標示的參考價」，不是卡冊那一列的），
+       所以「爆賞灌一百萬也不影響護欄」驗的仍然是同一件事。 */
+    const bustA = await bookCard(seller, { name: 'A 賞', setCode: 'sv8a', cardNo: '237/187', artId: 'SV8a-237' })
+    const bustRest = await bookCards(seller, 9, { name: '爆賞', setCode: 'sv8a', cardNo: '237/187', artId: 'SV8a-237' })
     const bustRef = await call(seller, '/v1/pools', {
       mode: 'muteki', title: 'smoke-bust-ref', ticketPrice: 100, totalTickets: 10,
       prizes: [
-        { tier: 'A', card: { id: 'c-a', name: 'A 賞', refPrice: 700 }, buyback: 500, total: 1 },
-        { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 1_000_000 }, buyback: 30, total: 9 }
+        { tier: 'A', prizeId: bustA, card: { id: 'c-a', name: 'A 賞', refPrice: 700 }, buyback: 500, total: 1 },
+        ...bustRest.map(id => ({
+          tier: 'BUST' as const, prizeId: id,
+          card: { id: 'c-bust', name: '爆賞', refPrice: 1_000_000 }, buyback: 30, total: 1
+        }))
       ]
     })
     check('爆賞的 refPrice 灌到一百萬也不影響護欄（refPrice 不再參與金額計算）',
@@ -903,14 +962,17 @@ async function run() {
     // 單張 refPrice 的絕對上限：多打幾個零不該進得了資料庫
     const huge = await call(seller, '/v1/pools', {
       mode: 'muteki', title: 'smoke-huge-ref', ticketPrice: 100_000_000, totalTickets: 1,
-      prizes: [{ tier: 'A', card: { id: 'c-h', name: '天價卡', refPrice: 99_999_999 }, buyback: 50_000_000, total: 1 }]
+      prizes: [{ tier: 'A', prizeId: stubPledges(1)[0], card: { id: 'c-h', name: '天價卡', refPrice: 99_999_999 }, buyback: 50_000_000, total: 1 }]
     })
     check('單張 refPrice 超過上限被擋', huge.status === 400, String(huge.status))
 
     /* ---- 買回價的上下限 ---- */
     const mkBuyback = (title: string, buyback: unknown) => call(seller, '/v1/pools', {
       mode: 'muteki', title, ticketPrice: 100, totalTickets: 10,
-      prizes: [{ tier: 'D', card: { id: 'c-b', name: '測試卡', refPrice: 100 }, buyback, total: 10 }]
+      /* 買回價的上下限是**每一項**各自檢查的，所以十籤攤成十項驗到的是同一條規則。 */
+      prizes: stubPledges(10).map(id => ({
+        tier: 'D' as const, prizeId: id, card: { id: 'c-b', name: '測試卡', refPrice: 100 }, buyback, total: 1
+      }))
     })
     const zero = await mkBuyback('smoke-buyback-0', 0)
     check('買回價填 0 被拒（掛著買回的招牌卻什麼都不買）', zero.status === 400, String(zero.status))
@@ -921,7 +983,9 @@ async function run() {
 
     const missing = await call(seller, '/v1/pools', {
       mode: 'muteki', title: 'smoke-buyback-missing', ticketPrice: 100, totalTickets: 10,
-      prizes: [{ tier: 'D', card: { id: 'c-b', name: '測試卡', refPrice: 100 }, total: 10 }]
+      prizes: stubPledges(10).map(id => ({
+        tier: 'D' as const, prizeId: id, card: { id: 'c-b', name: '測試卡', refPrice: 100 }, total: 1
+      }))
     })
     check('沒有任何買回價來源的池開不出來（不能有「抽到才發現沒得買回」的獎項）',
       missing.status === 400, String(missing.status))
@@ -931,12 +995,17 @@ async function run() {
        買回價按賞別給一個絕對金額（不需要任何基準），某一項特別貴時單獨覆寫。
        **存進資料庫與 manifest 的仍然是每個獎品的絕對金額** —— 下面就是驗這件事：
        解析完之後 A 賞那一項拿到的是覆寫值，D 賞拿到的是賞別預設。 */
+    /* 卡冊那幾列**刻意不填 refPrice**：下面有一條驗「參考價完全不填也開得出池、
+       而且照實回 null（不是 0）」，而押記之後 refPrice 沒送就退回卡冊那一列的值 ——
+       兩邊都不填才驗得到「沒有標示」這件事本身。 */
+    const tierA = await bookCard(seller, { name: '同賞別裡特別貴的那張', setCode: 'sv8a', cardNo: '237/187', artId: 'SV8a-237' })
+    const tierD = await bookCards(seller, 9, { name: '一般 D 賞', setCode: 'sv8a', cardNo: '237/187', artId: 'SV8a-237' })
     const tiered = await call(seller, '/v1/pools', {
       mode: 'muteki', title: 'smoke-tier-buyback', ticketPrice: 100, totalTickets: 10,
       tierBuyback: { A: 400, D: 40 },
       prizes: [
-        { tier: 'A', card: { id: 'c-ta', name: '同賞別裡特別貴的那張' }, buyback: 300, total: 1 },
-        { tier: 'D', card: { id: 'c-td', name: '一般 D 賞' }, total: 9 }
+        { tier: 'A', prizeId: tierA, card: { id: 'c-ta', name: '同賞別裡特別貴的那張' }, buyback: 300, total: 1 },
+        ...tierD.map(id => ({ tier: 'D' as const, prizeId: id, card: { id: 'c-td', name: '一般 D 賞' }, total: 1 }))
       ]
     })
     check('賞別預設 + 個別覆寫開得出池', tiered.ok, `${tiered.status} ${await tiered.clone().text()}`)
@@ -960,17 +1029,23 @@ async function run() {
     const tierBad = await call(seller, '/v1/pools', {
       mode: 'muteki', title: 'smoke-tier-bad', ticketPrice: 100, totalTickets: 10,
       tierBuyback: { D: 0 },
-      prizes: [{ tier: 'D', card: { id: 'c-tb', name: '測試卡' }, total: 10 }]
+      prizes: stubPledges(10).map(id => ({
+        tier: 'D' as const, prizeId: id, card: { id: 'c-tb', name: '測試卡' }, total: 1
+      }))
     })
     check('賞別預設填 0 一樣被上下限擋下', tierBad.status === 400, String(tierBad.status))
 
     /* 反面：正常的池還是開得出來。少了這一條，把護欄寫成「一律拒絕」也會全綠。
        買回價總和 500 + 30×9 = 770，票收 1,000 → 77%，落在 25–100 之間。 */
+    const okA = await bookCard(seller, { name: 'A 賞', setCode: 'sv8a', cardNo: '237/187', artId: 'SV8a-237' })
+    const okRest = await bookCards(seller, 9, { name: '爆賞', setCode: 'sv8a', cardNo: '237/187', artId: 'SV8a-237' })
     const okPool = await call(seller, '/v1/pools', {
       mode: 'muteki', title: 'smoke-ok-pool', ticketPrice: 100, totalTickets: 10,
       prizes: [
-        { tier: 'A', card: { id: 'c-a', name: 'A 賞', refPrice: 700 }, buyback: 500, total: 1 },
-        { tier: 'BUST', card: { id: 'c-bust', name: '爆賞', refPrice: 30 }, buyback: 30, total: 9 }
+        { tier: 'A', prizeId: okA, card: { id: 'c-a', name: 'A 賞', refPrice: 700 }, buyback: 500, total: 1 },
+        ...okRest.map(id => ({
+          tier: 'BUST' as const, prizeId: id, card: { id: 'c-bust', name: '爆賞', refPrice: 30 }, buyback: 30, total: 1
+        }))
       ]
     })
     check('含爆賞但買回價總和合理的池照常開得出來', okPool.ok, `${okPool.status} ${await okPool.clone().text()}`)
@@ -994,6 +1069,22 @@ async function run() {
      同時測「同一組卡號的兩個版本是兩個獎品」：兩項的卡名 / 套牌 / 卡號
      逐字相同，只有 variantId 不同（SV2a-025 的大師球鏡面與普卡，
      cardmarket 實測差約 18,000 倍）。 */
+  /* ── 為什麼這一段換一個賣家帳號 ──────────────────────────────────
+     建池從此要先把卡登記進卡冊，而 /v1/cardbook/upload 有速率限制
+     （40 張／15 分鐘／帳號，rate-limit.ts 的 card-upload-user 桶）。
+     整支 smoke 需要開得成的池加起來超過六十張卡，全掛在 u-seller 身上
+     會在中途被自己的限流擋掉 —— 那是限流正確運作，不是這裡要驗的東西
+     （限流本身由 regress-ratelimit 驗）。
+     所以這一段與下面「正常池」那一條改用第二個賣家帳號分攤。
+     **賣家身分不影響這幾條測的任何東西**：驗的是獎品身分有沒有被吃掉、
+     金額算得對不對，跟池屬於誰無關；反過來，順手也把「申請→核可→開池」
+     這條路多走了一次。 */
+  const seller2 = await login('seller2', '測試賣家二號')
+  const apply2 = await call(seller2, '/v1/seller/apply', { name: '煙霧測試二號店', origin: 'personal' })
+  check('第二個賣家申請成功', apply2.ok, `${apply2.status} ${await apply2.clone().text()}`)
+  const tier2 = await call(platform, '/v1/admin/sellers/u-seller2/tier', { tier: 'verified', note: 'smoke' })
+  check('後台核可第二個賣家', tier2.ok, `${tier2.status} ${await tier2.clone().text()}`)
+
   console.log('\n挑卡帶回的身分：')
   {
     const master = {
@@ -1003,14 +1094,19 @@ async function run() {
     }
     const normal = { ...master, id: 'c-SV2a-025-normal', variantId: 'endfynwn4n10gzq', refPrice: 100 }
 
-    const made = await call(seller, '/v1/pools', {
+    /* 十籤 = 十張實體卡。身分**以卡冊那一列為準**（押記會用卡冊的值覆蓋
+       呼叫端送的 card），所以這一段測的「身分有沒有被吃掉」現在驗的是
+       一條更長的路：登記進卡冊 → 挑進池 → 公開快照，中間任何一段掉一欄都會露餡。 */
+    const masterId = await bookCard(seller2, master)
+    const normalIds = await bookCards(seller2, 9, normal)
+    const made = await call(seller2, '/v1/pools', {
       /* 票價 1,200 × 10 籤 = 12,000；買回價總和 7,680 + 9×60 = 8,220 → 68.5%，
          落在護欄的 25–100 之間。這一段測的是身分有沒有被吃掉，
          不是經濟護欄，所以數字要刻意調成過得了的。 */
       mode: 'muteki', title: 'smoke-pick-identity', ticketPrice: 1200, totalTickets: 10,
       prizes: [
-        { tier: 'A', card: master, buyback: 7680, total: 1 },
-        { tier: 'D', card: normal, buyback: 60, total: 9 }
+        { tier: 'A', prizeId: masterId, card: master, buyback: 7680, total: 1 },
+        ...normalIds.map(id => ({ tier: 'D' as const, prizeId: id, card: normal, buyback: 60, total: 1 }))
       ]
     })
     check('帶完整卡片身分的池開得出來', made.ok, `${made.status} ${await made.clone().text()}`)
@@ -1042,12 +1138,15 @@ async function run() {
       language: 'JP', grader: 'PSA', grade: 10, certNo: 'STUB-OK-349', image: '',
       artId: 'SV4a-349', variantId: null, refPrice: 42000
     }
-    const g = await call(seller, '/v1/pools', {
+    const gradedPlain = { ...graded, id: 'c-smoke-plain', grader: 'RAW', grade: null, certNo: null, refPrice: 400 }
+    const gradedId = await bookCard(seller2, graded)
+    const plainIds = await bookCards(seller2, 9, gradedPlain)
+    const g = await call(seller2, '/v1/pools', {
       mode: 'muteki', title: 'smoke-pick-graded', ticketPrice: 900, totalTickets: 10,
       tierBuyback: { A: 6000, D: 200 },
       prizes: [
-        { tier: 'A', card: graded, total: 1 },
-        { tier: 'D', card: { ...graded, id: 'c-smoke-plain', grader: 'RAW', grade: null, certNo: null, refPrice: 400 }, total: 9 }
+        { tier: 'A', prizeId: gradedId, card: graded, total: 1 },
+        ...plainIds.map(id => ({ tier: 'D' as const, prizeId: id, card: gradedPlain, total: 1 }))
       ]
     })
     check('從卡冊挑的鑑定卡開得出池', g.ok, `${g.status} ${await g.clone().text()}`)
@@ -1088,13 +1187,19 @@ async function run() {
         mA?.certNo === 'STUB-OK-349', JSON.stringify(mA))
     }
 
-    const dup = await call(seller, '/v1/pools', {
+    const dup = await call(seller2, '/v1/pools', {
       mode: 'muteki', title: 'smoke-pick-graded-dup', ticketPrice: 900, totalTickets: 10,
       tierBuyback: { A: 6000 },
-      prizes: [{ tier: 'A', card: { ...graded, certNo: 'STUB-OK-349191' }, total: 10 }]
+      prizes: [{ tier: 'A', prizeId: stubPledges(1)[0], card: { ...graded, certNo: 'STUB-OK-349191' }, total: 10 }]
     })
     check('帶鑑定編號卻開 10 籤被擋（一個編號對應一張實體卡）', dup.status === 400,
       String(dup.status))
+    /* 擋它的必須是**編號那條規則**，不是「從卡冊挑的卡只能開 1 籤」那條。
+       兩條都會回 400，所以只看狀態碼分不出來 —— 而它們是兩件事：
+       前者說的是一個編號對應一張實體卡，後者說的是一列卡一個籤位。
+       （PrizeIn 上兩條 refine 的順序決定了回哪一句，這一條就是把那個順序釘住。） */
+    check('而且擋下來的是「編號」那條規則，不是別條',
+      (await dup.clone().text()).includes('編號'), await dup.clone().text())
   }
 
   console.log('\n下架：')
@@ -1174,7 +1279,13 @@ async function run() {
       // pending 不能開池 —— 門檻在這裡，不在申請
       const pool = await call(buyer, '/v1/pools', {
         title: '不該開得成的池', mode: 'muteki', ticketPrice: 100, totalTickets: 2,
-        prizes: [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, buyback: 60, total: 2 }]
+        /* 待審核的賣家在**押記之前**就被擋（routes/pools.ts 的第一道閘），
+           所以這裡的 prizeId 用 stub —— 用真的卡反而會讓「擋在哪一層」看不出來。 */
+        prizes: stubPledges(2).map(id => ({
+          tier: 'D' as const, prizeId: id,
+          card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 },
+          buyback: 60, total: 1
+        }))
       })
       check('待審核的賣家開不了池', pool.status === 403, `${pool.status}`)
 
@@ -1190,29 +1301,35 @@ async function run() {
     const cheapCard = { id: 'c-econ', name: '測試卡', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }
     /* 買回價固定 10 點（下限），只調票價就能掃過整個保底回饋率區間 ——
        這樣測到的是護欄的門檻，不是某一組數字剛好。 */
-    const mkPool = (title: string, price: number, tickets: number) => call(seller, '/v1/pools', {
-      title, mode: 'muteki', ticketPrice: price, totalTickets: tickets,
-      prizes: [{ tier: 'D', card: cheapCard, buyback: 10, total: tickets }]
-    })
+    /* 一張實體卡一個籤位（A-4），所以 N 籤 = N 個獎品項。
+       買回價仍然固定 10 點、仍然只調票價，掃過的還是同一段保底回饋率區間。 */
+    const mkPool = (tok: string, title: string, price: number, tickets: number, ids: string[]) =>
+      call(tok, '/v1/pools', {
+        title, mode: 'muteki', ticketPrice: price, totalTickets: tickets,
+        prizes: ids.map(id => ({ tier: 'D' as const, prizeId: id, card: cheapCard, buyback: 10, total: 1 }))
+      })
 
-    const harsh = await mkPool('苛刻池', 100, 10)          // 保底 10%
+    const harsh = await mkPool(seller, '苛刻池', 100, 10, stubPledges(10))          // 保底 10%
     check('保底回饋率過低的池開不了', harsh.status === 400, `${harsh.status}`)
     check('而且講得出原因', (await harsh.clone().text()).includes('過於不利'))
 
-    const mint2 = await mkPool('印鈔池', 2, 10)            // 保底 500%
+    const mint2 = await mkPool(seller, '印鈔池', 2, 10, stubPledges(10))            // 保底 500%
     check('Σ(買回價) 超過票收的池也開不了', mint2.status === 400)
     check('印鈔機的訊息把兩個數字並排講清楚',
       (await mint2.clone().text()).includes('票收'))
 
-    // 反面：保底 50%（買回價 10、票價 20）應該過得了
-    const fine = await mkPool('正常池', 20, 10)
+    /* 反面：保底 50%（買回價 10、票價 20）應該過得了。
+       這一條要**開得成**，所以十籤要有十張真的卡 —— 掛在第二個賣家帳號上，
+       理由見上面「為什麼這一段換一個賣家帳號」。 */
+    const fineIds = await bookCards(seller2, 10, { name: '正常池測試卡', setCode: 'sv8a', cardNo: '237/187', artId: 'SV8a-237' })
+    const fine = await mkPool(seller2, '正常池', 20, 10, fineIds)
     check('保底回饋率落在區間內的池開得出來', fine.ok, `${fine.status}`)
 
     /* 後端只收 muteki：抽卡邏輯不讀 mode，收下其他模式等於讓賣家開出
        標示著某種玩法、實際卻不是那樣運作的池。
        classic 也在擋掉的名單裡 —— 它宣傳的「抽走最後一籤額外得最後賞」
        後端一行都沒有，開得出來就等於繼續掛著不存在的規則收錢（見 migration 016） */
-    const onePrize = [{ tier: 'D', card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, buyback: 60, total: 1 }]
+    const onePrize = [{ tier: 'D', prizeId: stubPledges(1)[0], card: { id: 'c-smoke', name: 'x', setCode: 'sv', cardNo: '1', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 10 }, buyback: 60, total: 1 }]
     const badMode = await call(seller, '/v1/pools', {
       title: '指定賞池', mode: 'shitei', ticketPrice: 100, totalTickets: 1, prizes: onePrize
     })
@@ -1689,7 +1806,10 @@ async function run() {
     /* 規則 3 的後果：超過門檻不能再開池 */
     const blocked = await call(shop, '/v1/pools', {
       mode: 'muteki', title: 'smoke-blocked', ticketPrice: 100, totalTickets: 10,
-      prizes: [{ tier: 'D', card: { id: 'c-x', name: '測試卡', refPrice: 85 }, buyback: 60, total: 10 }]
+      /* 停權擋在押記之前（routes/pools.ts 的違約門檻），所以 prizeId 用 stub。 */
+      prizes: stubPledges(10).map(id => ({
+        tier: 'D' as const, prizeId: id, card: { id: 'c-x', name: '測試卡', refPrice: 85 }, buyback: 60, total: 1
+      }))
     })
     const bj = await json(blocked)
     check('違約次數達門檻的賣家開不了新池',
@@ -2133,17 +2253,25 @@ async function run() {
          變回可以再開池、可以上架。 */
       {
         const cert = 'STUB-OK-' + Math.floor(Math.random() * 900_000 + 100_000)
+        const relA = { id: 'c-rel-a', name: 'テストカード', setCode: 'SV8a', cardNo: '025',
+          artId: 'SV8a-025', language: 'JP', grader: 'PSA', grade: 10, certNo: cert,
+          image: '', variantId: null, refPrice: null }
+        const relD = { id: 'c-rel-d', name: '生卡', setCode: 'SV8a', cardNo: '001',
+          artId: 'SV8a-001', language: 'JP', grader: 'RAW', grade: null, certNo: null,
+          image: '', variantId: null, refPrice: null }
+        /* 兩張都先登記進卡冊（A-4：建池只能從卡冊挑）。
+           **兩張都會被解押**，所以下面那條通知的張數是 2 而不是 1 ——
+           改之前只有帶編號的那一張會進 prizes（023 只押帶編號的），
+           裸卡那一張根本不存在於卡冊，當然也不會被解押回去。
+           張數變了，測的東西沒變：驗的仍然是「沒抽走的卡回到卡冊、
+           通知說得出張數、指得到卡冊、重掃不會再發一次」。 */
+        const relAId = await bookCard(seller, relA)
+        const relDId = await bookCard(seller, relD)
         const r = await json(await call(seller, '/v1/pools', {
           mode: 'muteki', title: '解押通知測試池', ticketPrice: 100, totalTickets: 2,
           prizes: [
-            { tier: 'A', total: 1, buyback: 50, certConfirmed: true,
-              card: { id: 'c-rel-a', name: 'テストカード', setCode: 'SV8a', cardNo: '025',
-                language: 'JP', grader: 'PSA', grade: 10, certNo: cert,
-                image: '', variantId: null, refPrice: null } },
-            { tier: 'D', total: 1, buyback: 50,
-              card: { id: 'c-rel-d', name: '生卡', setCode: 'SV8a', cardNo: '001',
-                language: 'JP', grader: 'RAW', grade: null, certNo: null,
-                image: '', variantId: null, refPrice: null } }
+            { tier: 'A', prizeId: relAId, total: 1, buyback: 50, card: relA },
+            { tier: 'D', prizeId: relDId, total: 1, buyback: 50, card: relD }
           ]
         }))
         const pid = r.poolId
@@ -2158,7 +2286,7 @@ async function run() {
           const n = withRef(await notifs(seller), 'pool-released:' + pid)
           check('池揭曉後，賣家收到「沒抽走的卡已回到卡冊」', n.length === 1, `${n.length} 則`)
           check('通知說得出張數，而且指到卡冊',
-            String(n[0]?.title ?? '').includes('1 張') && n[0]?.link === '/me/cards',
+            String(n[0]?.title ?? '').includes('2 張') && n[0]?.link === '/me/cards',
             `${n[0]?.title} link=${n[0]?.link}`)
           await fetch(`${base}/v1/dev/sweep-pools`, { method: 'POST', headers: devHeaders() })
           check('重掃不會再發一次（refId 綁 poolId）',

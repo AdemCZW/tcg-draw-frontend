@@ -59,6 +59,10 @@ await call(platform, '/v1/admin/grant', { userId: 'u-seller', points: 5_000_000,
    平台已經不查證編號真偽，所以現在不會再有「其實是被 CERT_NOT_FOUND 擋掉」
    那種假通過 —— 但這條區別仍然是這支測試的重點。 */
 const RUN = String(Date.now()).slice(-8)
+let nameSeq = 0
+/* 裸卡沒有編號，卡冊裡可以有很多列同名的卡；名字帶序號只是為了
+   讀測試輸出時分得出是哪一張，不是規則。 */
+const uniqName = () => `${RUN}-${++nameSeq}`
 const CERT = `STUB-OK-349-${RUN}`
 const CERT2 = `STUB-OK-237-${RUN}`
 const certCard = (certNo: string) => ({
@@ -70,14 +74,43 @@ const plainCard = {
   setCode: 'sv8a', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 900
 }
 
-const makePool = (title: string, certNo: string) => call(seller, '/v1/pools', {
-  mode: 'muteki', title, ticketPrice: 2000, totalTickets: 4, days: 7,
-  prizes: [
-    { tier: 'A', card: certCard(certNo), total: 1 },
-    { tier: 'D', card: plainCard, total: 3 }
-  ],
-  tierBuyback: { A: 3000, D: 200 }
-})
+/**
+ * 把一張卡登記進卡冊，回傳那一列的 id。
+ *
+ * A-4 之後 `prizeId` 是必填的：建池只能從卡冊挑，
+ * 023 那條「內嵌鑑定卡就順手替你開一列」的舊路徑已經整條收掉。
+ * 所以這支測試原本靠建池順便產生的那一列卡，現在要自己先登記。
+ * **驗的東西一條都沒有變**：下面每一段仍然是同一個編號、同一組斷言，
+ * 只是「那一列卡從哪裡來」換成了卡冊登記。
+ *
+ * 同一個編號登記第二次時 /v1/cardbook/upload 回 409 ALREADY_IN_BOOK，
+ * 而且帶著既有那一列的 prizeId —— 這裡照收，因為這支測試要問的
+ * 正是「拿同一張卡（同一列）再開一次池會怎樣」。
+ */
+async function bookCard(card: Record<string, unknown>): Promise<string> {
+  const r = await call(seller, '/v1/cardbook/upload', { card })
+  const b = await json(r.clone())
+  if (r.ok) return b.prize.id as string
+  if (b.error === 'ALREADY_IN_BOOK' && b.prizeId) return b.prizeId as string
+  throw new Error(`登記卡片失敗 ${r.status} ${JSON.stringify(b).slice(0, 200)}`)
+}
+
+/* 4 籤的池 = 4 張實體卡（1 張鑑定卡 + 3 張裸卡），全部先進卡冊再挑。
+   一張實體卡一個籤位，所以裸卡那一項從「total: 3」變成三列各 total: 1 ——
+   籤數不變（4），測到的東西不變。 */
+const makePool = async (title: string, certNo: string) => {
+  const certId = await bookCard(certCard(certNo))
+  const plainIds: string[] = []
+  for (let i = 0; i < 3; i++) plainIds.push(await bookCard({ ...plainCard, name: `${plainCard.name} ${uniqName()}` }))
+  return call(seller, '/v1/pools', {
+    mode: 'muteki', title, ticketPrice: 2000, totalTickets: 4, days: 7,
+    prizes: [
+      { tier: 'A', prizeId: certId, card: certCard(certNo), total: 1 },
+      ...plainIds.map(id => ({ tier: 'D' as const, prizeId: id, card: plainCard, total: 1 }))
+    ],
+    tierBuyback: { A: 3000, D: 200 }
+  })
+}
 
 head('建池時帶編號的獎品要進卡冊')
 const p1r = await makePool('023 測試池 A', CERT)

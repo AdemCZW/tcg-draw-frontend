@@ -12,12 +12,16 @@
  * 只收自己的 `in_book`、轉成 `in_pool`。一列卡只有一個 status，
  * 物理上不可能同時 in_pool 兩次。
  *
- * ── 這支同時把「改之前真的會過」記錄下來 ────────────────────────────
- * 第 0 組跑的是**沒有 prizeId 的舊路徑**，而它現在**仍然會成功** ——
- * 那是這一輪已知還開著的缺口（把 prizeId 改成必填會讓 smoke.ts 十幾處
- * 直接送內嵌卡片的建池斷言全部倒下，而那支檔案這一輪不能改）。
- * 這一組刻意留著並印出來：一個沒有被寫下來的缺口跟一個不存在的缺口
- * 在測試報告上長得一模一樣。
+ * ── 第 0 組：那個缺口已經關上了 ────────────────────────────────────
+ * 前一輪 prizeId 還是選填，所以「沒帶 prizeId 的內嵌裸卡」照樣開得成池，
+ * 第 0 組刻意斷言**那個缺口還在**（一個沒被寫下來的缺口跟一個不存在的
+ * 缺口在測試報告上長得一樣）。這一輪 prizeId 改成必填，那條側門封死，
+ * 所以第 0 組整組翻面：同一支重現腳本，五次全部要被擋，
+ * 而且訊息要說得出下一步（去把卡片登記進卡冊），不是「參數不合法」。
+ *
+ * 一起消失的是 023 的舊路徑（只帶 certNo → 建池時當場替你開一列卡）：
+ * 必填之後它永遠走不到，程式碼已經刪掉，第 8 組驗的是它真的被擋而且
+ * **沒有偷偷替任何人開一列卡**。
  *
  * ── 用法 ────────────────────────────────────────────────────────────
  *   createdb vd_inv
@@ -143,22 +147,37 @@ const cardRow = async (id: string) =>
   (await sql`select id, user_id, status, pool_id from prizes where id = ${id}`)[0] as Any
 
 // ───────────────────────────────────────────────────────────────────
-head('0 舊路徑（沒有 prizeId）—— 已知還開著的缺口')
+head('0 ★ 舊路徑（沒有 prizeId）—— 缺口已經關上')
 {
+  /* 這一段跟 07952b1 的 commit 訊息裡那份重現腳本**逐字同形**：
+     同一張裸卡連開五個池。改之前五次全部 HTTP 200、卡冊裡 in_pool 是 0 列；
+     現在五次都要被擋。留著整組跑五次而不是跑一次，是因為這個缺口的形狀
+     就是「第二次以後還會過」—— 只跑一次看不出差別。 */
   const bare = { id: 'c-bare', name: `舊路徑裸卡 ${uniq()}` }
   const mk = (t: string) => call(seller, '/v1/pools', {
     mode: 'muteki', title: t, ticketPrice: 500, totalTickets: 3, days: 7,
     prizes: [{ tier: 'A', card: bare, total: 3 }], tierBuyback: { A: 260 }
   })
   const codes: number[] = []
-  for (let i = 0; i < 3; i++) codes.push((await mk(`舊路徑池 ${uniq()}`)).status)
-  ck('★ 內嵌裸卡仍然可以連開三個池（缺口存在，不是被修掉了）',
-    codes.every(s => s === 200), `狀態碼 = ${codes.join(', ')}`)
+  const bodies: Any[] = []
+  for (let i = 0; i < 5; i++) {
+    const r = await mk(`舊路徑池 ${uniq()}`)
+    codes.push(r.status)
+    bodies.push(await json(r))
+  }
+  note(`五次的狀態碼：${codes.join(', ')}（改之前是 200, 200, 200, 200, 200）`)
+  ck('★ 內嵌裸卡五次全部被擋（一次都不能過）', codes.every(s => s === 400),
+    `狀態碼 = ${codes.join(', ')}`)
+  ck('錯誤碼是 PRIZE_ID_REQUIRED，不是籠統的 BAD_REQUEST',
+    bodies.every(b => b.error === 'PRIZE_ID_REQUIRED'),
+    bodies.map(b => b.error).join(', '))
+  ck('★ 訊息說得出下一步（先把卡片登記進卡冊），不是「參數不合法」',
+    bodies.every(b => typeof b.message === 'string' && b.message.includes('登記進卡冊')),
+    String(bodies[0]?.message))
   const [n] = await sql<{ n: string }[]>`
-    select count(*)::text as n from prizes
-     where user_id = 'u-seller' and status = 'in_pool' and card->>'name' = ${bare.name}`
-  ck('而且卡冊裡一列都沒有被押住（這就是漏洞的樣子）', Number(n?.n ?? -1) === 0, `in_pool 列數 = ${n?.n}`)
-  note('這一組是刻意留著的紅線：把 prizeId 改成必填才會關掉它，見檔頭。')
+    select count(*)::text as n from pools
+     where seller_id = 'u-seller' and title like ${'舊路徑池 %'}`
+  ck('而且一個池都沒有被建出來', Number(n?.n ?? -1) === 0, `池數 = ${n?.n}`)
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -371,7 +390,13 @@ head('8 反向：正常的池都還開得起來（沒有誤擋）')
   ck('卡冊裡的鑑定卡開得起來', r1.ok, `${r1.status} ${await r1.clone().text()}`)
   ck('那一列也轉成 in_pool', (await cardRow(c.id))?.status === 'in_pool')
 
-  // 舊路徑：內嵌鑑定卡（023 的路，不帶 prizeId）
+  /* 023 的舊路徑（內嵌鑑定卡、不帶 prizeId）**已經整條收掉**。
+     這裡驗的是兩件事，第二件比第一件重要：
+       1 它被擋下來了；
+       2 它**沒有偷偷替任何人在 prizes 開一列** —— 舊路徑最貴的那個副作用
+         就是「建池順手替賣家宣告他手上有這張實體卡」，而那是整套機制
+         唯一不能自我宣告的一件事（U-6）。整筆回滾不等於沒發生過，
+         所以直接去資料庫確認那個編號不存在。 */
   const legacyCert = `INV-LEGACY-${uniq()}`
   const r2 = await call(seller, '/v1/pools', {
     mode: 'muteki', title: `舊路徑鑑定卡 ${uniq()}`, ticketPrice: 500, totalTickets: 2, days: 7,
@@ -380,11 +405,16 @@ head('8 反向：正常的池都還開得起來（沒有誤擋）')
       { tier: 'D', card: { id: 'c-p', name: '舊路徑裸卡' }, total: 1 }
     ], tierBuyback: { A: 260, D: 200 }
   })
-  ck('023 的舊路徑沒有被打壞（內嵌鑑定卡照樣開得起來）', r2.ok, `${r2.status} ${await r2.clone().text()}`)
+  const r2j = await json(r2.clone())
+  ck('★ 023 的舊路徑（內嵌鑑定卡）也被擋了 —— 帶編號不再是繞過卡冊的側門',
+    r2.status === 400 && r2j.error === 'PRIZE_ID_REQUIRED', `${r2.status} ${JSON.stringify(r2j).slice(0, 160)}`)
   const [legacyRow] = await sql`select status from prizes where cert_no = ${legacyCert}`
-  ck('而且它照樣被押進卡冊', (legacyRow as Any)?.status === 'in_pool', String((legacyRow as Any)?.status))
+  ck('★ 而且沒有替他開出那一列卡（建池不再代替賣家宣告「卡在我手上」）',
+    legacyRow === undefined, JSON.stringify(legacyRow))
 
-  // 混合：一張卡冊卡 + 一張內嵌裸卡
+  /* 混合池（一張從卡冊挑、一張內嵌）也要整筆被擋。
+     「一個池裡混兩種來源」是這條防線最容易被開回去的形狀：
+     只要有一項不帶 prizeId，那一項就沒有任何實體卡在後面。 */
   const mixName = `混合 ${uniq()}`
   const mixId = await seedBare('u-seller', mixName)
   const r3 = await call(seller, '/v1/pools', {
@@ -394,8 +424,9 @@ head('8 反向：正常的池都還開得起來（沒有誤擋）')
       { tier: 'D', card: { id: 'c-x', name: '內嵌普卡' }, total: 2 }
     ], tierBuyback: { A: 260, D: 200 }
   })
-  ck('混合池（卡冊卡 + 內嵌裸卡）開得起來', r3.ok, `${r3.status} ${await r3.clone().text()}`)
-  ck('卡冊那一張被押住', (await cardRow(mixId))?.status === 'in_pool')
+  ck('★ 混合池（卡冊卡 + 內嵌裸卡）整筆被擋', r3.status === 400, `${r3.status} ${await r3.clone().text()}`)
+  ck('那張卡冊卡沒有被押掉（整筆回滾）', (await cardRow(mixId))?.status === 'in_book',
+    String((await cardRow(mixId))?.status))
 }
 
 // ───────────────────────────────────────────────────────────────────

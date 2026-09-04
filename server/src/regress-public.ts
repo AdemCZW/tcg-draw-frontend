@@ -61,14 +61,46 @@ const plainCard = {
   id: 'c-SV8a-237', name: '太樂巴戈斯 ex UR', artId: 'SV8a-237', cardNo: '237/187',
   setCode: 'sv8a', language: 'JP', grader: 'RAW', grade: null, certNo: null, refPrice: 900
 }
-const makePool = (title: string, certNo: string, tickets = 4) => call(seller, '/v1/pools', {
-  mode: 'muteki', title, ticketPrice: 2000, totalTickets: tickets, days: 7,
-  prizes: [
-    { tier: 'A', card: certCard(certNo), total: 1 },
-    { tier: 'D', card: plainCard, total: tickets - 1 }
-  ],
-  tierBuyback: { A: 3000, D: 200 }
-})
+/**
+ * 把一張卡登記進卡冊，回傳那一列的 id。
+ *
+ * A-4 之後 `prizeId` 是必填的：建池只能從卡冊挑，023 那條「內嵌鑑定卡
+ * 就順手替你開一列」的舊路徑已經整條收掉。所以原本靠建池順便產生的
+ * 那一列卡，現在要自己先登記 —— **驗的東西一條都沒有變**，
+ * 只是「那一列卡從哪裡來」換了地方。
+ *
+ * 同一個編號登記第二次時 /v1/cardbook/upload 回 409 ALREADY_IN_BOOK
+ * 並帶著既有那一列的 prizeId，這裡照收：這幾支測試問的正是
+ * 「拿同一張卡（同一列）再開一次池會怎樣」。
+ */
+async function bookCard(tok: string, card: Record<string, unknown>): Promise<string> {
+  const r = await call(tok, '/v1/cardbook/upload', { card })
+  const b = await json(r.clone())
+  if (r.ok) return b.prize.id as string
+  if (b.error === 'ALREADY_IN_BOOK' && b.prizeId) return b.prizeId as string
+  throw new Error(`登記卡片失敗 ${r.status} ${JSON.stringify(b).slice(0, 200)}`)
+}
+let nameSeq = 0
+/* 裸卡沒有編號，卡冊裡可以有很多列同名的卡；名字帶序號只是為了讀測試
+   輸出時分得出是哪一張，不是規則。 */
+const uniqName = () => `${Date.now().toString(36)}-${++nameSeq}`
+
+/* N 籤的池 = N 張實體卡（1 張鑑定卡 + N−1 張裸卡），全部先進卡冊再挑。 */
+const makePool = async (title: string, certNo: string, tickets = 4) => {
+  const certId = await bookCard(seller, certCard(certNo))
+  const plainIds: string[] = []
+  for (let i = 0; i < tickets - 1; i++) {
+    plainIds.push(await bookCard(seller, { ...plainCard, name: `${plainCard.name} ${uniqName()}` }))
+  }
+  return call(seller, '/v1/pools', {
+    mode: 'muteki', title, ticketPrice: 2000, totalTickets: tickets, days: 7,
+    prizes: [
+      { tier: 'A', prizeId: certId, card: certCard(certNo), total: 1 },
+      ...plainIds.map(id => ({ tier: 'D' as const, prizeId: id, card: plainCard, total: 1 }))
+    ],
+    tierBuyback: { A: 3000, D: 200 }
+  })
+}
 
 const prizeOf = async (tok: string, pred: (x: Any) => boolean) =>
   ((await json(await call(tok, '/v1/prizes?limit=100'))).items ?? []).find(pred)
