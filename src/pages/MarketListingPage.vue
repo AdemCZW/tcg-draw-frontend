@@ -17,7 +17,11 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api } from '@/lib/api'
+import { api, MOCK } from '@/lib/api'
+/* 直接用傳輸層而不是 api.ts 的方法：這一輪這條線只擁有這一頁，
+   api.ts 不歸它動（見 docs/open-issues.md D-2 的分工）。之後要把這支
+   收編進 api.ts 的話，位置在 getListing 旁邊。 */
+import { http } from '@/lib/http'
 import { deliveryOf } from '@/shared/domain'
 import type { Listing, Seller } from '@/types/models'
 import { useWalletStore } from '@/stores/wallet'
@@ -54,11 +58,47 @@ const diffPct = computed(() => {
   return Math.round(((l.price - l.card.refPrice) / l.card.refPrice) * 100)
 })
 
+/**
+ * 寄存剩餘天數（D-2）。
+ *
+ * 為什麼這一塊非有不可：prizes.stash_expires_at 是抽中當下算的 90 天，
+ * 而**過戶不會重設它**（那 90 天量的是實體卡在原賣家抽屜裡放了多久，
+ * 庫內轉移不搬動實體卡）。所以市場上這張卡可能只剩 1 天 ——
+ * 不講的話，買家是付完錢才在通知裡看到「已超過寄存期限」，
+ * 而他以為自己買到的是一張剛開始寄存的卡。這是資訊落差，不是規則問題。
+ */
+type Stash = { expiresAt: number; daysLeft: number; totalDays: number; heldByOther: boolean }
+const stash = ref<Stash | null>(null)
+/** 剩兩週以內就轉成警示色 —— 跟後端寄存提醒的 STASH_WARN_MS 同一個門檻 */
+const stashUrgent = computed(() => !!stash.value && stash.value.daysLeft <= 14)
+const stashTitle = computed(() => {
+  const d = stash.value?.daysLeft ?? 0
+  return d <= 0 ? `寄存期限已經過了 ${-d} 天` : `寄存期限剩 ${d} 天`
+})
+const stashBody = computed(() => {
+  const st = stash.value
+  if (!st) return ''
+  /* 「買下不會重新計算」是這一段唯一非講不可的那句話：使用者的預設想像
+     一定是「我買了就從今天開始算」，而事實正好相反。 */
+  return (st.heldByOther ? '這張卡的實體還在原賣家手上。' : '')
+    + `寄存期是抽中之日起 ${st.totalDays} 天，買下不會重新計算 —— `
+    + '你接手的是剩下的天數。期限到了不會沒收、也不影響任何功能，'
+    + '只是提醒你把卡處理掉：申請出貨拿到實體卡，或再上架賣掉。'
+})
+
 onMounted(async () => {
   try {
     const l = await api.getListing(id.value)
     listing.value = l
     missing.value = !l
+    /* 只有庫內轉移問得到（需寄送的卡成交就會寄到買家手上，寄存在那一刻結束），
+       而且要登入 —— 端點掛在 /v1/orders 底下。拿不到就整塊不畫：
+       這是附加資訊，不該讓它的失敗擋住整頁。 */
+    if (l && deliveryOf(l) === 'vault' && auth.isLoggedIn && !MOCK) {
+      try {
+        stash.value = (await http<{ stash: Stash | null }>(`/v1/orders/listings/${id.value}/stash`)).stash
+      } catch { stash.value = null }
+    }
     /* 賣家資料拿不到不該擋住整頁：市場上大多數掛單是玩家掛的，
        玩家不是賣家（沒有審核等級可查），那時候只顯示名字就好。 */
     if (l) {
@@ -302,6 +342,14 @@ async function delist() {
           </p>
         </div>
 
+        <!-- 寄存剩餘天數。緊接在通道說明後面：兩者講的是同一件事的兩半 ——
+             「成交即過戶」講的是卡會變成你的，這一塊講的是那張卡已經放了多久。
+             只有庫內轉移會有這一塊（見 script 的說明）。 -->
+        <div v-if="stash" class="seg stashSeg" :class="stashUrgent ? 'urgent' : 'calm'">
+          <strong class="stashTitle">{{ stashTitle }}</strong>
+          <p class="cnote">{{ stashBody }}</p>
+        </div>
+
         <!-- 卡況與賣家排在同一份清單裡：對買家來說「這是什麼卡」跟
              「這是誰在賣」是同一個問題的兩半，沒有理由分成兩個區塊 -->
         <dl class="seg facts">
@@ -455,6 +503,9 @@ async function delist() {
           用 <strong class="mono">{{ listing.price.toLocaleString() }}</strong> 點買下？
           餘額將剩 <span class="mono">{{ (wallet.shown - listing.price).toLocaleString() }}</span> 點。
           <span class="cqLane">{{ lane === 'vault' ? '成交立刻過戶進卡冊。' : '點數凍結，等收貨才放款。' }}</span>
+          <!-- 快到期的話在**按下確定的那一刻**再講一次。上面那一塊在頁面流裡，
+               使用者完全可能捲過去就忘了；這一行跟金額在同一句話裡，躲不掉。 -->
+          <span v-if="stashUrgent" class="cqStash">{{ stashTitle }}，買下不會重新計算。</span>
         </p>
         <div class="crow">
           <button type="button" class="btn" :disabled="busy" @click="confirming = false">取消</button>
@@ -546,6 +597,17 @@ async function delist() {
 .laneTitle { display: block; font-size: 13.5px; letter-spacing: -.01em; }
 .laneSeg.vault .laneTitle { color: var(--ok-ink); }
 .cnote { font-size: 12.5px; line-height: 1.75; color: var(--muted); margin: 4px 0 0; }
+/* 寄存剩餘天數。兩種語氣共用版面，只換底色與字色 ——
+   換版面的話「剩 88 天」與「剩 1 天」會長得像兩種不同的東西，
+   而它們是同一件事的兩端。 */
+.stashSeg.calm { background: var(--info-wash); }
+.stashSeg.urgent { background: var(--warn-wash); }
+.stashTitle { display: block; font-size: 13.5px; letter-spacing: -.01em; }
+.stashSeg.calm .stashTitle { color: var(--info-ink); }
+.stashSeg.urgent .stashTitle { color: var(--warn-ink); }
+.stashSeg.calm .cnote { color: color-mix(in srgb, var(--info-ink) 74%, var(--muted)); }
+.stashSeg.urgent .cnote { color: color-mix(in srgb, var(--warn-ink) 78%, var(--muted)); }
+.cqStash { display: block; margin-top: 3px; color: var(--warn-ink); font-weight: 600; }
 .laneSeg.vault .cnote { color: color-mix(in srgb, var(--ok-ink) 78%, var(--muted)); }
 
 /* 卡況與賣家共用一份清單。右欄要 minmax(0, 1fr)：grid 子元素預設是

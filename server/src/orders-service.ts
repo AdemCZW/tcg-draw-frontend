@@ -281,7 +281,14 @@ async function releasePrize(tx: Tx, o: Order) {
     /* custodian 一起改：託管訂單的完成定義就是「實體卡寄到了買家手上」
        （出貨＋簽收或鑑賞期滿）。這是站內唯一「實體真的移動」的交易路徑，
        custodian 不跟著走的話，buyer 之後把這張卡上架，能不能上架的判準
-       （custodian 是不是自己）會給出錯的答案。 */
+       （custodian 是不是自己）會給出錯的答案。
+
+       stash_expires_at **在這裡也不用動**（D-2），但理由跟庫內轉移那兩條
+       不一樣：那兩條是「實體沒動所以時鐘不該歸零」，這一條是實體真的動了，
+       而且動到了買家自己手上 —— 寄存這件事在這一刻就結束了。status 一改成
+       'shipped'，pools-service.ts 的 sweepStashExpiry 就再也掃不到它
+       （那支只看 status = 'stashed'），欄位裡留著的舊值不再被任何人讀。
+       特地寫一個 now + 90 天進去只是製造一個沒有意義、之後會被誤讀的數字。 */
     await tx`
       update prizes p set user_id = ${o.buyerId}, custodian_id = ${o.buyerId}, status = 'shipped'
       from listings l

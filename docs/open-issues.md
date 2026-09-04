@@ -1,7 +1,7 @@
 # VaultDraw 未解問題總表
 
 把散在五份稽核報告、HANDOFF、和這一輪程式碼閱讀裡的東西合成一張表。
-**只列還沒解決的**；已修的不重複（那些在各自報告裡標了「已修」）。
+待辦順序只列尚未解決的事項；已修項目僅保留精簡的稽核追溯，避免舊報告的結論再次被誤認為現況。
 
 最後更新：2026-09-03（I-1／I-2／I-3 三條已修並實測；其餘維持 2026-08-27 的第三次查證）
 
@@ -19,7 +19,7 @@
 | ~~S-1 mode check~~ | **不用做 —— 016 早就修了，是我的清單寫錯。**見第四節的更正 |
 | **W-1〜W-3 前端錯誤態** | **已修並驗過。** 斷網時四頁都出中文「連不上伺服器，請檢查網路後重試」＋重試鈕，不再說「池已下架」 |
 | **W-4 桌機出貨入口** | **已做，但還沒 commit**（前端 header 工作線正在跑）。`src/components/AppHeader.vue:102-104` |
-| **L-1 / L-2 / L-4** | **修正中，全部還沒 commit。**查證途中那條工作線落了地（新增 `server/src/limits.ts`、`server/src/card-public.ts`）。L-4 已改完；**L-1 與 L-2 只做完卡冊那一半，市場那一半（`routes/public.ts`）還沒碰**。見第五節 |
+| **L-1 / L-2 / L-4** | **已修。**市場掛價已有限額、公開市場／池展示都走 `publicCard()` 白名單，建池上游錯誤只記錄在 server log、不再外送。舊的「只修一半」描述已失效。 |
 | **全表查證（本輪）** | 逐條重讀程式碼查過第四〜七、九節。**又抓到三條誤記**（M-1 的理由、L-3 與 L-4 的出處），一條要改寫（W-5），一條要重新評估（V-1）。詳見各節 |
 
 > **這一輪為什麼要全表重查**：S-1 被證實是誤記之後，把同樣的懷疑套到整張表。
@@ -94,7 +94,7 @@ U-1〜U-5 是 [inventory-first-plan.md](inventory-first-plan.md) 要解的。
 
 | # | 問題 | 驗證 | 狀態 |
 |---|---|---|---|
-| P-1 | **Railway 啟動指令還有 `npm run seed`** —— 每次部署重塞一批假掛單與假池 | 讀碼＋實測 | `server/railway.json` 的 `startCommand`：`npm run migrate && npm run seed && npm start`。**security-audit 把這條標為最高優先，現在還在**。<br>**2026-08-27 補上後果的實際量體**（見 P-5 的實測）：原本寫的是「塞了一些假資料」，實際上是**正式網址上陳列的商品 100% 是假的** —— 公開 API 撈到的 32 個池，`clientSeedSource` 全部以 `fixture:` 開頭，**沒有一個是真實賣家開的**。這不是資料乾淨度問題，是整間店沒有一件真貨 |
+| ~~P-1~~ | ~~Railway 啟動指令含 `npm run seed`，每次部署重塞假資料~~ **已修** | 讀碼（2026-09-04） | `server/railway.json` 現為 `npm run migrate && npm start`；seed 僅留在本機開發腳本。既有正式資料是否仍包含 fixture，應另以 production API／資料庫盤點，不可把舊的 2026-08-27 結果當成現況。 |
 | ~~P-2~~ | ~~LINE 登入送 1,000,000 點~~ | 讀碼＋型別檢查 | **已修（2026-09-02）。**移除 `line-signup-bonus` 的帳本貸記與通知；LINE OAuth 現在只負責建立／登入帳號，不再是點數發行入口。既有歷史分錄仍列為對帳發行來源，避免造成假 drift。 |
 | P-3 | **`DEV_LOGIN` 每次部署仍應確認正式環境是關的** | 實測＋型別檢查 | **已緩解（2026-09-02）。**2026-08-27 的唯讀實測顯示正式環境端點回 404。現在即使誤設 `DEV_LOGIN=1`，`env.ts` 會要求至少 32 字元的 `DEV_LOGIN_SECRET`，少設即拒絕啟動；所有 `/v1/auth/dev-login` 與 `/v1/dev/*` 另要求 `x-dev-login-secret`。這不取代部署檢查，但已移除「單一旗標誤設就可接管」的風險。 |
 | P-4 | ~~**C-1 的低熵種子閘沒有加**~~ **已加**（見上方進度表） | 讀碼 | `assertSeedEntropy()` 定義在 `server/src/pools-service.ts:41`，兩條寫入路都過閘：`commitPool()`（`pools-service.ts:159`）與 `seedPool()`（`seed.ts:461`）。產生端也對了：`seed.ts:456` 是 `randomBytes(32).toString('hex')` |
@@ -178,12 +178,12 @@ C-1 講的是「正式環境有 12 個籤序算得出來的池在收錢」——
 
 | # | 問題 | 嚴重度 | 驗證 | 現況 |
 |---|---|---|---|---|
-| M-1 | 註冊端點的速率限制**擋不到要擋的東西** | Medium | 讀碼 | **這條的敘述是誤記，結論不變。**原本寫「實際上沒有速率限制」—— 錯的：`server/src/routes/auth.ts:41-48` 註冊時**確實**有 `checkLimit(['ip:' + clientIp(c)])` 並回 429。<br>真正的破口是**計數只在失敗時累加**：`bumpFail(regKeys)` 只出現在 EMAIL_TAKEN 的 `catch` 裡（`auth.ts:65`），**成功註冊那條路（`auth.ts:68`）完全不計數**。所以「用不同 email 大量灌帳號」永遠觸發不了限制，被擋住的只有「一直拿同一個已註冊 email 去試」—— 剛好是最沒有攻擊價值的那種。<br>兩個附帶弱點：① `clientIp()`（`server/src/rate-limit.ts:28-33`）取 `x-forwarded-for` 的**第一段**，那是呼叫端可以自己填的，換一個值就換一個桶；② 註冊跟登入共用同一個 `ip:` 桶（`MAX_FAILS_IP = 40`，`rate-limit.ts:23`），所以登入打錯幾十次會連帶把註冊鎖住。<br>計數存 Postgres（`rate-limit.ts:41-72`）這點是對的，重新部署不會歸零 |
+| ~~M-1~~ | ~~註冊端點的速率限制擋不到大量成功註冊~~ **已修** | 讀碼（2026-09-04） | 註冊改用獨立 `reg-ip:` 日配額，通過檢查的每次嘗試都計數；`clientIp()` 取 Railway 代理附加的最後一段，不再由呼叫端可偽造的第一段決定 bucket。 |
 | ~~M-2~~ | **已加 CSP（2026-08-27）。** meta 版，build 時依環境變數生成（`vite.config.ts` 的 `cspPlugin`）。`script-src 'self'` 沒有 unsafe-inline —— 為此移除了 index.html 的 GA 片段（掛的是佔位 ID `G-XXXXXXX`，每次載入都真的去打 googletagmanager 卻收不到任何資料）與字體的 inline `onload`（搬進 `main.ts`）。**已知缺口：`frame-ancestors` 在 meta CSP 裡會被瀏覽器忽略**，所以防點擊劫持在換到能設 HTTP 標頭的主機之前做不到。`style-src` 仍需 `'unsafe-inline'`（執行期的動態 `:style` 綁定，風險遠低於腳本）。驗證：建置產物實跑 8 條路由，0 CSP 違規、43 張卡圖 0 破圖、0 console 錯誤 |
-| L-1 | 金額欄位沒有上界，塞大數字會 500 | Low | 讀碼 | **修正中（做完一半，未 commit）。**原本「金額欄位沒有上界」是以偏概全 —— 大多數欄位早就有界：`refPrice`（`routes/pools.ts:217` `REF_PRICE_MAX`，套用在 `:234`）、買回價（`pools.ts:222-224`，常數在 `shared/pool-settlement.ts:81-82`）、後台發點數（`routes/admin.ts:39`）、交易邀約（`routes/social.ts:140`）。<br>**本輪落地**：新增 `server/src/limits.ts`（`POINTS_INPUT_MAX = 1_000_000_000`，`:41`），票價已補上界（`pools.ts:288-289`）。<br>**還沒補的一個，而且正是 500 的那一個**：市場掛單價 `price`（`routes/public.ts:235` 仍只有 `.int().positive()`，欄位 `bigint`／`001_init.sql:35`）。上架的 `catch`（`public.ts:302-303`）只放行 `23505`，其餘原樣往上丟 → Postgres 的數值溢位變成沒人接的例外，落到 Hono 預設 500。`public.ts` 目前不在 `git diff` 裡 |
-| L-2 | **公開 API 回傳 `certNo`** —— 跟第二節直接相關：編號公開等於把「可以拿去別處登記的東西」送出去 | Low | 讀碼 | **修正中（做完一半，未 commit）。**範圍比原本寫的大：不只公開卡冊，市場也漏。<br>**本輪落地**：新增 `server/src/card-public.ts` —— 走**白名單**而不是刪 `certNo`（因為 `card` 是 jsonb 且建池端用 `.passthrough()`，黑名單一定會漏掉未來新增的欄位）。已套用在公開卡冊 `GET /cardbook/:slug`（`routes/social.ts:91`）與 `social.ts:226`。<br>**市場那一側還沒套**：`toListing()`（`routes/public.ts:154-155`）仍然回傳整包 `card`，供 `public.ts:182`、`:207`、`:225-232` 三條公開端點使用；`public.ts:199-201` 還提供一個以 `cert_no is not null` 篩出來的「已鑑定」貨架。`public.ts` 不在 `git diff` 裡 |
+| ~~L-1~~ | ~~金額欄位沒有上界，塞大數字會 500~~ **已修** | 讀碼＋回歸檔 | `POINTS_INPUT_MAX` 已套用到市場掛價與票價；`regress-public.ts` 覆蓋畸形價格全部回 400、不能變成 500。 |
+| ~~L-2~~ | ~~公開 API 回傳 `certNo`~~ **已修** | 讀碼＋回歸檔 | 公開卡冊、市場 listing 與 pool 展示均使用 `publicCard()` 白名單；reveal manifest 例外保留完整編號作為既有公平性驗算證據。 |
 | L-3 | 出貨憑證收任意外部 URL | Low | 讀碼 | **仍成立，但原本寫的出處是錯的。**不在 `sellers.ts`／`prizes.ts`：實際位置是 `server/src/routes/orders.ts:180-184` 的 `photoUrls: z.array(z.string().url()).min(1, ...)` —— **任何 scheme、任何 host 都收，沒有白名單、沒有長度上限、沒有陣列數量上限**，原樣寫進 `orders.ship_photos`（`orders.ts:209-210`）。<br>**第一方的路已經蓋好但沒有被強制走**：`server/src/routes/files.ts:29-38` 定義了 `'ship-photo'` 用途（含 MIME 與大小規則、R2 presign），但 `/ship` 從來不要求那裡發出來的 file id。<br>另兩條出貨路是乾淨的：`sellers.ts:144-166` 的 `ShipOne` 根本不收照片（只收 `carrier` / `tracking`，且 `tracking` 有 `validateTracking`），`prizes.ts` 沒有憑證欄位。`009_ship_evidence.sql:11-16` 的 `ship_photos jsonb` 也沒有任何約束 |
-| L-4 | 上游錯誤訊息直接透給呼叫端 | Low | 讀碼 | **修正中（已改完，未 commit）。原本寫的出處是錯的。**<br>**出處更正**：不在 `psa.ts`／`r2.ts` —— 那兩支反而一直是乾淨的（`psa.ts` 只 `console.warn/error`，對外只回固定的 `ok/reason`；`r2.ts:20`、`:50-55` 直接吞掉錯誤）。`psa.ts` 與 `routes/psa.ts` 之後已整組刪除，見 X-1。真正外洩的是 `routes/pools.ts` 的三個 `catch`，都是 `message: e instanceof Error ? e.message : '…'`，會把 drand 的上游狀態原文（`pools-service.ts:88`、`:99`）與內部狀態字串（如 `pool is draft, not committed`）轉給呼叫端。<br>**本輪落地**：那三處全部改成「只進 log、對外回固定中文訊息」（`pools.ts:505-509`、`:526-529`、`:625-628`）。全檔已經 grep 不到 `e.message` 外送。<br>順帶查到一件好事：`index.ts` **沒有** `app.onError`，所以未捕捉的例外只會落到 Hono 的通用 500，不會外洩 |
+| ~~L-4~~ | ~~上游錯誤訊息直接透給呼叫端~~ **已修** | 讀碼（2026-09-04） | `routes/pools.ts` 的建池、開池、公布 catch 均只記錄 server log，對外回固定訊息；全檔沒有將 `Error.message` 直接回傳給呼叫端。 |
 | ~~L-5~~ | ~~LINE 的 JWT 走 URL fragment 回前端~~ | 讀碼＋前後端建置 | **已修（2026-09-02）。**callback 現在只帶一把 256-bit、5 分鐘有效、只能使用一次的 code；資料庫只保存 SHA-256 雜湊，`POST /v1/auth/line/exchange` 以原子 `DELETE ... RETURNING` 交換 JWT。前端先清掉 fragment 才呼叫交換端點。帳號綁定也改為受 Authorization header 保護的 `POST /v1/auth/line/link/start`，不再把既有 JWT 放進 query。 |
 | M-3 | `refPrice` 同時是護欄分母與回收分子 | ~~Medium~~ | — | **已解**（migration 018 把回收換成宣告買回價） |
 
@@ -196,7 +196,7 @@ C-1 講的是「正式環境有 12 個籤序算得出來的池在收錢」——
 | ~~A-1 第一階段~~ | ~~帳號沒有全裝置登出／JWT 撤銷路徑~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | 已新增 `users.session_version`（033）；JWT 帶 `sv`，`requireAuth` 每次比對 DB；改密碼會遞增版本並回發當前裝置的新 token，`POST /v1/auth/logout-all` 可撤銷所有 token。`regress-session.ts` 覆蓋改密碼撤銷、保留當前裝置／不保留、舊 token 相容與並發。 |
 | A-1b | 忘記密碼尚無安全的交付管道 | 產品決策 | 讀碼（2026-09-03） | `session_version` 已處理 token 撤銷，卻不會讓忘記密碼者取得新憑證。必須先決定 Email 寄信服務或已綁定的 LINE 作為安全交付通道；目前不能只新增 reset endpoint 卻沒有安全送出 token 的方式。測試期可用人工帳號恢復工單，但會員編號不能當身分驗證因子。 |
 | ~~A-2~~ | ~~卡冊登記／鑑定編號宣告沒有獨立速率限制~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | `/cardbook/upload` 已使用獨立的 `card-upload-user:<userId>` 與 `card-upload-ip:<ip>` bucket，成功登記也會計數；不與登入失敗共用，且不把無法防止首次搶註的 per-cert 限流當作防線。`regress-ratelimit.ts` 覆蓋上限、`Retry-After`、NAT／帳號隔離與跨桶不互相封鎖。 |
-| A-3 | 公開賣家列表是逐位賣家序列查詢 | Medium | 讀碼（2026-09-03） | `routes/public.ts` 的 `/sellers` 先撈全部賣家，再 `await sellerView()`；每一位會進行多次統計查詢。賣家數增加後會有 N+1 延遲，並長時間占用 Railway 的連線池。<br>**修法**：先加 cursor/limit（預設 20、上限 100）；將賣家資料、池／訂單／抽卡統計改成批次聚合查詢，近期期獎項也批次查；公開統計可快取 30–60 秒。 |
+| ~~A-3~~ | ~~公開賣家列表是逐位賣家序列查詢~~ **已修並有回歸測試（2026-09-04）** | 讀碼＋回歸檔 | `/sellers` 現在以 `(joined_at, id)` 游標分頁（預設 20、上限 100），一頁的賣家資料、池／訂單統計與近期獎項改為固定四條批次查詢；每位最近 8 筆大獎以 `row_number() partition by seller_id` 正確分組。035 補上 `prizes(pool_id)` 與 `sellers(joined_at,id)` 索引。`regress-sellers.ts` 將每位回應逐欄比對改前 ground truth，並驗證分頁不重不漏、空資料賣家不消失、畸形游標回 400、單筆賣家頁一致及 100 位延遲不隨 N 線性放大。 |
 | ~~A-4~~ | ~~裸卡沒有完整的「一張實體卡一列」庫存防線~~ **已修並有回歸測試（2026-09-04）** | 實測 | `prizeId` 現為建池必填：交易內 `for update` 鎖卡冊那一列、只收自己的 `in_book`、轉 `in_pool` 並寫 `pool_prizes.card_id`。**改前重現**：同一張裸卡連開五個池，五次全部 HTTP 200，卡冊裡 `in_pool` 的列數 0（十五個籤位承諾同一張實體卡）；**改後**五次全部 400 `PRIZE_ID_REQUIRED`。卡片身分改以卡冊那一列為準，不採用呼叫端送的 `card` jsonb（否則可押普卡、在 manifest 宣告成噴火龍）。`total > 1` 的語意換位置：一列 `total = 10` 變成十列各押一張實體卡。鎖序照 `d5c8bd3` 先整批鎖完再做事，12 輪 × 4 筆並行建池 `deadlocks` 增量 0。**既有資料刻意不回填**（同 032／034 的尺）：回填等於系統代替賣家宣告「這張實體卡在你手上」（U-6 唯一不能自我宣告的事），且會把已發生的一卡多池洗白 —— 036 之前建的池有沒有一卡多池，事後查不出來。`regress-inventory.ts` 48 條；smoke 413／0（斷言名稱排序後 diff：0 條消失）。**殘留**：`seed.ts` 的示範池仍是舊制（`card_id is null`，解押不回卡冊），該在示範池換成真官方池那天走 API 重建。 |
 | ~~A-5~~ | ~~`in_book` 卡掛單下架後必然回到 `shipped`~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | 032 新增 `listings.previous_status`；上架時記錄原狀態，下架時以白名單精確還原。migration 亦保守回填仍可證明的舊掛單與既有錯轉卡；資訊不足的舊 `ship` 掛單仍採 `shipped` fallback，避免把真實已寄出的卡誤開池。`regress-public.ts` 驗證 `in_book → listing → delist → in_book` 後能再次開池，並驗 stashed 與成交反向路徑。 |
 | ~~A-6~~ | ~~公開池展示資料與公平性 manifest 的鑑定編號曝光規則混在一起~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | pool 列表／詳情展示的卡片已走 `publicCard()` 白名單；revealed manifest 刻意保留完整 `certNo`，因為它是 v2+ commit hash 的序列化輸入。`regress-public.ts` 同時驗證公開展示不含編號、reveal manifest 保留編號且公平性驗算可通過。 |
@@ -238,7 +238,7 @@ C-1 講的是「正式環境有 12 個籤序算得出來的池在收錢」——
 | # | 事情 | 驗證 | 現況 |
 |---|---|---|---|
 | D-1 | **寄存到期怎麼處理** | — | 目前只通知不動。卡冊變成主要容器之後會從「之後再說」變成每天遇到 |
-| D-2 | 過戶時不重設 `stash_expires_at` | 讀碼（2026-08-27 重查，仍成立） | 買家繼承賣家剩下的天數。使用者還沒表態。<br>**重查確認得很乾淨**：全站 `stash_expires_at` **只有一個寫入點** —— 抽中的當下（`server/src/pools-service.ts:283`，`now + STASH_DAYS * DAY`，`STASH_DAYS = 90` 在 `:21`），加上種子的 insert（`seed.ts:649`）。<br>三條過戶路**全部沒碰它**：`orders.ts:102`（庫內成交）、`social.ts:268`（交易邀約成交）、`orders-service.ts:97`（託管訂單完成）—— 三處都特地更新了 `acquired_at` 並寫了註解說明為什麼，卻都沒提到 `stash_expires_at`，**看起來是漏掉而不是決定**。資料庫也補不了：`002_core.sql:191` 是 `bigint not null` 且**沒有 default**。<br>具體後果：一張抽到第 89 天的卡在市場賣掉，新主人只剩 1 天 |
+| D-2 | 過戶時不重設 `stash_expires_at` | 實測（2026-09-04，`server/src/regress-stash.ts`，36 passed / 0 failed） | **結論：不重設是對的，這不是漏掉 —— 已改成揭露，不改行為。**<br>8/27 那次重查的推論（「三處都改了 `acquired_at` 卻沒提 `stash_expires_at`，看起來是漏掉」）站不住：那兩欄量的不是同一件事。`acquired_at` 量「這張卡什麼時候變成你的」（卡冊排序用），`stash_expires_at` 量「這張**實體卡**在 `custodian` 的抽屜裡放了多久」——而 021 已經寫死「站內交易一律不碰 `custodian_id`」，庫內轉移與交易邀約成交時實體卡一步都沒動，時鐘沒有理由歸零。實體真的會動的兩條路（出貨簽收、站外轉手接管）都會把 `status` 移出 `stashed`，而 `sweepStashExpiry` 只掃 `stashed`，那一欄從此不再被讀。<br>**重設反而會開一個免費的洞**：庫內轉移與交易邀約雙方帳目相抵、沒有手續費，兩個自己控制的帳號互相買賣同一張卡就能無限延後到期提醒 —— 而那則提醒是唯一保護實體保管人的機制。`regress-stash.ts` 第 4 組就是那個佈景，實測繞一圈回來到期日不動。<br>**真正的問題是揭露，已修**：`/v1/listings/:id` 只讀 `listings` 那張表，市場頁上一個字都沒有，買家付完錢才收到「已超過寄存期限」的通知。新增 `GET /v1/orders/listings/:id/stash`（`routes/orders.ts`），`MarketListingPage.vue` 在價格區塊下方與購買確認列各講一次，剩兩週內轉警示色。截圖 `docs/shots/stash-expiry/`。<br>039 把這個結論寫成 `comment on column`，避免下一個人照同樣的直覺「修好」它。<br>**還要使用者拍板的是 D-1**（到期之後要做什麼），不是這一條。
 | D-3 | 開池保證金 | — | 沒做，用「新賣家額度上限 + 違約累積」替代 |
 | D-4 | 保底／天井 | — | 沒做。建議不做，使用者還沒確認 |
 | D-5 | 市場交易手續費 | 讀碼（2026-08-27 重查，仍成立） | **0%，而且機制根本不存在** —— 沒有任何 `MARKET_FEE_RATE` 之類的常數，三條市場成交路都是 100% 過手：庫內 `orders.ts:95-96`、託管 `orders-service.ts:55-56`、P2P `social.ts:262-265`（每條都是買家 `-price` / 賣家 `+price`）。<br>市場路上唯一會進平台帳的是沒收的保證金（`orders-service.ts:61-62`）—— 那是**罰則不是手續費**，不要拿它當「已經有抽成」的證據 |
@@ -374,13 +374,14 @@ Process 1786: select id from prizes where id = $1 for update
 
 ## 建議的處理順序
 
-### 2026-09-03 目前待處理順序
+### 2026-09-04 目前待處理順序
 
-1. **A-9：部署前確認 migration 032／033／036 及中間 migration 已套用** —— 這是已完成程式碼能否安全上 production 的前提。
-2. **A-10：設定 GitHub Actions 的 `VITE_R2_UPLOAD_ORIGIN`** —— workflow 現在會正確拒絕缺少 R2 CSP 網域的 production build；設定後再部署。
-3. **A-3：公開賣家列表分頁與批次統計**。
-4. **A-1b：選定忘記密碼的 Email／LINE 交付方案**，再設計單次、短效的恢復流程。
-5. 其餘未解項目按嚴重度與上線時程處理；A-1 第一階段、A-2、A-4、A-5、A-6、A-7、A-8 與 V-1 已完成，不再列入待辦。
+1. **L-3：出貨憑證改為第一方 `ship-photo` file ID** —— 目前 `/ship` 仍接受任意外部 URL，且未限制數量與長度。
+2. **A-1b：選定忘記密碼的 Email／LINE 交付方案**，再設計單次、短效的恢復流程。
+3. **W-5：動態 `/u/:slug` 的 SEO／分享預覽** —— GitHub Pages 對未知 slug 仍回 404；需改到能做 SPA rewrite 或動態渲染的託管。
+4. **P-7：確認平台自營池是否可提供買回價**，並將法律／產品決策落成後端規則。
+5. **D-1、D-2、D-3、D-4、D-5、D-6、D-7**：依產品與法規決策處理寄存期限、轉手期限、保證金、保底與費率。
+6. **X-3、X-4**：外部驗證來源與 Railway 資料庫存取限制，僅在確有對應產品需求時處理。
 
 **這一輪查證的副產品**：三條的敘述是錯的（M-1 的理由、L-3 與 L-4 的出處），
 一條的敘述過時（W-5）。錯法跟 S-1 完全一樣 —— 抄稽核報告的結論與行號，

@@ -295,7 +295,12 @@ social.post('/trade-offers/:id/accept', async c => {
     await tx`insert into points_ledger (user_id, delta, reason, ref_id)
              values (${me}, ${price}, 'trade-sell', ${id}) on conflict do nothing`
     /* 跟市場的庫內轉移同一件事：卡冊照 acquired_at 排，過戶要一起更新，
-       否則買方的卡冊裡這張卡排在賣方抽到它的那天（見 routes/orders.ts 的說明） */
+       否則買方的卡冊裡這張卡排在賣方抽到它的那天（見 routes/orders.ts 的說明）。
+       **stash_expires_at 同樣刻意不動**，理由也在那一段（D-2）：這條路
+       跟庫內轉移一樣只換 owner、不搬實體卡（custodian_id 沒動），
+       寄存的時鐘量的是實體卡在原賣家那裡放了多久，換人擁有不會讓它歸零。
+       交易邀約這條更需要守住這一點 —— 兩個帳號互相接受出價的成本是零，
+       重設的話那個時鐘可以被無限往後推。 */
     await tx`update prizes set user_id = ${o.from_user}, acquired_at = ${Date.now()} where id = ${o.prize_id}`
 
     // 同一張卡上其他人還在等的出價全部作廢：卡已經不是我的了，不可能再答應

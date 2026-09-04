@@ -15,7 +15,8 @@ import { requireAuth } from '../auth.js'
 import { notify } from '../notify.js'
 import { lockSpender, walletOf } from '../money.js'
 import { PLATFORM_ID, depositFor, save, settle, sweep, toOrder } from '../orders-service.js'
-import { actionsFor, validateTracking } from '../shared/escrow.js'
+import { DAY, actionsFor, validateTracking } from '../shared/escrow.js'
+import { STASH_DAYS } from '../pools-service.js'
 import { openDisputeTicket } from '../tickets.js'
 import type { Order } from '../shared/domain.js'
 
@@ -62,6 +63,67 @@ orders.get('/', async c => {
     return rows.map(r => toOrder(r as Record<string, unknown>))
   })
   return c.json({ orders: body, wallet: await walletOf(me), serverTime: Date.now() })
+})
+
+/**
+ * GET /orders/listings/:id/stash —— 買下庫內掛單之前，先看到「這張卡已經放多久了」。
+ *
+ * ── 為什麼需要這一支（D-2）────────────────────────────────────────
+ * prizes.stash_expires_at 是抽中當下算的 won_at + 90 天，而**三條過戶路
+ * 都刻意不重設它**（理由寫在下面 POST / 的庫內轉移那段）。所以一張抽到
+ * 第 89 天才在市場賣掉的卡，買家接手時只剩 1 天 —— 這件事本身是對的，
+ * 因為那 90 天量的是「實體卡在原賣家抽屜裡放了多久」，而庫內轉移
+ * 不搬動實體卡（custodian_id 不變）。
+ *
+ * 真正的問題是**買家看不到這件事**：/v1/listings/:id 只讀 listings 那一張表，
+ * 裡面沒有任何跟寄存有關的欄位，市場頁上一個字都沒有。買家付完錢才收到
+ * 「已超過寄存期限」的通知，而他以為自己買到的是一張剛開始寄存的卡。
+ * 不揭露的話，這條規則就是在用資訊落差懲罰買家。
+ *
+ * ── 為什麼掛在 /orders 底下（要登入）────────────────────────────────
+ * 揭露的對象是**買家在按下購買之前**，而買家一定是登入的（前端的 buyable
+ * 就綁著 auth.isLoggedIn，後端 POST /orders 也要登入）。掛在這裡的代價是
+ * 未登入的訪客看不到這個數字；換來的是不必把「某張實體卡在誰那裡放了幾天」
+ * 這種獎品層級的中繼資料，攤在一支不用登入、全站可爬的端點上。
+ * （這一支之後若要給訪客看，正確的位置是 routes/public.ts 的 toListing，
+ * 那支檔案這一輪不歸這條線動。）
+ *
+ * 只有 vault（庫內轉移）的掛單回得出東西：delivery = 'ship' 的卡會真的
+ * 寄到買家手上，寄存這件事在成交那一刻就結束了（orders-service.ts 的
+ * releasePrize 會把 status 改成 'shipped'，寄存掃描只看 'stashed'），
+ * 對那種掛單講「剩幾天」只會誤導。
+ *
+ * 找不到就回 null 而不是 404：這支是頁面的附加資訊，掛單本身查不到時
+ * 該講話的是 /v1/listings/:id，不是這裡再丟一個錯給前端處理。
+ */
+orders.get('/listings/:id/stash', async c => {
+  const [row] = await sql<{
+    delivery: string; stash_expires_at: string; won_at: string
+    custodian_id: string | null; seller_id: string
+  }[]>`
+    select l.delivery, l.seller_id, p.stash_expires_at, p.won_at, p.custodian_id
+      from listings l join prizes p on p.id = l.prize_id
+     where l.id = ${c.req.param('id') ?? ''} and l.status in ('live', 'sold')
+  `
+  if (!row || row.delivery !== 'vault') return c.json({ stash: null })
+
+  const expiresAt = Number(row.stash_expires_at)
+  const now = Date.now()
+  /* 無條件進位：剩 0.2 天要說「剩 1 天」而不是「剩 0 天」——
+     0 天在使用者眼裡等於「已經過期」，那是另一件事（負數才是）。
+     過期的用負數表示，讓前端分得出「快到了」與「早就過了」。 */
+  const daysLeft = Math.ceil((expiresAt - now) / DAY)
+  return c.json({
+    stash: {
+      expiresAt,
+      daysLeft,
+      totalDays: STASH_DAYS,
+      /* 實體卡現在是不是還在別人手上。這裡只回一個布林值、不回是誰 ——
+         買家需要知道的是「買下之後卡不會跟著到我這裡」，
+         custodian 的身分是別人的個資，跟這個決定無關。 */
+      heldByOther: (row.custodian_id ?? '') !== ''
+    }
+  })
 })
 
 const CreateBody = z.object({
@@ -196,7 +258,24 @@ orders.post('/', async c => {
          acquired_at 一定要一起改：卡冊是照它排的，不改的話這張卡帶著賣家當初
          抽到的時間進買家的卡冊，排在幾天前的位置 —— 卡冊超過一頁時買家在第一頁
          根本看不到自己剛買的卡。won_at 不動，那是「這張卡被抽出來」的事實，
-         公開的最近開出動態還要照它排。 */
+         公開的最近開出動態還要照它排。
+
+         ── stash_expires_at **刻意不動**（D-2）────────────────────────
+         很容易看成漏掉的一欄（隔壁的 acquired_at 就跟著改了），但兩者
+         量的不是同一件事：acquired_at 量「這張卡什麼時候變成你的」，
+         而 stash_expires_at 量「這張**實體卡**在別人的抽屜裡放了多久」。
+         庫內轉移不搬動實體卡 —— custodian_id 在這一行連提都沒提到，
+         021 的說明也寫死了「站內交易一律不碰 custodian_id」。實體沒動，
+         那個時鐘就沒有理由歸零：卡確實已經在原賣家那裡放了 89 天，
+         買家承接的風險就是 89 天份的風險。
+
+         重設成 90 天還會開一個免費的洞：兩個自己控制的帳號互相買賣同一張
+         卡（庫內轉移雙方帳目相抵、沒有手續費），時鐘就能無限往後推，
+         而 pools-service.ts 的 sweepStashExpiry 正是靠這個時鐘提醒
+         「這張卡放很久了」—— 那則提醒會永遠不發。
+
+         代價是買家可能買到一張「明天就到期」的卡。那是**揭露**問題不是
+         重設問題，由上面的 GET /orders/listings/:id/stash 負責講出來。 */
       await tx`update prizes set user_id = ${me}, status = 'stashed', acquired_at = ${Date.now()} where id = ${l.prize_id}`
       // 賣家不會一直盯著市場，卡賣掉了要主動告知
       await notify({
