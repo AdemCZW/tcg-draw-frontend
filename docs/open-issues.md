@@ -210,7 +210,7 @@ C-1 講的是「正式環境有 12 個籤序算得出來的池在收錢」——
 - 註冊速率限制已改為成功與失敗嘗試都計數，且使用獨立 `reg-ip:` bucket；`clientIp()` 已改取 Railway 代理附加的最後一段。舊 M-1 文字仍描述改前行號，後續整理時應以本段為準。
 - 市場掛價已有 `POINTS_INPUT_MAX`；公開市場 listing 已走 `publicCard()`。舊 L-1／L-2「市場那一半尚未修」為過時紀錄。
 - Railway 的 `startCommand` 已不含 `npm run seed`；不能再把「每次部署重灌示範池」當成當前程式行為。正式環境是否仍留有 fixture 資料，需另以部署資料實測。
-- R2 網域未透過 `VITE_R2_PUBLIC_URL`／`VITE_R2_UPLOAD_ORIGIN` 帶入 production build 時，CSP 會 fail-closed 擋住圖檔與直傳。這是上線設定檢查項，應在 CI 建置後檢查 `dist/index.html` 的 CSP，而不是程式漏洞。
+- **R2 網域未帶入 production build 導致 CSP fail-closed —— 已修（2026-09-04）**。`deploy-pages.yml` 的建置步驟原本只傳 `VITE_API_URL`，`VITE_R2_PUBLIC_URL`／`VITE_R2_UPLOAD_ORIGIN` 兩個現在都跟著傳（同樣走 repo Variable）。另新增建置後檢查 `scripts/check-csp.mjs`（`npm run check:csp`），讀 `dist/` 每一份 HTML 的 CSP meta 並斷言：`script-src` 沒有 `'unsafe-inline'`／`'unsafe-eval'`、API 網域同時在 `img-src` 與 `connect-src`、R2 兩個網域各自到位、六份 seo 產物的 CSP 與 `index.html` 一致；失敗 exit 1 讓 CI 紅，不是印警告。「本機還沒接 R2」與「正式漏設變數」的環境變數長得一樣，靠 workflow 裡寫死的 `CSP_EXPECT_API`／`CSP_EXPECT_R2: 'true'` 分開 —— 預期在版控裡、值在 GitHub 設定裡，忘記填值動不到那兩行，所以漏設必紅；真的還沒有 R2 就得改那一行並 commit。**待辦：使用者要在 repo 的 Settings → Secrets and variables → Actions → Variables 新增 `VITE_R2_PUBLIC_URL`（R2 公開讀取網域）與 `VITE_R2_UPLOAD_ORIGIN`（`<帳號>.r2.cloudflarestorage.com`），沒填的話下一次部署會被這道檢查擋下。**
 - `frame-ancestors` 無法由 meta CSP 生效仍成立；需改用能設 HTTP response header 的前端託管才能根治。
 
 ---

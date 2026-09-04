@@ -8,6 +8,7 @@
     "build": "vue-tsc -b && vite build && node scripts/seo.mjs",
     "build:pages": "vue-tsc -b && GH_PAGES=true vite build && GH_PAGES=true node scripts/seo.mjs",
     "preview": "vite preview",
+    "check:csp": "node scripts/check-csp.mjs",
     "og": "node scripts/og.mjs"
   },
   "dependencies": {

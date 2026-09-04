@@ -25,11 +25,42 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # VITE_API_URL 是 repo 的 Variable（Settings → Secrets and variables → Actions → Variables）。
-      # 沒設就是 mock 模式；設成 Railway 的網址前端就打真的後端。切換不用改程式。
+      # 這三個都是 repo 的 Variable（Settings → Secrets and variables → Actions → Variables）。
+      # 它們不是祕密（build 產物本來就會把值印在 CSP 與 JS 裡），所以用 Variable 不用 Secret ——
+      # 跟 VITE_API_URL 原本的做法一致，也才看得到值、才 debug 得動。
+      #
+      # VITE_API_URL          沒設就是 mock 模式；設成 Railway 的網址前端就打真的後端。
+      # VITE_R2_PUBLIC_URL    R2 公開讀取網域。/v1/files/:id/raw 是 302 導到這裡，
+      #                       所以它必須進 CSP 的 img-src，否則所有卡片圖片破圖。
+      # VITE_R2_UPLOAD_ORIGIN R2 預簽名直傳的主機（<帳號>.r2.cloudflarestorage.com），
+      #                       跟上面那個是不同網域，必須進 connect-src，否則上傳永遠失敗。
+      #
+      # 為什麼一定要在這裡帶：CSP 是 vite.config.ts 在**建置時**用這些變數組出來的。
+      # 沒帶＝CSP 少了那幾條白名單＝瀏覽器 fail-closed 擋掉圖片與上傳，
+      # 而且**不會有任何使用者看得見的錯誤**，建置與部署照樣全綠。
       - run: npm run build:pages
         env:
           VITE_API_URL: ${{ vars.VITE_API_URL }}
+          VITE_R2_PUBLIC_URL: ${{ vars.VITE_R2_PUBLIC_URL }}
+          VITE_R2_UPLOAD_ORIGIN: ${{ vars.VITE_R2_UPLOAD_ORIGIN }}
+
+      # 建置後檢查產物的 CSP。失敗會讓這個 job 紅（腳本 exit 1），不是印警告 ——
+      # 印警告等於沒有，沒有人會去看一次綠色建置的 log。
+      #
+      # CSP_EXPECT_API / CSP_EXPECT_R2 是**寫死在這個版控檔案裡**的預期宣告，
+      # 這正是「本機還沒接 R2」與「正式環境漏設變數」分得開的地方：
+      # 兩者的環境變數都是空的，長得一模一樣，只能靠「這次建置預期要有什麼」來分。
+      # 忘記去 GitHub 設定填變數，動不到下面這兩行 true —— 所以漏設一定會紅。
+      # 若某個部署是刻意還沒有 R2，就必須把 CSP_EXPECT_R2 改成 'false' 並 commit：
+      # 一個看得到、審得到、留得下紀錄的決定，而不是一個沒有人知道的空值。
+      - run: npm run check:csp
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+          VITE_R2_PUBLIC_URL: ${{ vars.VITE_R2_PUBLIC_URL }}
+          VITE_R2_UPLOAD_ORIGIN: ${{ vars.VITE_R2_UPLOAD_ORIGIN }}
+          CSP_EXPECT_API: 'true'
+          CSP_EXPECT_R2: 'true'
+
       # 404.html（SPA 深層連結的退回）現在由 scripts/seo.mjs 產生，
       # build:pages 裡已經包含。這裡原本有一行 cp dist/index.html dist/404.html，
       # 會把那份蓋掉 —— 連同它的 noindex 一起洗掉。
