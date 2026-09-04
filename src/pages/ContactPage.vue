@@ -215,6 +215,28 @@ async function submit() {
         </p>
       </header>
 
+      <!-- 已登入的人：**這一塊要排在「怎麼回覆你」之前**。
+           對他而言下面那段（只能靠 email、站上沒有進度）講的是一個他不必接受的
+           限制 —— 站內的「我的問題」可以附證據、看得到進度、回覆也在站內。
+           讓他填完整張表才發現有更好的路，是這一頁最容易犯的錯。
+
+           但**不強制導走**：他可能就是要用這一條（帳號被盜、不想把這件事留在
+           自己帳號的紀錄裡、或正在替別人問）。所以是一條建議不是一道閘。 -->
+      <aside v-if="auth.isLoggedIn" class="ctLogged" role="note">
+        <p class="ctLoggedT">你已經登入了 —— 用「我的問題」會比這裡快</p>
+        <p class="ctLoggedP">
+          站內的工單可以附上照片與檔案、看得到處理進度，客服的回覆也直接出現在站上，
+          不必等 email。你目前以 <b>{{ auth.user?.name || auth.user?.handle }}</b>
+          的身分登入。
+        </p>
+        <RouterLink class="ctLoggedGo" :to="{ name: 'support-new' }">
+          去「我的問題」開一張工單
+        </RouterLink>
+        <p class="ctLoggedAlt">
+          還是要用這張表也可以 —— 送出時會一併附上你的帳號，客服照樣對照得到你的訂單與卡冊。
+        </p>
+      </aside>
+
       <!-- 這一頁最重要的一句話。放在表單上方，而不是送出鍵旁邊：
            他要在開始打字之前就知道回覆會發生在哪裡。 -->
       <aside class="ctHow" role="note">
@@ -224,18 +246,6 @@ async function submit() {
           是客服本人讀完之後，用平台的信箱寫一封信給你。
           所以請確認下面填的地址是你收得到信的那一個。
         </p>
-      </aside>
-
-      <!-- 已登入的人：告訴他有一條更好的路，而不是默默把他留在這裡。
-           不強制導走 —— 他可能就是想用這條（例如帳號被盜、不想留紀錄在自己帳號上）。 -->
-      <aside v-if="auth.isLoggedIn" class="ctLogged" role="note">
-        <p class="ctLoggedP">
-          你目前以 <b>{{ auth.user?.name || auth.user?.handle }}</b> 的身分登入，
-          送出時會一併附上你的帳號，客服因此可以直接對照你的訂單與卡冊。
-        </p>
-        <RouterLink class="ctLoggedGo" :to="{ name: 'support-new' }">
-          改用站內的「我的問題」（有對話串與站內通知）
-        </RouterLink>
       </aside>
 
       <form class="ctForm" novalidate @submit.prevent="submit">
@@ -391,6 +401,18 @@ async function submit() {
 .ctLogged {
   padding: 12px 14px; margin-bottom: 18px; min-width: 0;
   background: var(--surface-2); border-radius: var(--radius);
+}
+.ctLoggedT {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.ctLoggedAlt {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
 }
 .ctLoggedP { margin: 0; font-size: 12.5px; line-height: 1.85; color: var(--muted); overflow-wrap: anywhere; }
 /* 連結也要 44px 觸控高。inline-flex + min-height，不是靠字級撐 */
