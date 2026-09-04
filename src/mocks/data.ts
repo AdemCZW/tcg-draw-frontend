@@ -651,6 +651,14 @@ export interface NewPoolInput {
    */
   prizes: {
     tier: Tier; card: CardItem; qty: number; buyback: number
+    /**
+     * 這個獎品押的是卡冊裡哪一列實體卡（A-4）。
+     *
+     * 從卡冊挑的卡才有（`PickedCard.prizeId`）；從目錄挑的沒有。
+     * 後端拿它把那一列鎖住、轉成 in_pool —— 「同一張卡不能同時進兩個池」
+     * 是靠這個結構保證，不是靠鑑定編號的唯一索引（裸卡根本沒有編號）。
+     */
+    prizeId?: string
   }[]
 }
 

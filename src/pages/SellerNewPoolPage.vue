@@ -115,7 +115,22 @@ async function loadSeller() {
     loadingSeller.value = false
   }
 }
-onMounted(() => { if (!MOCK) loadSeller() })
+/**
+ * 卡冊裡有沒有可以開池的卡。
+ *
+ * 只要一張就夠 —— 這個答案只用來決定「要不要指路去登記卡片」，
+ * 不是要顯示數量。問不到就當作「有」：一個連不上伺服器的畫面不該
+ * 對使用者說「你沒有卡」，那是把我們的故障說成他的問題（同 W-1 那組）。
+ */
+async function loadBookState() {
+  try {
+    const page = await api.myPrizes({ status: 'in_book', limit: 1 })
+    hasBookCards.value = page.items.length > 0
+  } catch {
+    hasBookCards.value = true
+  }
+}
+onMounted(() => { if (!MOCK) { loadSeller(); loadBookState() } })
 
 const tier = computed(() => MOCK ? (me.value?.tier ?? null) : (remote.value?.seller?.tier ?? null))
 const canList = computed(() => !!tier.value && tier.value !== 'pending')
@@ -246,6 +261,8 @@ function newRow(p: PickedCard): PrizeRow {
   return {
     pick: p,
     tier: form.prizes.length === 0 ? 'A' : 'D',
+    /* 一律從 1 開始。卡冊來源的卡**只能**是 1（一張實體卡一個籤位，見
+       fromBook），目錄來源的卡則根本不該被送出（見 needsRegister）。 */
     qty: 1,
     // 卡冊卡帶著賣家自己標過的參考價；目錄卡沒有，留 null（不是 0）
     unitValue: p.card.refPrice ?? null,
@@ -265,6 +282,37 @@ function removePrize(i: number) {
  * 就會在下一次挑卡之後失效。
  */
 const tiersUsed = computed(() => TIERS.filter(t => form.prizes.some(p => p.tier === t)))
+
+/* ---- 卡冊優先（A-4）----
+
+   開池的每一張獎品都必須指向**卡冊裡一列真實存在的卡**（`pick.prizeId`）。
+   後端拿那個 id 把那一列鎖住、確認是自己的 in_book、轉成 in_pool ——
+   「同一張實體卡不能同時放進兩個池」是靠這個結構保證的。
+
+   為什麼不能只靠鑑定編號：裸卡沒有編號，`prizes_cert_alive`
+   （unique(grader, cert_no)）的述詞是 `where cert_no is not null`，
+   整條索引跳過它。改之前實測同一張裸卡連開五個池，五次全部成功、
+   卡冊裡一列都沒被押住 —— 十五個籤位對外承諾同一張實體卡。
+
+   所以這一頁的規則變成兩條：
+     1 目錄挑來的卡**不能直接開池**，要先登記進卡冊（下面的 needsRegister）
+     2 卡冊挑來的卡**只能開 1 籤**（一張實體卡一個籤位，下面的 fromBook）
+   兩條後端都會擋，但擋在送出之後；賣家該在挑卡的當下就知道。 */
+const fromBook = (p: PrizeRow) => !!p.pick.prizeId
+
+/** 還沒登記進卡冊的那幾張（目錄來源）。它們是這一頁唯一擋得住送出的新理由 */
+const needsRegister = computed(() => form.prizes.filter(p => !p.pick.prizeId))
+
+/**
+ * 卡冊裡有沒有可以開池的卡（`in_book`）。
+ *
+ * CardPicker 自己會在卡冊空的時候切到目錄分頁，但那個行為現在**不夠** ——
+ * 目錄分頁挑到的卡不能直接開池了，使用者會在目錄裡挑滿一頁才發現送不出去。
+ * 所以這一頁要自己知道答案，並且在最上面就講出下一步是「先去登記卡片」。
+ *
+ * null = 還在查（不要在還沒有結論的時候說「你沒有卡」）。
+ */
+const hasBookCards = ref<boolean | null>(null)
 
 /** 解析成每個獎品的絕對金額：個別覆寫優先，否則吃該賞別的預設 */
 const resolved = computed(() =>
@@ -591,6 +639,29 @@ const problems = computed<Problem[]>(() => {
       tier: badCert.tier, cardKey: badCert.pick.key
     })
   }
+  /* 還沒登記進卡冊的卡不能開池（A-4）。這是這一頁**新的**擋人理由，
+     所以訊息要把「為什麼」跟「下一步」一起講完 —— 只說「不能用」的話，
+     賣家會以為那張卡有問題，而其實只是還沒進他的卡冊。
+     出路是頁面上那顆「先去登記卡片」的按鈕，錨點指著它上面那一塊。 */
+  const unregistered = needsRegister.value[0]
+  if (unregistered) {
+    out.push({
+      anchor: 'f-picker',
+      msg: needsRegister.value.length === 1
+        ? `「${unregistered.pick.card.name}」還沒登記進你的卡冊 —— 先登記，才能拿它開池`
+        : `有 ${needsRegister.value.length} 張卡還沒登記進你的卡冊 —— 先登記，才能拿它們開池`
+    })
+  }
+  /* 卡冊挑來的卡只能開 1 籤 —— 一張實體卡一個籤位。面板那一格已經鎖成
+     不可輸入，這條是最後一道網（範本複製會帶 qty > 1 進來）。 */
+  const badBookQty = form.prizes.find(p => fromBook(p) && p.qty > 1)
+  if (badBookQty) {
+    out.push({
+      anchor: 'f-sheet-qty',
+      msg: '從卡冊挑的卡只能開 1 籤（一張實體卡一個籤位）—— 要開 N 籤請挑 N 張卡',
+      tier: badBookQty.tier, cardKey: badBookQty.pick.key
+    })
+  }
   const badRepick = form.prizes.find(p => p.needsRepick)
   if (badRepick) {
     out.push({
@@ -899,6 +970,10 @@ async function runSubmit() {
         /* 挑到的身分原封不動送出去（含 variantId）。參考價是這一列自己的欄位，
            所以最後蓋回 card 上 —— 賣家在表單上改的是這一格，不是挑卡時的原值。 */
         card: { ...p.pick.card, refPrice: p.unitValue },
+        /* 押的是卡冊裡哪一列實體卡（A-4）。上面的 problems 已經擋掉沒有
+           這一欄的卡，所以走到這裡的每一項都帶得出來 —— 型別上仍然是選填，
+           因為 PickedCard 的目錄來源本來就沒有。 */
+        prizeId: p.pick.prizeId,
         qty: p.qty,
           buyback: resolved.value[i]!
       }))
@@ -1179,12 +1254,52 @@ function bottomOccluded(): number {
             <span class="chip">已挑 {{ form.prizes.length }} 張</span>
           </div>
           <p class="hint muted pickNote">
-            從你的卡冊挑，或搜卡片目錄。挑到的卡會帶著<strong>卡號、系列、卡圖與版本</strong>
-            進獎品，而且那份身分會被寫進公平性承諾——開賣後換卡會被驗算抓到。
-            同一組卡號的不同版本（例如大師球鏡面與普卡）在系統裡是<strong>兩張不同的卡</strong>。
+            獎品<strong>只能從你的卡冊挑</strong> —— 一個籤位對應一張你已經登記的實體卡。
+            挑到的卡會帶著<strong>卡號、系列、卡圖與版本</strong>進獎品，那份身分會被寫進
+            公平性承諾，開賣後換卡會被驗算抓到。
           </p>
+          <!-- 為什麼這一頁不再收目錄卡（A-4）。
+               只寫「不能用」會讓賣家以為那張卡有問題，所以連理由一起講：
+               同一張實體卡不能同時押在兩個池裡，而「哪一張」只有卡冊裡的
+               那一列指得出來 —— 目錄挑來的是「卡面」，不是他手上的那一張。 -->
+          <p class="hint muted pickNote">
+            目錄可以用來<strong>找卡</strong>，但要開池得先把那張卡登記進卡冊。
+            同一張實體卡只能押在一個池裡，而系統認得出「哪一張」的唯一依據
+            就是卡冊裡的那一列。
+          </p>
+
+          <!-- 卡冊是空的：這一頁最容易變成死路的地方。
+               「沒有可以用的卡」不能是結論 —— 結論要是一個按得下去的下一步。
+               還在查（null）的時候什麼都不說：對著一個還沒有答案的問題
+               先講「你沒有卡」，比慢半秒糟得多。 -->
+          <div v-if="hasBookCards === false" class="bookGate" role="status">
+            <p class="big">你的卡冊裡還沒有可以開池的卡</p>
+            <p class="muted">
+              開池的每一張獎品都必須是你已經登記進卡冊的實體卡。
+              先把手上要開的卡一張一張登記進去，回到這一頁就挑得到了。
+            </p>
+            <RouterLink class="btn primary bookGateGo" to="/me/cards/upload">先去登記卡片</RouterLink>
+          </div>
+
           <div id="f-picker">
             <CardPicker v-model="pickedModel" :max="60" />
+          </div>
+
+          <!-- 已經挑了目錄卡：同樣不能只說「不行」。列出是哪幾張、
+               並把「去登記」放在同一個位置。 -->
+          <div v-if="needsRegister.length" class="bookGate warn" role="alert">
+            <p class="big">
+              有 {{ needsRegister.length }} 張卡還沒登記進你的卡冊
+            </p>
+            <ul class="needList">
+              <li v-for="p in needsRegister" :key="p.pick.key">{{ p.pick.card.name }}</li>
+            </ul>
+            <p class="muted">
+              這幾張沒有對應到卡冊裡的某一列 —— 從<strong>卡片目錄</strong>挑的、
+              或從<strong>範本</strong>複製過來的都會這樣。目錄與範本帶來的是「卡面」，
+              不是你手上的那一張。先登記進卡冊，再回來挑；或是先把它們從這個池移除。
+            </p>
+            <RouterLink class="btn primary bookGateGo" to="/me/cards/upload">去登記這些卡</RouterLink>
           </div>
         </section>
 
@@ -1651,10 +1766,12 @@ function bottomOccluded(): number {
                掛在輸入框上的話，那條問題跳過來會查無元素。 -->
           <div id="f-sheet-qty" class="sf">
             <span>籤數</span>
-            <!-- 鑑定卡固定 1 籤：規則沒變，只是從「輸錯再報錯」改成「不可能輸錯」。
+            <!-- 卡冊來的卡固定 1 籤：規則沒變，只是從「輸錯再報錯」改成
+                 「不可能輸錯」。以前只有鑑定卡鎖，現在**卡冊來的都鎖** ——
+                 一列卡就是一張實體卡，開兩籤就會有兩個得主拿到同一張（A-4）。
                  但範本複製與後端回來的資料仍可能帶 qty > 1，那時候要修得回來，
                  所以不是只畫一格死的文字，而是給一顆把它改對的鈕。 -->
-            <template v-if="sheetRow.pick.card.certNo">
+            <template v-if="fromBook(sheetRow) || sheetRow.pick.card.certNo">
               <div class="locked" :class="{ bad: sheetRow.qty > 1 }">
                 {{ sheetRow.qty > 1 ? `目前是 ${sheetRow.qty} 籤，只能是 1 籤` : '1 籤（固定）' }}
               </div>
@@ -1662,8 +1779,14 @@ function bottomOccluded(): number {
                 改成 1 籤
               </button>
               <span class="fnote">
-                這張有鑑定編號 #{{ sheetRow.pick.card.certNo }}，一個編號只對應一張實體卡，
-                開兩籤就會有兩個得主。
+                <template v-if="sheetRow.pick.card.certNo">
+                  這張有鑑定編號 #{{ sheetRow.pick.card.certNo }}，一個編號只對應一張實體卡，
+                  開兩籤就會有兩個得主。
+                </template>
+                <template v-else>
+                  這是你卡冊裡的<strong>一張</strong>實體卡，開兩籤就會有兩個得主分同一張。
+                  要開 N 籤請挑 N 張卡。
+                </template>
               </span>
             </template>
             <template v-else>
@@ -1768,6 +1891,27 @@ function bottomOccluded(): number {
 .page { padding-top: 28px; padding-bottom: 72px; }
 h1 { font-size: 28px; margin: 0 0 20px; }
 h2 { font-size: 15px; margin: 0 0 12px; }
+/* 卡冊空的／挑到目錄卡時的出路（A-4）。
+   兩種狀態同一個版型：一句結論、一段理由、一顆按得下去的下一步。
+   顏色一律走 tokens.css 的既有變數 —— 手機上這一塊是使用者唯一的出路，
+   淺色底下 --warn 的對比只有 2.6，所以字用 --warn-ink（見 tokens.css 的說明）。 */
+.bookGate {
+  margin: 12px 0 0; padding: 14px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface-2);
+  display: grid; gap: 8px; justify-items: start;
+}
+.bookGate.warn { border-color: var(--warn); background: var(--warn-wash); }
+.bookGate .big { margin: 0; font-size: 15px; font-weight: 600; }
+.bookGate.warn .big { color: var(--warn-ink); }
+.bookGate p { margin: 0; }
+.needList { margin: 0; padding-left: 20px; display: grid; gap: 2px; }
+.bookGateGo {
+  /* 觸控目標 ≥44px。這顆是這一塊存在的理由，不能比別的鈕小 */
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 44px; padding: 0 16px; margin-top: 2px;
+}
+
 .gate { padding: 30px; text-align: center; display: grid; gap: 12px; justify-items: center; }
 .gate .big { font-size: 19px; font-weight: 600; margin: 0; }
 .gate p { max-width: 460px; margin: 0; }

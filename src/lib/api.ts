@@ -375,6 +375,10 @@ export const api = {
       shiteiTier: input.shiteiTier,
       prizes: input.prizes.map((p, i) => ({
         tier: p.tier, total: p.qty,
+        /* 押的是卡冊裡哪一列實體卡（A-4）。從目錄挑的卡沒有這一欄 ——
+           那條路後端仍然收，但它沒有任何一卡多池的防線，
+           所以這一頁不讓它送出（見 SellerNewPoolPage 的 needsRegister）。 */
+        prizeId: p.prizeId ?? null,
         /* buyback 跟 card 分開送：card.refPrice 是賣家標示的參考價（選填、只顯示），
            buyback 是他宣告要履行的絕對金額。兩者沒有算式關係，不能混在一起。
 

@@ -27,6 +27,24 @@ type Row = Record<string, unknown>
 // Hono 的 param() 型別是 string | undefined；路由有 :id 就一定有值
 const pid = (c: { req: { param: (k: 'id') => string | undefined } }) => c.req.param('id') ?? ''
 
+/** 卡片狀態的白話。狀態機的字不該原樣丟給使用者（跟 routes/cardbook.ts 同一份） */
+const STATUS_LABEL: Record<string, string> = {
+  in_book: '閒置在卡冊',
+  in_pool: '押在另一個池裡',
+  stashed: '在保管庫（抽中後寄存）',
+  listed: '掛在市場上',
+  ship_requested: '出貨申請中',
+  shipped: '已出貨',
+  recycled: '已回收',
+  refunded: '已退款'
+}
+
+/** 錯誤訊息裡指名是哪一張卡。指不出來時說「這張卡」，不要印出 id */
+function cardName(card: unknown): string {
+  const n = (card as { name?: unknown } | null)?.name
+  return typeof n === 'string' && n.trim() ? n.trim() : '這張卡'
+}
+
 /** 對外的池資料。這裡決定什麼能出去 —— server_seed 只在 revealed 之後 */
 function toPublic(p: Row, prizes: Row[], taken: number[], publicTaken: number) {
   const revealed = p.status === 'revealed'
@@ -205,6 +223,31 @@ const buybackAmount = z.number().int()
 
 const PrizeIn = z.object({
   tier: z.enum(TIERS),
+  /**
+   * 這個獎品押的是卡冊裡哪一列實體卡（A-4）。
+   *
+   * ── 為什麼要有這一欄 ──────────────────────────────────────────────
+   * 在這一欄出現之前，只有**帶鑑定編號**的獎品會在 prizes 開一列並轉成
+   * in_pool（023）。裸卡沒有這條路：它用自由填寫的 `card` jsonb 反覆宣告，
+   * 沒有任何一列既有的卡被鎖住，於是**同一張實體裸卡可以同時放進無限多個池**
+   * （實測：同一張卡連開五個池，五次全部 200，卡冊裡 in_pool 的列數是 0）。
+   * prizes_cert_alive（unique(grader, cert_no)）擋得住帶編號的，裸卡沒有編號，
+   * 索引蓋不到 —— 只有「一張實體卡一列、一列只有一個 status」這個**結構保證**
+   * 蓋得到（inventory-first-plan.md 5.4）。
+   *
+   * 帶了這一欄，那一列會在同一個交易裡被 FOR UPDATE 鎖住、檢查是不是
+   * **自己的、而且 in_book**，然後轉成 in_pool。押第二次時它已經不是 in_book，
+   * 直接被擋 —— 不論有沒有鑑定編號。
+   *
+   * ── 為什麼還是 optional ───────────────────────────────────────────
+   * 這一輪**沒有**把它改成必填。必填是對的方向（見 docs/open-issues.md A-4），
+   * 但那是一個破壞性的 API 變更：`server/src/smoke.ts` 有十幾處直接送
+   * 內嵌卡片（沒有 prizeId、而且 total > 1）並斷言建池成功，而那支檔案
+   * 由另一條工作線持有、這一輪不能改。缺口與收掉它的代價寫在回報裡。
+   *
+   * 沒帶這一欄時走的仍然是舊路徑（帶編號 → 023 的重用／新增；裸卡 → 不押記）。
+   */
+  prizeId: z.string().min(1).max(80).nullable().optional(),
   card: z.object({
     id: z.string(), name: z.string(),
     /* 不填就是「賣家沒有標示參考價」，存成 null。
@@ -235,6 +278,18 @@ const PrizeIn = z.object({
      所以第一個得主上架之後，其餘 N−1 個人上架全部被擋，
      而且會被告知「這張卡已經在市場上了」—— 他們的卡根本沒上架過。 */
   message: '有鑑定編號的卡只能開 1 籤 —— 一個編號對應一張實體卡'
+}).refine(p => !p.prizeId || p.total === 1, {
+  /* 押記的是**一張實體卡**，所以它只能開一籤 —— 這是 total > 1 在
+     卡冊優先之下的答案：那個語意沒有消失，它換了位置。
+     以前「同一款卡開 10 籤」是一列 pool_prizes 的 total = 10；
+     現在是**十列** pool_prizes，各自押著十張不同的實體卡。
+     `pool_prizes.card_id` 是單一外鍵，一列只指得到一張卡；讓 total > 1
+     的那一列帶 card_id，等於宣告「這 10 個籤位都會發出同一張實體卡」——
+     正是這一條要修的一卡多池，只是換成一卡多籤。
+     （另一種做法是把指標下放到 pool_seats.card_id，見
+     inventory-first-plan.md 3.4 —— 那會新增一個「幾號籤中哪張卡」的
+     洩漏面，這一輪刻意不開。） */
+  message: '從卡冊挑的卡只能開 1 籤 —— 一張實體卡對應一個籤位。要開 N 籤請挑 N 張卡'
 })
 const CreatePool = z.object({
   /* 只收 muteki（無敵賞）。這是唯一「標示等於實際」的玩法：pools-service.ts 的
@@ -347,6 +402,25 @@ pools.post('/', requireAuth, async c => {
     resolved.push(v)
   }
 
+  /* 同一張卡不能在同一個池裡出現兩次。
+     少了這一條，一卡多池被擋下之後還剩一卡多籤：兩個獎項指著同一個
+     prizeId，第一個把它轉成 in_pool，第二個看到的已經不是 in_book ——
+     那會回一句「這張卡在別的池裡」，而它其實就在**這個**池裡，
+     使用者照著那句話去找不存在的另一個池。在這裡先講清楚。 */
+  const seenPledge = new Set<string>()
+  for (const p of b.prizes) {
+    const wantId = (p.prizeId ?? '').trim()
+    if (!wantId) continue
+    if (seenPledge.has(wantId)) {
+      return c.json({
+        error: 'CARD_DUPLICATED',
+        message: `「${p.card.name}」在這個池裡出現了兩次 —— 一張實體卡只能放進一個籤位。`
+          + '要開兩籤請挑兩張卡。'
+      }, 400)
+    }
+    seenPledge.add(wantId)
+  }
+
   const sum = b.prizes.reduce((a, p) => a + p.total, 0)
   if (sum !== b.totalTickets) {
     return c.json({ error: 'BAD_REQUEST', message: `獎品總數 ${sum} 必須等於籤數 ${b.totalTickets}` }, 400)
@@ -377,6 +451,49 @@ pools.post('/', requireAuth, async c => {
   const id = 'p-' + randomBytes(5).toString('hex')
   try {
     const result = await sql.begin(async tx => {
+      /* ── 第一段：先無鎖找出這筆交易會動到的 prizes 列 ───────────────
+         兩種來源：呼叫端指名的 prizeId，以及舊路徑靠 (grader, cert_no)
+         查出來的那一列。兩種都要在**同一次**批次上鎖裡鎖掉 ——
+         分兩次鎖就等於兩個不同的 id 區間，交錯的兩筆交易又是一個死結環。
+
+         這一段刻意不上鎖，跟 sweepSettlements 的兩階段是同一個模式：
+         候選名單可能是舊的（查完到上鎖之間有人動了那一列），
+         所以下面拿到鎖之後讀的是**鎖住的那一份**，不是這裡查到的值。 */
+      const pledgeIds: string[] = []
+      const certRowId = new Map<number, string>()
+      for (let i = 0; i < b.prizes.length; i++) {
+        const src = b.prizes[i]!
+        const wantId = (src.prizeId ?? '').trim()
+        if (wantId) { pledgeIds.push(wantId); continue }
+        const certRaw = typeof src.card.certNo === 'string' ? src.card.certNo.trim() : ''
+        if (!certRaw) continue
+        const graderRaw = typeof src.card.grader === 'string' ? src.card.grader.trim() : ''
+        const normGrader = graderRaw ? graderRaw.toUpperCase() : null
+        const [cand] = await tx<{ id: string }[]>`
+          select id from prizes
+           where grader is not distinct from ${normGrader}::text and cert_no = ${certRaw}
+        `
+        if (cand) { certRowId.set(i, cand.id); pledgeIds.push(cand.id) }
+      }
+
+      /* ── 第二段：把這個交易要動到的 prizes 列**一次鎖完** ──────────
+         全站鎖序是 prizes → sellers → settlements → shipments（見
+         pool-settlement.ts 檔頭與 commit d5c8bd3），而 prizes 排在最前面 ——
+         所以這一批鎖排在 insert into pools（會對 sellers 那一列做 FK 檢查）之前，
+         而且是這筆交易唯一一次對 prizes 上鎖：**先整批鎖完，再開始做事**，
+         迴圈中途不再要求任何新的列鎖。
+
+         `order by id` 不是裝飾：`= any(...)` 本身不保證上鎖順序，
+         兩個賣家各拿一組交錯的卡同時開池時，沒有排序就是一個死結環。 */
+      const lockIds = [...new Set(pledgeIds)]
+      const lockedRows = lockIds.length
+        ? await tx`
+            select id, user_id, status, card, grader, cert_no
+              from prizes where id = any(${lockIds}) order by id for update
+          `
+        : []
+      const locked = new Map(lockedRows.map(r => [String(r.id), r]))
+
       await tx`
         insert into pools (id, seller_id, mode, title, cover_file_id, ticket_price, total_tickets,
                            shitei_tier, floor_ratio, expires_at, platform_fee_rate)
@@ -412,21 +529,87 @@ pools.post('/', requireAuth, async c => {
       }))
       await tx`insert into pool_prizes ${tx(rows as never)}`
 
-      /* ── 帶鑑定編號的獎品要押進卡冊（023）──────────────────────────
-         替每一張帶編號的獎品在 prizes 開一列：賣家名下、狀態 in_pool。
-         唯一性因此由既有的 prizes_cert_alive（unique(grader, cert_no)）
-         保證 —— 同一個編號放進第二個池會在這裡撞上索引，而不是等到
-         有人發現同一張卡被賣了兩次。
+      /* ── 押記：把獎品接到卡冊裡那一張實體卡（023 + A-4）────────────
+         兩條入口，同一個終點（prizes 一列，狀態 in_pool，pool_prizes.card_id 指著它）：
 
-         沒有編號的獎品維持舊路徑（抽中時才 insert）：唯一索引的述詞是
-         `where cert_no is not null`，替它們開列一點保護都沒有多，
-         而它們可以 total > 1，開下去是幾百列永遠不會被抽走的資料。
-         範圍的完整理由見 migration 023 的檔頭。
+           1 獎品帶 prizeId  → 卡冊優先。**不論有沒有鑑定編號**，
+                              鎖住那一列、只收自己的 in_book、轉成 in_pool。
+                              裸卡唯一的防線就是這條（A-4／U-3）：它沒有編號，
+                              prizes_cert_alive 蓋不到，只有「一列卡只有一個
+                              status」這個結構保證擋得住第二次押注。
+           2 只帶 certNo     → 023 的舊路徑。已經在自己卡冊裡的那一列就重用，
+                              沒有的話當場開一列（等於順手登記）。唯一性由
+                              prizes_cert_alive 保證。
+
+         沒有 prizeId 又沒有編號的裸卡**維持原樣，一點保護都沒有** ——
+         這是這一輪已知還開著的缺口，理由見 PrizeIn.prizeId 的說明。
 
          won_at / acquired_at 在押記當下還沒有「贏得」這件事發生，
          填現在只是為了滿足 NOT NULL；抽中時會被覆寫成真正的時間。 */
       const now = Date.now()
+
       for (let i = 0; i < rows.length; i++) {
+        const src = b.prizes[i]!
+        const wantId = (src.prizeId ?? '').trim()
+
+        /* ---- 入口一：從卡冊挑的那一張（A-4）---- */
+        if (wantId) {
+          const mine = locked.get(wantId)
+          if (!mine) {
+            throw new Rollback(404, {
+              error: 'CARD_NOT_FOUND',
+              message: '挑到的卡不在你的卡冊裡了，請重新整理卡片清單再挑一次。'
+            })
+          }
+          if (String(mine.user_id) !== me) {
+            /* 講「不在你的卡冊裡」而不是「這是別人的卡」：後者等於用一個
+               別人的 prizeId 就能問出「這張卡存在而且不是你的」。 */
+            throw new Rollback(404, {
+              error: 'CARD_NOT_FOUND',
+              message: '挑到的卡不在你的卡冊裡了，請重新整理卡片清單再挑一次。'
+            })
+          }
+          if (String(mine.status) !== 'in_book') {
+            throw new Rollback(409, {
+              error: 'CARD_BUSY',
+              message: `「${cardName(mine.card)}」目前是「${STATUS_LABEL[String(mine.status)] ?? String(mine.status)}」`
+                + ' —— 它已經押在別的池裡、掛在市場上、或在出貨流程中，不能再放進這個池。'
+            })
+          }
+
+          /* 卡片身分**以卡冊那一列為準**，不用呼叫端送上來的。
+             呼叫端同時決定 prizeId 與 card jsonb 的話，可以押一張普卡
+             卻在承諾裡宣告成噴火龍 —— manifest 會照著那份謊言算，
+             而抽到的人拿到的是普卡。身分只有一個來源這件事，
+             跟 prizes.user_id 只有一個來源是同一條理由。
+             pool_prizes.card 仍然是**快照**（開賣後賣家改卡冊不影響承諾），
+             這裡只是把快照的來源換成權威值。
+             refPrice 例外：那是「這個池對外標示的參考價」，一張卡在不同
+             時間開池可以標不同的數字，所以照呼叫端送的（沒送才退回卡冊的值）。 */
+          const bookCard = (mine.card ?? {}) as Record<string, unknown>
+          const str = (v: unknown) => typeof v === 'string' && v ? v : null
+          rows[i]!.card = {
+            ...bookCard,
+            /* 卡冊登記的卡沒有 `id`（routes/cardbook.ts 的 CardIn 沒有這一欄），
+               而獎品的 card 需要一個非空字串。artId 是這張卡在目錄裡的唯一鍵，
+               比現編一個時間戳誠實；兩者都沒有時退回呼叫端送的那一個。 */
+            id: str(bookCard.id) ?? str(bookCard.artId) ?? src.card.id,
+            name: str(bookCard.name) ?? src.card.name,
+            refPrice: src.card.refPrice ?? (bookCard.refPrice as number | null | undefined) ?? null,
+            variantId: (bookCard.variantId as string | null | undefined) ?? null
+          }
+
+          await tx`
+            update prizes set pool_id = ${id}, status = 'in_pool',
+                   card = ${rows[i]!.card as never}, tier = ${rows[i]!.tier},
+                   seat = null, draw_id = null
+             where id = ${wantId}
+          `
+          await tx`update pool_prizes set card = ${rows[i]!.card as never}, card_id = ${wantId} where id = ${rows[i]!.id}`
+          continue
+        }
+
+        /* ---- 入口二：只帶鑑定編號（023 的舊路徑）---- */
         const card = rows[i]!.card as { grader?: unknown; certNo?: unknown }
         const certRaw = typeof card.certNo === 'string' ? card.certNo.trim() : ''
         if (!certRaw) continue
@@ -438,13 +621,10 @@ pools.post('/', requireAuth, async c => {
            開新列會撞 prizes_cert_alive 唯一索引，把「拿自己的卡再開一次池」
            這個完全正當的動作擋成 CERT_ALREADY_LISTED（audit-3 的 A-3：
            in_book 進得去出不來）。
-           鎖那一列再改：跟上架、接管搶同一把鎖才互斥得了。 */
-        const [mine] = await tx`
-          select id, user_id, status from prizes
-           where grader is not distinct from ${normGrader}::text and cert_no = ${certRaw}
-           for update
-        `
-        if (mine && String(mine.user_id) === me && mine.status === 'in_book') {
+           那一列已經在上面整批鎖過了（certLookup 先無鎖找出候選、
+           id 併進 lockIds），這裡不再拿新鎖。 */
+        const mine = locked.get(certRowId.get(i) ?? '')
+        if (mine && String(mine.user_id) === me && String(mine.status) === 'in_book') {
           await tx`
             update prizes set pool_id = ${id}, status = 'in_pool',
                    card = ${rows[i]!.card as never}, tier = ${rows[i]!.tier},
