@@ -242,11 +242,16 @@ async function auditPage(page, label) {
   return hard.length
 }
 
-/* ── 走到訓練家卡成品頁 ────────────────────────────────────────────── */
+/* ── 走到訓練家卡成品頁 ──────────────────────────────────────────────
+   P2 已經改成「從自己的卡冊挑一張」（第二版），但這一支測的是**版面遮擋**，
+   跟卡片從哪裡來無關。這裡刻意走次要入口「用一張還沒登記的卡」——
+   它用本地合成的 PNG，不必打 TCGdex，這支測試就不會因為別人的 CDN 而紅。
+   分支本身（目錄卡不校正 / 實拍卡要校正）由 scripts/trainer-card/e2e.mjs 驗。 */
 async function toTrainerResult(page, base) {
   await page.goto(`${base}/trainer-card?tc-test=1`)
   await page.getByRole('checkbox').check()
   await page.getByRole('button', { name: '開始' }).click()
+  await page.locator('details.alt summary').click()
   await page.locator('[data-testid="card-file"]').setInputFiles(CARD_PNG)
   await page.locator('.quad canvas').waitFor({ timeout: 15_000 })
   await page.getByRole('button', { name: '用這張' }).click()
@@ -285,6 +290,12 @@ async function main() {
       note(`  ${w}×${h}`)
       const ctx = await browser.newContext({ viewport: { width: w, height: h } })
       await ctx.addInitScript(LOGIN)
+      /* 卡圖不打真的 CDN：這支測的是遮擋，圖裡畫什麼不影響結論，
+         但「TCGdex 今天慢」不該讓遮擋測試變紅。 */
+      await ctx.route('https://assets.tcgdex.net/**', (r) => r.fulfill({
+        status: 200, contentType: 'image/png',
+        headers: { 'access-control-allow-origin': '*' }, body: CARD_PNG.buffer
+      }))
       const page = await ctx.newPage()
 
       /* 幾何不變式先驗 —— 它跟頁面內容無關，一頁量到就代表全站 */

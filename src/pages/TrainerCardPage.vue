@@ -2,8 +2,20 @@
 /**
  * 訓練家卡（規格 SPECtrainercard.md 的 P1–P6）。
  *
+ * ── 第二版：P2 從「拍卡」改成「從自己的卡冊挑一張」──────────────────
+ * 使用者拍板（2026-09-04）：「暫時只需要有上傳卡片就可以製作，選擇自己要的
+ * 生成一張，中途只能重新一次」。
+ *
+ * 這一改讓**多數人不必再做透視校正**，因為卡冊裡的卡我們已經有圖了：
+ *   · 目錄卡（圖來自 TCGdex）本來就是正面方正的掃描 → 直接貼，不跑校正
+ *   · 自己登記的卡（card-front 上傳的照片）是手持拍的 → 照樣要拖四個角
+ * 這兩者怎麼分辨、為什麼不能看欄位名，全部寫在 features/trainer-card/card-source.ts。
+ *
+ * 相機那條路降級成 P2 的次要入口（「用一張還沒登記的卡」），**而且不再
+ * 一進頁面就要權限** —— 使用者按了才開相機。留著的理由見那一段的註解。
+ *
  * ── 這一輪做了什麼、沒做什麼 ─────────────────────────────────────────
- * 六個步驟全部是真的：拍卡、四角透視校正、自拍、命名、等待、成品分享。
+ * 六個步驟全部是真的：挑卡（必要時四角透視校正）、自拍、命名、等待、成品分享。
  * **唯一是替身的是「換臉」那一次 AI 呼叫** —— 它包在 face-swap.ts 的
  * adapter 後面，這一輪的實作直接回傳樣板原圖，並刻意保留 20 秒的延遲，
  * 因為「等待畫面撐不撐得住 20 秒」是這一頁真正的設計風險。
@@ -18,7 +30,13 @@
  * 入口要放哪還沒決定（建議見交付說明）。
  */
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import BottomActionBar from '@/components/BottomActionBar.vue'
 import QuadEditor from '@/features/trainer-card/components/QuadEditor.vue'
+import CardbookPicker from '@/features/trainer-card/components/CardbookPicker.vue'
+import {
+  CardArtError, classifyCardArt, fullFrameCorners, loadCardArt, type CardArtSource
+} from '@/features/trainer-card/card-source'
+import type { UserPrize } from '@/types/models'
 import {
   CARD_ASPECT, composeTrainerCard, rectifyPreview, templateUrl
 } from '@/features/trainer-card/compose'
@@ -78,10 +96,27 @@ function closeCamera() {
   if (video.value) video.value.srcObject = null
 }
 
-/* ── P2 拍卡 ────────────────────────────────────────────────────────── */
+/* ── P2 挑卡（卡冊優先，相機是次要入口）────────────────────────────── */
 const cardPhoto = shallowRef<ImageBitmap | null>(null)
 const corners = ref<Pt[]>([])
 const previewUrl = ref('')
+
+/**
+ * 這張卡的圖是哪一種來源。**整個 P2 的分岔就靠它**：
+ *   rectify = true   → 走 QuadEditor，使用者拖四個角
+ *   rectify = false  → 直接用，不出現 QuadEditor
+ * null = 還沒挑。
+ *
+ * 這個值也會寫進 DOM（`data-card-source` / `data-rectify`），驗收腳本讀的是
+ * 它而不是「畫面看起來像不像」—— 走錯分支的症狀（一張本來就方正的圖被
+ * 多做一次重取樣、或一張手持照片沒校正就貼上去）用肉眼判斷是不可靠的。
+ */
+const cardSource = ref<CardArtSource | null>(null)
+const needsRectify = computed(() => cardSource.value?.rectify ?? false)
+/** 挑到的是卡冊裡的哪一張。目前只拿來顯示卡名；端點上線後也是綁定的鍵 */
+const pickedPrize = shallowRef<UserPrize | null>(null)
+const cardError = ref('')
+const cardBusy = ref(false)
 
 /** 預設四角：置中的 63:88 框，佔畫面七成。使用者從這裡開始拖，通常只要微調。 */
 function defaultCorners(w: number, h: number): Pt[] {
@@ -94,23 +129,75 @@ function defaultCorners(w: number, h: number): Pt[] {
   ]
 }
 
-function setCardPhoto(bmp: ImageBitmap) {
+function setCardPhoto(bmp: ImageBitmap, source: CardArtSource) {
   cardPhoto.value?.close()
   cardPhoto.value = bmp
-  corners.value = defaultCorners(bmp.width, bmp.height)
+  cardSource.value = source
+  /* 不校正的來源，四角就是圖自己的四角 —— 使用者不必拖，也不可能拖歪。
+     （為什麼「不校正」不等於「不做任何映射」，見 card-source.ts 的說明。） */
+  corners.value = source.rectify
+    ? defaultCorners(bmp.width, bmp.height)
+    : fullFrameCorners(bmp.width, bmp.height)
   closeCamera()
 }
 
+/** 從卡冊挑了一張。圖用 classifyCardArt() 決定的那個網址去取，看到什麼就合成什麼。 */
+async function onPickFromCardbook(prize: UserPrize, source: CardArtSource) {
+  cardError.value = ''
+  cardBusy.value = true
+  try {
+    const bmp = await loadCardArt(source)
+    pickedPrize.value = prize
+    setCardPhoto(bmp, source)
+  } catch (e) {
+    /* 卡名與圖片網址都不進 log（卡片照是個人資料，規格 §5）——
+       只讓使用者看到人話訊息，並留下「換別張」這條路。 */
+    cardError.value = e instanceof CardArtError ? e.message : '這張卡的圖讀不進來，換一張試試。'
+  } finally {
+    cardBusy.value = false
+  }
+}
+
+/** 重新挑一張：把已經挑的那張清掉，回到卡冊列表 */
+function repickCard() {
+  cardPhoto.value?.close()
+  cardPhoto.value = null
+  cardSource.value = null
+  pickedPrize.value = null
+  cardError.value = ''
+  closeCamera()
+}
+
+/* ── 次要入口：用一張還沒登記的卡 ───────────────────────────────────
+   **為什麼不刪掉相機那條路**（三個理由，都不是「捨不得」）：
+     1. 卡冊裡沒有的卡就只剩這條路。使用者手上剛拆的卡還沒登記是常態，
+        而登記一張卡要填卡名／卡號／鑑定資訊，比拍一張照麻煩得多。
+     2. 它是卡冊那條路的**故障退路**。自己登記的卡走的是
+        /v1/files/:id/raw → 302 到 R2，那條路要 R2 的 CORS 放行本站來源；
+        沒放行時圖讀不進 canvas，而使用者手上明明就有那張實體卡。
+     3. 透視校正（第一階段量到 0.0088px 的那一套）只有這條路與「自己登記的
+        卡」會走到。整條藏起來的話，那份程式碼會變成沒有任何測試走得到的死碼。
+   **但它不再是主路徑**：預設收在 <details> 裡，而且**不會一進頁面就要相機
+   權限** —— 多數人現在根本不需要相機，先要權限只會讓人在第一步就跳出去。 */
 async function shootCard() {
   if (!video.value) return
-  try { setCardPhoto(await grabFrame(video.value)) } catch { camError.value = cameraMessage('unknown') }
+  try {
+    setCardPhoto(await grabFrame(video.value), UNREGISTERED_SOURCE)
+  } catch { camError.value = cameraMessage('unknown') }
 }
 
 async function pickCard(e: Event) {
   const f = (e.target as HTMLInputElement).files?.[0]
   if (!f) return
-  try { setCardPhoto(await bitmapFromFile(f)) } catch { camError.value = '這個檔案讀不成圖片，換一張試試。' }
+  try {
+    setCardPhoto(await bitmapFromFile(f), UNREGISTERED_SOURCE)
+  } catch { camError.value = '這個檔案讀不成圖片，換一張試試。' }
   ;(e.target as HTMLInputElement).value = ''
+}
+
+/** 相機／相簿來的一律是手持拍的照片 —— 必然有梯形變形，一定要校正 */
+const UNREGISTERED_SOURCE: CardArtSource = {
+  kind: 'photo', url: '', rectify: true, why: '相機或相簿的照片（還沒登記的卡）'
 }
 
 /* 校正預覽：跟合成走同一支 warpQuad，所以這裡看到的就是最後貼上去的東西。
@@ -118,7 +205,9 @@ async function pickCard(e: Event) {
 let previewJob = 0
 watch([cardPhoto, corners], () => {
   const bmp = cardPhoto.value
-  if (!bmp || corners.value.length !== 4) return
+  /* 不校正的來源不做預覽：那張圖本來就是最後貼上去的樣子，
+     再算一次只是白花 8ms 並且多產生一個要回收的 blob URL。 */
+  if (!bmp || !needsRectify.value || corners.value.length !== 4) return
   cancelAnimationFrame(previewJob)
   previewJob = requestAnimationFrame(() => {
     try {
@@ -131,6 +220,16 @@ watch([cardPhoto, corners], () => {
     } catch { /* 四角退化時解不出透視，等使用者再拖一下就好，不用報錯 */ }
   })
 }, { deep: true })
+
+/* 測試面板開著時，把分類函式掛出來。
+   **這不是後門**：它只在 ?tc-test=1 之下存在，而且是一支純函式，讀不到任何
+   使用者資料。掛出來的理由是「自己登記的卡要走校正」這條在 mock 模式下
+   沒有素材可以端對端跑（mock 的卡全部是目錄卡），而那正是最容易寫錯、
+   錯了又看不出來的一條。有了它，驗收可以拿**真實形狀**的資料直接問
+   「這筆會走哪一條」，而不是看畫面猜。 */
+if (testMode && typeof window !== 'undefined') {
+  ;(window as unknown as { __tcClassify?: unknown }).__tcClassify = classifyCardArt
+}
 
 /* ── P3 自拍 ────────────────────────────────────────────────────────── */
 const selfie = shallowRef<ImageBitmap | null>(null)
@@ -200,6 +299,28 @@ const remaining = ref(MAX_USER_GENERATIONS)
 function syncBudget() {
   remaining.value = budget.canGenerate ? budget.remainingGenerations : 0
 }
+
+/* 額度改成「一次生成 + 一次重來」之後，「還可以生成 2 次」這種說法會讓人以為
+   自己有兩次機會慢慢挑 —— 實際上第一次是必然要用掉的。所以直接講規則，
+   不講剩餘數字。 */
+/* 錯誤訊息要跟「還能不能再試」對得起來。
+   額度只有「一次生成 + 一次重來」之後，一個會自動重試的錯誤（NO_IMAGE /
+   TIMEOUT / NETWORK）會在**同一次生成裡**把兩次上游呼叫都用掉 ——
+   這時候如果還照原本的文案寫「再試一次？」，畫面上卻沒有那顆鈕，
+   使用者會以為是按鈕壞了。這種錯是我們自己造成的，話要講清楚。 */
+const errorText = computed(() => {
+  const e = genError.value
+  if (!e) return ''
+  if (e.canRetry && remaining.value === 0) {
+    return '生成失敗了，自動重試也沒有成功。這一輪的次數用完了 —— 重新整理頁面可以再開始一輪。'
+  }
+  return e.text
+})
+
+const budgetText = computed(() =>
+  remaining.value > 1 ? '生成一次；不滿意的話，只能重來一次'
+    : remaining.value === 1 ? '還可以重來一次，這是最後一次'
+      : '這一輪的生成次數用完了。重新整理頁面可以再開始一輪。')
 
 async function generate() {
   genError.value = null
@@ -324,13 +445,14 @@ async function save() {
 /* ── 導覽 ───────────────────────────────────────────────────────────── */
 const consented = ref(false)
 
-function goCard() { step.value = 'card'; startCamera('environment') }
+/* P2 不再一進來就開相機：現在的主路徑是「從卡冊挑」，那條路一張照片都不用拍。
+   進頁面就要相機權限，會讓多數人在還沒看到自己要挑什麼之前先遇到一個系統對話框。 */
+function goCard() { closeCamera(); step.value = 'card' }
 function goSelfie() { step.value = 'selfie'; if (!selfie.value) startCamera('user') }
 function goName() { closeCamera(); step.value = 'name' }
 function backTo(s: Step) {
   closeCamera()
   step.value = s
-  if (s === 'card' && !cardPhoto.value) startCamera('environment')
   if (s === 'selfie' && !selfie.value) startCamera('user')
 }
 
@@ -393,32 +515,56 @@ const sendsOffDevice = probeAdapter.sendsSelfieOffDevice
         </button>
       </section>
 
-      <!-- ── P2 拍卡 + 四角校正 ─────────────────────────────────── -->
-      <section v-else-if="step === 'card'" class="pane">
+      <!-- ── P2 從卡冊挑一張（必要時才校正）───────────────────── -->
+      <section
+        v-else-if="step === 'card'" class="pane"
+        :data-card-source="cardSource?.kind ?? ''"
+        :data-rectify="cardSource ? String(cardSource.rectify) : ''"
+      >
         <p class="eyebrow">第 1 步／共 4 步</p>
-        <h1>拍下你的卡</h1>
 
+        <!-- ① 還沒挑：列出卡冊 -->
         <template v-if="!cardPhoto">
-          <p class="lead">把整張卡拍進畫面就好，不用對得很正 —— 下一步可以自己拉四個角。</p>
-          <div class="viewport">
-            <video ref="video" class="cam" playsinline muted autoplay />
-            <div class="guide card-guide" aria-hidden="true" />
-          </div>
-          <p v-if="camError" class="warn" role="alert">{{ camError }}</p>
-          <div class="row">
-            <button class="btn primary" type="button" :disabled="!stream || camBusy" @click="shootCard">
-              拍照
-            </button>
-            <label class="btn ghost file">
-              從相簿選一張
-              <input type="file" accept="image/*" data-testid="card-file" @change="pickCard" />
-            </label>
-          </div>
+          <h1>挑一張你的卡</h1>
+          <p class="lead">從你的卡冊挑一張，它會被原樣貼進成品，不會經過 AI 重畫。</p>
+
+          <p v-if="cardError" class="warn" role="alert">{{ cardError }}</p>
+          <p v-if="cardBusy" class="hint" role="status">正在讀那張卡的圖…</p>
+
+          <CardbookPicker @pick="onPickFromCardbook" />
+
+          <!-- 次要入口。預設收起來，展開才開相機 —— 理由見 script 裡那一段 -->
+          <details class="alt">
+            <summary>卡冊裡沒有？用一張還沒登記的卡</summary>
+            <p class="hint">
+              這條路要自己拍，而且拍完得把四個角對到卡片上 —— 從卡冊挑不用做這件事。
+            </p>
+            <div v-if="stream" class="viewport">
+              <video ref="video" class="cam" playsinline muted autoplay />
+              <div class="guide card-guide" aria-hidden="true" />
+            </div>
+            <p v-if="camError" class="warn" role="alert">{{ camError }}</p>
+            <div class="row">
+              <button
+                v-if="!stream" class="btn ghost" type="button" :disabled="camBusy"
+                data-testid="open-camera" @click="startCamera('environment')"
+              >開啟相機</button>
+              <button
+                v-else class="btn primary" type="button" :disabled="camBusy" @click="shootCard"
+              >拍照</button>
+              <label class="btn ghost file">
+                從相簿選一張
+                <input type="file" accept="image/*" data-testid="card-file" @change="pickCard" />
+              </label>
+            </div>
+          </details>
         </template>
 
-        <template v-else>
+        <!-- ② 挑到了、而且要校正：四角編輯器 -->
+        <template v-else-if="needsRectify">
+          <h1>把四個角對到卡片上</h1>
           <p class="lead">
-            把四個紅點拖到卡片的四個角。歪斜與梯形變形都會被拉正 ——
+            這是一張拍出來的照片，會有梯形變形。把四個紅點拖到卡片的四個角 ——
             右邊小圖就是最後會貼上去的樣子。
           </p>
           <div class="editor">
@@ -429,9 +575,24 @@ const sendsOffDevice = probeAdapter.sendsSelfieOffDevice
             </figure>
           </div>
           <div class="row">
-            <button class="btn ghost" type="button" @click="cardPhoto?.close(); cardPhoto = null; startCamera('environment')">
-              重拍
-            </button>
+            <button class="btn ghost" type="button" data-testid="repick" @click="repickCard">換一張</button>
+            <button class="btn primary" type="button" @click="goSelfie">用這張</button>
+          </div>
+        </template>
+
+        <!-- ③ 挑到了、不用校正：直接看成果就好 -->
+        <template v-else>
+          <h1>就用這張？</h1>
+          <p class="lead">
+            這是目錄裡的官方卡面，本來就是正的 ——
+            <strong>不用對四個角</strong>，直接貼進成品。
+          </p>
+          <figure class="picked">
+            <img :src="cardSource!.url" :alt="pickedPrize?.card.name ?? '你挑的卡'" data-testid="picked-card" />
+            <figcaption v-if="pickedPrize">{{ pickedPrize.card.name }}</figcaption>
+          </figure>
+          <div class="row">
+            <button class="btn ghost" type="button" data-testid="repick" @click="repickCard">換一張</button>
             <button class="btn primary" type="button" @click="goSelfie">用這張</button>
           </div>
         </template>
@@ -485,7 +646,7 @@ const sendsOffDevice = probeAdapter.sendsSelfieOffDevice
           placeholder="最多 12 個字" data-testid="name-input"
           autocomplete="off" enterkeyhint="done"
         />
-        <p class="hint">還可以生成 {{ remaining }} 次</p>
+        <p class="hint" data-testid="budget-text">{{ budgetText }}</p>
         <div class="row">
           <button class="btn ghost" type="button" @click="backTo('selfie')">上一步</button>
           <button class="btn primary" type="button" :disabled="!selfie || !cardPhoto" @click="generate">
@@ -535,8 +696,8 @@ const sendsOffDevice = probeAdapter.sendsSelfieOffDevice
         </template>
 
         <template v-else>
-          <h1>{{ genError.text }}</h1>
-          <p v-if="genError.canRetry" class="hint">還可以生成 {{ remaining }} 次</p>
+          <h1 data-testid="gen-error">{{ errorText }}</h1>
+          <p v-if="genError.canRetry" class="hint" data-testid="budget-text">{{ budgetText }}</p>
           <div class="row">
             <button
               v-if="genError.canRetry && remaining > 0"
@@ -551,28 +712,59 @@ const sendsOffDevice = probeAdapter.sendsSelfieOffDevice
       <section v-else-if="step === 'result'" class="pane center">
         <p class="eyebrow">完成</p>
         <figure class="result">
+          <!--
+            **長按這張圖要能叫出系統的「加入照片」**，那是使用者指定的存法。
+            所以這張 <img> 不可以繼承任何 user-select / -webkit-touch-callout
+            的觸控防呆（規格 §10.7 要求整頁加那些，但加在成品圖上就等於把
+            長按選單關掉），也不可以被任何裝飾層蓋住。
+            兩件事都在樣式那邊明確寫死，並由驗收腳本用
+            getComputedStyle + elementFromPoint 檢查。
+          -->
           <img v-if="resultUrl" :src="resultUrl" alt="你的訓練家卡" data-testid="result-image" />
         </figure>
 
-        <!-- 規格 §5 C-3：連帶提示義務。這段不是可有可無的裝飾。 -->
+        <!-- 規格 §5 C-3：連帶提示義務。這段不是可有可無的裝飾。
+             第二句是使用者指定的存法，跟第一句連著讀：先講會不見，再講怎麼存。 -->
         <p class="warn strong" role="status">
           請先存起來。這張圖只在這個頁面裡，<strong>離開或重新整理之後就無法復原</strong>。
+          用下面的按鈕存，或是<strong>長按上面那張圖</strong>，選「加入照片」／「儲存影像」。
         </p>
+        <p v-if="saveNote" class="hint">{{ saveNote }}</p>
+      </section>
+    </div>
 
+    <!--
+      成品頁的主要動作放進站上既有的 BottomActionBar。
+
+      **為什麼不是把按鈕留在頁面裡再加 padding**：讓位（--nav-total）只保護
+      「文件的最末端」，保護不到捲動途中的任何一幀。實測（scripts/bottom-nav/
+      occlusion.mjs）375×812 在**使用者剛做完卡落地的 scrollY = 0 那一幀**，
+      「儲存到相簿」的中心點 (188,740) 打到的是底部導覽那顆凸起的球
+      （rect.pb-top），點下去會跳到 /play —— 而規格 §5 C-3 說成品只在記憶體裡，
+      離開頁面圖就永久消失。
+
+      BottomActionBar 的 bottom 是 `gap + max(--nav-total, --safe-b)`、z-index 65
+      （導覽列是 60），所以它**在任何捲動位置**都在球的上面、也在球的外面。
+      這一條讀過那支元件才決定用它：它 Teleport 到 body（祖先的 transform 不會
+      變成定位基準）、讓位補在文件最末端、進出動畫用 keyframes 不欠幀 ——
+      三件事都正是這一頁需要的，一個字都不用改它。
+    -->
+    <BottomActionBar :open="step === 'result'" label="成品操作" :spacer="150" :max-width="560">
+      <div class="resultBar">
         <button class="btn primary" type="button" :disabled="!resultFile" data-testid="save" @click="save">
           儲存到相簿
         </button>
-        <p v-if="saveNote" class="hint">{{ saveNote }}</p>
-
-        <div class="row wrap">
+        <div class="row">
           <button
             class="btn ghost" type="button" :disabled="remaining === 0"
             data-testid="regenerate" @click="generate"
-          >重新生成（還有 {{ remaining }} 次）</button>
-          <button class="btn ghost" type="button" @click="backTo('card')">換一張卡</button>
+          >{{ remaining > 0 ? '重來一次' : '不能再重來' }}</button>
+          <button class="btn ghost" type="button" data-testid="recard" @click="repickCard(); backTo('card')">
+            換一張卡
+          </button>
         </div>
-      </section>
-    </div>
+      </div>
+    </BottomActionBar>
   </div>
 </template>
 
@@ -739,11 +931,61 @@ h2 { margin: 0 0 6px; font-size: max(14px, calc(16 * var(--u))); }
   width: 5px; height: 5px; border-radius: 50%; background: var(--line);
 }
 
+/* ── 成品圖：長按存圖必須能用 ───────────────────────────────────────
+   使用者指定的存法就是「常壓另存圖片」。要成立有三個條件，這裡逐一保證：
+
+   ① 不可以關掉系統的長按選單。`.btn` 為了防誤觸有
+      `user-select: none` + `-webkit-touch-callout: none`，那組屬性**會繼承**，
+      而 iOS Safari 只要看到 `-webkit-touch-callout: none` 就不再彈出
+      「加入照片／儲存影像」。所以這裡把兩個都明確寫回 auto/default，
+      而不是「沒有寫就等於預設」—— 沒有寫的話，哪天有人在 .page 或 .pane
+      上加一條全域防呆，這張圖會靜靜地失去長按存圖，而且看不出來。
+   ② 圖上不可以蓋東西。<figure> 只負責置中，沒有 ::before/::after、沒有漸層、
+      沒有任何絕對定位的裝飾層；主要動作也搬去 BottomActionBar 了。
+   ③ 圖的中心點要在畫面上、而且不能落在那條操作列底下。這一條由版面保證，
+      並由驗收腳本用 elementFromPoint(圖片中心) 檢查回傳的就是這張 <img>。
+
+   ①②③ 都在 scripts/trainer-card/e2e.mjs 裡有對應的檢查。
+   **真機（iOS Safari）對 blob: URL 的長按行為沒有驗到** —— 見交付說明。 */
 .result { margin: 0; display: flex; justify-content: center; }
 .result img {
-  width: 100%; max-width: 380px; height: auto; display: block;
+  width: auto; max-width: min(100%, 380px); height: auto; display: block;
+  /* 高度收在 44dvh：不收的話成品圖會把「離開就沒了 + 可以長按存圖」那一段
+     推到操作列底下，而 scrollY = 0 正是使用者落地的那一幀 —— 他最需要看到
+     那兩句的時候恰好看不到。圖小一點不影響長按存圖（存下來的是原生
+     1696×2528，不是畫面上這一份）。 */
+  max-height: 44dvh; object-fit: contain;
   border-radius: var(--radius); box-shadow: var(--shadow);
+  user-select: auto; -webkit-user-select: auto;
+  -webkit-touch-callout: default;
+  touch-action: auto;
+  pointer-events: auto;
 }
+
+/* 挑到目錄卡之後的確認圖。跟 .result 分開：這張只是預覽，不需要長按存圖 */
+.picked { margin: 0; display: grid; gap: 8px; justify-items: center; }
+.picked img {
+  width: auto; max-width: min(100%, 240px); height: auto; display: block;
+  border-radius: 10px; border: 1px solid var(--line); background: var(--field);
+}
+.picked figcaption { color: var(--muted); font-size: max(12px, calc(13 * var(--u))); }
+
+/* 次要入口（用一張還沒登記的卡）。收起來時只是一行字，不搶主路徑 */
+.alt {
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 12px; padding: 10px 12px;
+  display: grid; gap: 10px;
+}
+.alt summary {
+  cursor: pointer; min-height: 24px; padding: 10px 0;
+  color: var(--muted); font-size: max(13px, calc(14 * var(--u)));
+  touch-action: manipulation;
+}
+.alt[open] summary { margin-bottom: 2px; }
+
+/* BottomActionBar 的內容。主要動作獨立一行、佔滿寬度 —— 它是這一頁唯一
+   「按錯就永久失去成品」的按鈕，不該跟其他兩顆並排讓拇指去分辨。 */
+.resultBar { display: grid; gap: 8px; }
 
 .test {
   margin-top: calc(10 * var(--u)); padding: 12px;
