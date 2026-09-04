@@ -187,6 +187,32 @@ C-1 講的是「正式環境有 12 個籤序算得出來的池在收錢」——
 | ~~L-5~~ | ~~LINE 的 JWT 走 URL fragment 回前端~~ | 讀碼＋前後端建置 | **已修（2026-09-02）。**callback 現在只帶一把 256-bit、5 分鐘有效、只能使用一次的 code；資料庫只保存 SHA-256 雜湊，`POST /v1/auth/line/exchange` 以原子 `DELETE ... RETURNING` 交換 JWT。前端先清掉 fragment 才呼叫交換端點。帳號綁定也改為受 Authorization header 保護的 `POST /v1/auth/line/link/start`，不再把既有 JWT 放進 query。 |
 | M-3 | `refPrice` 同時是護欄分母與回收分子 | ~~Medium~~ | — | **已解**（migration 018 把回收換成宣告買回價） |
 
+### 2026-09-03 補充核對：身分、公開端點與裸卡庫存
+
+以下是依當前工作樹重新讀碼的結果；這段優先修正「舊稽核結論仍被當成現況」的問題。
+
+| # | 問題 | 嚴重度 | 驗證 | 現況與建議 |
+|---|---|---|---|---|
+| ~~A-1 第一階段~~ | ~~帳號沒有全裝置登出／JWT 撤銷路徑~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | 已新增 `users.session_version`（033）；JWT 帶 `sv`，`requireAuth` 每次比對 DB；改密碼會遞增版本並回發當前裝置的新 token，`POST /v1/auth/logout-all` 可撤銷所有 token。`regress-session.ts` 覆蓋改密碼撤銷、保留當前裝置／不保留、舊 token 相容與並發。 |
+| A-1b | 忘記密碼尚無安全的交付管道 | 產品決策 | 讀碼（2026-09-03） | `session_version` 已處理 token 撤銷，卻不會讓忘記密碼者取得新憑證。必須先決定 Email 寄信服務或已綁定的 LINE 作為安全交付通道；目前不能只新增 reset endpoint 卻沒有安全送出 token 的方式。測試期可用人工帳號恢復工單，但會員編號不能當身分驗證因子。 |
+| ~~A-2~~ | ~~卡冊登記／鑑定編號宣告沒有獨立速率限制~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | `/cardbook/upload` 已使用獨立的 `card-upload-user:<userId>` 與 `card-upload-ip:<ip>` bucket，成功登記也會計數；不與登入失敗共用，且不把無法防止首次搶註的 per-cert 限流當作防線。`regress-ratelimit.ts` 覆蓋上限、`Retry-After`、NAT／帳號隔離與跨桶不互相封鎖。 |
+| A-3 | 公開賣家列表是逐位賣家序列查詢 | Medium | 讀碼（2026-09-03） | `routes/public.ts` 的 `/sellers` 先撈全部賣家，再 `await sellerView()`；每一位會進行多次統計查詢。賣家數增加後會有 N+1 延遲，並長時間占用 Railway 的連線池。<br>**修法**：先加 cursor/limit（預設 20、上限 100）；將賣家資料、池／訂單／抽卡統計改成批次聚合查詢，近期期獎項也批次查；公開統計可快取 30–60 秒。 |
+| A-4 | 裸卡沒有完整的「一張實體卡一列」庫存防線 | High | 讀碼 | 建池時只有帶 `certNo` 的卡會重用／建立 `prizes` 實體列並轉為 `in_pool`；裸卡仍可用自由 `pool_prizes.card` 反覆宣告，沒有對應既有 `in_book` 卡列可鎖定。個人開池普及後，這會成為一卡多池的主要缺口。<br>**修法**：個人開池的每一個獎品都必須帶既有 `prizeId`，在交易內鎖該列，且只允許自己的 `in_book → in_pool`。裸卡要開 10 籤，就必須先入庫 10 張卡；`pool_prizes.card_id` 成為每個獎品的正式實體連結。 |
+| ~~A-5~~ | ~~`in_book` 卡掛單下架後必然回到 `shipped`~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | 032 新增 `listings.previous_status`；上架時記錄原狀態，下架時以白名單精確還原。migration 亦保守回填仍可證明的舊掛單與既有錯轉卡；資訊不足的舊 `ship` 掛單仍採 `shipped` fallback，避免把真實已寄出的卡誤開池。`regress-public.ts` 驗證 `in_book → listing → delist → in_book` 後能再次開池，並驗 stashed 與成交反向路徑。 |
+| ~~A-6~~ | ~~公開池展示資料與公平性 manifest 的鑑定編號曝光規則混在一起~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | pool 列表／詳情展示的卡片已走 `publicCard()` 白名單；revealed manifest 刻意保留完整 `certNo`，因為它是 v2+ commit hash 的序列化輸入。`regress-public.ts` 同時驗證公開展示不含編號、reveal manifest 保留編號且公平性驗算可通過。 |
+| ~~A-7~~ | ~~公開 OAuth 起始端點沒有速率限制~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | LINE login/link start 已使用獨立 `oauth-start-ip:` bucket，並在 start 路徑清理逾期 `oauth_states` 與 login exchange codes。`regress-ratelimit.ts` 驗證上限、`Retry-After`、IP 隔離與過期資料清理。 |
+| A-8 | 已有全裝置登出 API，但前端尚未提供操作入口 | Medium | 讀碼（2026-09-03） | `POST /v1/auth/logout-all` 已完成，但前端搜尋不到呼叫；使用者無法從 UI 使用這個帳號自救功能。<br>**修法**：在帳號／登入方式設定加入「登出其他裝置」動作，預設呼叫 `{ keepCurrent: true }` 後以回傳的新 token 更新本機；可另提供「連目前裝置也登出」的確認操作。 |
+| A-9 | 032／033 migration 是否已套用到正式資料庫尚未驗證 | 部署驗證 | 待查 | 程式已依賴 `listings.previous_status` 與 `users.session_version`。production 必須先執行 migration 032、033，否則上架／登入驗證會因欄位不存在而失敗。<br>**驗證**：部署日確認 migration log，並以唯讀 schema 查詢確認兩欄存在；不得以本機 build 通過取代此確認。 |
+| P-7 | 平台自營池是否可提供買回價 | 產品／法規決策 | 讀碼＋規則文件 | 建池程式會驗買回價範圍與經濟護欄，但沒有依 official seller/origin 禁止買回。若 rules.md 的法律判斷為「平台自營不可提供買回」，這不是文件提醒就能處理。<br>**決策後修法**：明確定義 `u-official` 是否代表平台；若是，後端建立池時拒絕 tierBuyback／個別 buyback，前端同時隱藏欄位，並盤點既有官方池。 |
+
+**本輪確認已修／不應再列為現況的事項：**
+
+- 註冊速率限制已改為成功與失敗嘗試都計數，且使用獨立 `reg-ip:` bucket；`clientIp()` 已改取 Railway 代理附加的最後一段。舊 M-1 文字仍描述改前行號，後續整理時應以本段為準。
+- 市場掛價已有 `POINTS_INPUT_MAX`；公開市場 listing 已走 `publicCard()`。舊 L-1／L-2「市場那一半尚未修」為過時紀錄。
+- Railway 的 `startCommand` 已不含 `npm run seed`；不能再把「每次部署重灌示範池」當成當前程式行為。正式環境是否仍留有 fixture 資料，需另以部署資料實測。
+- R2 網域未透過 `VITE_R2_PUBLIC_URL`／`VITE_R2_UPLOAD_ORIGIN` 帶入 production build 時，CSP 會 fail-closed 擋住圖檔與直傳。這是上線設定檢查項，應在 CI 建置後檢查 `dist/index.html` 的 CSP，而不是程式漏洞。
+- `frame-ancestors` 無法由 meta CSP 生效仍成立；需改用能設 HTTP response header 的前端託管才能根治。
+
 ---
 
 ## 六、前端（audit-frontend-2）
@@ -235,73 +261,127 @@ C-1 講的是「正式環境有 12 個籤序算得出來的池在收錢」——
 
 | # | 事情 | 驗證 |
 |---|---|---|
-| V-1 | **死鎖**：鎖序相反。**2026-08-27 重新評估：仍然成立，但成立條件已經大幅收窄** —— 詳見下方 | 讀碼（重新評估）＋仍未實測 |
+| ~~V-1~~ | **死鎖**：鎖序相反。**2026-09-03 實測後關掉** —— 原本那個環（prizes ↔ 結算列）在 f851070／42caace 就已經修好，這次是把它實跑證明了；同一次壓測抓到**另一個還活著的環**（prizes ↔ sellers，兩支掃描互撞），已一併修掉 —— 詳見下方 | **實測**（`server/src/regress-deadlock.ts`） |
 | V-2 | `SELLER_UNFUNDED`：單張買回價超過保留額、賣家可動用又不足的拒絕路徑，未實測 | 推論 |
 | V-3 | 四條收尾路徑兩兩併發（回收 vs 出貨申請、退款 vs 賣家出貨）。推理上安全（狀態守衛 + `returning`），未實跑 | 推論 |
 
-### V-1 重新評估（因為 `sweepSettlements` 剛改成 `for update of st`）
+### V-1 收尾（2026-09-03 實測）
 
-**先講結論：環還在，V-1 不能劃掉；但可能觸發的情境從「非常多」變成「很少」。**
-另外要提醒：**`for update of st` 這個改動本身還沒 commit**（在工作樹裡），
-所以「已經收窄」這句話只對現在的工作樹成立，對線上不成立。
+**先講結論：V-1 可以劃掉了 —— 但上面那段 2026-08-27 的重新評估，現在整段都是過時的，
+連它建議的修法方向都跟實際落地的相反。**
 
-**改了什麼**：`sweepSettlements` 的兩個 `select` 現在是 `for update of st`
-（`server/src/pool-settlement.ts:380`、`:385`、`:397`、`:403`），
-而不是裸的 `for update`。有 join 的時候裸的會**連 `prizes` 那一列一起鎖**，
-現在只鎖結算列。
+#### 一、2026-08-27 那段的每一句話，現在還成不成立
 
-**為什麼環還在**：鎖不只來自 `select ... for update`，**`update` 一樣會拿列鎖**。
-sweep 走到退款時：
-
-- `refund()` 在 `pool-settlement.ts:271` 執行 `update prizes set status = 'refunded'`
-  —— 這時它**已經**握著那筆結算列的鎖了。鎖序仍然是「結算列 → prizes」。
-- 回收那條路的鎖序沒變：`routes/prizes.ts:166` 先 `select * from prizes ... for update`，
-  再到 `:176` `... for update of st`。也就是「prizes → 結算列」。
-
-兩邊方向依舊相反 → 環仍然存在，Postgres 仍會挑一邊 abort，那個請求仍會 500。
-
-**為什麼實務上變窄很多**：sweep 大部分的結案路徑**根本不碰 `prizes`**。
-
-| sweep 的動作 | 會不會拿 prizes 鎖 |
+| 那時寫的 | 現在 |
 |---|---|
-| `release()`（`pool-settlement.ts:239-246`） | **不會** —— 只 update `pool_settlements` |
-| `markShipDefault()`（`:294-312`） | **不會** —— 只動 `pool_settlements` 與 `sellers` |
-| `refund()`（`:255-283`） | **會**（`:271`）—— 這是唯一還在環上的 |
+| 「`for update of st` 這個改動還沒 commit，只在工作樹裡」 | **不成立。**已經在 `f851070`（2026-08-27）裡了 |
+| 「回收那條路是 `routes/prizes.ts:166` → `:176`」 | **行號全錯**（現在是 `:433` → `:443`），方向倒是沒變 |
+| 「sweep 的鎖序是『結算列 → prizes』」 | **不成立。**`f851070` 同一支 commit 把 `sweepSettlements` 改成兩段式：第一段無鎖撈候選，第二段照 **prizes → 結算列**上鎖。跟回收同向 |
+| 「環還在，要把**回收**那條反過來」 | **不成立，而且方向相反。**實際落地的是把**掃描**那條轉成跟回收同向。回收那條一個字都沒動 —— 它本來就是對的（「從一張卡出發」是這個系統的自然順序） |
+| 「頻率沒有降低」 | 成立，而且正是這一點讓下面那個新的環會咬人 |
 
-所以觸發條件從
-「sweep 掃到的**任何一列** × 同時有人回收那張卡」
-收窄成
-「**同一筆**結算正好是 `awaiting_ship` 且已逾期、sweep 正要退款，而卡的主人同時按下回收」。
+**教訓跟這張表前面幾條一樣**：那段是照著「當時的工作樹」寫的，之後 `f851070`
+與 `42caace` 都動過這幾支，沒有人回頭改這一節。**讀這張表之前先讀程式碼。**
 
-**還是不能劃掉的兩個理由**：
+#### 二、環是真的 —— A/B 對照
 
-1. **頻率沒有降低。**sweep 掛在讀清單的路徑上，每個請求都會觸發 ——
-   `routes/prizes.ts:36`（讀卡冊）與 `routes/sellers.ts:115`（讀賣家結算頁）。
-   全域排程那支（`sweepSettlementsAll`，`pool-settlement.ts:427`）更是一次撈全部未結案的結算列。
-2. **要根治只要把回收那條路的鎖序反過來**（先鎖結算列再鎖 prizes），
-   成本很低，比繼續推理划算。
+`server/src/regress-deadlock.ts` 用同一份佈景、同一個併發時序，只換鎖序：
 
-**建議**：實測優先度可以往後放（窗口小了），但**修法優先度不變**，
-而且要在 `for update of st` 那個改動 commit 的同一批一起做 —— 否則下一個讀這段的人
-會看到 `:371` 那則註解說「這裡只需要結算列的鎖」，誤以為 V-1 已經解決了。
+| | 鎖序 | 20 輪的結果 |
+|---|---|---|
+| A 組 | 結算列 → prizes（**舊的**，用裸 SQL 重演） | **20／20 輪撞到 40P01**，`pg_stat_database.deadlocks` +20 |
+| B 組 | prizes → 結算列（**現行**） | 0／20，`deadlocks` +0 |
+
+A 組撞得出來，才證明這個佈景**有能力**製造死鎖；B 組是 0，那個 0 才代表
+「來自鎖序」而不是「壓不到」。兩邊缺一個，結論都不成立 ——
+這也是這支測試跟 `regress-race.ts` 第 7 組最大的差別（那一組只有 B 邊）。
+
+#### 三、順手抓到的：**另一個還活著的環**（prizes ↔ sellers）
+
+拿現行程式碼實跑時，第 3 組還是撞出了一個 40P01。Postgres 的 log 說得很清楚：
+
+```
+Process 1769: update sellers set default_count = default_count + 1 where id = $1
+Process 1786: select id from prizes where id = $1 for update
+```
+
+**這不是 V-1 的環，跟回收完全無關 —— 是兩支掃描自己湊出來的：**
+
+- `refund()` 與 `markShipDefault()` 都會 `update sellers set default_count`，
+  而**一個賣家只有一列**，那一列會被握到 COMMIT；
+- 而 `sweepSettlements` 原本是在**迴圈裡逐筆**鎖 prizes。
+
+於是「握著共用的 sellers 列、還在往下拿新的 prizes 列」——
+
+```
+掃描 A：握著 sellers(u-shop) → 要 prizes(p2)
+掃描 B：握著 prizes(p2)      → 要 sellers(u-shop)
+```
+
+**鎖序對了還不夠，還要「不再中途拿新鎖」。**
+
+會分岔的關鍵是 `sweepSettlements(tx, userId)` 跟 `sweepSettlementsAll()` 的候選
+查詢不一樣（前者多一個 `and (st.seller_id = $1 or pz.user_id = $1)`），
+候選集合與順序都不同。四支全域掃描互撞反而撞不太出來 —— 它們的計畫一樣，
+第二名在第一列就整個排隊。而使用者範圍那一支正是正式環境最常跑的：
+它掛在讀卡冊（`routes/prizes.ts`）與讀賣家結算頁（`routes/sellers.ts`）上。
+
+**修法**（`pool-settlement.ts`，`sweepSettlements`）：把上鎖跟做事拆成兩個階段。
+先從無鎖候選裡篩出真的到期的那幾筆，然後**一次**把它們的 `prizes` 與 `sellers`
+整批鎖起來（各自 `order by id`），之後的迴圈**不再要求任何新的列鎖**。
+全站的鎖序因此是 **prizes → sellers → settlements → shipments**。
+
+實測（同一支測試、`regress-deadlock.ts` 第 3b 組，每輪 6 筆逾期 × 4 支掃描
+＝ 2 支全域 + 2 支使用者範圍，共 20 輪）：
+
+| | `deadlocks` 增量 | 掃描拋 40P01 |
+|---|---|---|
+| 修之前 | **+14**（20 輪裡 14 輪撞到） | 14 次 |
+| 修之後 | **0** | 0 次 |
+
+加上第 3 組（掃描 × 回收 × 讀清單）修前 +1、修後 0 ——
+**產品碼上的死鎖從 15 次降到 0 次。**
+
+資料在死鎖發生時**沒有壞**（被 abort 的那支整筆回滾，其他支把同一批補完，
+`drift` 始終是 0）。壞的是那個請求變成一個沒有理由的 500，或者被
+`.catch(() => {})` 吞掉之後靜靜地少掃了一輪。
+
+#### 四、全站同時鎖 `prizes` 與 `pool_settlements` 的路徑（逐條查過）
+
+| 路徑 | 鎖序 |
+|---|---|
+| `pool-settlement.ts` `sweepSettlements` | prizes（整批，`order by id`）→ sellers（整批）→ 結算列 ✅ |
+| `routes/prizes.ts` `POST /:id/recycle` | prizes → 結算列 ✅ |
+| `routes/prizes.ts` `POST /:id/confirm` | prizes → 結算列 ✅ |
+| `routes/sellers.ts` `POST /settlements/:id/ship` | 無鎖讀 prize_id → prizes → 結算列 ✅ |
+| `routes/prizes.ts` `POST /ship` | 只鎖 prizes（`markShipRequested` 之後才動結算列） ✅ |
+| `routes/admin.ts` 後台標出貨 | prizes（`order by id`）→ shipments ✅ |
+
+只寫其中一張表的（`index.ts` 的 dev rewind、`monitor.ts` 的體檢、
+`routes/sellers.ts` 的清單查詢）不在環上。
+`update sellers` 全站只有兩處，都在 `refund()` / `markShipDefault()` 裡 ——
+也就是**只有掃描會動 sellers**，所以上面那個新的環只在掃描 × 掃描之間成立。
+
+#### 五、留給下一個人的
+
+- `regress-deadlock.ts` 的 A 組會**故意**製造 20 次死鎖，`pg_stat_database.deadlocks`
+  跑完不是 0 —— 那是預期輸出，不是失敗。看的是每一組的**增量**。
+- `regress-race.ts` 第 7 組（V-1 專項）與第 7b 組（後台 vs 賣家出貨）仍然有效，
+  但它們只有 B 邊。要判斷鎖序有沒有被改壞，跑 `regress-deadlock.ts`。
 
 ---
 
 ## 建議的處理順序
 
-1. ~~**F-1〜F-6**~~ —— 已修並驗過（見進度表）
-2. **P-1 拿掉 `npm run seed`** —— **本輪實測後往上調**。原本以為是「塞了一些假資料」，
-   實際是正式站陳列的 32 個池 100% 是假池。改一行字串的事
-3. **U-1〜U-5**（inventory-first 021〜024）
-4. ~~S-1~~ · ~~W-1〜W-3 錯誤態~~ · ~~P-4 低熵種子閘~~ —— 已處理（S-1 是誤記）
-5. **L-1 / L-2 補完 `routes/public.ts`** —— 這兩條的工作線已經做完卡冊那一半，
-   市場那一半（`toListing()` 的白名單、掛單 `price` 的上界）還沒碰。
-   **半套比沒做更危險**：會讓人以為已經解決了
-6. **M-1 註冊速率限制** —— 一行的事（成功註冊那條路也要 `bumpFail`），
-   而且跟 P-2 的送點是同一條水龍頭的兩截
-7. **V-1 把回收的鎖序反過來** —— 跟 `for update of st` 同一批 commit，
-   否則那則註解會讓下一個人以為已經解決了
-8. 其餘按嚴重度。L-5 建議降為觀察項（緩解已到位，殘餘曝險靠 M-2 解）
+### 2026-09-03 目前待處理順序
+
+1. **A-9：部署前確認 migration 032／033 已套用** —— 這是已完成程式碼能否安全上 production 的前提。
+2. **A-8：前端串接全裝置登出** —— 後端撤銷能力已可用，UI 必須讓使用者能實際操作。
+3. **A-3：公開賣家列表分頁與批次統計**。
+4. **A-4：裸卡實體庫存模型** —— 範圍較大，但個人開池正式上線前必修。
+5. **A-1b：選定忘記密碼的 Email／LINE 交付方案**，再設計單次、短效的恢復流程。
+6. ~~V-1：統一回收與逾期退款的鎖序~~ —— **2026-09-03 完成**：原環早已修好（實測證明），順手抓到並修掉 prizes ↔ sellers 那個還活著的環。
+7. 其餘未解項目按嚴重度與上線時程處理；已完成的 A-1 第一階段、A-2、A-5、A-6、A-7 不再列入待辦。
 
 **這一輪查證的副產品**：三條的敘述是錯的（M-1 的理由、L-3 與 L-4 的出處），
 一條的敘述過時（W-5）。錯法跟 S-1 完全一樣 —— 抄稽核報告的結論與行號，

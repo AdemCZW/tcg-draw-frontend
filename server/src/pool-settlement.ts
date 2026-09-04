@@ -451,12 +451,20 @@ export async function acceptRecycle(
  * 但被 abort 的那個請求變 500）。所以掃描改成兩段式：
  *
  *   第一段**不鎖**，只把「看起來到期了」的候選撈出來；
- *   第二段逐筆照全站鎖序重新上鎖（prizes → 結算列），**拿到鎖之後重讀重判**——
- *   候選名單是舊的，這一筆可能已經被別人處理掉了，重判讓輸的那邊乾淨退出
- *   （refund/markShipDefault 本來就有 returning 守衛，這裡是第二層）。
+ *   第二段照全站鎖序**整批**上鎖（prizes → sellers，各自 order by id），
+ *   第三段才逐筆重讀重判 —— 候選名單是舊的，這一筆可能已經被別人處理掉了，
+ *   重判讓輸的那邊乾淨退出（refund/markShipDefault 本來就有 returning 守衛，
+ *   這裡是第二層）。
  *
  * 順帶的好處：原本第一段就把使用者名下**所有**保留中的結算全部上鎖，
  * 每一次讀卡冊都要跟別人搶那批鎖；現在只有真的到期的那幾筆才上鎖。
+ *
+ * ⚠️ **鎖序對了還不夠，還要「不再中途拿新鎖」。** 2026-09-03 實測
+ * （regress-deadlock.ts 第 3 組）在鎖序已經統一的程式碼上仍然壓出 40P01：
+ * 這支原本是在迴圈裡逐筆鎖 prizes，而 refund()／markShipDefault() 會
+ * `update sellers`，一個賣家只有一列、會被握到 COMMIT —— 兩支掃描於是
+ * 一個握著 sellers 要 prizes、一個握著 prizes 要 sellers。詳見迴圈前的說明。
+ * 所以現在是「先整批鎖完，再開始做事」，不是「邊走邊鎖」。
  *
  * 曾經的殘餘，現在補掉了：後台出貨那條路原本先鎖 shipments 再動 prizes，
  * 跟賣家自助出貨（prizes → … → shipments）方向相反。原本的判斷是
@@ -470,38 +478,78 @@ export async function sweepSettlements(tx: Tx, userId?: string): Promise<number>
      加上 released 但還欠實體卡的（F-5，條件同 022 的部分索引）。 */
   const candidates = userId
     ? await tx`
-        select st.id, st.prize_id, st.status, st.created_at, st.ship_due_at, st.shipped_at,
-               st.ship_default_at
+        select st.id, st.prize_id, st.seller_id, st.status, st.created_at, st.ship_due_at,
+               st.shipped_at, st.ship_default_at
           from pool_settlements st join prizes pz on pz.id = st.prize_id
          where (st.status = any(${RESERVED_STATUSES as unknown as string[]})
                 or (st.status = 'released' and st.ship_due_at is not null
                     and st.shipped_at is null and st.ship_default_at is null))
            and (st.seller_id = ${userId} or pz.user_id = ${userId})`
     : await tx`
-        select st.id, st.prize_id, st.status, st.created_at, st.ship_due_at, st.shipped_at,
-               st.ship_default_at
+        select st.id, st.prize_id, st.seller_id, st.status, st.created_at, st.ship_due_at,
+               st.shipped_at, st.ship_default_at
           from pool_settlements st
          where st.status = any(${RESERVED_STATUSES as unknown as string[]})
             or (st.status = 'released' and st.ship_due_at is not null
                 and st.shipped_at is null and st.ship_default_at is null)`
 
   const now = Date.now()
-  let changed = 0
-  for (const cand of candidates) {
-    /* 先用無鎖快照判斷「值不值得上鎖」——絕大多數保留中的結算離時限還遠，
-       替它們上鎖是純浪費。 */
+
+  /* 第二段：從候選裡篩出**真的到期**的那幾筆。絕大多數保留中的結算離時限
+     還遠，替它們上鎖是純浪費 —— 這一步用的是無鎖快照，篩完才碰鎖。 */
+  const due = candidates.filter(cand => {
     const peek: Settlement = {
       id: cand.id as string, status: cand.status as SettlementStatus,
       createdAt: Number(cand.created_at),
       shipDueAt: cand.ship_due_at == null ? null : Number(cand.ship_due_at),
       shippedAt: cand.shipped_at == null ? null : Number(cand.shipped_at)
     }
-    const worthIt = applySettlementDeadline(peek, now) != null ||
+    return applySettlementDeadline(peek, now) != null ||
       (cand.ship_default_at == null && physicalShipOverdue(peek, now))
-    if (!worthIt) continue
+  })
+  if (!due.length) return 0
 
-    /* 第二段：照全站鎖序上鎖 —— prizes 先、結算列後 —— 然後重讀重判。 */
-    await tx`select id from prizes where id = ${cand.prize_id as string} for update`
+  /*
+   * 第三段：**在動任何一列之前，先把這一輪要碰的列全部鎖起來，照固定順序。**
+   *
+   * ── 為什麼不能邊走邊鎖（實測，2026-09-03）──────────────────────────
+   * 這支原本是在迴圈裡逐筆 `select id from prizes ... for update`。方向是對的
+   * （prizes → 結算列，跟回收、確認收貨、賣家出貨同向，V-1 的環確實關掉了），
+   * 但它漏掉了第三張表：`refund()` 與 `markShipDefault()` 都會
+   * `update sellers set default_count = ...`，而**一個賣家只有一列** ——
+   * 那一列會被這筆交易一路握到 COMMIT，同時迴圈還在往下拿新的 prizes 列。
+   * 於是兩支同時跑的掃描就長成：
+   *
+   *   掃描 A：握著 sellers(u-shop)，正要鎖 prizes(p2)
+   *   掃描 B：握著 prizes(p2)，正要鎖 sellers(u-shop)
+   *
+   * regress-deadlock.ts 第 3 組實際壓出來的就是這一個（Postgres 的 log：
+   * `update sellers ...` 對上 `select id from prizes ... for update`）。
+   * 這不需要有人在按回收 —— **兩支掃描自己就湊得出環**，而掃描掛在每一條
+   * 讀清單的路徑上（讀卡冊、讀賣家結算頁）外加五分鐘一次的全域排程。
+   *
+   * ── 修法 ────────────────────────────────────────────────────────────
+   * 把上鎖跟做事分成兩個階段。上鎖階段結束之後**不再要求任何新的列鎖**，
+   * 所以「握著共用列還在拿新列」這個形狀就不存在了；而兩個階段內部都照
+   * id 排序，兩支交易對同一批列的請求順序一致，排隊而不是互等。
+   * 順序固定成 prizes → sellers，跟全站的 prizes → settlements → shipments
+   * 疊在一起就是一條總序。
+   *
+   * （`order by id` 不是裝飾：`= any(...)` 本身不保證上鎖順序。
+   *  同樣的寫法見 routes/admin.ts 的後台出貨。）
+   */
+  const prizeIds = [...new Set(due.map(c => c.prize_id as string))].sort()
+  await tx`select id from prizes where id = any(${prizeIds}) order by id for update`
+  const sellerIds = [...new Set(due.map(c => c.seller_id as string))].sort()
+  await tx`select id from sellers where id = any(${sellerIds}) order by id for update`
+
+  let changed = 0
+  for (const cand of due) {
+    /* 第四段：逐筆重讀重判。候選名單是無鎖撈的，這一筆可能已經被別人處理掉了；
+       拿到鎖之後重判讓輸的那邊乾淨退出（refund/markShipDefault 本來就有
+       returning 守衛，這裡是第二層）。
+       這裡**不再鎖 prizes** —— 上面已經整批鎖過了，迴圈中途再要新鎖就是
+       上面那個環。 */
     const [fresh] = await tx`
       select st.*, pz.user_id as owner_id
         from pool_settlements st join prizes pz on pz.id = st.prize_id
