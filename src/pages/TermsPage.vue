@@ -93,6 +93,12 @@ const DEPOSIT = [
         <li>客服聯絡信箱：⟨待填⟩</li>
         <li>合意管轄法院：⟨待填⟩</li>
       </ul>
+      <p class="blankNow">
+        <b>客服聯絡信箱補齊之前，對外的聯絡管道是這一條：</b>
+        <RouterLink :to="{ name: 'contact' }">聯絡客服</RouterLink>那一頁<b>不需要登入</b>，
+        任何人都送得出去，訊息會直接進到客服的後台佇列。
+        （站內的客服工單要登入 —— 而「登入不了」本身就是最需要找我們的理由之一。）
+      </p>
     </div>
 
     <nav class="toc" aria-label="目錄">
@@ -373,6 +379,8 @@ const DEPOSIT = [
       </ul>
       <p>
         遇到問題的正式管道是站內的客服工單。工單、爭議與後台的每一次處分都會留下稽核紀錄。
+        <b>如果你登入不進來</b>（工單要登入，而本站刻意沒有自助的忘記密碼流程），
+        請走<RouterLink :to="{ name: 'contact' }">聯絡客服</RouterLink>那一頁，它不需要登入。
       </p>
     </section>
 
@@ -558,6 +566,10 @@ a { color: var(--accent); }
 }
 .blank p { font-size: 13.5px; margin: 0 0 8px; }
 .blank ul { margin: 0; padding-left: 20px; }
+/* ⟨待填⟩ 底下的那條出路：講的不是「還沒填」，而是「在填好之前現在能做什麼」。
+   連結補到 44px 觸控高，負外距抵銷視覺影響（同全站頁尾連結的做法）。 */
+.blankNow { margin: 12px 0 0 !important; padding-top: 10px; border-top: 1px solid var(--accent); }
+.blankNow a { display: inline-block; padding: 13px 2px; margin: -13px 0; }
 .blank li {
   font-size: 13.5px; line-height: 1.9; color: var(--ink);
   font-family: var(--font-mono);

@@ -32,11 +32,25 @@ onMounted(loadOverview)
    而側欄的重點是「現在有什麼要我處理」—— 少了工單那一項就不完整。
    失敗時 store 自己吞掉（側欄的數字不值得為它跳一句紅字）。 */
 onMounted(() => tickets.adminRefreshCount())
+
+/* 聯絡訊息的待辦數字。刻意不開一支專用的計數端點 ——
+   /v1/admin/contact 的列表本來就順帶回 pending，兩邊用同一個來源
+   才不會出現「側欄說 3、點進去只有 1」。
+   失敗就吞掉並維持 0：側欄的一個數字不值得為它在整個後台頂端跳紅字。 */
+const contactPending = ref(0)
+async function loadContactCount() {
+  try {
+    const r = await http<{ pending: number }>('/v1/admin/contact?scope=new&limit=1')
+    contactPending.value = r.pending ?? 0
+  } catch { /* 側欄的數字不值得為它報錯 */ }
+}
+onMounted(loadContactCount)
 /* 子頁處理完事情後要能讓側欄的數字跟著減 —— 出貨標記完成了，
    側欄還掛著「3」會讓人以為沒存到 */
 provide('console:refresh', async () => {
   await loadOverview()
   await tickets.adminRefreshCount()
+  await loadContactCount()
 })
 provide('console:overview', overview)
 
@@ -52,6 +66,12 @@ const NAV: Nav[] = [
      而稽核紀錄是事後查帳，不是待辦。待辦數字不走 overview（那支端點沒有工單欄位），
      直接讀工單 store 自己的計數。 */
   { name: 'console-tickets', label: '客服工單', icon: 'M4 5h16v11H8l-4 3zM8 9h8M8 12.5h5', badge: () => tickets.adminPendingCount },
+  /* 公開聯絡表單（/contact）送進來的訊息。**這是第二個佇列，不是工單的一部分** ——
+     那張表的每一列都可能沒有 user_id（送出的人多半沒有帳號），併不進 024。
+     完整的代價分析寫在 server/migrations/037_contact.sql 的檔頭。
+     它有自己的待辦數字，而且那個數字必須在側欄上：這個功能付出的代價
+     就是「客服多一個地方要看」，而看不看得到不該靠記得。 */
+  { name: 'console-contact', label: '聯絡訊息', icon: 'M3 6h18v12H3zM3 7l9 6 9-6', badge: () => contactPending.value },
   { name: 'console-audit', label: '稽核紀錄', icon: 'M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5' }
 ]
 

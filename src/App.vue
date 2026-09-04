@@ -58,6 +58,11 @@ const showChrome = computed(() => chrome.value !== 'none')
         <template v-if="FAIRNESS_UI">
           <RouterLink :to="{ name: 'fairness' }">公平性</RouterLink> ·
         </template>
+        <!-- 聯絡客服排在最前面（公平性之後）：頁尾是全站唯一每一頁都有的
+             出口，而這條連結的目標對象是「卡住了、找不到人講」的人 ——
+             他不會先去讀條款再找信箱。而且這一頁不需要登入，所以連
+             形象頁的頁尾也連得過去（同 /terms 與 /privacy 的理由）。 -->
+        <RouterLink :to="{ name: 'contact' }">聯絡客服</RouterLink> ·
         <RouterLink :to="{ name: 'terms' }">會員條款</RouterLink> ·
         <RouterLink :to="{ name: 'privacy' }">隱私權政策</RouterLink>
       </span>

@@ -117,6 +117,36 @@ const overview: Overview = {
  * 回傳這條路徑的展示資料。認不出來就回 null，呼叫端會照常走真的 http()
  * —— 這樣新加的端點不會因為忘了補假資料而靜默拿到空物件。
  */
+/* 公開聯絡表單送進來的訊息（/v1/admin/contact）。
+   **一定要有一筆匿名的**：這個佇列跟客服工單的差別就在「送出的人多半
+   沒有帳號」，全部都有帳號的展示資料看不出它為什麼要獨立成一頁。
+   （沒有這一段的話展示模式會落到下面那條「寫入類一律回 ok」，
+   回一個沒有 items 的物件，畫面直接壞掉。） */
+const contactMessages = [
+  {
+    id: 'ct-000000000001', topic: 'login', name: '匿名訪客',
+    email: 'guest@example.com',
+    body: '我忘記密碼了，登入頁上找不到忘記密碼的按鈕，也開不了工單。我是用 Email 註冊的。',
+    userId: null, userName: null, userMemberNo: null,
+    status: 'new', createdAt: ago(2), handledAt: null, handledByName: null, handledNote: null
+  },
+  {
+    id: 'ct-000000000002', topic: 'report', name: '林小姐',
+    email: 'reporter@example.com',
+    body: '市場上有一張卡的鑑定編號跟我手上那張一模一樣，我懷疑是同一張被重複登記。',
+    userId: null, userName: null, userMemberNo: null,
+    status: 'new', createdAt: ago(1), handledAt: null, handledByName: null, handledNote: null
+  },
+  {
+    id: 'ct-000000000003', topic: 'order', name: '阿凱',
+    email: 'kai@example.com',
+    body: '訂單一直停在運送中，物流查不到單號。',
+    userId: 'u-a2', userName: '阿凱', userMemberNo: 'VD-M9X2P7',
+    status: 'handled', createdAt: ago(6), handledAt: ago(5),
+    handledByName: 'VaultDraw 官方', handledNote: '已回信，請賣家補正確單號'
+  }
+]
+
 export function mockAdmin(path: string): unknown | null {
   const [route, query = ''] = path.split('?')
   const q = new URLSearchParams(query)
@@ -127,6 +157,10 @@ export function mockAdmin(path: string): unknown | null {
   if (route === '/v1/admin/pools') return { pools }
   if (route === '/v1/admin/sellers') return { sellers }
   if (route === '/v1/admin/verifications') return { verifications }
+  if (route === '/v1/admin/contact') {
+    const items = q.get('scope') === 'all' ? contactMessages : contactMessages.filter(m => m.status === 'new')
+    return { items, nextCursor: null, pending: contactMessages.filter(m => m.status === 'new').length }
+  }
 
   if (route === '/v1/admin/shipments') {
     const st = q.get('status')

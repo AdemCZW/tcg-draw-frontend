@@ -1312,3 +1312,48 @@ export const cardbookApi = {
     return { prize: toPrize(r.prize) }
   }
 }
+
+/* ==================================================================
+   公開的客服聯絡表單（/contact）
+
+   **這一段刻意不重用 ticketsApi。** 那組全部要登入（後端
+   `tickets.use('*', requireAuth)`），而這條路存在的理由正是
+   「服務進不來的人」—— 忘記密碼的、還沒註冊的、檢舉的。
+   共用型別會讓「這支不需要 token」這件事在程式碼上看不見。
+
+   跟工單那一段同一個理由獨立成一個物件：這個檔案同時有多支 agent 在動，
+   附加一整塊比插進既有物件安全。
+================================================================== */
+
+export type ContactTopic = 'login' | 'account' | 'order' | 'report' | 'privacy' | 'other'
+
+export interface ContactInput {
+  topic: ContactTopic
+  /** 怎麼稱呼你。不是本名 —— 匿名者沒有理由要交出本名 */
+  name: string
+  /** 唯一的回覆管道。平台沒有寄信服務，客服是自己用信箱回這個地址 */
+  email: string
+  body: string
+}
+
+export const contactApi = {
+  /**
+   * 送出一則聯絡訊息。**不需要登入**，但有登入時 http() 會照常帶上
+   * Authorization —— 後端拿它來記「這則是誰送的」，客服因此有脈絡。
+   * token 過期也沒關係：後端用的是 optionalUserId，壞掉的 token 只是變匿名，
+   * 不會讓送出失敗（那正是這條路的目標對象）。
+   */
+  async send(input: ContactInput): Promise<{ id: string; duplicate?: boolean }> {
+    if (MOCK) {
+      await delay(420)
+      /* 展示模式沒有後端，但這一頁必須看得出「送出成功」長什麼樣子 ——
+         回一個假編號就夠了，不寫進任何 mock 資料：這頁沒有列表可以回去看。 */
+      return { id: 'ct-demo' }
+    }
+    const r = await http<{ id: string; duplicate?: boolean }>('/v1/contact', {
+      method: 'POST',
+      json: { topic: input.topic, name: input.name, email: input.email, body: input.body }
+    })
+    return { id: r.id, duplicate: r.duplicate }
+  }
+}

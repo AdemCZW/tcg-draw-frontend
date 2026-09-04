@@ -305,6 +305,15 @@ export const router = createRouter({
           meta: { title: '工單' }
         },
         {
+          /* 公開聯絡表單送進來的訊息。**跟客服工單是兩個佇列** ——
+             理由（024 的 user_id not null 與內連接）寫在
+             server/migrations/037_contact.sql 與 ConsoleContact.vue 的檔頭。
+             排在工單後面、稽核前面：它跟工單一樣是「有人在等我」。 */
+          path: 'contact', name: 'console-contact',
+          component: () => import('@/pages/console/ConsoleContact.vue'),
+          meta: { title: '聯絡訊息' }
+        },
+        {
           path: 'audit', name: 'console-audit',
           component: () => import('@/pages/console/ConsoleAudit.vue'),
           meta: { title: '稽核紀錄' }
@@ -325,6 +334,21 @@ export const router = createRouter({
 
        刻意不要 requiresAuth：條款與隱私政策要能貼給還沒註冊的人看，
        而且形象頁的頁尾也連過來 —— 擋登入等於連結對未登入者永遠是死的。 */
+    /* 聯絡客服。**刻意不要 requiresAuth，那是這一頁存在的全部理由** ——
+       /support 那條整組要登入，而最需要聯絡平台的人正是進不來的那些：
+       忘記密碼的（平台刻意沒有忘記密碼流程）、還沒註冊的、檢舉的、
+       主管機關與律師。擋登入等於把這條路關掉。
+
+       放在頂層 /contact 而不是 /me/contact 或 /support/contact：
+       它要能被貼在條款頁、隱私權政策、登入頁的「登入不了？」旁邊，
+       而那些地方指過來的必須是一個好記、好貼、跟身分完全無關的網址。
+       走 chrome: 'full'（不是 'none'）—— 讀完要能用底部導覽回到原本在做的事，
+       同 /terms 與 /privacy 那兩頁的理由。 */
+    {
+      path: '/contact', name: 'contact',
+      component: () => import('@/pages/ContactPage.vue'),
+      meta: { depth: 1, title: '聯絡客服' }
+    },
     {
       path: '/terms', name: 'terms',
       component: () => import('@/pages/TermsPage.vue'),

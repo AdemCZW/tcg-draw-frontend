@@ -23,6 +23,7 @@ import { files } from './routes/files.js'
 import { social, socialPublic } from './routes/social.js'
 import { sellers } from './routes/sellers.js'
 import { tickets } from './routes/tickets.js'
+import { contact, contactAdmin, sweepContact } from './routes/contact.js'
 import { sweep } from './orders-service.js'
 import { sweepPools, sweepStashExpiry } from './pools-service.js'
 import { sweepSettlementsAll } from './pool-settlement.js'
@@ -177,6 +178,15 @@ app.route('/v1/seller', sellers)
    掛在 /v1/tickets 而不是 /v1 底下：這支有 use('*', requireAuth)，
    掛同一個前綴會把 public.ts 那些公開端點一起變成要登入（同 /v1/seller 那條的理由）。 */
 app.route('/v1/tickets', tickets)
+/* 公開的客服聯絡表單。**這一支沒有 requireAuth，那是它存在的全部理由** ——
+   忘記密碼的人（平台刻意沒有忘記密碼流程）在系統裡本來沒有任何管道可以講話。
+   掛在自己的前綴 /v1/contact 而不是 /v1 底下：pub 那組公開端點已經掛在 /v1，
+   而後台那半（contactAdmin）有自己的 requireAuth + 管理員檢查，
+   必須跟公開那半分開掛，否則兩者會互相污染（同 /v1/seller 那條的理由）。
+   /v1/admin/contact 走的是 contactAdmin 自己的守衛，不是 admin 那支 ——
+   這樣就不必為了一個新功能去動已經在跑的 routes/admin.ts。 */
+app.route('/v1/contact', contact)
+app.route('/v1/admin/contact', contactAdmin)
 
 /* 逾期掃描。
    時限本身是用時間戳算的，所以這支排程不是唯一真相 —— 它掛掉不會讓狀態算錯，
@@ -222,6 +232,11 @@ setInterval(() => {
     .catch(e => console.error('[settle] 失敗', e))
   // 順手清掉過期的登入失敗紀錄，那張表不需要保留歷史
   sweepAttempts().catch(e => console.error('[sweep] 清理登入紀錄失敗', e))
+  /* 公開聯絡訊息的保存期限：已處理的 180 天後刪除，未處理的不刪
+     （理由見 routes/contact.ts 的 sweepContact）。這一條讓隱私權政策
+     第四節的「留多久」有一個真的在執行的答案，而不是又一個 ⟨待填⟩。
+     它自己保證不 throw，所以只記數量、不需要 catch 分支。 */
+  void sweepContact().then(n => { if (n) console.log(`[contact] 清除 ${n} 則過期的聯絡訊息`) })
 }, SWEEP_MS)
 
 serve({ fetch: app.fetch, port: env.PORT }, info => {

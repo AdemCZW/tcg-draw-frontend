@@ -96,6 +96,21 @@ const DATA: Group[] = [
     ]
   },
   {
+    name: '公開聯絡表單',
+    note: '「聯絡客服」那一頁（不需要登入）送出時建立。這一類的特別之處是'
+      + '**送出的人多半沒有帳號**，所以這幾個欄位是我們對他唯一知道的事。',
+    fields: [
+      { f: 'contact_messages.topic', d: '你選的主題（登入不了、帳號、訂單、檢舉、個資、其他）' },
+      { f: 'contact_messages.name', d: '你填的稱呼。不是本名，也不會拿去跟任何帳號比對' },
+      { f: 'contact_messages.email', d: '你填的 Email。**這是回覆你的唯一管道** —— 本站沒有寄自動信的功能，是客服本人寫信給你' },
+      { f: 'contact_messages.body', d: '你寫的訊息內文。這張表單不能附加檔案，所以只有文字' },
+      { f: 'contact_messages.user_id', d: '送出時如果你剛好登入著，會記下你的帳號，客服因此可以對照你的訂單與卡冊。沒登入就是空的' },
+      { f: 'contact_messages.ip_hash', d: '來源網路位址的**雜湊值，不是位址本身**。加了站台密鑰，無法反查回位址；只用來擋機器人灌訊息' },
+      { f: 'contact_messages.fingerprint', d: '主題＋Email＋內文的雜湊。只用來認出「同一則被連按兩下送出兩次」' },
+      { f: 'contact_messages.handled_by / handled_note', d: '哪位客服處理的、他寫下的處理紀錄' }
+    ]
+  },
+  {
     name: '技術與安全紀錄',
     note: '這一類不是你主動提供的，是使用系統時產生的。',
     fields: [
@@ -177,6 +192,11 @@ const STORAGE = [
         <li>負責人：⟨待填⟩</li>
         <li>個資聯絡信箱（行使下方第六節權利的窗口）：⟨待填⟩</li>
       </ul>
+      <p class="blankNow">
+        <b>在那個信箱補齊之前，有一條真的送得到的路：</b>
+        <RouterLink :to="{ name: 'contact' }">聯絡客服</RouterLink>那一頁不需要登入，
+        主題選「個資與隱私」即可。它會直接進到客服的後台佇列，客服再用 email 回覆你。
+      </p>
     </div>
 
     <div class="hard">
@@ -306,6 +326,15 @@ const STORAGE = [
               </td>
             </tr>
             <tr>
+              <td class="k">公開聯絡表單的訊息</td>
+              <td>
+                客服標記處理完成之後 <b class="t">180 天</b>，由排程自動刪除
+                （這一條有真的在跑，不是承諾）。
+                <b>還沒處理完的不會自動刪除</b> —— 沒回覆完就刪掉等於把提問的人丟掉，
+                而且未處理的訊息會一直掛在後台佇列上，不會被忘記。
+              </td>
+            </tr>
+            <tr>
               <td class="k">站內通知</td>
               <td class="todo"><b>⟨待填⟩</b>　目前沒有清除機制，通知會一直留著。</td>
             </tr>
@@ -366,6 +395,14 @@ const STORAGE = [
       </ul>
       <p><b>目前需要人工處理的：</b>製給複製本（資料匯出）、停止利用、刪除、關閉帳號。
         站上還沒有自助的匯出或刪除功能，請開客服工單，或寄到上方 ⟨待填⟩ 的個資聯絡信箱。</p>
+      <p>
+        <b>進不去帳號也一樣可以行使這些權利。</b>
+        客服工單要登入才開得了，而「忘記密碼」本身就是需要找我們的理由之一 ——
+        本站刻意沒有自助的忘記密碼流程。這種情況請用
+        <RouterLink :to="{ name: 'contact' }">聯絡客服</RouterLink>那一頁（不需要登入），
+        主題選「個資與隱私」或「登入不了」。那張表單收的欄位、誰看得到、留多久，
+        就寫在它自己那一頁上，也列在本頁第一節與第四節。
+      </p>
       <p class="warnbox">
         <b>有兩件事我們必須先講清楚，免得你以為刪得掉：</b>
         點數帳本與交易紀錄<b>不會因為你的請求而刪除</b> ——
@@ -457,6 +494,8 @@ const STORAGE = [
             <tr><td>三・顯示名稱與本名分開</td><td class="m">server/migrations/006_profile.sql:5-8</td></tr>
             <tr><td>三・公開卡冊預設關閉、分享網址</td><td class="m">server/migrations/007_social.sql:10-15；src/router/index.ts（/u/:slug）</td></tr>
             <tr><td>三・客服可見的完整檔案</td><td class="m">server/src/routes/admin.ts:417-436</td></tr>
+            <tr><td>一・公開聯絡表單的欄位、IP 只存雜湊</td><td class="m">server/migrations/037_contact.sql；server/src/routes/contact.ts（hashIp）</td></tr>
+            <tr><td>四・聯絡訊息處理完 180 天刪除、未處理不刪</td><td class="m">server/src/routes/contact.ts（sweepContact、CONTACT_KEEP_DAYS）；server/src/index.ts 的五分鐘掃描</td></tr>
             <tr><td>四・寄存 90 天、到期前 14 天提醒</td><td class="m">server/src/pools-service.ts:21, 520</td></tr>
             <tr><td>四・登入紀錄自動清除的窗</td><td class="m">server/src/rate-limit.ts:23, 34, 105-125</td></tr>
             <tr><td>四・鑑定編號永久保存、無查證結果可存</td><td class="m">server/migrations/029_remove_psa_cache.sql（刪除快取表）；server/src/preflight.ts:44（唯一性索引）</td></tr>
@@ -527,6 +566,11 @@ a { color: var(--accent); }
 .blank li {
   font-size: 13.5px; line-height: 1.9; color: var(--ink); font-family: var(--font-mono);
 }
+/* ⟨待填⟩ 底下的那條出路。跟上面的清單分開一段 ——
+   它講的不是「還沒填」，而是「在填好之前你現在就可以做什麼」。
+   連結補到 44px 觸控高，負外距抵銷視覺影響（同全站頁尾連結的做法）。 */
+.blankNow { margin: 12px 0 0 !important; padding-top: 10px; border-top: 1px solid var(--accent); }
+.blankNow a { display: inline-block; padding: 13px 2px; margin: -13px 0; }
 
 .hard {
   background: var(--surface-2); border-left: 3px solid var(--accent);
