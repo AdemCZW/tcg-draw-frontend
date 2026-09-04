@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { applySeo } from '@/lib/seo'
+import { isChunkLoadFailure, recoverFromChunkFailure, clearRetryMark } from '@/lib/chunk-recovery'
 
 /**
  * 外框樣式。頁面自己宣告要不要全域的 header / 底部導覽 / 頁尾。
@@ -432,7 +433,36 @@ router.beforeResolve((to, from) => {
   })
 })
 
+/* 換版之後「按了沒反應」的救援。判定方式、防迴圈、為什麼是提示而不是
+   直接重整，全部寫在 lib/chunk-recovery.ts 的檔頭。
+
+   這裡只做兩件事：把不是 chunk 失敗的錯誤原樣留給既有行為（console 的
+   unhandled rejection —— 真正的程式錯誤必須看得見，被靜默重整吃掉會更難查），
+   以及把「使用者本來要去哪」交給救援程序。 */
+router.onError((err, to) => {
+  if (!isChunkLoadFailure(err)) {
+    /* 不是換版問題就原樣印出來。**這一行不能省** —— vue-router 只有在
+       「一個 onError 都沒註冊」時才會自己 console.error；一旦註冊了處理器，
+       它就認定錯誤有人接手，不再印。也就是說光是加上這個 handler，
+       就會把所有真正的程式錯誤從 console 上抹掉（實測 Chromium 與 Firefox
+       都是如此）。那正是這次最該避免的後果：bug 變成無聲無息。 */
+    console.error(err)
+    return
+  }
+  /* resolve().href 會帶上 base（GitHub Pages 的 /tcg-draw-frontend/ 前綴），
+     直接用 fullPath 會重整到網域根目錄底下不存在的路徑。 */
+  const href = router.resolve(to.fullPath).href
+  /* 第一次導航的判準：目前的 currentRoute 還是 router 的初始位置
+     （name 是 undefined、path 是 '/'）—— 那代表畫面上還沒有任何一頁，
+     也就沒有未儲存的輸入要保護。 */
+  const first = router.currentRoute.value.name === undefined
+  recoverFromChunkFailure(to.fullPath, href, first)
+})
+
 router.afterEach((to) => {
+  /* 成功抵達就把防迴圈的標記還給這個路徑，否則下一次真的換版時
+     會被當成「已經重試過」，直接跳到死路訊息。 */
+  clearRetryMark(to.fullPath)
   /* 換頁後套 meta。SPA 換頁不會重載 HTML，meta 會停在上一頁 ——
      這時候分享網址或被 Google 的 JS 渲染抓到，拿到的都是錯的。
      私人頁（我的、後台、開卡結果、選籤）標 noindex：它們本來就要登入，
