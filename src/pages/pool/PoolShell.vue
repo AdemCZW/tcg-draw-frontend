@@ -10,7 +10,7 @@
  * 不推 history —— 返回鍵應該直接跳出池，不該在 tab 之間來回彈。
  * 桌機保留側欄的購買面板：同一屏邊看獎項邊決定抽數，這是桌機該有的效率。
  */
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePoolStore } from '@/stores/pools'
 import { useSellerStore } from '@/stores/sellers'
@@ -37,9 +37,15 @@ const sellers = useSellerStore()
 const pool = computed(() => pools.byId(String(route.params.id)))
 
 onMounted(async () => {
-  await Promise.all([pools.ensureLoaded(), sellers.ensureLoaded()])
+  await pools.ensureLoaded()
   track('view_pool_detail')
 })
+
+/* 賣家只問這一池的那一位（總覽分頁的賣家膠囊在讀）。
+   以前是 ensureLoaded()，而 /v1/sellers 分頁之後那只拿得到第一頁的 20 位 ——
+   第 21 位以後的賣家開的池，膠囊整塊不渲染。池要先載進來才知道 sellerId，
+   所以掛在 pool 上 watch，不是寫在 onMounted 裡。 */
+watch(() => pool.value?.sellerId, id => { sellers.ensureSeller(id) }, { immediate: true })
 
 const tabs = [
   { name: 'pool-overview', label: '總覽' },

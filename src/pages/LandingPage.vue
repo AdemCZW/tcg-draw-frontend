@@ -122,7 +122,17 @@ function afterLogin() {
    LINE 那邊拒絕或驗證失敗會帶 ?line=denied|state|token|verify 回來。 */
 onMounted(async () => {
   if (MOCK) return
-  if (await auth.consumeToken()) { afterLogin(); return }
+  try {
+    if (await auth.consumeToken()) { afterLogin(); return }
+  } catch {
+    /* 一定要接。consumeToken() 只有在網址帶著 #code=… 時才會真的打 API，
+       但那正是「LINE 剛把人導回來」的那一刻 —— 後端這時候沒醒（冷啟動）
+       就是一個未捕捉的 mounted hook 錯誤，而 <script setup> 裡的未捕捉錯誤
+       會摧毀整棵元件樹（SPEC §10.5）：使用者從 LINE 回來只看到白畫面，
+       連「再登入一次」的按鈕都沒有。接住之後，登入面板還在，他可以重按。 */
+    loginErr.value = 'LINE 登入沒有完成，請再試一次'
+    return
+  }
   const why = typeof route.query.line === 'string' ? route.query.line : ''
   if (why) loginErr.value = why === 'denied' ? '你取消了 LINE 登入' : 'LINE 登入沒有完成，請再試一次'
 })

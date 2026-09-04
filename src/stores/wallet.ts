@@ -31,7 +31,15 @@ export const useWalletStore = defineStore('wallet', {
      */
     lockedBy: { orders: 0, offers: 0 },
     ledger: [] as LedgerEntry[],
-    ledgerLoaded: false
+    ledgerLoaded: false,
+    ledgerLoading: false,
+    /**
+     * 帳本這一次載入失敗的原因（成功時是 null）。
+     *
+     * 有這個欄位，loadLedger() 才有地方把例外放 —— 見下面它為什麼不再往外丟。
+     * 畫面拿它畫「中文訊息＋重試鈕」，而不是把錯誤畫成一本空帳本。
+     */
+    ledgerErr: null as string | null
   }),
   getters: {
     /** 真正能拿去花的餘額 */
@@ -62,10 +70,31 @@ export const useWalletStore = defineStore('wallet', {
      * 接上真後端後伺服器本來就會回傳完整帳本，屆時可改為每次重新整理。
      */
     async loadLedger() {
-      if (this.ledgerLoaded) return
-      const rows = await api.ledger()
-      this.ledger = [...this.ledger, ...rows]
-      this.ledgerLoaded = true
+      if (this.ledgerLoaded || this.ledgerLoading) return
+      this.ledgerLoading = true
+      try {
+        const rows = await api.ledger()
+        this.ledger = [...this.ledger, ...rows]
+        this.ledgerLoaded = true
+        this.ledgerErr = null
+      } catch (e) {
+        /* ---- 為什麼吞在這裡，而不是要每個呼叫端自己接 ----
+           兩個呼叫端（錢包頁、我的）都是 `onMounted(() => wallet.loadLedger())`
+           這種開火即忘。它一 reject 就是沒有人接的 promise：實測後端重啟時
+           錢包頁吐出 `[Vue warn]: Unhandled error during execution of mounted hook
+           at <WalletPage>` ＋ 一個 pageerror，而 <script setup> 裡的未捕捉錯誤
+           會摧毀整棵元件樹（SPEC §10.5）—— 白畫面，而且換頁也救不回來。
+
+           判準不該是「有沒有人記得接」，那是紀律問題；改成「這支本來就不 reject」
+           之後漏不掉，下一個讀帳本的新畫面也自動安全。
+           （同一個判斷已經用在 stores/sellers.ts 的 ensureLoaded、
+           stores/pools.ts 的 ensureLoaded。）
+
+           ledgerLoaded 維持 false，所以重試鈕直接再呼叫一次就會真的重打。 */
+        this.ledgerErr = e instanceof Error ? e.message : '交易紀錄載入失敗'
+      } finally {
+        this.ledgerLoading = false
+      }
     },
     canAfford(cost: number) {
       // 用可動用餘額判斷，不是總餘額 —— 託管中的點數不能再拿去買東西

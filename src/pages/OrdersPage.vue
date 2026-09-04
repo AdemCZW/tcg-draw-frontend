@@ -594,7 +594,15 @@ async function doDispute(o: Order) {
     </section>
 
     <p v-if="err" class="err" role="alert">{{ err }}</p>
-    <p v-if="!list.length" class="empty muted">
+    <!-- 讀不到訂單要說「讀不到」。這一層一定要排在空狀態前面：斷網時
+         list 是空的，沒有它就直接掉進「目前沒有進行中的訂單」——
+         而使用者的託管訂單裡有錢，那句話等於在斷網時說他的錢不見了。
+         （同一條判斷在大廳的池清單也是這樣擺的。） -->
+    <div v-if="store.loadErr" class="loadFail" role="alert">
+      <p class="muted">{{ store.loadErr }}</p>
+      <button type="button" class="btn" @click="store.load()">重試</button>
+    </div>
+    <p v-else-if="!list.length" class="empty muted">
       {{ tab === 'open' ? '目前沒有進行中的訂單。到市場買一張「需寄送」的卡就會建立託管訂單。' : '還沒有結案的訂單。' }}
     </p>
 
@@ -1309,6 +1317,14 @@ a.who2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 
 .err { color: var(--danger); font-size: 13.5px; margin: 0 0 12px; }
+
+/* 載入失敗：跟大廳、錢包頁同一套（訊息置中＋一顆重試鈕），不另外發明一種 */
+.loadFail {
+  min-width: 0;
+  display: grid; justify-items: center; gap: 12px;
+  padding: 36px 16px; text-align: center;
+}
+.loadFail p { margin: 0; }
 
 /* 放款成功的訊息。用綠底而不是一行綠字：這是使用者剛剛花掉一筆不可還原的
    錢換來的唯一回執，它得跟旁邊的說明文字分得開。不自動消失 —— 訂單卡在

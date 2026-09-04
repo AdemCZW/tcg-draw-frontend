@@ -81,7 +81,16 @@ export const useOrdersStore = defineStore('orders', {
     offset: MOCK ? Number(localStorage.getItem(OFFSET_KEY) || 0) : 0,
     /** API 模式：伺服器時間與本機的差，倒數用伺服器時間算，不信使用者的裝置時鐘 */
     serverOffset: 0,
-    loaded: false
+    loaded: false,
+    /**
+     * 這一次讀取訂單失敗的原因（成功時是 null）。
+     *
+     * load()／sweep() 不再往外丟例外（見下面的說明），吞掉的東西要留在
+     * 某個地方 —— 畫面拿它畫「中文訊息＋重試鈕」。**訂單列表不清空**：
+     * 斷網時把清單清成「目前沒有進行中的交易」是在說謊，而那句話會讓
+     * 使用者以為自己的託管訂單消失了。
+     */
+    loadErr: null as string | null
   }),
 
   getters: {
@@ -93,12 +102,26 @@ export const useOrdersStore = defineStore('orders', {
   },
 
   actions: {
+    /**
+     * 載入訂單。**不會 reject。**
+     *
+     * 呼叫端是 `onMounted(() => { store.load() })`（訂單頁）與「我的」那一頁，
+     * 都是開火即忘 —— 往外丟就是沒有人接的 promise。實測後端關掉時訂單頁
+     * 在使用者什麼都還沒做的情況下吐出一個 pageerror，而 <script setup> 裡的
+     * 未捕捉錯誤會摧毀整棵元件樹（SPEC §10.5）。理由與作法跟
+     * stores/sellers.ts、stores/wallet.ts 同一條。
+     */
     async load() {
       if (!MOCK) {
-        const r = await pull()
-        this.orders = r.orders
-        this.serverOffset = r.serverTime - Date.now()
-        this.loaded = true
+        try {
+          const r = await pull()
+          this.orders = r.orders
+          this.serverOffset = r.serverTime - Date.now()
+          this.loaded = true
+          this.loadErr = null
+        } catch (e) {
+          this.loadErr = e instanceof Error ? e.message : '訂單載入失敗'
+        }
         return
       }
       if (this.loaded) return
@@ -122,7 +145,19 @@ export const useOrdersStore = defineStore('orders', {
      * 結案的訂單要同時處理凍結的點數，否則餘額會跟訂單狀態對不起來。
      */
     async sweep() {
-      if (!MOCK) { const r = await pull(); this.orders = r.orders; return }
+      /* 每分鐘由計時器呼叫一次，同樣不能 reject —— 那個 promise 更沒有人接得到，
+         而且它會在使用者停在訂單頁的任何一分鐘突然炸掉整棵樹。
+         這一輪失敗就沿用上一輪的清單，下一分鐘自己會再試。 */
+      if (!MOCK) {
+        try {
+          const r = await pull()
+          this.orders = r.orders
+          this.loadErr = null
+        } catch (e) {
+          this.loadErr = e instanceof Error ? e.message : '訂單更新失敗'
+        }
+        return
+      }
       const t = Date.now() + this.offset
       let changed = false
       this.orders = this.orders.map(o => {

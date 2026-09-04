@@ -38,22 +38,40 @@ const price = ref<Record<string, number | null>>({})
 /* 卡冊改成分批載入之後不能只抓第一批：使用者是從卡冊裡「選好幾張」進來的，
    被選中的卡完全可能落在第 3 批。這裡沿著游標一路翻到「要的都找到了」為止，
    翻完就停 —— 只撈寄存中的，那是唯一能上架的狀態，量比整本卡冊小得多。 */
-onMounted(async () => {
-  const want = new Set(ids.value)
-  const found: UserPrize[] = []
-  let cursor: string | null = null
-  do {
-    /* 不帶 status 過濾：可上架的有兩種（stashed 與 in_book），
-       API 的 status 參數一次只能給一個 —— 抓全部再在前端濾，
-       選卡清單本來就已經把不能上架的排除在外。 */
-    const page = await api.myPrizes({ cursor, limit: 100 })
-    for (const p of page.items) if (want.has(p.id)) found.push(p)
-    cursor = page.nextCursor
-  } while (cursor && found.length < want.size)
-  all.value = found
-  for (const p of cards.value) price.value[p.id] = p.card.refPrice || null
-  loading.value = false
-})
+/** 這一次載入卡片失敗的原因。有值就畫錯誤態，不畫成「還沒選卡」 */
+const loadErr = ref<string | null>(null)
+
+async function load() {
+  loading.value = true
+  loadErr.value = null
+  try {
+    const want = new Set(ids.value)
+    const found: UserPrize[] = []
+    let cursor: string | null = null
+    do {
+      /* 不帶 status 過濾：可上架的有兩種（stashed 與 in_book），
+         API 的 status 參數一次只能給一個 —— 抓全部再在前端濾，
+         選卡清單本來就已經把不能上架的排除在外。 */
+      const page = await api.myPrizes({ cursor, limit: 100 })
+      for (const p of page.items) if (want.has(p.id)) found.push(p)
+      cursor = page.nextCursor
+    } while (cursor && found.length < want.size)
+    all.value = found
+    for (const p of cards.value) price.value[p.id] = p.card.refPrice || null
+  } catch (e) {
+    /* 一定要接。這裡原本是沒有 try 的 async onMounted —— 後端一重啟就是
+       `[Vue warn]: Unhandled error during execution of mounted hook
+       at <SellListingPage>` ＋ pageerror，而 <script setup> 裡的未捕捉錯誤
+       會摧毀整棵元件樹（SPEC §10.5），使用者得到白畫面。
+
+       不下沉到 store 是因為這一頁沒有 store：api.myPrizes 是共用資料層，
+       讓它不 reject 會害到真的需要知道失敗的呼叫端（同 LobbyPage 的判斷）。 */
+    loadErr.value = e instanceof ApiError ? e.message : '連不上伺服器，請檢查網路後重試'
+  } finally {
+    loading.value = false
+  }
+}
+onMounted(load)
 
 const total = computed(() =>
   cards.value.reduce((a, p) => a + (price.value[p.id] || 0), 0))
@@ -125,6 +143,13 @@ async function submit() {
     </p>
 
     <p v-if="loading" class="muted">載入中…</p>
+    <!-- 讀不到卡要說「讀不到」。這一層要排在「還沒選卡」前面：斷網時
+         cards 是空的，掉進下面那句會變成「你還沒選卡」—— 而使用者明明
+         剛從卡冊選了五張過來，那句話會讓他以為選取沒有帶過來。 -->
+    <div v-else-if="loadErr" class="loadFail" role="alert">
+      <p class="muted">{{ loadErr }}</p>
+      <button type="button" class="btn" @click="load">重試</button>
+    </div>
     <p v-else-if="!cards.length" class="muted">
       <!-- 這裡的「沒有卡」幾乎都是「直接打網址進來、沒有從卡冊帶選取」，
            不是使用者真的沒有卡 —— 說「沒有可以上架的卡」會讓有卡的人
@@ -201,7 +226,20 @@ async function submit() {
    96px 是留給下面那條 sticky 結帳列的活動空間，跟安全區無關。 */
 .page { padding-top: 20px; padding-bottom: 96px; max-width: 640px; }
 .head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.back { font-size: 13px; color: var(--muted); text-decoration: none; }
+/* 返回鍵原本只有 21px 高 —— 是這一頁的主要出口，卻是最難按到的東西。
+   撐到 44px 用 inline-flex 而不是加 padding，才不會把標題那一列往下推。 */
+.back {
+  font-size: 13px; color: var(--muted); text-decoration: none;
+  display: inline-flex; align-items: center; min-height: 44px;
+}
+
+/* 載入失敗：跟大廳、錢包頁、訂單頁同一套（訊息置中＋一顆重試鈕） */
+.loadFail {
+  min-width: 0;
+  display: grid; justify-items: center; gap: 12px;
+  padding: 36px 16px; text-align: center;
+}
+.loadFail p { margin: 0; }
 h1 { font-size: 20px; margin: 0; }
 .lead { font-size: 13.5px; line-height: 1.8; color: var(--muted); margin: 0 0 16px; }
 .lead strong { color: var(--ink); }

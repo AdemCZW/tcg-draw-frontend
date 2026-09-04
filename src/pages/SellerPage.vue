@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSellerStore } from '@/stores/sellers'
 import { usePoolStore } from '@/stores/pools'
@@ -13,10 +13,19 @@ const route = useRoute()
 const sellers = useSellerStore()
 const pools = usePoolStore()
 
-onMounted(() => { sellers.ensureLoaded(); pools.ensureLoaded() })
+const sellerId = computed(() => String(route.params.id))
 
-const seller = computed(() => sellers.byId(String(route.params.id)))
-const theirPools = computed(() => pools.pools.filter(p => p.sellerId === route.params.id))
+/* 只問這一位賣家，不撈整份名單。
+   /v1/sellers 是分頁的（一頁 20），以前這裡呼叫 ensureLoaded() 等於只拿第一頁 ——
+   第 21 位以後的賣家頁會整頁變成「找不到這位賣家」，而那個人是存在的。
+
+   用 watch(immediate) 而不是 onMounted：從一位賣家的頁面點到另一位時，
+   路由參數變了但元件會被複用，onMounted 不會再跑一次。 */
+watch(sellerId, id => { sellers.ensureSeller(id) }, { immediate: true })
+onMounted(() => { pools.ensureLoaded() })
+
+const seller = computed(() => sellers.byId(sellerId.value))
+const theirPools = computed(() => pools.pools.filter(p => p.sellerId === sellerId.value))
 /* 三堆而不是兩堆。以前是 open 與「不是 open」，於是賣家剛開好、
    一張都沒抽走的池會被放進「已完抽」那一區 —— 那一區是拿來證明
    「這個賣家過去開過什麼」的，把還沒開賣的池放進去，等於把新池

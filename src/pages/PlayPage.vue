@@ -6,7 +6,7 @@
  * grid 適合「一眼掃六個」的比較，選池台適合「一次專心看一個」的挑選。
  * 右上的切換鍵可以隨時跳過去。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { usePoolStore } from '@/stores/pools'
 import { useSellerStore } from '@/stores/sellers'
 import type { Pool, Tier } from '@/types/models'
@@ -23,8 +23,6 @@ const pools = usePoolStore()
 const sellers = useSellerStore()
 onMounted(() => {
   pools.ensureLoaded()
-  // 桌機的資訊面板要秀賣家；手機沒有面板，但這支是快取過的，重複呼叫不花錢
-  sellers.ensureLoaded()
   track('view_play')
 })
 
@@ -82,6 +80,12 @@ function onChange(i: number) {
    挑池的判斷本來就需要這些，把它們搬到選池台等於少一次來回。 */
 const activeSeller = computed(() =>
   activePool.value ? sellers.byId(activePool.value.sellerId) : undefined)
+
+/* 只問「現在這一張卡的賣家」。以前是 ensureLoaded() 撈整份名單，而那支在
+   API 模式下只拿得到第一頁的 20 位 —— 翻到第 21 位以後的池，桌機資訊面板的
+   賣家那一格就是空的。改成跟著 activePool 走：翻一張問一位，
+   store 自己記得問過誰，來回翻不會重複打。 */
+watch(() => activePool.value?.sellerId, id => { sellers.ensureSeller(id) }, { immediate: true })
 
 /** 還沒出的最高賞。這是挑池時最先被問的一件事 */
 const topLive = computed(() => {

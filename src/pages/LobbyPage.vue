@@ -46,7 +46,7 @@
  * 一是那張卡要凸顯的數字（剩幾籤）在 PoolCard 上是最小的灰字，
  * 二是不重複掛 view-transition-name，把轉場的唯一性留給第 3 區的格線。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { usePoolStore } from '@/stores/pools'
 import { useSellerStore } from '@/stores/sellers'
 import type { Listing, Pool, Tier } from '@/types/models'
@@ -66,7 +66,6 @@ const pools = usePoolStore()
 const sellers = useSellerStore()
 onMounted(() => {
   pools.ensureLoaded()
-  sellers.ensureLoaded()
   track('view_lobby')
 })
 
@@ -109,6 +108,10 @@ const prizeAria = computed(() => {
   return `${featured.value.title}，${tierLabel.value} ${featuredPrize.value.card.name} 未出，前往池詳情`
 })
 const seller = computed(() => (featured.value ? sellers.byId(featured.value.sellerId) : undefined))
+/* 只問推薦池那一位賣家。以前是 ensureLoaded() 撈整份名單，而 /v1/sellers 是
+   分頁的（一頁 20）—— 推薦池的賣家只要不在最早的 20 位裡，大廳那張主打卡
+   底下的賣家膠囊就整塊不見。推薦池每天輪替，所以要 watch 不是 onMounted。 */
+watch(() => featured.value?.sellerId, id => { sellers.ensureSeller(id) }, { immediate: true })
 const pct = computed(() => (featured.value ? Math.round(leftPct(featured.value)) : 0))
 
 /* 能量場色相跟著推薦池的球階走 */

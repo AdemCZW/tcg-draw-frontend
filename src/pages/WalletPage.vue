@@ -3,7 +3,10 @@ import { onMounted } from 'vue'
 import { useWalletStore } from '@/stores/wallet'
 
 const wallet = useWalletStore()
-onMounted(() => wallet.loadLedger())
+/* loadLedger() 自己不會 reject（見 stores/wallet.ts 的說明）——
+   這裡刻意保持開火即忘，失敗由 wallet.ledgerErr 在畫面上講出來。
+   以前這一行的例外會變成「mounted hook 未捕捉」，整棵元件樹當場被摧毀。 */
+onMounted(() => { wallet.loadLedger() })
 
 const typeLabel: Record<string, string> = {
   topup: '儲值', draw: '抽選', refund: '退點', recycle: '回收', redeem: '兌換', trade: '交易'
@@ -21,7 +24,17 @@ const typeLabel: Record<string, string> = {
       </div>
     </div>
     <h2>交易紀錄</h2>
-    <div class="ledger card">
+    <!-- 讀不到帳本要說「讀不到」，不能畫成一本空帳本 ——
+         後端冷啟動要 20 秒是常態，而「你還沒有任何交易紀錄」跟
+         「這一刻問不到」對剛儲值完的人是完全相反的兩件事。
+         版型沿用大廳與出貨頁那一套：訊息＋一顆重試鈕。 -->
+    <div v-if="wallet.ledgerErr" class="loadFail card" role="alert">
+      <p class="muted">{{ wallet.ledgerErr }}</p>
+      <button type="button" class="btn" @click="wallet.loadLedger()" :disabled="wallet.ledgerLoading">
+        {{ wallet.ledgerLoading ? '重試中…' : '重試' }}
+      </button>
+    </div>
+    <div v-else class="ledger card">
       <div v-for="e in wallet.ledger" :key="e.id" class="entry">
         <span class="chip">{{ typeLabel[e.type] }}</span>
         <span class="note">{{ e.note }}</span>
@@ -43,7 +56,18 @@ h2 { font-size: 15px; color: var(--muted); margin: 26px 0 10px; }
 .bal { padding: 18px; display: grid; gap: 8px; justify-items: start; }
 .bal strong { font-size: 26px; }
 .gold { color: var(--gold); }
-.btn.sm { padding: 6px 14px; font-size: 12.5px; }
+/* 儲值是這一頁唯一的行動鍵，44px 是手指按得到的下限 —— 原本 34px 高，
+   在 393px 的手機上就是「看得到但常常按不準」。 */
+.btn.sm { padding: 6px 14px; font-size: 12.5px; min-height: 44px; }
+
+/* 載入失敗：跟大廳、出貨頁同一套（訊息置中＋一顆重試鈕），
+   不另外發明一種錯誤態。min-width: 0 讓長訊息不撐破容器。 */
+.loadFail {
+  min-width: 0;
+  display: grid; justify-items: center; gap: 12px;
+  padding: 32px 16px; text-align: center;
+}
+.loadFail p { margin: 0; }
 .entry {
   display: grid; grid-template-columns: auto 1fr auto auto auto;
   gap: 12px; align-items: center;
