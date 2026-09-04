@@ -59,7 +59,11 @@ jobs:
           VITE_R2_PUBLIC_URL: ${{ vars.VITE_R2_PUBLIC_URL }}
           VITE_R2_UPLOAD_ORIGIN: ${{ vars.VITE_R2_UPLOAD_ORIGIN }}
           CSP_EXPECT_API: 'true'
-          CSP_EXPECT_R2: 'true'
+          # 2026-09-04：正式站實測 CSP 本來就沒有 R2 網域，池的資料裡也沒有任何 R2
+          # 來源 —— R2 從來沒在正式環境用起來過。所以這次刻意宣告「不預期有 R2」。
+          # 代價：目錄外的自訂卡登記不了（需要 card-front 上傳，presign 會回 503）。
+          # 接上 R2 的那一天：填好兩個 Variable，把這行改回 'true' 並 commit。
+          CSP_EXPECT_R2: 'false'
 
       # 404.html（SPA 深層連結的退回）現在由 scripts/seo.mjs 產生，
       # build:pages 裡已經包含。這裡原本有一行 cp dist/index.html dist/404.html，
