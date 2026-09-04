@@ -25,6 +25,7 @@ import CardArt from '@/components/CardArt.vue'
 import OwnerTag from '@/components/OwnerTag.vue'
 import TradeGuard from '@/components/TradeGuard.vue'
 import ListSentinel from '@/components/ListSentinel.vue'
+import SegTrack, { type SegOption } from '@/components/SegTrack.vue'
 import { useInfiniteList } from '@/composables/useInfiniteList'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { track } from '@/lib/ga'
@@ -108,31 +109,12 @@ const SORTS: { k: Sort; label: string }[] = [
   { k: 'cheap', label: '價格低到高' },
   { k: 'pricey', label: '價格高到低' }
 ]
-/* ---- 分段控制（segmented control）的鍵盤操作 ----
+/* 排序軌道餵給 SegTrack 的形狀。這一條沒有「不限」，四格都是真的排序，
+   所以不需要 tone —— 全部走中性的浮起。
 
-   這一頁的三組單選（排序、鑑定、分數）都改成一體式軌道（.segTrack / .segCell）。
-   軌道在無障礙上是 radiogroup 而不是一排各自獨立的按鈕，因為它們**互斥**：
-   一排 aria-pressed 的按鈕在讀螢幕上唸起來是「四個可以各自開關的東西」，
-   跟畫面上剛修好的那個誤會是同一個。
-
-   radiogroup 的慣例是「Tab 只停一站，方向鍵在組內移動」。少了這個處理，
-   使用者光走完排序就要按四次 Tab、走完面板要按十次 —— 所以不是可選的裝飾，
-   是換成 radiogroup 就必須一起補的那一半。
-   焦點要跟著移過去（roving tabindex），不然按了方向鍵值變了但焦點還留在原地。 */
-function segKey(e: KeyboardEvent, n: number, i: number, pick: (next: number) => void) {
-  const k = e.key
-  const step = k === 'ArrowRight' || k === 'ArrowDown' ? 1
-    : k === 'ArrowLeft' || k === 'ArrowUp' ? -1 : 0
-  let next = i
-  if (step) next = (i + step + n) % n          // 環繞：最後一格再往右回到第一格
-  else if (k === 'Home') next = 0
-  else if (k === 'End') next = n - 1
-  else return
-  e.preventDefault()
-  pick(next)
-  const group = (e.currentTarget as HTMLElement).parentElement
-  group?.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus()
-}
+   （鍵盤在元件裡：roving tabindex ＋方向鍵，整條軌道只佔一個 Tab 站。
+     卡冊那一頁原本是每格一站，抽出來時一起統一了，見 SegTrack.vue 的檔頭。） */
+const sortOptions: SegOption<Sort>[] = SORTS.map(s => ({ value: s.k, label: s.label }))
 
 /* ---- 篩選：卡片等級與點數區間 ----
 
@@ -183,6 +165,15 @@ const GRADER_SEG: { k: GraderFilter | null; label: string }[] =
   [{ k: null, label: '不限' }, ...GRADER_OPTS]
 const GRADE_SEG: { v: number | null; label: string }[] =
   [{ v: null, label: '不限' }, ...GRADE_OPTS.map(v => ({ v, label: `${v} 分以上` }))]
+
+/* tone：選中「真的篩選條件」時上 --accent-wash ＋ accent 內描邊，選「不限」
+   退回中性。不區分的話「已選 PSA」跟「不限」長得一樣，就看不出篩選正在生效；
+   反過來把強調色也套在「不限」上，面板一打開就有兩格在喊「這裡有事情發生」，
+   而其實什麼都沒篩。 */
+const graderOptions: SegOption<GraderFilter | null>[] =
+  GRADER_SEG.map(g => ({ value: g.k, label: g.label, tone: g.k === null ? 'neutral' : 'accent' }))
+const gradeOptions: SegOption<number | null>[] =
+  GRADE_SEG.map(g => ({ value: g.v, label: g.label, tone: g.v === null ? 'neutral' : 'accent' }))
 
 /**
  * 點數輸入的上界。跟後端 server/src/limits.ts 的 POINTS_INPUT_MAX 是同一個數字
@@ -539,24 +530,18 @@ watch([() => list.ready.value, shown, queryKey], () => {
          刻意不是下拉／選單：目前值必須一直看得見，而且四個選項全部在畫面上，
          使用者不用點開才知道有什麼可選。
 
-         形態與卡冊那一頁（b66a5af 的 .segTrack / .segCell）刻意用同一套：
-         一圈外框、一個圓角、格子貼邊、只用 1px 細線隔開。兩頁是同一個產品，
-         同一種語意（單選）不該長成兩個樣子。
+         形態跟卡冊那一頁刻意是同一套 —— 現在是字面上的同一個：兩頁都用
+         SegTrack。一圈外框、一個圓角、格子貼邊、只用 1px 細線隔開。
+         兩頁是同一個產品，同一種語意（單選）不該長成兩個樣子。
 
          順帶修掉一個真的壞掉的東西：舊版四顆膠囊在 393px 上是 394px 寬塞進
          256px 的容器（實測），第四個「價格高到低」要橫向滑才看得到。
          軌道是等分的 grid，四格永遠都在畫面上。 -->
     <div class="bar">
-      <div class="segTrack sortTrack" role="radiogroup" aria-label="排序方式" :style="{ '--n': SORTS.length }">
-        <button
-          v-for="(s, i) in SORTS" :key="s.k"
-          type="button" role="radio" :aria-checked="sort === s.k"
-          :tabindex="sort === s.k ? 0 : -1"
-          class="segCell" :class="{ on: sort === s.k }"
-          @click="sort = s.k"
-          @keydown="segKey($event, SORTS.length, i, n => { sort = SORTS[n]!.k })"
-        >{{ s.label }}</button>
-      </div>
+      <!-- layout 走預設的 even（等分 grid）：最長的一組是六格純標籤，
+           393px 上等分之後每格 53px 還放得下三個字，一列排得完。
+           換行是裝不下才做的事。 -->
+      <SegTrack v-model="sort" :options="sortOptions" class="sortTrack" aria-label="排序方式" />
     </div>
 
     <!-- 篩選面板。預設收起來 —— 不篩選的人（多數）版面跟以前一模一樣。
@@ -566,41 +551,24 @@ watch([() => list.ready.value, shown, queryKey], () => {
          但也收進同一條有邊框的欄位裡（中間一個 – 分隔），
          這樣三列讀起來是三個東西，而不是「六顆磚、四顆磚、兩個框」十二個東西。
 
-         三條的外觀跟卡冊那一頁的軌道是同一套（--line 底、1px 細線、13px 圓角、
-         格子鋪 --field），只多一件事：選中的那一格如果是**真的篩選條件**才上
-         強調色淡底，是「不限」就跟卡冊一樣只做中性的浮起。 -->
+         三條的外觀跟卡冊那一頁的軌道是同一套（同一個 SegTrack：--line 底、
+         1px 細線、13px 圓角、格子鋪 --field），只多一件事：選中的那一格如果是
+         **真的篩選條件**才上強調色淡底（那一格的 tone 是 accent），
+         是「不限」就跟卡冊一樣只做中性的浮起。 -->
     <div v-if="panelOpen" id="marketFilters" class="fpanel">
       <div class="frow">
         <span id="fl-grader" class="flabel">鑑定</span>
-        <!-- 「不限」那一格帶 .any：選中時走中性的浮起（跟卡冊完全同一套），
-             不上強調色。強調色在這站的語意是「這裡有事情發生」，套在一個
-             什麼都沒篩的預設值上，面板一打開就有兩格紅的在喊 -->
-        <div class="segTrack fTrack" role="radiogroup" aria-labelledby="fl-grader" :style="{ '--n': GRADER_SEG.length }">
-          <button
-            v-for="(g, i) in GRADER_SEG" :key="g.k ?? 'any'"
-            type="button" role="radio" :aria-checked="grader === g.k"
-            :tabindex="grader === g.k ? 0 : -1"
-            class="segCell" :class="{ on: grader === g.k, any: g.k === null }"
-            @click="grader = g.k"
-            @keydown="segKey($event, GRADER_SEG.length, i, n => { grader = GRADER_SEG[n]!.k })"
-          >{{ g.label }}</button>
-        </div>
+        <!-- 「不限」那一格的 tone 是 neutral：選中時走中性的浮起（跟卡冊完全
+             同一套），不上強調色。強調色在這站的語意是「這裡有事情發生」，
+             套在一個什麼都沒篩的預設值上，面板一打開就有兩格紅的在喊 -->
+        <SegTrack v-model="grader" :options="graderOptions" class="fTrack" aria-labelledby="fl-grader" />
       </div>
 
       <!-- 未鑑定的卡沒有分數，這一段整塊收起來：
            留一排點了必定 0 件的選項，比沒有這一段更難懂 -->
       <div v-if="grader !== 'raw'" class="frow">
         <span id="fl-grade" class="flabel">分數</span>
-        <div class="segTrack fTrack" role="radiogroup" aria-labelledby="fl-grade" :style="{ '--n': GRADE_SEG.length }">
-          <button
-            v-for="(g, i) in GRADE_SEG" :key="g.v ?? 'any'"
-            type="button" role="radio" :aria-checked="minGrade === g.v"
-            :tabindex="minGrade === g.v ? 0 : -1"
-            class="segCell" :class="{ on: minGrade === g.v, any: g.v === null }"
-            @click="minGrade = g.v"
-            @keydown="segKey($event, GRADE_SEG.length, i, n => { minGrade = GRADE_SEG[n]!.v })"
-          >{{ g.label }}</button>
-        </div>
+        <SegTrack v-model="minGrade" :options="gradeOptions" class="fTrack" aria-labelledby="fl-grade" />
       </div>
       <p v-else class="fnote muted">未鑑定的卡沒有鑑定分數，所以這裡不提供分數條件。</p>
 
@@ -990,75 +958,13 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   font-size: 11px; font-weight: 700; line-height: 1;
 }
 
-/* ---- 一體式軌道（.segTrack / .segCell）：排序與兩組篩選共用 ----
+/* 軌道本身（.segTrack / .segCell）與焦點框已經抽成
+   src/components/SegTrack.vue。這一頁只留「這一頁才有的話要說」：寬度上限。
 
-   這是這一頁「一體」的核心，而且**刻意跟卡冊那一頁（b66a5af）是同一套**：
-   一圈外框、一個圓角、格子貼邊、只用 1px 細線隔開。兩頁都在做同一件事
-   （一個單選控制項），長成兩個樣子才是錯的。
-
-   細線怎麼畫（作法沿用卡冊）：容器底鋪 --line、格與格之間 gap: 1px、
-   格子自己蓋 --field，露出來的那 1px 就是分隔線。
-   overflow: hidden 讓四個角被外框的圓角切乾淨。
-
-   跟卡冊唯一的差別是排法：卡冊的五個分頁連著計數在 393px 上一列裝不下，
-   要 flex-wrap 換行；這一頁最長的一組是六格純標籤（不限／未鑑定／已鑑定／
-   PSA／BGS／ARS），393px 上等分之後每格 53px 還放得下三個字，所以直接用
-   等分的 grid 一列排完 —— 換行是為了裝不下才做的事，裝得下就不必。
-
-   等分用 grid-auto-columns 而不是 repeat(var(--n), …)：後者要 var() 進到
-   repeat() 的計數位置，那件事在部分瀏覽器上不成立；auto-flow: column
-   ＋ auto-columns 給的是同一個結果，而且不需要知道有幾格。
-   minmax(0, 1fr) 而不是 1fr：1fr 的下限是 min-content，長標籤會把某一格
-   撐寬、其他格被壓扁，「等分」就不成立了（.fpanel 踩過同一個坑）。 */
-.segTrack {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
-  gap: 1px;
-  min-width: 0;
-  background: var(--line);
-  border: 1px solid var(--line);
-  border-radius: 13px;
-  overflow: hidden;
-}
-.segCell {
-  min-width: 0;
-  min-height: 44px;              /* 觸控目標下限 */
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 6px 8px;
-  border: 0; border-radius: 0;
-  background: var(--field);
-  color: var(--muted);
-  font-size: 12.5px; font-weight: 500; font-family: inherit; cursor: pointer;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  transition: background .15s, color .15s;
-}
-/* 目前值：在凹下去的軌道裡浮起來的那一格。顏色階梯沿用卡冊的結論，
-   不重新發明 —— 深色 field(#0f1115) → surface(#17161a)、
-   淺色 #f6f2f0 → #ffffff，兩套主題都是「軌道凹、目前值浮」。
-   inset ring 而不是外擴陰影：軌道有 overflow: hidden，外擴會被切掉，
-   而且頭尾兩格被切得跟中間格不一樣，正好破壞「一體」。 */
-.segCell.on {
-  background: var(--surface);
-  color: var(--ink); font-weight: 600;
-  box-shadow: inset 0 0 0 1px var(--line);
-}
-@media (hover: hover) { .segCell:not(.on):hover { background: var(--surface-2); color: var(--ink); } }
-
-/* ---- 焦點框（作法與卡冊逐字一致）----
-   根因：base.css 只給 .btn 寫了 :focus-visible，這些格子不是 .btn，
-   於是掉回瀏覽器預設的焦點環 —— Chrome 是寫死的 rgb(0, 95, 204)，
-   不走任何權杖，在暖色系上就是一圈突兀的藍。
-
-   兩條規則要一起下：:focus 明確拆掉 UA 的環（只靠 :focus-visible 等於把
-   「滑鼠點完該不該留框」交給各家瀏覽器的啟發式去猜）；:focus-visible 補回
-   專案自己的環，鍵盤操作必須看得見焦點，這是無障礙不是裝飾。
-   offset 往內縮：軌道 overflow: hidden，外擴的環會被切掉半圈。 */
-.segCell:focus { outline: none; }
-.segCell:focus-visible {
-  outline: 2px solid var(--accent); outline-offset: -2px;
-  border-radius: 4px; position: relative; z-index: 1;
-}
+   選中要不要上強調色，改由每一格的 tone 表達（見上面的 graderOptions），
+   不再靠 .fTrack .segCell.on 這個祖先選擇器。原因不只是「搬家」——
+   那件事是行為（哪一格算真的在篩）不是版面，而且軌道成為子元件之後，
+   父層的 scoped CSS 只搆得到它的根元素，搆不到裡面的格子。 */
 
 /* 排序那一條：控制列上唯一一直露在外面的控制項。
    它**不**做成整片最亮的東西 —— 卡冊那一輪已經下過這個結論（原本 --ink
@@ -1068,23 +974,12 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 /* 桌機上四格攤成 1180px 寬不會更像一個控制項，只會更像四塊板子 */
 @media (min-width: 721px) { .sortTrack { max-width: 480px; } }
 
-/* 面板裡那兩條：選中的格子如果是**真的篩選條件**才上強調色淡底 ——
-   「這裡有事情發生」的訊號要留給真的有事情發生的時候。 */
-.fTrack .segCell.on {
-  background: var(--accent-wash);
-  color: var(--accent); font-weight: 700;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
-}
-/* 「不限」＝沒有在篩選，退回卡冊那個中性的浮起（.segCell.on 的原樣）：
-   強調色套在一個什麼都沒篩的預設值上，等於面板一打開就有兩格紅的在喊。 */
-.fTrack .segCell.any.on {
-  background: var(--surface);
-  color: var(--ink); font-weight: 600;
-  box-shadow: inset 0 0 0 1px var(--line);
-}
 /* 桌機上不讓軌道攤到 1180px：六格各 190px 寬的東西已經不是一個控制項，
-   是一條橫幅。上限跟格數綁在一起（--n 就是格數），四格與六格才不會一個
-   剛好、一個太空。手機上這個上限永遠碰不到，版面照舊是滿版等分。 */
+   是一條橫幅。上限跟格數綁在一起（--n 就是格數，由 SegTrack 掛在自己的根
+   元素上），四格與六格才不會一個剛好、一個太空。
+   這兩條搆得到，是因為 Vue 的 scoped 規則：子元件的根元素同時帶著父元件的
+   scope，所以 .sortTrack / .fTrack 這種「掛在根元素上的 class」父層寫得動。
+   手機上這個上限永遠碰不到，版面照舊是滿版等分。 */
 @media (min-width: 721px) {
   .fTrack { max-width: calc(var(--n) * 100px); }
   .prices { max-width: 320px; }

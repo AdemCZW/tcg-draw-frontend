@@ -10,6 +10,7 @@ import CertTag from '@/components/CertTag.vue'
 import ValueCurve from '@/components/ValueCurve.vue'
 import ListSentinel from '@/components/ListSentinel.vue'
 import BottomActionBar from '@/components/BottomActionBar.vue'
+import SegTrack, { type SegOption } from '@/components/SegTrack.vue'
 import { useInfiniteList } from '@/composables/useInfiniteList'
 import { useKeyboardInset } from '@/composables/useKeyboardInset'
 import { useWalletStore } from '@/stores/wallet'
@@ -136,6 +137,10 @@ const TABS: { k: Tab; label: string }[] = [
    會顯示成 0，而使用者會據此以為自己的卡不見了。 */
 const countOf = (k: Tab) => k === 'all' ? total.value : (summary.value?.counts[k] ?? 0)
 const tabs = computed(() => TABS.filter(t => countOf(t.k) > 0))
+/* 餵給 SegTrack 的形狀。count 就是分頁上那個較暗的數字 ——
+   它是使用者決定「該點哪一個」的依據，不是裝飾，所以留在格子裡。 */
+const tabOptions = computed<SegOption<Tab>[]>(() =>
+  tabs.value.map(t => ({ value: t.k, label: t.label, count: countOf(t.k) })))
 /* 過濾已經在後端做完了（tab 是 API 參數），這裡拿到的就是這個分頁的卡。
    再濾一次是有害的：剛回收的那張在本地被改成 recycled，如果這裡還濾
    status === tab，它會在「寄存中」分頁裡當場消失，使用者看不到入帳提示。 */
@@ -159,6 +164,7 @@ const SORT_TABS: { k: PrizeSort; label: string }[] = [
   { k: 'dupes', label: '同款集中' },
   { k: 'value', label: '參考價' }
 ]
+const sortOptions: SegOption<PrizeSort>[] = SORT_TABS.map(t => ({ value: t.k, label: t.label }))
 /* 只有這兩種排序保證「同款卡必然相鄰」（order by 裡夾著分組鍵），
    前端才敢把連續同鍵的卡併成一格。取得時間是一條時間軸，
    把 9 張舊卡拉到新卡旁邊就不再是時間軸了，所以它刻意不分組。
@@ -1089,28 +1095,31 @@ async function copyLink() {
     <div v-if="tabs.length > 1 || showSorts" class="viewBar">
       <div v-if="tabs.length > 1" class="viewRow">
         <span class="viewLabel" aria-hidden="true">顯示</span>
-        <!-- 每個分頁後面的數字是使用者決定「該點哪一個」的依據，不是裝飾。
-             計數留在格子裡而不是另外找地方擺 —— 393px 上擺得下，見樣式裡的實測。 -->
-        <div class="segTrack" role="tablist" aria-label="顯示哪一批卡">
-          <button
-            v-for="t in tabs" :key="t.k"
-            type="button" role="tab" :aria-selected="tab === t.k"
-            class="segCell" :class="{ on: tab === t.k }"
-            @click="tab = t.k"
-          >{{ t.label }}<span class="segN mono">{{ countOf(t.k) }}</span></button>
-        </div>
+        <!-- 每個分頁後面的數字（option.count）是使用者決定「該點哪一個」的依據，
+             不是裝飾。計數留在格子裡而不是另外找地方擺 —— 393px 上擺得下。
+
+             layout="wrap"：五個分頁連著計數在 393px 一列裝不下（軌道內寬
+             295.1px、五格自然寬合計 383px），所以換行但不斷開。
+             role="tablist"：切的是「你正在看哪一批卡」，每一格對應下面卡牆的
+             一種內容 —— 那是分頁，不是篩選條件，別因為市場那一頁是 radiogroup
+             就跟著改（鍵盤兩邊本來就一樣，見 SegTrack.vue 的檔頭）。 -->
+        <SegTrack
+          v-model="tab" :options="tabOptions"
+          layout="wrap" role="tablist" aria-label="顯示哪一批卡"
+        />
       </div>
 
       <div v-if="showSorts" class="viewRow">
         <span class="viewLabel" aria-hidden="true">排序</span>
-        <div class="segTrack" role="tablist" aria-label="排序方式">
-          <button
-            v-for="s in SORT_TABS" :key="s.k"
-            type="button" role="tab" :aria-selected="sort === s.k"
-            class="segCell" :class="{ on: sort === s.k }"
-            @click="sort = s.k"
-          >{{ s.label }}</button>
-        </div>
+        <!-- 這一條也是 tablist：它跟上面那條是同一件事的兩半（都在決定
+             「下面那面卡牆長什麼樣」），拆成一個 tablist 一個 radiogroup
+             只會讓讀螢幕的人聽到兩種語意。
+             （留一句誠實的話：這一條說是 radiogroup 也講得通 —— 排序不換內容
+               只換次序。這次是純抽取，不動語意；真要改就自己開一輪。） -->
+        <SegTrack
+          v-model="sort" :options="sortOptions"
+          layout="wrap" role="tablist" aria-label="排序方式"
+        />
       </div>
 
       <!-- ---- 「你有重複的卡」----
@@ -1984,89 +1993,11 @@ async function copyLink() {
   font-size: 12px; color: var(--faint); letter-spacing: .04em;
 }
 
-/* ---- 一體式軌道（.segTrack / .segCell）：狀態分頁與排序共用 ----
-   （不叫 .seg —— 這一頁上面的 tier 分佈條已經佔走那個名字了）
-
-   為什麼從「一排膠囊」改成「一條軌道」：
-   膠囊有自己的圓角、自己的邊、彼此之間還有 8px 的縫 —— 那是「N 個獨立物件」
-   的形狀，而它其實是**一個單選控制項**。形狀在說謊，使用者掃過去就得
-   一個一個讀才知道現在選的是哪個。軌道相反：一圈外框、一個圓角、
-   格子貼邊、只用 1px 細線隔開，整條讀起來是「一把刻度尺 + 一個亮起來的位置」。
-
-   細線怎麼畫：容器底色鋪 --line，格與格之間留 gap: 1px，格子自己蓋 --field。
-   露出來的那 1px 就是分隔線。這樣做的好處是**換行時橫向與縱向都自動有線**，
-   不必為「哪一格是列尾」寫任何規則 —— 換行之後它變成一張表格，
-   而表格仍然是一個物件。overflow: hidden 讓四個角被外框的圓角切乾淨。
-
-   格子的底色刻意跟外面的面板同一階（都是 --field），不再往上疊一層填色 ——
-   面板裡再套一個有自己底色的盒子就是「盒中盒」，那是雜亂的另一個來源。
-   軌道只多了「一圈框 + 幾條細線」，資訊量剛好等於「這幾格是同一件事」。
-
-   換行不橫捲：這一點延續 aab073f，不准改回去。原本是 overflow-x: auto +
-   右緣漸隱，實測「在卡冊 / 待出貨 / 已出貨」三個 chip 的可見寬度都是 0px，
-   使用者根本不知道有東西可以捲。換行之後 scrollWidth 恆等於 clientWidth。 */
-.segTrack {
-  /* 桌機：軌道收到內容寬，不要撐滿一整條 1000px —— 三個排序各佔 330px
-     不會更像一個控制項，只會更像三塊板子。 */
-  flex: 0 1 auto; min-width: 0;
-  display: flex; flex-wrap: wrap; gap: 1px; margin: 0;
-  background: var(--line);
-  border: 1px solid var(--line); border-radius: 13px;
-  overflow: hidden;
-}
-.segCell {
-  /* 桌機不撐、手機撐滿（見底下 max-width: 720px）。
-     min-width: 0 是這個 repo 的老規矩：預設 auto 會讓內容把軌道撐破。 */
-  flex: 0 1 auto; min-width: 0; min-height: 44px;
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  /* 沒有間距也沒有各自的圓角之後，左右內距從 12 收到 10 就夠把字撐開，
-     而每一格省下的 4px + 少掉的 7px 縫，是 393px 上「計數還擺得下」的來源。 */
-  padding: 6px 10px; border: 0; border-radius: 0;
-  background: var(--field);
-  color: var(--muted); font-size: 12.5px; font-weight: 500; cursor: pointer;
-  white-space: nowrap; overflow: hidden;
-  transition: background .15s, color .15s;
-}
-/* 目前值：在凹下去的軌道裡浮起來的那一格。
-
-   顏色階梯沿用上一版的結論，不重新發明：深色 field(#0f1115) → surface(#17161a)，
-   淺色 #f6f2f0 → #ffffff，兩套主題都是「軌道凹、目前值浮」。
-   強調色與最高亮度仍然只屬於上面那組動作 —— 這一格只要在軌道內部贏過
-   隔壁就夠了，它不必、也不該跟「合併出貨」搶。
-
-   inset ring 而不是 box-shadow：軌道有 overflow: hidden，外擴的陰影會被切掉，
-   而且第一格與最後一格會被切得跟中間幾格不一樣 —— 那正好破壞「一體」。
-   內描邊不佔版面、每一格被切的方式都一樣。
-   （上一版刻意讓選中的晶片沒有邊，是為了跟浮在頁面上的 .btn 區分開。
-     那個顧慮在這裡不成立：.btn 是自由浮動的膠囊，這一格貼死在軌道格線裡，
-     兩者的形狀本來就不可能看錯。） */
-.segCell.on {
-  background: var(--surface);
-  color: var(--ink); font-weight: 600;
-  box-shadow: inset 0 0 0 1px var(--line);
-}
-.segN { font-size: 11px; opacity: .6; font-weight: 400; }
-.segCell.on .segN { opacity: .75; font-weight: 500; }
-@media (hover: hover) { .segCell:not(.on):hover { background: var(--surface-2); color: var(--ink); } }
-
-/* ---- 焦點框 ----
-   根因：base.css 只給 .btn 寫了 :focus-visible，這些格子不是 .btn，
-   於是掉回瀏覽器的預設焦點環 —— Chrome 是寫死的 rgb(0, 95, 204)，
-   不走任何權杖，在暖色系的深色主題上就是一圈突兀的藍。截圖裡那圈藍是它。
-
-   兩條規則要一起下，缺一不可：
-     :focus       → outline: none，明確拆掉 UA 的環。只靠 :focus-visible
-                    是把「滑鼠點完該不該留框」交給各家瀏覽器的啟發式去猜
-                    （Chromium 猜對，WebKit / Firefox 的判定不一樣）。
-     :focus-visible → 補回專案自己的環。鍵盤操作**必須**看得見焦點，
-                    這是無障礙，不是裝飾；顏色走 --accent 跟全站一致。
-   outline-offset 給 -2px（往內縮）而不是 +3px：軌道 overflow: hidden，
-   外擴的環會被切掉半圈。 */
-.segCell:focus { outline: none; }
-.segCell:focus-visible {
-  outline: 2px solid var(--accent); outline-offset: -2px;
-  border-radius: 4px; position: relative; z-index: 1;
-}
+/* 軌道本身（.segTrack / .segCell）已經抽成 src/components/SegTrack.vue ——
+   會分岔的是行為（哪一格算選中、要不要上強調色、鍵盤怎麼走）不是樣式，
+   所以抽的是元件不是 class。這一頁只保留它外面那圈版面。
+   （順帶：這一頁上面的 tier 分佈條用的是 .mixBar .seg，跟 .segCell 不同名，
+     軌道搬走之後那條分佈條的樣式完全沒被碰到。） */
 
 /* ---- 「你有 N 款重複的卡」----
    面板裡的一句話，不是橫幅。它貼在排序那一列底下，講的就是正上方那顆
@@ -2101,9 +2032,8 @@ async function copyLink() {
      仍然是同一塊板子。
 
      flex: 1 1 auto 讓每一列的格子把該列撐滿 —— 這一條同時解掉
-     「最後一列只剩一格會留下一塊空洞」：那一格自己會長成整列寬。 */
-  .segTrack { flex: 1 1 auto; }
-  .segCell { flex: 1 1 auto; }
+     「最後一列只剩一格會留下一塊空洞」：那一格自己會長成整列寬。
+     （這兩條規則現在住在 SegTrack.vue 的 @media (max-width: 720px) 裡。） */
 }
 
 
