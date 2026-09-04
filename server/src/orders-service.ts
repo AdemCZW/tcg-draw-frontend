@@ -218,29 +218,93 @@ async function notifyTransition(tx: Tx, o: Order) {
  *     cert 索引跳過 null，所以同一張卡可以同時掛出好幾筆有效掛單，
  *     好幾個買家的點數同時被凍結，而賣家只有一張卡。
  *
- * 這裡把兩件事一起補上。所有訂單都來自 delivery = 'ship' 的掛單
- * （vault 在 orders.ts 當場過戶、根本不建訂單），所以卡的實體去向是確定的：
- *   completed          → 卡寄到買家手上了，過戶給買家
- *   refunded/cancelled → 交易沒成，卡還在賣家那邊
- * 兩種情況狀態都回到 'shipped'（＝在人手上、不在保管庫），
- * 之後要再上架就是「需寄送」那條路。
+ * 所有訂單都來自 delivery = 'ship' 的掛單（vault 在 orders.ts 當場過戶、
+ * 根本不建訂單），所以這裡只有兩種結局要處理：**卡過給買家**，或**卡留在賣家**。
+ *
+ * ── 為什麼「留在賣家」不能一律寫 'shipped'（A-7，跟 A-5 同一類病）────
+ * 原本兩種結局都寫 status = 'shipped'，理由是「shipped ＝ 在人手上、
+ * 不在保管庫」。但 'shipped' 不只是一個位置描述，它同時**否定**了另一個
+ * 位置：'in_book'（閒置在卡冊，可以上架、也可以拿去開池）。
+ * 一張 in_book 的卡上架 → 成交 → 賣家逾期未出貨被系統取消，卡從頭到尾
+ * 沒離開過賣家的抽屜，卻被寫成 'shipped'。建池只收 in_book
+ * （pools.ts 的押記重用分支，其餘一律 CARD_BUSY），於是那張卡永遠不能
+ * 再開池，而且整條路上沒有任何錯誤訊息 —— 每一步都「成功」了。
+ * 這跟 A-5 的下架反推是同一個錯誤：用一個可以合法發生的狀態，
+ * 蓋掉一個我們其實還留著的事實。
+ *
+ * 修法一樣：不要反推，去讀上架時抄下來的 listings.previous_status
+ * （migration 032）。掛單那一列在這裡一定還在（訂單的 listing_id 指著它，
+ * 成交只是把它改成 'sold'，沒有人刪它），所以資訊拿得到。
+ *
+ * ── 逐條結局 ────────────────────────────────────────────────────────
+ *   completed（buyer-confirm / auto-release / dispute-seller）
+ *       卡真的寄到買家手上了 → 過戶給買家、status = 'shipped'。
+ *       這條沒有還原可言（卡易主了），previous_status 跟它無關。
+ *   cancelled（ship-timeout；賣家逾期未出貨）
+ *       shipped_at 是 null ⇒ 賣家從來沒有按過出貨 ⇒ 卡**確定**沒離開他手上
+ *       → 還原成 previous_status。這是這支修的主要那一條。
+ *   refunded（dispute-buyer；爭議判買家）
+ *       爭議只開得起來於 shipped / delivered（escrow.ts 的 actionsFor），
+ *       所以 shipped_at 一定有值：賣家已經按過出貨，實體卡**可能**已經
+ *       在買家那裡（買家可以是「收到了但貨不對」而勝訴）。
+ *       這種情況資料上沒有任何欄位分得出卡在誰手上 —— 站上沒有簽收回報，
+ *       物流也沒串。所以**不還原**，維持 'shipped'。
+ *
+ * 判準用的是 o.shippedAt 而不是 o.status：那才是「卡有沒有可能離開賣家」
+ * 的物理事實。之後再多一種結案狀態，這條判準不需要跟著改。
+ *
+ * 方向是刻意的，跟 A-5 與 migration 032 同一個方向：**不確定時倒向
+ * 'shipped'**。猜錯成 'in_book' 會讓一張真的寄出去的卡被拿去開池
+ * （抽到的人拿不到卡），比不能開池嚴重得多。
  *
  * 只動 status = 'listed' 的那一列：那是上架時標記的，代表這張卡確實是被
  * 這筆掛單鎖住的。加這個條件讓重複呼叫不會覆蓋掉之後才發生的狀態變化。
  */
+/**
+ * 還原時允許寫回 prizes.status 的白名單。
+ *
+ * previous_status 是上架時抄下來的，理論上只會是上架端允許的那幾個值；
+ * 但它是一個可以被舊資料、回填、或某次手動修資料寫進任何字串的欄位，
+ * 而下游是 prizes.status —— 寫進一個沒人認得的值會讓那張卡從所有清單裡
+ * 消失（每一支查詢都是列舉狀態的），比原本的 bug 更難查。
+ *
+ * 這裡**刻意不收 'stashed'**（routes/public.ts 的下架白名單有收）：
+ * stashed 的語意是「寄存在平台保管庫」，而會走到這裡的一定是
+ * delivery = 'ship' 的掛單（vault 不建訂單），卡本來就不在保管庫。
+ * 真的讀到 'stashed' 只代表資料壞了，這時謊稱平台保管著一張卡
+ * 比不還原嚴重 —— 出貨流程會拿它去出一張平台沒有的貨。
+ */
+const RESTORABLE_ON_RETURN = new Set(['shipped', 'in_book'])
+
 async function releasePrize(tx: Tx, o: Order) {
-  if (o.status !== 'completed' && o.status !== 'refunded' && o.status !== 'cancelled') return
-  const owner = o.status === 'completed' ? o.buyerId : o.sellerId
-  /* custodian 一起改：託管訂單的完成定義就是「實體卡寄到了買家手上」
-     （出貨＋簽收或鑑賞期滿），退款/取消則是卡根本沒離開賣家。
-     這是站內唯一「實體真的移動」的交易路徑，custodian 不跟著走的話，
-     buyer 之後把這張卡上架，能不能上架的判準（custodian 是不是自己）
-     會給出錯的答案。 */
-  await tx`
-    update prizes p set user_id = ${owner}, custodian_id = ${owner}, status = 'shipped'
-    from listings l
-    where l.id = ${o.listingId} and p.id = l.prize_id and p.status = 'listed'
-  `
+  if (o.status === 'completed') {
+    /* custodian 一起改：託管訂單的完成定義就是「實體卡寄到了買家手上」
+       （出貨＋簽收或鑑賞期滿）。這是站內唯一「實體真的移動」的交易路徑，
+       custodian 不跟著走的話，buyer 之後把這張卡上架，能不能上架的判準
+       （custodian 是不是自己）會給出錯的答案。 */
+    await tx`
+      update prizes p set user_id = ${o.buyerId}, custodian_id = ${o.buyerId}, status = 'shipped'
+      from listings l
+      where l.id = ${o.listingId} and p.id = l.prize_id and p.status = 'listed'
+    `
+    return
+  }
+  if (o.status !== 'refunded' && o.status !== 'cancelled') return
+
+  const [l] = await tx`select prize_id, previous_status from listings where id = ${o.listingId}`
+  if (!l?.prize_id) return
+  const prev = typeof l.previous_status === 'string' ? l.previous_status : null
+  /* previous_status 是 null 的兩種來源：032 之前建立的舊掛單，以及沒有
+     prize_id 的早期種子掛單（上面已經擋掉）。舊掛單沒有更好的資訊了，
+     退回保守的 'shipped' —— 跟 routes/public.ts 下架端那條退路同一個理由、
+     同一個方向。034 的回填會救回其中證明得了的那一部分。 */
+  const back = o.shippedAt == null && prev && RESTORABLE_ON_RETURN.has(prev) ? prev : 'shipped'
+  /* 這條路**只改 status**，不碰 user_id / custodian_id：卡沒有移動，
+     所有權也沒有轉移（賣家本來就是 owner，上架時驗過 user_id = 賣家）。
+     原本這裡會把兩欄都寫成賣家，那是不必要的重寫 —— 萬一 custodian
+     跟 owner 本來就不同（站外轉手留下的狀態），一筆沒成交的訂單
+     不該有權把它改掉。「什麼都沒發生」就該什麼都不寫。 */
+  await tx`update prizes set status = ${back} where id = ${l.prize_id} and status = 'listed'`
 }
 
 /** 把一張訂單寫回資料庫（只寫會變的欄位） */
