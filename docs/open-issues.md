@@ -201,8 +201,9 @@ C-1 講的是「正式環境有 12 個籤序算得出來的池在收錢」——
 | ~~A-5~~ | ~~`in_book` 卡掛單下架後必然回到 `shipped`~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | 032 新增 `listings.previous_status`；上架時記錄原狀態，下架時以白名單精確還原。migration 亦保守回填仍可證明的舊掛單與既有錯轉卡；資訊不足的舊 `ship` 掛單仍採 `shipped` fallback，避免把真實已寄出的卡誤開池。`regress-public.ts` 驗證 `in_book → listing → delist → in_book` 後能再次開池，並驗 stashed 與成交反向路徑。 |
 | ~~A-6~~ | ~~公開池展示資料與公平性 manifest 的鑑定編號曝光規則混在一起~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | pool 列表／詳情展示的卡片已走 `publicCard()` 白名單；revealed manifest 刻意保留完整 `certNo`，因為它是 v2+ commit hash 的序列化輸入。`regress-public.ts` 同時驗證公開展示不含編號、reveal manifest 保留編號且公平性驗算可通過。 |
 | ~~A-7~~ | ~~公開 OAuth 起始端點沒有速率限制~~ **已修並有回歸測試（2026-09-03）** | 讀碼＋回歸檔 | LINE login/link start 已使用獨立 `oauth-start-ip:` bucket，並在 start 路徑清理逾期 `oauth_states` 與 login exchange codes。`regress-ratelimit.ts` 驗證上限、`Retry-After`、IP 隔離與過期資料清理。 |
-| A-8 | 已有全裝置登出 API，但前端尚未提供操作入口 | Medium | 讀碼（2026-09-03） | `POST /v1/auth/logout-all` 已完成，但前端搜尋不到呼叫；使用者無法從 UI 使用這個帳號自救功能。<br>**修法**：在帳號／登入方式設定加入「登出其他裝置」動作，預設呼叫 `{ keepCurrent: true }` 後以回傳的新 token 更新本機；可另提供「連目前裝置也登出」的確認操作。 |
-| A-9 | 032／033 migration 是否已套用到正式資料庫尚未驗證 | 部署驗證 | 待查 | 程式已依賴 `listings.previous_status` 與 `users.session_version`。production 必須先執行 migration 032、033，否則上架／登入驗證會因欄位不存在而失敗。<br>**驗證**：部署日確認 migration log，並以唯讀 schema 查詢確認兩欄存在；不得以本機 build 通過取代此確認。 |
+| ~~A-8~~ | ~~已有全裝置登出 API，但前端尚未提供操作入口~~ **已修（2026-09-04）** | 讀碼＋前端建置 | `LoginMethods.vue` 已加入二次確認面板與「登出所有裝置」操作；預設保留目前裝置並以回傳的新 token 更新本機，也可明確選擇連目前裝置一起登出、清除本地憑證並回到首頁。 |
+| ~~A-9~~ | ~~032–036 migration 是否已套用到正式資料庫尚未驗證~~ **已確認（2026-09-04）** | 部署驗證 | **證明方式是結構性的，不是看 log**：`server/railway.json` 的 `startCommand` 是 `npm run migrate && npm start` —— `&&` 表示只要任何一支 migration 失敗、`migrate` 以非 0 結束，`npm start` 就不會執行、API 會整個掛掉。而 API 正在服務（`/health` 200、`/v1/pools` 200），所以 032–036 全部套用成功。另外實測兩個依賴新欄位的行為：`POST /v1/auth/logout-all` 回 401（不是 404，路由存在且 requireAuth 正常），`GET /v1/sellers?limit=1` 回應含 `nextCursor`、`joinedAt` 是 `2026-08-19`（不再是修正前的 `Thu Sep 03`）。 |
+| ~~A-10~~ | ~~GitHub Pages production build 尚待設定 R2 upload origin Variable~~ **已完成並上線（2026-09-04）** | 部署驗證 | `VITE_R2_UPLOAD_ORIGIN` 已寫入 GitHub Actions Variables，`CSP_EXPECT_R2` 已改回 `true`，CI 通過並部署。正式站實測 CSP：`img-src` 與 `connect-src` **兩條都含 R2 網域**。<br>**這一輪同時修掉一個程式問題**：`vite.config.ts` 原本只把 `r2Public` 放進 `img-src`，而 Railway 上 `R2_PUBLIC_URL` 沒設 —— `routes/files.ts` 的 `publicUrlOf(key) ?? presignGet(key)` 因此一律退回簽名網址，302 導到 `<帳號>.r2.cloudflarestorage.com`，也就是 `r2Upload` 那個主機，而它當時只在 `connect-src`。所以每一張使用者上傳的圖都被 `img-src` 擋掉。現在兩個 R2 網域都進 `img-src`。<br>`VITE_R2_PUBLIC_URL` 維持空白是**刻意的**：bucket 不開公開讀取，因為 `ship-photo` 拍得到面單上的姓名電話地址、`unbox-video` 拍得到家裡。`scripts/check-csp.mjs` 也一併改成「公開網域是選填」—— 原本的寫法會逼人去開公開 bucket 才能讓 CI 變綠。 |
 | P-7 | 平台自營池是否可提供買回價 | 產品／法規決策 | 讀碼＋規則文件 | 建池程式會驗買回價範圍與經濟護欄，但沒有依 official seller/origin 禁止買回。若 rules.md 的法律判斷為「平台自營不可提供買回」，這不是文件提醒就能處理。<br>**決策後修法**：明確定義 `u-official` 是否代表平台；若是，後端建立池時拒絕 tierBuyback／個別 buyback，前端同時隱藏欄位，並盤點既有官方池。 |
 
 **本輪確認已修／不應再列為現況的事項：**
@@ -210,7 +211,7 @@ C-1 講的是「正式環境有 12 個籤序算得出來的池在收錢」——
 - 註冊速率限制已改為成功與失敗嘗試都計數，且使用獨立 `reg-ip:` bucket；`clientIp()` 已改取 Railway 代理附加的最後一段。舊 M-1 文字仍描述改前行號，後續整理時應以本段為準。
 - 市場掛價已有 `POINTS_INPUT_MAX`；公開市場 listing 已走 `publicCard()`。舊 L-1／L-2「市場那一半尚未修」為過時紀錄。
 - Railway 的 `startCommand` 已不含 `npm run seed`；不能再把「每次部署重灌示範池」當成當前程式行為。正式環境是否仍留有 fixture 資料，需另以部署資料實測。
-- **R2 網域未帶入 production build 導致 CSP fail-closed —— 已修（2026-09-04）**。`deploy-pages.yml` 的建置步驟原本只傳 `VITE_API_URL`，`VITE_R2_PUBLIC_URL`／`VITE_R2_UPLOAD_ORIGIN` 兩個現在都跟著傳（同樣走 repo Variable）。另新增建置後檢查 `scripts/check-csp.mjs`（`npm run check:csp`），讀 `dist/` 每一份 HTML 的 CSP meta 並斷言：`script-src` 沒有 `'unsafe-inline'`／`'unsafe-eval'`、API 網域同時在 `img-src` 與 `connect-src`、R2 兩個網域各自到位、六份 seo 產物的 CSP 與 `index.html` 一致；失敗 exit 1 讓 CI 紅，不是印警告。「本機還沒接 R2」與「正式漏設變數」的環境變數長得一樣，靠 workflow 裡寫死的 `CSP_EXPECT_API`／`CSP_EXPECT_R2: 'true'` 分開 —— 預期在版控裡、值在 GitHub 設定裡，忘記填值動不到那兩行，所以漏設必紅；真的還沒有 R2 就得改那一行並 commit。**待辦：使用者要在 repo 的 Settings → Secrets and variables → Actions → Variables 新增 `VITE_R2_PUBLIC_URL`（R2 公開讀取網域）與 `VITE_R2_UPLOAD_ORIGIN`（`<帳號>.r2.cloudflarestorage.com`），沒填的話下一次部署會被這道檢查擋下。**
+- **R2 網域未帶入 production build 導致 CSP fail-closed —— 已修（2026-09-04）**。`deploy-pages.yml` 的建置步驟現在傳入 `VITE_API_URL`、`VITE_R2_PUBLIC_URL` 與 `VITE_R2_UPLOAD_ORIGIN`（同樣走 repo Variable）。另新增建置後檢查 `scripts/check-csp.mjs`（`npm run check:csp`），讀 `dist/` 每一份 HTML 的 CSP meta 並斷言：`script-src` 沒有 `'unsafe-inline'`／`'unsafe-eval'`、API 網域同時在 `img-src` 與 `connect-src`、必要的 R2 upload origin 位於 `connect-src` 與 `img-src`、六份 seo 產物的 CSP 與 `index.html` 一致；失敗 exit 1 讓 CI 紅，不是印警告。「本機還沒接 R2」與「正式漏設變數」的環境變數長得一樣，靠 workflow 裡寫死的 `CSP_EXPECT_API`／`CSP_EXPECT_R2: 'true'` 分開 —— 預期在版控裡、值在 GitHub 設定裡，忘記填值動不到那兩行，所以漏設必紅；真的還沒有 R2 就得改那一行並 commit。**待辦：使用者要在 repo 的 Settings → Secrets and variables → Actions → Variables 新增 `VITE_R2_UPLOAD_ORIGIN`（`<帳號>.r2.cloudflarestorage.com`）。`VITE_R2_PUBLIC_URL` 在 bucket 不公開讀取、`/raw` 改走簽名網址的現況下可維持空白；未設定 upload origin 的話下一次部署會被這道檢查擋下。**
 - `frame-ancestors` 無法由 meta CSP 生效仍成立；需改用能設 HTTP response header 的前端託管才能根治。
 
 ---
@@ -375,13 +376,11 @@ Process 1786: select id from prizes where id = $1 for update
 
 ### 2026-09-03 目前待處理順序
 
-1. **A-9：部署前確認 migration 032／033 已套用** —— 這是已完成程式碼能否安全上 production 的前提。
-2. **A-8：前端串接全裝置登出** —— 後端撤銷能力已可用，UI 必須讓使用者能實際操作。
+1. **A-9：部署前確認 migration 032／033／036 及中間 migration 已套用** —— 這是已完成程式碼能否安全上 production 的前提。
+2. **A-10：設定 GitHub Actions 的 `VITE_R2_UPLOAD_ORIGIN`** —— workflow 現在會正確拒絕缺少 R2 CSP 網域的 production build；設定後再部署。
 3. **A-3：公開賣家列表分頁與批次統計**。
-4. **A-4：裸卡實體庫存模型** —— 範圍較大，但個人開池正式上線前必修。
-5. **A-1b：選定忘記密碼的 Email／LINE 交付方案**，再設計單次、短效的恢復流程。
-6. ~~V-1：統一回收與逾期退款的鎖序~~ —— **2026-09-03 完成**：原環早已修好（實測證明），順手抓到並修掉 prizes ↔ sellers 那個還活著的環。
-7. 其餘未解項目按嚴重度與上線時程處理；已完成的 A-1 第一階段、A-2、A-5、A-6、A-7 不再列入待辦。
+4. **A-1b：選定忘記密碼的 Email／LINE 交付方案**，再設計單次、短效的恢復流程。
+5. 其餘未解項目按嚴重度與上線時程處理；A-1 第一階段、A-2、A-4、A-5、A-6、A-7、A-8 與 V-1 已完成，不再列入待辦。
 
 **這一輪查證的副產品**：三條的敘述是錯的（M-1 的理由、L-3 與 L-4 的出處），
 一條的敘述過時（W-5）。錯法跟 S-1 完全一樣 —— 抄稽核報告的結論與行號，
