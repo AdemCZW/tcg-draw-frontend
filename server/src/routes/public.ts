@@ -151,7 +151,10 @@ function compose(
   return {
     id: s.id, handle: s.handle, name: s.name, tier: s.tier, origin: s.origin,
     avatarHue: parseInt(String(s.id).slice(-2), 16) % 360 || 200,
-    joinedAt: String(s.joined_at).slice(0, 10), bio: s.bio,
+    /* toISOString 不是 String()：postgres.js 給的是 Date，String(date) 是
+       「Fri Sep 04 2026 …」那種預設字串，切前十碼會得到 "Fri Sep 04" ——
+       不但不是日期格式，**連年份都沒有**，前端再怎麼解析也救不回來。 */
+    joinedAt: new Date(s.joined_at as string | number | Date).toISOString().slice(0, 10), bio: s.bio,
     stats: {
       poolsRun: Number(st?.pools_run ?? 0),
       cardsShipped: Number(ship?.shipped ?? 0),
