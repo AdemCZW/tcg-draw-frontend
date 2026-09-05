@@ -59,7 +59,7 @@ import WinnerTicker from '@/components/WinnerTicker.vue'
 import PoolModeBadge from '@/components/PoolModeBadge.vue'
 import SellerChip from '@/components/SellerChip.vue'
 import { track } from '@/lib/ga'
-import { refDiscount, refPriceNum } from '@/lib/refprice'
+import { refPriceNum, shownDiscount } from '@/lib/refprice'
 import { isDrawable, isUpcoming } from '@/lib/pool-status'
 
 const pools = usePoolStore()
@@ -252,7 +252,13 @@ const halfGone = computed(() => closing.value.filter(p => leftPct(p) <= 50).leng
 const catalog = ref<HTMLElement | null>(null)
 
 /* ---- 第 4 區：現貨市場 ----
-   低於市值最多的幾張。這一區跟上面三區的性質完全不同 ——
+   低於「賣家標示參考價」最多的幾張 —— 主詞是賣家，不是市場。
+   那個參考價是賣家自己在上架表單裡填的，平台沒有外部行情可以對照
+   （docs/rules.md「還沒定案的事」第一條），所以標題與說明都不寫「市值」。
+   後端已經把離群與沒有標示的那些排到 deal 排序的末端
+   （server/src/routes/public.ts 的 DEAL_RATIO），這裡取前 8 筆拿到的
+   是真的落在合理區間的那些。
+   這一區跟上面三區的性質完全不同 ——
    那是抽選（碰運氣、單價低、結果未知），這是二手現貨（看得到買得到）。
    所以它搬到整頁最後，並且用綠色系與高密度小方塊，
    跟上面的紅／中性色卡片拉開，讀起來像「另一個地方的入口」而不是又一批池。 */
@@ -276,14 +282,25 @@ onMounted(async () => {
     marketPicks.value = []
   }
 })
-// 沒有標示參考價就沒有折價幅度可言 —— 回 null，畫面不顯示那個標籤
-const dealPct = (l: Listing) => { const d = refDiscount(l); return d == null ? null : Math.round(d * 100) }
+/* 沒有標示參考價（沒有基準）、或宣稱折數離譜（平台查不動）都回 null，
+   畫面不顯示那個標籤 —— 跟市場那兩頁同一條線，見 lib/refprice.ts */
+const dealPct = (l: Listing) => { const d = shownDiscount(l); return d == null ? null : Math.round(d * 100) }
 /** 標頭的數據籤直接寫「最多 -14%」，比「8 張」更接近使用者想知道的事 */
 const bestDeal = computed(() => {
   // 沒有標示參考價的掛單算不出折價幅度，直接不參與這個「最多 -N%」
   const pcts = marketPicks.value.map(dealPct).filter((x): x is number => x != null)
   return pcts.length ? Math.min(...pcts) : 0
 })
+/**
+ * 數據籤的字。**只有真的算得出折數時才寫折數。**
+ *
+ * 後端把「沒有標示參考價」與「宣稱折數離譜」的掛單一律排到 deal 排序的末端
+ * （A-1），所以這一區完全可能一張有折數的都沒有 —— 那時候 bestDeal 是 0，
+ * 舊寫法會印出「最多 0%」，那句話既不是事實也沒有意義。
+ * 退回講張數：那是這一區確定知道的事。
+ */
+const marketCount = computed(() =>
+  bestDeal.value < 0 ? `最多 ${bestDeal.value}%` : `${marketPicks.value.length} 張`)
 </script>
 
 <template>
@@ -486,8 +503,8 @@ const bestDeal = computed(() => {
         <LobbySection
           tone="market"
           title="現貨市場"
-          :count="`最多 ${bestDeal}%`"
-          note="不想碰運氣的話，這些卡的售價低於市值，看得到就買得到。"
+          :count="marketCount"
+          note="不想碰運氣的話，這些卡看得到就買得到。折數比的是賣家自己標示的參考價，平台未查證。"
         >
           <template #action>
             <RouterLink :to="{ name: 'market' }" class="more">看全部 →</RouterLink>

@@ -78,6 +78,21 @@ const total = computed(() => summary.value?.total ?? 0)
 const ownedCount = computed(() => summary.value?.owned ?? 0)
 const totalValue = computed(() => summary.value?.totalValue ?? 0)
 const bestCard = computed(() => summary.value?.best ?? null)
+/**
+ * 這本卡冊裡**沒有標示參考價**的張數。
+ *
+ * 為什麼非講不可（A-2）：totalValue 是 Σ refPrice，而沒有標示的卡在裡面算 0
+ * （後端 /prizes/summary 的註解自己承認了這件事）。也就是說一本 30 張的卡冊，
+ * 如果 22 張沒有標價，那個「合計」實際上只在講另外 8 張 —— 而畫面上完全
+ * 看不出來。把張數講出來，那個數字才讀得懂。
+ *
+ * 從 curve 數而不是另外跟後端要一個欄位：curve 本來就是一張卡一列
+ * （後端一次撈完整本卡冊，不是分頁的），這個數字現成就在手上。
+ * `<= 0` 而不是 `== null`：refPrice 允許填 0，而 0 與「沒填」在這裡是同一件事
+ * ——兩者都沒有給出一個可以加總的基準（跟 lib/refprice.ts 的 refDiscount 同一條線）。
+ */
+const unpricedCount = computed(() =>
+  (summary.value?.curve ?? []).filter(c => !(c.refPrice > 0)).length)
 /* 重複的卡有幾款、共幾張。**這兩個數字的用途是讓「同款集中」被看見** ——
    沒有人會去點一個他不知道自己需要的排序，但「你有 10 款重複的卡」會讓他去點。
    同樣由後端算：前端數已載入的那 24 張，會告訴使用者「重複 1 款」。 */
@@ -901,7 +916,8 @@ async function copyLink() {
     <h1>我的卡冊</h1>
 
     <!-- ---- 收藏總覽 ----
-         這一頁最想被回答的問題就是「我收了多少、值多少」。
+         這一頁最想被回答的問題是「我收了多少」。
+         **不是**「值多少」—— 那個問題這個平台答不出來，理由見下面那一大段。
 
          這張卡原本是八條互不相干的橫帶（標題／大數字、分佈條、圖例、最高價、
          「收藏總值累積」＋日期、圖表、逐張數字、分隔線＋分享），中間隔著三條
@@ -920,9 +936,36 @@ async function copyLink() {
          那些數字的關係說不清楚，只好用一條分隔線把它隔開 —— 那條線正是碎裂感
          的來源之一。放進抬頭之後它有了明確的身分（這張卡的控制項），
          不必再多一條橫帶，也不必再畫線。 -->
+    <!-- ---- 「收藏總值 N 點」為什麼整組改掉（A-2）----
+
+         改之前這裡印的是「收藏總值」＋一個大數字＋單位「點」。三個部分各自
+         都有問題，而且**合起來比分開更嚴重**：
+
+         1. 那個數字是 Σ refPrice —— 賣家／登記人自己填的參考價的總和，
+            沒有任何外部依據（docs/rules.md「還沒定案的事」第一條）。
+         2. 沒有標示參考價的卡在裡面算 0，而畫面上看不出有幾張是這樣。
+            一本 30 張、22 張沒標價的卡冊，那個「總值」其實只在講 8 張。
+         3. **單位寫「點」**。點在這個站上有明確定義：儲值 1 元換 1 點，
+            可以拿去抽卡、可以在市場買別人的卡。把一個自填估值印成「N 點」，
+            讀起來就是「這本卡冊可以換 N 點」。
+
+         第 3 點不只是用詞問題。docs/rules.md 記著兩條紅線：
+         點數不能換回現金（刑法 266 條的對價關係），以及平台不能買回自己
+         送出的獎品（電子遊戲場業管理條例第 14 條）。整套論述的地基是
+         「站內閉環、沒有一條路把卡變回錢」。在使用者的卡冊首頁印一個
+         「你的收藏值 N 點」，等於自己在暗示那條路存在 —— 而它不存在：
+         能換點數的只有「那個池宣告過買回價」的卡，而且錢是從賣家出的。
+
+         所以三件事一起改：
+           名字   「收藏總值」→「已標示參考價合計」。主詞換成「誰標的」，
+                  「合計」也講明它是加總不是估值。
+           單位   「點」拿掉。它不是餘額，不該長得像餘額。
+           缺口   「N 張未標示」直接寫在旁邊，那個合計才讀得懂。
+         底下再補一行出處與「不能兌換」。這一段字看起來多，但它取代的是
+         一個會被誤讀成資產的數字，而這張卡還可以被公開分享出去。 -->
     <section v-if="ownedCount || total" class="overview card">
       <div class="ovHead">
-        <p v-if="ownedCount" class="ovLabel">收藏總值</p>
+        <p v-if="ownedCount" class="ovLabel">已標示參考價合計</p>
 
         <!-- 公開卡冊：分享出去的就是這張卡講的東西（總值、張數、賞別分佈），
              所以控制項就掛在這張卡的抬頭上。
@@ -969,12 +1012,32 @@ async function copyLink() {
 
       <template v-if="ownedCount">
         <div class="ovHero">
-          <!-- 數字與單位鎖在同一個 inline 盒子裡，永遠不會被折成兩行 -->
+          <!-- 單位「點」拿掉了（理由見上面那一大段）。留一個空的量詞位置也不行 ——
+               大數字旁邊只要有東西，那個東西就會被讀成幣別。
+               現在唯一貼著數字的是「持有 N 張」，那是平台自己數得出來的事實。 -->
           <p class="ovVal">
-            <strong class="ovNum">{{ totalValue.toLocaleString() }}</strong><span class="ovUnit">點</span>
+            <strong class="ovNum">{{ totalValue.toLocaleString() }}</strong>
           </p>
           <p class="ovHold">持有 <b class="mono">{{ ownedCount }}</b> 張</p>
         </div>
+
+        <!-- 缺口、出處、紅線，三句話一段，缺一不可：
+
+             「N 張未標示」——那些卡在合計裡算 0，不講的話這個數字讀起來
+                              像在講整本卡冊，其實只在講有標價的那幾張。
+             「誰填的」    ——沒有它，「參考價」讀起來像平台估出來的。
+             「不能兌換」  ——沒有它，一個很大的數字擺在卡冊首頁就是在暗示
+                              它可以換成點數（見上面那段關於兩條紅線的說明）。
+
+             這一段跟大數字之間不留大縫：它不是可看可不看的補充，
+             是那個數字的一部分。整段在 393px 上是三行。 -->
+        <p class="ovSrc">
+          <template v-if="unpricedCount">
+            其中 <b class="mono">{{ unpricedCount }}</b> 張未標示參考價，在合計裡算 0。
+          </template>
+          參考價由賣家或登記人自行填寫，平台未查證；它<strong>不是點數，不能兌換</strong>，
+          也不參與任何金額計算。
+        </p>
 
         <!-- 成長曲線緊貼著大數字，中間不留大縫也不畫線：
              那個數字就是這條線的最後一點，兩者是同一件事的兩種讀法 -->
@@ -1001,9 +1064,11 @@ async function copyLink() {
             </li>
           </ul>
 
-          <!-- 只有一張卡時「最高價」就是總值本身，再列一次是廢話 -->
+          <!-- 只有一張卡時這一行就是上面那個合計本身，再列一次是廢話。
+               標籤是「標示最高」不是「最高價」：排序的依據是賣家標示的參考價，
+               而那不是價格，是宣稱（見上面 A-2 那一段） -->
           <p class="ovBest" v-if="bestCard && ownedCount > 1">
-            <span class="bLabel">最高價</span>
+            <span class="bLabel">標示最高</span>
             <span class="kd" :class="tierKey(bestCard.tier)" aria-hidden="true"></span>
             <span class="bName">{{ bestCard.name }}</span>
             <span class="bVal mono">{{ bestCard.refPrice.toLocaleString() }}</span>
@@ -1400,7 +1465,9 @@ async function copyLink() {
                發生在別的地方，讀螢幕的人需要被告知這裡的數字動了 -->
           <span class="pickLines" role="status">
             <strong>已選 <span class="mono">{{ sellPick.length }}</span> 張</strong>
-            <span class="mono pickSub">市值合計 {{ sellPickValue.toLocaleString() }} 點</span>
+            <!-- 一樣不寫「市值」也不寫「點」：這是所選卡片的「賣家標示參考價」加總，
+                 不是市價，也不是一筆可動用的餘額（見上面 A-2 那一段） -->
+            <span class="mono pickSub">標示參考價合計 {{ sellPickValue.toLocaleString() }}</span>
           </span>
           <span v-if="sellPick.length" class="pickPeek">查看</span>
         </button>
@@ -1889,17 +1956,26 @@ async function copyLink() {
   margin: 0; font-size: 11.5px; color: var(--faint); letter-spacing: .04em;
 }
 .ovHero { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: nowrap; margin-top: 2px; }
-/* 主角數字。單位是行內元素、不換行，「53,380 點」永遠是一個量詞而不是兩段。
-   clamp 讓它在 320px 上自己縮到塞得下，不必等到折行才發現放不下 */
+/* 主角數字。clamp 讓它在 320px 上自己縮到塞得下，不必等到折行才發現放不下 */
 .ovVal { margin: 0; white-space: nowrap; min-width: 0; }
 .ovNum {
   font-size: clamp(25px, 7.6vw, 34px);
   font-weight: 700; letter-spacing: -.025em; line-height: 1.05;
-  color: var(--gold-deep);
+  /* 顏色從 --gold-deep 換成 --ink（A-2）。
+     金色在這個站上有專屬用途：錢包的點數餘額就是 var(--gold)（WalletPage.vue）。
+     同一個色系加上一個很大的數字，即使字面上已經拿掉「點」，
+     視覺上還是在說「這是你的餘額」。層級不必靠顏色撐 ——
+     34px 的粗體本來就是整張卡最大的東西。 */
+  color: var(--ink);
   /* 大字用比例數字：tabular 會讓每個數字都佔 0 的寬度，整串看起來鬆散 */
   font-variant-numeric: proportional-nums;
 }
-.ovUnit { margin-left: 4px; font-size: 12.5px; color: var(--muted); }
+/* 缺口＋出處＋紅線。11.5px／--faint 跟市場那兩頁的出處註腳同一套 */
+.ovSrc {
+  margin: 6px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--faint);
+}
+.ovSrc b { color: var(--muted); font-weight: 700; font-variant-numeric: tabular-nums; }
+.ovSrc strong { color: var(--muted); font-weight: 600; }
 .ovHold { margin: 0; flex: none; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
 .ovHold b { color: var(--ink); font-weight: 700; font-size: 13.5px; font-variant-numeric: tabular-nums; }
 

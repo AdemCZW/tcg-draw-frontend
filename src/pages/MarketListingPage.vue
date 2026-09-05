@@ -3,7 +3,7 @@
  * 市場單張卡片 —— 看清楚，然後買下。
  *
  * 為什麼要獨立一頁：購買原本是市場列表裡的行內確認框，而那個框是渲染在
- * 「主列表的那一格」裡的。從上方「今日最殺」的橫向捲軸點一張，確認框會跑到
+ * 「主列表的那一格」裡的。從上方「低於賣家標示」的橫向捲軸點一張，確認框會跑到
  * 下面主列表去長出來，使用者看到的是「我點 A，B 問我要不要買」。主列表改成
  * 游標分頁之後更糟：那一格如果還沒載入，點了根本不會有任何事發生。
  *
@@ -36,7 +36,7 @@ import BottomActionBar from '@/components/BottomActionBar.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
 import { haptic } from '@/lib/haptics'
 import { track } from '@/lib/ga'
-import { refPriceText } from '@/lib/refprice'
+import { refPriceText, shownDiscount } from '@/lib/refprice'
 
 const route = useRoute()
 const router = useRouter()
@@ -52,10 +52,21 @@ const loading = ref(true)
 const missing = ref(false)
 
 const lane = computed(() => (listing.value ? deliveryOf(listing.value) : 'vault'))
+/**
+ * 掛價相對賣家標示參考價的折數。**沒有標示就回 null，不是 0。**
+ *
+ * 改之前這裡回的是 0，而模板無條件畫那個標籤 —— 一張賣家根本沒有標參考價的卡
+ * 會顯示成綠色的「0%」，讀起來是「剛好平在市價」。那是兩件完全不同的事：
+ * 一個是**沒有基準可比**，一個是**比出來剛好一樣**。
+ * lib/refprice.ts 的檔頭早就寫死了這條紀律（null 一律回 null，不用 0 頂替），
+ * 市場列表也照做，只有這一頁反著來。
+ * （同一個 coalesce(...,0) 的錯誤也在後端的排序層，見 public.ts 的 DEAL_RATIO。）
+ */
 const diffPct = computed(() => {
   const l = listing.value
-  if (!l || !l.card.refPrice) return 0
-  return Math.round(((l.price - l.card.refPrice) / l.card.refPrice) * 100)
+  if (!l) return null
+  const d = shownDiscount(l)
+  return d == null ? null : Math.round(d * 100)
 })
 
 /**
@@ -324,11 +335,29 @@ async function delist() {
           <div class="priceRow">
             <strong class="mono p">{{ listing.price.toLocaleString() }}</strong>
             <span class="u">點</span>
-            <span class="tag" :class="diffPct <= 0 ? 'good' : 'over'">
+            <!-- 沒有標示參考價就整個標籤不畫。畫一個「0%」等於替一張沒有基準的卡
+                 蓋章說「剛好平價」 -->
+            <span v-if="diffPct !== null" class="tag" :class="diffPct <= 0 ? 'good' : 'over'">
               {{ diffPct <= 0 ? '' : '+' }}{{ diffPct }}%
             </span>
           </div>
           <p class="ref mono">賣家標示參考價 {{ refPriceText(listing.card.refPrice) }} · 上架於 {{ listing.listedAt }}</p>
+          <!-- 上面那個百分比是拿「賣家自己填的數字」當分母算出來的，
+               而畫面上唯一看得出這件事的線索本來只有「賣家標示」四個字 ——
+               對第一次來的買家來說那讀起來像是「賣家標出來的市價」。
+               所以把主詞與「平台沒查證」講完整，就放在價格正下方。
+
+               有標示參考價就講，不管折數畫不畫得出來：這一行講的是**出處**，
+               而出處在「賣家標了一個很誇張的數字」時只會更需要被講出來。 -->
+          <p v-if="listing.card.refPrice != null" class="refSrc">
+            參考價由賣家自行填寫，平台未查證；它不參與任何金額計算。
+            <!-- 折數被壓下來時要說出原因。不說的話畫面就是「有標參考價、
+                 但沒有折數標籤」，看起來像壞掉，而其實是平台不願意替
+                 那個差距背書（門檻見 lib/refprice.ts 的 REF_DISCOUNT_FLOOR）。 -->
+            <template v-if="diffPct === null">
+              這一筆標示的參考價與掛價差距過大，平台沒有依據可以查證，因此不顯示折數。
+            </template>
+          </p>
         </div>
 
         <!-- 通道說明緊貼價格：它講的是「這筆交易的性質」，跟價格是同一組資訊。
@@ -366,7 +395,7 @@ async function delist() {
             <dd>{{ listing.card.language === 'JP' ? '日文版' : '英文版' }}</dd>
           </div>
           <div class="fact">
-            <dt>參考市值</dt>
+            <dt>賣家標示參考價</dt>
             <dd class="mono">{{ refPriceText(listing.card.refPrice) }}</dd>
           </div>
           <div class="fact">
@@ -590,6 +619,8 @@ async function delist() {
 .tag.good { background: var(--ok); color: #06210f; }
 .tag.over { background: var(--surface-3); color: var(--muted); }
 .ref { font-size: 12px; color: var(--muted); margin: 5px 0 0; }
+/* 出處那一行比參考價本身更小、更淡 —— 它是註腳不是數據 */
+.refSrc { font-size: 11.5px; line-height: 1.5; color: var(--faint); margin: 3px 0 0; }
 
 /* 通道那一段給一點底色 —— 它是這筆交易的性質，不是可看可不看的補充。
    底色壓在面板裡而不是自己一個盒子，所以左右仍然齊頭 */

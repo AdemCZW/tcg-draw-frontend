@@ -16,7 +16,11 @@ export interface ShareSettings { public: boolean; slug: string | null }
 
 export interface PublicCard {
   id: string
-  card: { name?: string; artId?: string; grader?: string; grade?: number; certNo?: string; value?: number }
+  /* value（賣家標示的參考價）拿掉了。兩個理由，見 PublicCardbookPage.vue 的說明：
+     後端的公開白名單根本沒有這一欄（它叫 refPrice，見 server/src/card-public.ts），
+     所以它只有在 mock 下才有值 —— 型別留著等於讓下一個人以為真環境拿得到；
+     而且公開卡冊刻意不顯示持有人自填的估值（A-2）。 */
+  card: { name?: string; artId?: string; grader?: string; grade?: number; certNo?: string }
   tier: string
   /** 已上架的卡不能私下出價，要走市場 */
   tradable: boolean
@@ -34,6 +38,24 @@ export interface PublicCardbookPage {
   summary?: { count: number; tradable: number; totalValue: number }
 }
 
+/**
+ * 邀約牽涉的那張卡還剩幾天寄存（D-2）。
+ *
+ * 由 GET /v1/social/trade-offers 隨每一筆邀約一起帶回來，不是另外打一支 ——
+ * 收發匣各 100 筆，每一筆都是一張卡，拆成單筆端點就是一頁 200 次往返。
+ *
+ * `null` 的意思是**沒有這個資訊**，不是「剩 0 天」：卡已經離開寄存
+ * （申請出貨、寄出、進了實體卡冊）就沒有剩餘天數可言。
+ */
+export interface OfferStash {
+  expiresAt: number
+  /** 無條件進位。過期用負數表示，前端才分得出「快到了」與「早就過了」 */
+  daysLeft: number
+  totalDays: number
+  /** 實體卡還在別人的抽屜裡（相對於看的人）。是誰不回，那是個資 */
+  heldByOther: boolean
+}
+
 export type OfferStatus = 'pending' | 'accepted' | 'declined' | 'cancelled'
 export interface TradeOffer {
   id: string
@@ -49,6 +71,8 @@ export interface TradeOffer {
   /** 收件匣有 from_name、寄件匣有 to_name */
   from_name?: string
   to_name?: string
+  /** 寄存剩餘天數。拿不到（舊後端）與不適用都是 null，畫面一律當「沒有這個資訊」 */
+  stash?: OfferStash | null
 }
 
 export type NotifyKind =
@@ -81,15 +105,22 @@ const mockNotifications: Notification[] = [
 ]
 let mockShare: ShareSettings = { public: false, slug: null }
 
+/* mock 的寄存剩餘天數。要有「還很久」與「快到期」兩種，否則沒有後端時
+   警示那一版樣式永遠畫不出來 —— 而那一版才是這塊資訊存在的理由。
+   heldByOther 一律 true：那是寄存的真實佈景（實體卡在開池的賣家手上）。 */
+const mockStash = (daysLeft: number): OfferStash => ({
+  expiresAt: now + daysLeft * 86_400_000, daysLeft, totalDays: 90, heldByOther: true
+})
+
 /* 收發匣的假資料。要有「待回覆」「已成交」「被婉拒」「自己收回」四種，
    否則 mock 模式下只看得到空狀態，版面與狀態樣式都驗不到。 */
 const mockIncoming: TradeOffer[] = [
-  { id: 'to-1', prize_id: 'pz-1', from_user: 'u-a', to_user: 'u-me', points: 12_000, message: '想收這張很久了，可以割愛嗎', status: 'pending', created_at: now - 6 * 60_000, responded_at: null, card: { name: '噴火龍 ex UR', artId: 'SV4a-349' }, from_name: '小明' },
-  { id: 'to-2', prize_id: 'pz-2', from_user: 'u-b', to_user: 'u-me', points: 3_500, message: '', status: 'pending', created_at: now - 3 * 3600_000, responded_at: null, card: { name: '奇樹 SAR', artId: 'SV4a-350' }, from_name: '阿凱' },
+  { id: 'to-1', prize_id: 'pz-1', from_user: 'u-a', to_user: 'u-me', points: 12_000, message: '想收這張很久了，可以割愛嗎', status: 'pending', created_at: now - 6 * 60_000, responded_at: null, card: { name: '噴火龍 ex UR', artId: 'SV4a-349' }, from_name: '小明', stash: mockStash(88) },
+  { id: 'to-2', prize_id: 'pz-2', from_user: 'u-b', to_user: 'u-me', points: 3_500, message: '', status: 'pending', created_at: now - 3 * 3600_000, responded_at: null, card: { name: '奇樹 SAR', artId: 'SV4a-350' }, from_name: '阿凱', stash: mockStash(1) },
   { id: 'to-3', prize_id: 'pz-3', from_user: 'u-c', to_user: 'u-me', points: 900, message: '這個價可以嗎', status: 'declined', created_at: now - 2 * 86400_000, responded_at: now - 2 * 86400_000 + 3600_000, card: { name: '月亮伊布 ex SAR', artId: 'SV8a-217' }, from_name: '收藏家 J' }
 ]
 const mockOutgoing: TradeOffer[] = [
-  { id: 'to-4', prize_id: 'pz-9', from_user: 'u-me', to_user: 'u-d', points: 8_800, message: '誠心收購', status: 'pending', created_at: now - 40 * 60_000, responded_at: null, card: { name: '太樂巴戈斯 ex UR', artId: 'SV8a-237' }, to_name: '保庫堂' },
+  { id: 'to-4', prize_id: 'pz-9', from_user: 'u-me', to_user: 'u-d', points: 8_800, message: '誠心收購', status: 'pending', created_at: now - 40 * 60_000, responded_at: null, card: { name: '太樂巴戈斯 ex UR', artId: 'SV8a-237' }, to_name: '保庫堂', stash: mockStash(1) },
   { id: 'to-5', prize_id: 'pz-10', from_user: 'u-me', to_user: 'u-e', points: 26_000, message: '', status: 'accepted', created_at: now - 5 * 86400_000, responded_at: now - 5 * 86400_000 + 7200_000, card: { name: '謎擬Ｑ SAR', artId: 'SV4a-341' }, to_name: '滿分場' },
   { id: 'to-6', prize_id: 'pz-11', from_user: 'u-me', to_user: 'u-f', points: 450, message: '出價後又找到更好的，先收回', status: 'cancelled', created_at: now - 9 * 86400_000, responded_at: now - 9 * 86400_000 + 600_000, card: { name: '沙包蟒 SR', artId: 'SV4a-345' }, to_name: '促販工房' }
 ]
@@ -129,7 +160,9 @@ export const share = {
         ...(opts.cursor ? {} : { summary: {
           count: mockBook.length,
           tradable: mockBook.filter(p => p.tradable).length,
-          totalValue: mockBook.reduce((a, p) => a + (p.card.value ?? 0), 0)
+          /* 後端仍然回這個欄位（social.ts），只是公開卡冊不再顯示它。
+             mock 給 0 就好 —— 不再需要一份假的估值來餵一個不存在的畫面。 */
+          totalValue: 0
         } })
       }
     }
@@ -144,9 +177,9 @@ export const share = {
 
 /* mock 的卡冊刻意多過一頁（預設 24），否則捲動載入這條路在本機開發時永遠走不到 */
 const mockBook: PublicCard[] = [
-  { id: 'pz-1', card: { name: '噴火龍 ex UR', artId: 'SV4a-349', grader: 'PSA', grade: 10, value: 43680 }, tier: 'LAST', tradable: true },
-  { id: 'pz-2', card: { name: '奇樹 SAR', artId: 'SV4a-350', grader: 'PSA', grade: 10, value: 26320 }, tier: 'A', tradable: true },
-  { id: 'pz-3', card: { name: '月亮伊布 ex SAR', artId: 'SV8a-217', grader: 'BGS', grade: 9.5, value: 4200 }, tier: 'C', tradable: false },
+  { id: 'pz-1', card: { name: '噴火龍 ex UR', artId: 'SV4a-349', grader: 'PSA', grade: 10 }, tier: 'LAST', tradable: true },
+  { id: 'pz-2', card: { name: '奇樹 SAR', artId: 'SV4a-350', grader: 'PSA', grade: 10 }, tier: 'A', tradable: true },
+  { id: 'pz-3', card: { name: '月亮伊布 ex SAR', artId: 'SV8a-217', grader: 'BGS', grade: 9.5 }, tier: 'C', tradable: false },
   ...Array.from({ length: 30 }, (_, i) => ({
     id: `pz-m${i + 4}`,
     card: {
@@ -154,7 +187,6 @@ const mockBook: PublicCard[] = [
       artId: `SV4a-3${String((i % 50) + 10).padStart(2, '0')}`,
       grader: i % 4 === 0 ? 'PSA' : 'RAW',
       grade: i % 4 === 0 ? 10 : undefined,
-      value: 600 + i * 310
     },
     tier: (['B', 'C', 'D'] as const)[i % 3],
     tradable: i % 5 !== 0

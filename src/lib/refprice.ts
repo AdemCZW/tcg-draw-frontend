@@ -31,3 +31,28 @@ export function refDiscount(l: { price: number; card: Pick<CardItem, 'refPrice'>
   if (ref == null || ref <= 0) return null
   return (l.price - ref) / ref
 }
+
+/**
+ * 折數的合理下界。**跟 server/src/routes/public.ts 的 DEAL_FLOOR 是同一個數字，
+ * 兩邊要一起改。**
+ *
+ * 為什麼有這條線：分母是賣家自己填的，所以「宣稱這張卡值掛價的 3.3 倍以上」
+ * 不是一個更划算的證據，是一個平台查不動的宣稱（外部錨點還沒接，見 A-3）。
+ * 後端已經不讓這種掛單排到前面、也不讓它進精選區；顯示層要跟著同一條線 ——
+ * 不然會出現「排序不承認它，但每一格上面照樣印一個綠色的 -90%」，
+ * 那個綠色標籤本身就是平台在替那個數字背書。
+ */
+export const REF_DISCOUNT_FLOOR = -0.7
+
+/**
+ * 給**畫面**用的折數。離群的宣稱回 null，畫面就不畫那個標籤。
+ *
+ * 跟 refDiscount 分成兩支而不是直接改它：refDiscount 回答的是
+ * 「這筆相對賣家標示便宜多少」（一個算式），這一支回答的是
+ * 「我們願不願意把這個數字印出來」（一個政策）。混在一起的話，
+ * 之後有人要算真正的折數就會拿到一個被政策動過手腳的值。
+ */
+export function shownDiscount(l: { price: number; card: Pick<CardItem, 'refPrice'> }): number | null {
+  const d = refDiscount(l)
+  return d == null || d < REF_DISCOUNT_FLOOR ? null : d
+}

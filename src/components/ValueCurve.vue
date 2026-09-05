@@ -1,6 +1,11 @@
 <script setup lang="ts">
 /**
- * 收藏總值累積曲線。
+ * 「已標示參考價」的累積曲線。
+ *
+ * ⚠️ 這條線畫的**不是**「收藏值多少錢」。它加總的是賣家／登記人自己填的
+ * 參考價（見 MyCardsPage.vue 那一大段 A-2 的說明），沒有標示的卡在裡面算 0。
+ * 所以這裡的文案一律不寫「總值」也不寫「點」——「點」在站上是可以拿去抽卡、
+ * 買卡的東西，把一個自填估值講成點數，等於暗示它可以兌現，而那是紅線的反面。
  *
  * ---- 為什麼畫「累積」而不是「每張卡的價格分佈」 ----
  * 收藏者打開卡冊時想確認的是「我的收藏長多快」，那是一條隨時間往上疊的線。
@@ -298,24 +303,26 @@ const labelY = computed(() => {
 
 const aria = computed(() => {
   const p = pts.value
-  if (p.length < 2) return '收藏總值累積曲線，資料不足'
-  return `收藏總值累積曲線：${p[0].full} 到 ${p[last.value].full} 之間取得 ${p.length} 張卡，`
-    + `總值從 ${p[0].total.toLocaleString()} 點一路累積到 ${p[last.value].total.toLocaleString()} 點。`
+  if (p.length < 2) return '已標示參考價的累積曲線，資料不足'
+  return `已標示參考價的累積曲線：${p[0].full} 到 ${p[last.value].full} 之間取得 ${p.length} 張卡，`
+    + `標示合計從 ${p[0].total.toLocaleString()} 累積到 ${p[last.value].total.toLocaleString()}。`
 })
 </script>
 
 <template>
   <figure ref="box" class="curve">
     <!-- 這裡刻意沒有標題。上面那個大數字就是這條線的終點，
-         再寫一次「收藏總值累積」等於同一張卡裡同一個詞出現兩次 ——
+         再寫一次「參考價合計」等於同一張卡裡同一個詞出現兩次 ——
          「這條線在講什麼」交給 aria-label 與圖下那行起訖日期回答。 -->
 
     <!-- 只有一張卡時沒有「累積」可言。硬畫一個孤點的折線圖是在假裝有趨勢，
          不如老實講現況，順便告訴使用者要看到曲線需要什麼 -->
     <p v-if="pts.length < 2" class="lone">
       <template v-if="pts.length">
-        <strong class="mono">{{ pts[0].full }}</strong> 取得第一張，目前總值
-        <strong class="mono val">{{ pts[0].total.toLocaleString() }}</strong> 點。
+        <!-- 「總值 N 點」改成「標示參考價合計 N」：主詞是誰標的，單位不寫「點」
+             （理由見檔頭）。跟 MyCardsPage 的大數字用同一套說法 -->
+        <strong class="mono">{{ pts[0].full }}</strong> 取得第一張，
+        標示參考價合計 <strong class="mono val">{{ pts[0].total.toLocaleString() }}</strong>。
         再收一張就會開始畫出累積曲線。
       </template>
       <template v-else>還沒有可以計算的卡片。</template>

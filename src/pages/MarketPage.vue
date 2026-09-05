@@ -29,7 +29,7 @@ import SegTrack, { type SegOption } from '@/components/SegTrack.vue'
 import { useInfiniteList } from '@/composables/useInfiniteList'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { track } from '@/lib/ga'
-import { refDiscount, refPriceText } from '@/lib/refprice'
+import { refPriceText, shownDiscount } from '@/lib/refprice'
 
 const wallet = useWalletStore()
 const auth = useAuthStore()
@@ -100,12 +100,41 @@ const clearSearch = () => { draft.value = ''; commit('') }
 
 onBeforeUnmount(() => { if (timer) clearTimeout(timer) })
 
-/* 排序。低於市值放第一個 —— 那是使用者真正在找的東西。 */
+/* ---- 排序 ----
+
+   ── 為什麼「低於市值」這四個字不見了 ──
+
+   那一格排的是 (掛價 − 參考價) / 參考價，而**參考價是賣家自己在上架表單裡
+   打進去的數字**（CardUploadPage 的一個輸入框，上限一千萬，沒有任何交叉檢查）。
+   平台手上沒有任何外部行情可以對照 —— docs/rules.md 的「還沒定案的事」
+   第一條自己就寫著「賣家標示的參考市值目前沒有外部依據」。
+
+   也就是說「市值」這兩個字，平台答不出來。它不是講得不夠精確，是**講了一件
+   自己不知道的事**：畫面上寫「低於市值 12%」，買家會理解成「市場上這張卡值
+   9800，這裡賣 8620」，而系統真正知道的只有「賣家說 9800」。
+
+   改標籤是零成本的，而且比改演算法更誠實 —— 所以先改標籤：
+   「低於市值」→「低於標示價」，「標示」兩個字把主詞換回賣家。
+   卡片上本來就已經寫著「賣家標示 9,800」，兩處對得起來。
+
+   ── 為什麼它不再是預設 ──
+
+   標籤改對之後，剩下的問題是**位置**：把一個「排序鍵整條來自賣家輸入框」的
+   看法當成預設，等於讓買家打開市場的第一眼由賣家的打字決定。
+   實測（本機，種子 5 筆真掛單）：把 refPrice 填成掛價的十倍就排到第一名，
+   而且同一個人上架兩筆就佔滿前兩名。
+
+   所以預設換成「最新上架」—— 它排的是 listed_at，那是平台記的時間，
+   賣家改不了。「低於標示價」留著，但要使用者自己選；後端的排除規則
+   （離群值、沒有標示的）見 server/src/routes/public.ts 的 DEAL_RATIO。
+   要換回去的前提是先有外部錨點（cardbase-comparison.md 的 A-3）。 */
 type Sort = MarketSort
-const sort = ref<Sort>('deal')
+/** 預設看法。精選區只在這個看法下出現（見模板），所以只有這一個常數要改 */
+const DEFAULT_SORT: Sort = 'new'
+const sort = ref<Sort>(DEFAULT_SORT)
 const SORTS: { k: Sort; label: string }[] = [
-  { k: 'deal', label: '低於市值' },
   { k: 'new', label: '最新上架' },
+  { k: 'deal', label: '低於標示價' },
   { k: 'cheap', label: '價格低到高' },
   { k: 'pricey', label: '價格高到低' }
 ]
@@ -282,7 +311,7 @@ function readQuery() {
      要重現的是「我看到的那一頁」—— 條件帶得走、排序帶不走的話，
      收到連結的人看到的順序跟寄件人不一樣，而畫面上沒有任何跡象。 */
   const so = oneOf(route.query.sort)
-  sort.value = SORTS.some(x => x.k === so) ? (so as Sort) : 'deal'
+  sort.value = SORTS.some(x => x.k === so) ? (so as Sort) : DEFAULT_SORT
 
   const g = oneOf(route.query.grader).toLowerCase()
   grader.value = GRADER_OPTS.some(o => o.k === g) ? (g as GraderFilter) : null
@@ -329,14 +358,14 @@ readQuery()
    關鍵字（?q=）已經是這樣，篩選沒有理由是另一套。
    用 replace 不用 push —— 去抖動之後每停一次就是一筆歷史紀錄的話，
    使用者按上一頁要按十幾次才離得開這一頁。
-   預設值（sort=deal）不寫進去：乾淨的網址才看得出哪些是使用者真的挑過的。 */
+   預設值（sort=new）不寫進去：乾淨的網址才看得出哪些是使用者真的挑過的。 */
 function syncUrl() {
   const next: LocationQueryRaw = { ...route.query }
   for (const [k, v] of Object.entries(params.value)) {
     if (v === undefined || v === '') delete next[k]
     else next[k] = String(v)
   }
-  if (sort.value === 'deal') delete next.sort
+  if (sort.value === DEFAULT_SORT) delete next.sort
   else next.sort = sort.value
   void router.replace({ query: next })
 }
@@ -399,9 +428,11 @@ onMounted(async () => {
    放在共用層是因為列表徽章、詳情頁與 mock 的成交邏輯必須是同一個判斷。 */
 const laneOf = deliveryOf
 
-/** 掛價相對市值的折數。負數＝比市值便宜 */
-// 沒有標示參考價就沒有折價幅度可言 —— 回 null，畫面不顯示那個標籤
-const diffPct = (l: Listing) => { const d = refDiscount(l); return d == null ? null : Math.round(d * 100) }
+/** 掛價相對**賣家標示參考價**的折數。負數＝比標示價便宜 */
+/* 用 shownDiscount 而不是 refDiscount：兩種掛單都回 null，畫面都不畫標籤 ——
+   沒有標示參考價的（沒有基準），以及宣稱折數離譜到平台查不動的（見 refprice.ts）。
+   後端的排序已經同樣對待這兩種，畫面跟著同一條線才不會自相矛盾。 */
+const diffPct = (l: Listing) => { const d = shownDiscount(l); return d == null ? null : Math.round(d * 100) }
 
 /* ---- 分區 ----
    市場原本跟大廳一樣是單一格線，兩頁看起來幾乎一樣。
@@ -544,6 +575,15 @@ watch([() => list.ready.value, shown, queryKey], () => {
       <SegTrack v-model="sort" :options="sortOptions" class="sortTrack" aria-label="排序方式" />
     </div>
 
+    <!-- 選了「低於標示價」才出現。精選區那一行講的是同一件事，但那一區在這個
+         排序下是收起來的，所以這裡要自己講一次 —— 讓「低於什麼」這個問題
+         在使用者開始比較之前就有答案，而不是等他點進單張頁才發現。
+         aria-live 讓讀螢幕的人在切換排序時也聽得到這句話。 -->
+    <p v-if="sort === 'deal'" class="srcNote sortNote" aria-live="polite">
+      比的是<strong>賣家自己填的參考價</strong>，平台未查證。
+      沒有標示參考價、或宣稱折數過大的掛單排在最後。
+    </p>
+
     <!-- 篩選面板。預設收起來 —— 不篩選的人（多數）版面跟以前一模一樣。
 
          裡面三組條件跟上面的排序用同一種形態：**每一組都是一條軌道**。
@@ -601,14 +641,30 @@ watch([() => list.ready.value, shown, queryKey], () => {
 
     <TradeGuard />
 
-    <!-- 撿便宜：橫向捲動的小方塊，密度高，跟下面的大格線形成對比。
+    <!-- 橫向捲動的小方塊，密度高，跟下面的大格線形成對比。
          搜尋時整區收起來：這兩條講的是「整個市場」，跟關鍵字無關，
-         留著會讓使用者以為那也是搜尋結果 -->
-    <section v-if="deals.length && sort === 'deal' && !filtering" class="band">
+         留著會讓使用者以為那也是搜尋結果。
+
+         ── 為什麼不再叫「今日最殺」──
+
+         舊版是「折數最深的 6 筆」，而折數的分母是賣家自己填的參考價。
+         那個排法有一個一行字的解法：把參考價填成掛價的十倍。實測時
+         同一個賣家的兩筆灌水掛單同時佔住第 1、2 名 —— 一個誰都能靠打字
+         排到第一的區塊不是精選區，是免費的廣告位，而「最殺」還替它背書。
+
+         現在這一區能講出口的只有一句：「這幾張，賣家掛得比自己標的參考價低」。
+         標題就照這句寫。進得來的門檻與排序規則見 server/src/routes/public.ts
+         的 /listings/highlights —— 重點是**排第幾由上架時間決定，不由賣家的
+         數字決定**，而且一位賣家只取一筆（擋掉用數量洗版）。 -->
+    <section v-if="deals.length && sort === DEFAULT_SORT && !filtering" class="band">
       <header class="bh">
-        <h2><span class="dot deal"></span>今日最殺</h2>
-        <span class="muted bhNote">低於市值 8% 以上</span>
+        <h2><span class="dot deal"></span>低於賣家標示</h2>
+        <span class="muted bhNote">每位賣家一筆・新的在前</span>
       </header>
+      <!-- 這一行是這一區的地基，不是補充說明：上面那句「低於賣家標示」
+           只有在讀者知道「標示的是賣家自己」時才成立。放在卡片之前，
+           讓它在使用者開始比價之前就到位 -->
+      <p class="srcNote">參考價由賣家自行填寫，平台未查證，也不參與任何金額計算。</p>
       <div class="rail">
         <RouterLink
           v-for="l in deals" :key="l.id"
@@ -630,7 +686,7 @@ watch([() => list.ready.value, shown, queryKey], () => {
     </section>
 
     <!-- 鑑定卡：單價最高的一區，用寬一點的卡凸顯 -->
-    <section v-if="graded.length && sort === 'deal' && !filtering" class="band gradedBand">
+    <section v-if="graded.length && sort === DEFAULT_SORT && !filtering" class="band gradedBand">
       <header class="bh">
         <h2><span class="dot cert"></span>已鑑定</h2>
         <span class="muted bhNote">附鑑定編號，可自行到鑑定機構查證</span>
@@ -682,7 +738,7 @@ watch([() => list.ready.value, shown, queryKey], () => {
       </button>
     </div>
 
-    <header v-else-if="sort === 'deal' && (deals.length || graded.length)" class="bh allHead">
+    <header v-else-if="sort === DEFAULT_SORT && (deals.length || graded.length)" class="bh allHead">
       <h2><span class="dot all"></span>全部掛單</h2>
       <span class="muted bhNote">{{ total }} 件</span>
     </header>
@@ -1087,6 +1143,15 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .bh h2 { display: flex; align-items: center; gap: 8px; font-size: 16px; margin: 0; letter-spacing: -.01em; }
 .bhNote { font-size: 11.5px; }
 .allHead { margin-top: 4px; }
+/* 參考價的來源。刻意用 --faint 而不是 --danger：這不是警告，是出處 ——
+   紅字會讓每一張掛單看起來都可疑，而事實只是「這個數字是賣家填的」。
+   兩套主題都吃 tokens 的變數，不寫死顏色。 */
+.srcNote {
+  margin: -4px 0 10px; font-size: 11.5px; line-height: 1.5; color: var(--faint);
+}
+.srcNote strong { color: var(--muted); font-weight: 600; }
+/* 排序軌道底下那一句貼著軌道走，不吃 .band 的負邊界 */
+.sortNote { margin: -6px 0 12px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .dot.deal { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 .dot.cert { background: #d8b25a; box-shadow: 0 0 8px #d8b25a; }
@@ -1130,7 +1195,11 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   color: #fff;
 }
 .dealPrice { font-size: 13px; font-weight: 700; }
-.dealRef { font-size: 9.5px; opacity: .6; text-decoration: line-through; }
+/* 刪除線拿掉了（A-1）。
+   劃掉的價格在零售業有一個非常固定的意思：「原價是這個，現在便宜賣」——
+   那是一句**平台替賣家背書**的話，而這個數字是賣家自己填的、沒有經過任何查證。
+   「賣家標示」四個字已經把它是什麼講完了，不需要再加一個會被讀成原價的裝飾。 */
+.dealRef { font-size: 9.5px; opacity: .6; }
 
 /* 已鑑定：橫式寬卡，跟上面的小方塊形狀完全不同 */
 .gradedCard {

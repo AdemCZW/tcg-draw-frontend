@@ -73,7 +73,9 @@ watch(list.error, msg => {
 const loading = computed(() => list.loading.value && !list.ready.value)
 const prizes = list.items
 const tradableCount = computed(() => summary.value?.tradable ?? 0)
-const totalValue = computed(() => summary.value?.totalValue ?? 0)
+/* summary.totalValue 刻意沒有對應的 computed：後端還是會回它，但這一頁不顯示
+   （理由寫在模板裡那一大段 A-2）。型別留著是為了讓下一個人知道那個欄位存在，
+   而不是以為它被忘了 —— 它是被決定不用的。 */
 const totalCount = computed(() => summary.value?.count ?? prizes.value.length)
 // 頭像沒有實際圖檔，用名字第一個字 + 由 handle 推出的色相，至少每個人長得不一樣
 const initial = computed(() => (owner.value?.name ?? '?').trim().slice(0, 1) || '?')
@@ -235,10 +237,27 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
             <dt>收藏</dt>
             <dd class="mono">{{ totalCount }}<span class="unit">張</span></dd>
           </div>
-          <div v-if="totalValue > 0">
-            <dt>市值合計</dt>
-            <dd class="mono val">{{ totalValue.toLocaleString() }}</dd>
-          </div>
+          <!-- ---- 「市值合計」整格拿掉了（A-2）----
+
+               這一格印的是 Σ refPrice，而 refPrice 是**持有人自己填的**參考價，
+               平台沒有任何外部依據可以對照（docs/rules.md「還沒定案的事」第一條）。
+               在自己的卡冊裡印它還有得談 —— 那裡看得到「N 張未標示」、看得到
+               出處那一行，讀者也知道那是自己填的。這一頁不一樣，三件事同時成立：
+
+                 1. **它會被轉貼**。這條連結的用途就是貼進 LINE 群組給沒有帳號
+                    的人看，而收到連結的人對這個站一無所知，「市值合計」四個字
+                    對他就是平台算出來的估值。
+                 2. **填數字的人就是分享的人**。把自己的收藏講得更值錢，
+                    成本是零、沒有任何交叉檢查，而好處是實在的 ——
+                    這一頁底下就可以直接對他的卡出價。
+                 3. **這一頁補不上揭露**。summary 由 server/src/routes/social.ts
+                    算出來，只回 count / tradable / totalValue 三個數字，
+                    沒有「幾張未標示」可講；那支這一輪不歸這條線動。
+
+               留下的兩格（收藏 N 張、可談交易 N 張）都是平台自己數得出來的
+               事實，這一頁講的話因此每一句都站得住。
+               真的要在公開頁講估值，前置條件是外部錨點（A-3）—— 在那之前，
+               不講比講一個沒人查得動的數字誠實。 -->
           <div>
             <dt>可談交易</dt>
             <dd class="mono">{{ tradableCount }}<span class="unit">張</span></dd>
@@ -274,7 +293,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
             <!-- CertTag 判斷的是 grader/grade 而不是證號，所以公開卡冊拿不到
                  certNo 也不會被誤標成生卡（見 CertTag.vue 的說明） -->
             <CertTag :card="p.card" />
-            <span v-if="p.card.value" class="price mono">參考價 {{ p.card.value.toLocaleString() }}</span>
+            <!-- 這裡本來有一行「參考價 N」。拿掉的理由有兩層：
+
+                 一、**它其實從來沒有在真的環境裡出現過。** 讀的是 card.value，
+                     而後端的公開白名單送的欄位叫 refPrice（server/src/card-public.ts）
+                     —— 只有 mock 資料裡有 value。也就是說這一行在 mock 下看得到、
+                     打真後端一定是空的，兩邊長得不一樣而沒有人發現。
+                 二、**就算把它接對也不該留。** 那個數字是持有人自己填的，
+                     而這一頁底下就是「提出交易」——在陌生人要出價的畫面上
+                     擺一個由收款方自己設定的參考數字，那不是資訊是錨點。
+
+                 卡冊要展示的是「收了哪些卡」，卡名、賞別、鑑定資訊已經講完了。 -->
 
             <!-- 送出後保留在卡片上，並給一個走到收發匣的出口 -->
             <p v-if="sentFor === p.id" class="sent" role="status">
@@ -324,8 +353,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
           <h2>提出交易</h2>
           <!-- 對哪一張卡出價要寫在面板裡：面板蓋住了卡片格線，
                不寫的話使用者要關掉面板才確認得了自己選的是哪一張 -->
-          <p class="muted fine">{{ offerFor.card.name ?? '未命名卡片' }}<span
-            v-if="offerFor.card.value" class="fyi">參考價 {{ offerFor.card.value.toLocaleString() }}</span></p>
+          <!-- 只寫卡名。原本這裡還帶一個「參考價 N」——那是**收款方自己填的**
+               數字，擺在「你要出多少點」正上方就是一個錨點：出價的人會不自覺地
+               繞著它走，而平台從來沒有查證過它（同一個理由見卡片那格的說明）。 -->
+          <p class="muted fine">{{ offerFor.card.name ?? '未命名卡片' }}</p>
 
           <label class="fld">
             <span class="lb">你要出多少點</span>
@@ -397,7 +428,6 @@ h1 { font-size: 21px; margin: 0; line-height: 1.25; overflow-wrap: anywhere; }
 .stats { display: flex; gap: 28px; flex-wrap: wrap; margin: 0; }
 .stats dt { font-size: 11.5px; color: var(--faint); letter-spacing: .04em; }
 .stats dd { margin: 2px 0 0; font-size: 24px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
-.stats dd.val { color: var(--gold); }
 .unit { font-size: 11.5px; font-weight: 500; color: var(--muted); margin-left: 3px; }
 .lead { margin: 0; font-size: 12.5px; line-height: 1.7; }
 
@@ -406,7 +436,6 @@ h1 { font-size: 21px; margin: 0; line-height: 1.25; overflow-wrap: anywhere; }
 .item { padding: 12px; }
 .body { display: grid; gap: 8px; padding: 12px 4px 4px; justify-items: start; }
 .name { font-size: 14px; line-height: 1.35; }
-.price { font-size: 11.5px; color: var(--gold-deep); }
 .act { justify-self: stretch; margin-top: 2px; }
 .btn.sm { padding: 7px 12px; font-size: 12.5px; }
 
@@ -443,7 +472,6 @@ h1 { font-size: 21px; margin: 0; line-height: 1.25; overflow-wrap: anywhere; }
 .sheet:focus-visible { outline: none; }
 .sheet h2 { font-size: 17px; margin: 0; }
 .sheet .fine { margin: -4px 0 2px; font-size: 12.5px; line-height: 1.5; }
-.fyi { margin-left: 8px; font-size: 11.5px; color: var(--faint); }
 
 /* 底部內距搬進 .sheetFoot，sticky 的 bottom: 0 才貼得到面板真正的下緣，
    不然會浮在 18px 內距上面、露出一條會捲動的縫 */

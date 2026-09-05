@@ -262,9 +262,107 @@ pub.get('/winners', async c => {
    市場掛單列表
    ===================================================================== */
 
-/** 掛價相對市值的折數。市值填 0 或沒填時當成「不折不扣」，不要讓它變 NULL 排到天邊 */
-const DEAL_RATIO = sql`coalesce(
-  (price - nullif((card->>'refPrice')::numeric, 0)) / nullif((card->>'refPrice')::numeric, 0), 0)`
+/* ---------------------------------------------------------------------
+   折數：分母是**賣家自己填的參考價**，所以它是一個宣稱，不是一個事實
+
+   ── 改之前是什麼樣子（重現過，不是推測）──
+
+   舊寫法是 `coalesce((price - ref) / ref, 0)`，而 ref 就是賣家在上架表單裡
+   打進去的數字（上限一千萬，沒有任何交叉檢查）。這條式子當時同時是
+   **預設排序**的鍵與**精選區**的門檻，於是：
+
+     把 refPrice 填成掛價的十倍 → 折數 -90% → 預設排序第一名 ＋ 今日最殺第一名
+
+   本機重現（種子資料 5 筆真掛單 ＋ 2 筆灌水掛單）：灌水的兩筆同時霸佔
+   預設排序的 1、2 名與精選區的 1、2 名，而真正的 -14% / -12% 被擠到第 3、4。
+   買家打開市場第一眼看到的就是灌出來的東西 —— 而且是同一個賣家的兩筆。
+
+   ── 改成什麼、為什麼 ──
+
+   1. `coalesce(..., 0)` 拿掉。「沒有標示參考價」不是「零折價」：前者是
+      *沒有基準可比*，後者是*比出來剛好一樣*。顯示層（src/lib/refprice.ts）
+      早就寫死了這條紀律（null 一律回 null，不用 0 頂替），排序層卻反著做，
+      同一份資料兩層紀律不一致。對的是顯示層，所以這裡跟過去。
+
+   2. **離群值不當成折價**。宣稱「這張卡值掛價的 3.3 倍以上」（<= -70%）的
+      掛單，平台沒有任何錨點能查證（外部參考價那條線是 A-3，還沒接）。
+      這種數字不是「更划算」的證據，是一個沒人能反駁的宣稱 —— 讓它排第一
+      等於把排序的第一名開放給任何願意亂打數字的人。所以它跟「沒有基準」
+      走同一條路：退到排序末端、不進精選區。
+      **代價要說清楚**：真的有人願意 -80% 出清時也會被埋掉。可以接受 ——
+      那張卡在「價格低到高」與「最新上架」照樣找得到，而這裡少收一筆真便宜，
+      換的是「排第一不能用打字打出來」。
+
+   3. 沒有被排除的那些，**照樣照折數排**。這一半同樣重要：買家真的需要一個
+      「哪些比較划算」的入口，把功能拿掉不是修好它。改的是**它講的話**
+      （前端標籤從「低於市值」改成「低於標示價」，而且不再是預設排序）。
+
+   下界為什麼是 -70% 而不是 -50%：種子與實際掛單的折數落在 -6% ~ -14%，
+   真實的清倉大概到 -50% 就很極端了；-70% 留了一段餘裕，只擋掉「明顯是
+   打出來的」那一類（十倍 = -90%）。這個數字要調的話只有這一行。
+   --------------------------------------------------------------------- */
+
+/**
+ * 折數的合理下界。
+ *
+ * ⚠️ **跟 src/lib/refprice.ts 的 REF_DISCOUNT_FLOOR 是同一個數字，兩邊要一起改。**
+ * 沒有放進 src/shared/ 共用：那個資料夾裝的是「規則」（保證金、回收、公平性
+ * 承諾），改了要跑 sync-shared 並且兩邊一起 commit；這一條是**顯示與排序的政策**，
+ * 不影響任何一筆錢。分兩份加一條互指的註解，比為它多開一個共用模組划算 ——
+ * 但兩邊不同步的話後果是看得見的：排序不承認的掛單，畫面上照樣印綠色的折數標籤。
+ */
+const DEAL_FLOOR = -0.7
+/** 進精選區至少要低於標示價這麼多 */
+const DEAL_CEIL = -0.08
+/**
+ * 「沒有基準／離群」在 deal 排序裡的位置。
+ *
+ * 為什麼用哨兵值而不是讓它變 NULL：這一支的游標分頁靠 `(排序鍵, id) > (…)`
+ * 這種列比較翻頁，而 NULL 進到列比較裡整條件會變成 unknown ——
+ * 那一批掛單不是排到後面，是**永遠翻不出來**（同一族的坑在 new 排序的
+ * 游標精度那段註解裡踩過一次）。給它一個恆大於任何真實折數的常數，
+ * 排序鍵就永遠是 not null，游標機制一行都不用改。
+ */
+const NO_BASIS = 1_000_000
+
+/**
+ * 常數送進 SQL 時一律 `::text::numeric`。
+ *
+ * 跟同一支的分數下限同一個理由：先轉 text 讓 Postgres 在 describe 階段把參數
+ * 判成 text，字串原封送過去由 Postgres 自己轉；直接綁 JS number 會走
+ * postgres.js 的數字序列化器，-0.7 這種值在 numeric 與 float8 之間轉手，
+ * 而它同時是 `>=` 的右運算元 —— 邊界上差一個 ulp 就換一個結果。
+ */
+const num = (v: number) => sql`${String(v)}::text::numeric`
+
+/**
+ * 賣家標示的參考價，取成 numeric。
+ *
+ * `card` 是 passthrough 收進來的 jsonb（見 routes/pools.ts 的 PrizeIn），
+ * 所以 refPrice 完全可能是 `"待估"` 或 `""` —— 直接 `::numeric` 碰到那種列
+ * 會回 22P02，Hono 把它翻成 500：**一筆髒資料就讓整個市場變成伺服器故障**。
+ * 跟同一支的 GRADE_NUM 同一個處理：先用正規表示式確認它長得像數字，
+ * 不像的當成「沒有標示」（NULL）。
+ * `nullif(…, 0)` 讓 0 也算沒有標示 —— 0 當分母是除以零，而且 0 讀起來是
+ * 「這張卡不值錢」，跟「沒有標示」是兩件事，兩者都不該進折數。
+ */
+const REF_NUM = sql`(case when card->>'refPrice' ~ '^[0-9]+(\.[0-9]+)?$'
+                          then nullif((card->>'refPrice')::numeric, 0) end)`
+
+/** 折數本身。沒有基準就是 NULL —— 跟顯示層（src/lib/refprice.ts）同一條紀律 */
+const DEAL_RATIO = sql`((price - ${REF_NUM}) / ${REF_NUM})`
+
+/**
+ * deal 排序的鍵。恆為 not null（理由見 NO_BASIS）。
+ *
+ * least(…, NO_BASIS - 1)：折數的上界是 price/ref - 1，ref 最小是 1 而掛價
+ * 上限有十億，理論上算得出比哨兵還大的值 —— 那會讓一筆「貴到離譜」的掛單
+ * 排到「沒有基準」那一群後面去，順序就講不出道理了。夾住上界之後，
+ * 真實折數永遠 < 哨兵，兩群的先後是定義出來的而不是碰巧的。
+ */
+const DEAL_KEY = sql`coalesce(
+  case when ${DEAL_RATIO} >= ${num(DEAL_FLOOR)} then least(${DEAL_RATIO}, ${num(NO_BASIS - 1)}) end,
+  ${num(NO_BASIS)})`
 
 /**
  * 排序搬到後端。
@@ -372,7 +470,14 @@ const PriceParam = z.preprocess(
 )
 
 const ListingQuery = PageQuery.extend({
-  sort: z.enum(SORTS).default('deal'),
+  /* 預設排序是 `new` 不是 `deal`。
+     deal 的排序鍵**整條都來自賣家自己填的數字**（見 DEAL_RATIO 的說明）——
+     把它當預設，等於讓「買家打開市場的第一眼」由賣家的輸入框決定。
+     `new` 排的是 listed_at，那是平台自己記的時間，賣家改不了。
+     deal 還在，只是變成使用者**主動選**的一種看法，而且畫面上的名字
+     從「低於市值」改成「低於標示價」（MarketPage.vue）。
+     這個預設值要換回去的話，先把 A-3 的外部錨點接起來。 */
+  sort: z.enum(SORTS).default('new'),
   q: z.string().trim().max(Q_MAX).optional(),
   grader: z.preprocess(emptyToUndef, z.enum(GRADER_FILTERS).optional()),
   /* 只有下限沒有上限：「9.5 分以上」是真實需求，「9.5 分以下」不是 ——
@@ -492,10 +597,14 @@ function sortSpec(sort: Sort, after: [string, string] | null) {
         key: (r: Row) => String(r.price)
       }
     case 'deal':
+      /* 排序鍵是 DEAL_KEY 不是 DEAL_RATIO：沒有標示參考價、或宣稱的折數
+         離譜到平台查不動的那些，統一退到末端（見 DEAL_KEY 的說明）。
+         它們**不會被藏起來** —— 只是不再跟「剛好標在參考價」擠在同一格，
+         也不再有機會靠打字排到第一名。 */
       return {
-        order: sql`order by ${DEAL_RATIO} asc, id asc`,
-        where: after ? sql`and (${DEAL_RATIO}, id) > (${after[0]}::numeric, ${after[1]}::text)` : sql``,
-        key: (r: Row) => String(r.deal_ratio)
+        order: sql`order by ${DEAL_KEY} asc, id asc`,
+        where: after ? sql`and (${DEAL_KEY}, id) > (${after[0]}::text::numeric, ${after[1]}::text)` : sql``,
+        key: (r: Row) => String(r.deal_key)
       }
   }
 }
@@ -507,7 +616,10 @@ type Row = {
      只有毫秒 —— 拿它組游標會把同一微秒內的相鄰列切錯邊，換頁時漏一筆。
      所以另外撈一份完整精度的字串專門給游標用。 */
   listed_at_text: string
-  deal_ratio: string
+  /* deal 排序的游標鍵。**不是**折數本身（沒有基準與離群的那些在這裡是哨兵值），
+     所以名字也跟著改 —— 叫 deal_ratio 會讓下一個人以為它可以直接顯示。
+     畫面上的折數一律由前端從 card.refPrice 自己算（src/lib/refprice.ts）。 */
+  deal_key: string
 }
 
 /* card 一定要過 publicCard() 白名單再出去（L-2）。
@@ -570,7 +682,7 @@ pub.get('/listings', async c => {
   const where = listingWhere(filters)
 
   const rows = await sql<Row[]>`
-    select *, listed_at::text as listed_at_text, ${DEAL_RATIO} as deal_ratio
+    select *, listed_at::text as listed_at_text, ${DEAL_KEY} as deal_key
     from listings where status = 'live' ${where} ${spec.where}
     ${spec.order}
     limit ${limit + 1}
@@ -595,21 +707,58 @@ pub.get('/listings', async c => {
 })
 
 /**
- * 市場首頁上方那兩條橫向捲軸（今日最殺、已鑑定）與總筆數。
+ * 市場首頁上方那兩條橫向捲軸（低於標示價、已鑑定）與總筆數。
  *
- * 它們講的是「整個市場裡最便宜／最貴的那幾張」，不是「這一頁裡的」——
+ * 它們講的是「整個市場裡的那幾張」，不是「這一頁裡的」——
  * 從已載入的清單挑會挑到假的第一名。取 top-N 是有界的查詢，跟分頁無關，
  * 所以獨立一支，前端只在第一次進頁時打一次。
+ *
+ * ── 第一條捲軸改了什麼（A-1）──
+ *
+ * 舊版是「折數最深的 6 筆」，而折數的分母是賣家自己填的參考價 ——
+ * 那個排法有一個很簡單的解：把 refPrice 填成掛價的十倍，就是第一名。
+ * 本機重現時**同一個賣家的兩筆灌水掛單同時佔住第 1、2 名**。
+ * 一個誰都能靠打字排到第一的區塊，不是精選區，是免費的廣告位。
+ *
+ * 改成三條規則，每一條各擋一件事：
+ *
+ *   1. **可以進來的範圍是一個區間**，不是一個下限：折數要落在
+ *      [DEAL_FLOOR, DEAL_CEIL]（-70% ~ -8%）。上緣還是「至少便宜 8%」，
+ *      下緣是新的 —— 宣稱便宜九成的那些進不來（理由見 DEAL_RATIO 的說明）。
+ *
+ *   2. **一位賣家只取一筆**（distinct on）。這一條擋的是「用數量洗版」：
+ *      沒有它的話，一個人上架六筆就能整條捲軸都是他的，而上面那個區間
+ *      擋不住這件事 —— 他只要每一筆都填在合理範圍內就好。
+ *
+ *   3. **排序用 listed_at，不是折數**。這是這次最重要的一條：
+ *      進得來仍然是賣家決定的（他填了參考價、掛得比它低），
+ *      但**排第幾不是** —— 那由上架時間決定，而時間是平台記的。
+ *      於是「把數字填得更誇張」不再換得到更好的位置，只換得到「進不來」。
+ *      副作用是這一區會自己輪替，不會長年卡著同樣六張。
+ *
+ * 所以這一區現在能講出口的話只有一句：「這幾張，賣家掛得比自己標的參考價低」。
+ * 前端的標題與說明也照這句改（MarketPage.vue），不再叫「今日最殺」。
  */
 pub.get('/listings/highlights', async c => {
   const [deals, graded, total] = await Promise.all([
+    /* distinct on 的 order by 必須以 seller_id 開頭（Postgres 的要求），
+       所以「每人取哪一筆」在內層決定（最新的那一筆），
+       「六筆之間怎麼排」在外層決定。兩層都帶 id 當第二鍵：
+       同一微秒上架的兩筆誰在前不能是未定義的，否則同一支查詢兩次結果不同。 */
     sql<Row[]>`
-      select *, listed_at::text as listed_at_text, ${DEAL_RATIO} as deal_ratio
-      from listings where status = 'live' and ${DEAL_RATIO} <= -0.08
-      order by ${DEAL_RATIO} asc, id asc limit 6
+      select * from (
+        select distinct on (seller_id)
+               *, listed_at::text as listed_at_text, ${DEAL_KEY} as deal_key
+        from listings
+        where status = 'live'
+          and ${DEAL_RATIO} >= ${num(DEAL_FLOOR)}
+          and ${DEAL_RATIO} <= ${num(DEAL_CEIL)}
+        order by seller_id, listed_at desc, id desc
+      ) t
+      order by listed_at desc, id desc limit 6
     `,
     sql<Row[]>`
-      select *, listed_at::text as listed_at_text, ${DEAL_RATIO} as deal_ratio
+      select *, listed_at::text as listed_at_text, ${DEAL_KEY} as deal_key
       from listings where status = 'live' and cert_no is not null
       order by price desc, id desc limit 4
     `,
@@ -636,7 +785,7 @@ pub.get('/listings/highlights', async c => {
  */
 pub.get('/listings/:id', async c => {
   const [row] = await sql<Row[]>`
-    select *, listed_at::text as listed_at_text, ${DEAL_RATIO} as deal_ratio
+    select *, listed_at::text as listed_at_text, ${DEAL_KEY} as deal_key
     from listings where id = ${c.req.param('id') ?? ''} and status in ('live', 'sold')
   `
   if (!row) return c.json({ error: 'NOT_FOUND', message: '這筆掛單不存在或已下架' }, 404)
