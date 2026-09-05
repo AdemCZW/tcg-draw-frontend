@@ -1,0 +1,1003 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>提升現有功能 · 現在 vs 改良後</title>
+<style>
+/* ------------------------------------------------------------------
+   色票抄自 src/styles/tokens.css（只抄這份原型用得到的那些）。
+   這份檔案刻意自包含：不連外、不載字體、不吃專案的 CSS。
+   做法沿用 docs/proto/prize-editor.html。
+------------------------------------------------------------------- */
+:root{
+  --bg:#0d0c0f; --surface:#17161a; --surface-2:#1e1c22; --surface-3:#272430;
+  --line:#302d38; --line-soft:#222029;
+  --ink:#f4f1ee; --muted:#a49b96; --faint:#6f6862;
+  --accent:#f73b20; --on-accent:#fff; --accent-soft:#ff5236; --accent-wash:#2c1512;
+  --gold:#ecc063; --gold-deep:#ecc063;
+  --ok:#35c98a; --warn:#f0a13a; --danger:#ff5a4d;
+  --ok-wash:#11251c; --warn-wash:#2a2114; --danger-wash:#2c1614;
+  --ok-ink:#4fd8a0; --warn-ink:#f0a13a; --danger-ink:#ff5a4d;
+  --info-wash:#14203a; --info-ink:#6aa9f5;
+  --scrim:rgba(0,0,0,.67); --field:#0f1115;
+  --font-body:"Inter","Noto Sans TC",system-ui,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,monospace;
+  --radius:18px;
+}
+:root[data-theme="light"]{
+  --bg:#fdfbfa; --surface:#fff; --surface-2:#f6f2f0; --surface-3:#efe9e6;
+  --line:#e8e0dc; --line-soft:#f0eae7;
+  --ink:#1a1614; --muted:#7a706b; --faint:#a89f9a;
+  --accent:#f73b20; --accent-soft:#f84d35; --accent-wash:#fde8e4;
+  --gold:#b9801c; --gold-deep:#b9801c;
+  --ok:#23a06a; --warn:#d98324; --danger:#e0453a;
+  --ok-wash:#eaf7ee; --warn-wash:#fdf4e3; --danger-wash:#fdeceb;
+  --ok-ink:#1c7d68; --warn-ink:#8a5108; --danger-ink:#b3251c;
+  --info-wash:#e8effa; --info-ink:#1e4e8c;
+  --scrim:rgba(0,0,0,.45); --field:#f6f2f0;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.mono{font-family:var(--font-mono)}
+button{font:inherit;cursor:pointer}
+input,select,textarea{font:inherit}
+
+/* ---------- 原型自己的外殼（不是設計的一部分） ---------- */
+.lab{max-width:1180px;margin:0 auto;padding:22px 16px 80px}
+.lab h1{font-size:21px;margin:0 0 6px;line-height:1.35}
+.lab .sub{color:var(--muted);font-size:13px;margin:0 0 16px;max-width:74ch}
+.lab .sub strong{color:var(--ink)}
+.topbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:14px;background:var(--surface);position:sticky;top:0;z-index:60;margin-bottom:20px}
+.topbar .lbl{font-size:11.5px;font-weight:700;color:var(--muted);margin-right:2px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:11px 12px;border:1px solid var(--line);border-radius:14px;background:var(--surface);margin:0 0 14px}
+.bar .grp{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}
+.bar .lbl{font-size:11.5px;font-weight:700;color:var(--muted);margin-right:2px}
+.tgl{min-height:44px;min-width:44px;padding:0 13px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);color:var(--ink);font-size:13px}
+.tgl.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:700}
+.tgl.warn.on{background:var(--warn);border-color:var(--warn);color:#20180a}
+.tgl.danger.on{background:var(--danger);border-color:var(--danger);color:#fff}
+.tgl:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.bar select,.bar input{min-height:44px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--field);color:var(--ink);max-width:100%;min-width:0}
+.bar input[type=number]{width:120px;font-family:var(--font-mono);text-align:right}
+
+/* 章節 */
+.sec{margin:0 0 44px;scroll-margin-top:78px}
+.secHead{border-top:1px solid var(--line);padding-top:18px;margin-bottom:12px}
+.kicker{font-size:11px;font-weight:800;letter-spacing:.10em;color:var(--accent);margin:0 0 4px}
+.sec h2{font-size:19px;margin:0 0 8px;line-height:1.35}
+.lede{color:var(--muted);font-size:13.5px;margin:0 0 12px;max-width:74ch}
+.lede strong{color:var(--ink)}
+.src{font-family:var(--font-mono);font-size:11.5px;color:var(--faint);word-break:break-all}
+
+/* 兩具手機並排；393 以下自動堆疊 */
+.stage{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:20px;justify-items:center;margin-bottom:14px}
+.phoneWrap{width:393px;max-width:100%}
+.phoneCap{display:flex;align-items:baseline;gap:8px;margin:0 0 8px;flex-wrap:wrap}
+.phoneCap h3{font-size:14px;margin:0}
+.phoneCap .tag{font-size:10.5px;font-weight:800;padding:2px 7px;border-radius:999px;letter-spacing:.04em}
+.phoneCap .tag.now{background:var(--surface-3);color:var(--muted)}
+.phoneCap .tag.next{background:var(--accent);color:var(--on-accent)}
+.phoneCap span.note{font-size:11.5px;color:var(--muted)}
+.phone{position:relative;width:100%;height:640px;border:1px solid var(--line);border-radius:20px;overflow:hidden;background:var(--bg)}
+.phone.tall{height:720px}
+.scroll{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;padding:14px 14px 70px}
+.chromeNav{position:absolute;left:0;right:0;bottom:0;height:56px;background:var(--surface);border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-around;font-size:11px;color:var(--faint)}
+.chromeNav b{color:var(--accent);font-weight:700}
+
+/* 站上的通用外觀 */
+.card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--line-soft);padding:15px;margin-bottom:12px}
+.card h4{margin:0 0 8px;font-size:15px}
+.muted{color:var(--muted)}
+.tiny{font-size:11.5px;line-height:1.55}
+.sm{font-size:12.5px;line-height:1.6}
+.fld{display:grid;gap:5px;margin-bottom:11px}
+.fld>span{font-size:12px;color:var(--muted);font-weight:600}
+.fld input,.fld select{min-height:44px;padding:9px 11px;font-size:14px;border:1px solid var(--line);border-radius:10px;background:var(--field);color:var(--ink);width:100%}
+.fld input:focus,.fld select:focus{outline:none;border-color:var(--gold)}
+.tabs{display:flex;gap:6px;margin-bottom:10px}
+.tabs button{flex:1;min-height:44px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);color:var(--muted);font-size:12.5px;padding:0 6px}
+.tabs button.on{background:var(--surface-3);color:var(--ink);border-color:var(--gold);font-weight:700}
+.btn{min-height:46px;display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:0 16px;border-radius:12px;border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);font-weight:700;font-size:14px;width:100%}
+.btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.pill{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--surface-3);color:var(--muted)}
+.pill.ok{background:var(--ok-wash);color:var(--ok-ink)}
+.pill.warn{background:var(--warn-wash);color:var(--warn-ink)}
+.pill.bad{background:var(--danger-wash);color:var(--danger-ink)}
+.pill.info{background:var(--info-wash);color:var(--info-ink)}
+.banner{border-radius:12px;padding:10px 12px;font-size:12.5px;line-height:1.6;margin-bottom:11px;border:1px solid transparent}
+.banner.ok{background:var(--ok-wash);border-color:var(--ok);color:var(--ok-ink)}
+.banner.warn{background:var(--warn-wash);border-color:var(--warn);color:var(--warn-ink)}
+.banner.bad{background:var(--danger-wash);border-color:var(--danger);color:var(--danger-ink)}
+.banner.info{background:var(--info-wash);border-color:var(--info-ink);color:var(--info-ink)}
+.banner>b:first-child{display:block;font-size:13px;margin-bottom:2px}
+/* 標題那顆 b 才換行；句子中間的 b 是行內強調，換行會把一句話切成三段 */
+.rowline{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line-soft);font-size:13px}
+.rowline:last-child{border-bottom:0}
+.rowline .v{font-family:var(--font-mono);white-space:nowrap}
+.big{font-family:var(--font-mono);font-size:30px;font-weight:600;line-height:1.1}
+.big.neg{color:var(--danger-ink)}
+.big.gold{color:var(--gold)}
+.unitline{font-size:11.5px;color:var(--muted);margin-top:3px}
+
+/* 掃描模擬 */
+.shot{position:relative;border-radius:12px;overflow:hidden;border:1px solid var(--line);background:var(--surface-2);aspect-ratio:16/10;display:grid;place-items:center;margin-bottom:11px}
+.slab{width:62%;height:78%;border-radius:6px;background:linear-gradient(160deg,var(--surface-3),var(--surface));border:1px solid var(--line);display:grid;grid-template-rows:34% 1fr;overflow:hidden}
+.slabTag{border-bottom:1px solid var(--line);background:var(--surface-2);display:grid;align-content:center;justify-items:center;gap:1px;padding:2px}
+.slabTag i{font-style:normal;font-size:8px;letter-spacing:.06em;color:var(--muted);font-family:var(--font-mono)}
+.slabTag i.hi{color:var(--ink);font-weight:700;font-size:9px}
+.slabArt{background:radial-gradient(circle at 34% 28%,rgba(236,192,99,.32),transparent 62%),var(--surface-3)}
+.scanline{position:absolute;left:6%;right:6%;height:2px;background:var(--accent);box-shadow:0 0 10px var(--accent);animation:sweep 1.25s ease-in-out infinite}
+@keyframes sweep{0%{top:14%}50%{top:84%}100%{top:14%}}
+.readRow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);margin-bottom:7px}
+.readRow .k{font-size:11px;color:var(--muted);display:block}
+.readRow .v{font-family:var(--font-mono);font-size:13.5px;word-break:break-all}
+.readRow.dim .v{color:var(--faint)}
+.cands{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px}
+.cand{flex:none;width:78px;border:2px solid transparent;border-radius:9px;background:transparent;padding:0;display:grid;gap:3px;text-align:left}
+.cand .art{width:78px;aspect-ratio:63/88;border-radius:7px;background:radial-gradient(circle at 36% 26%,rgba(236,192,99,.34),transparent 60%),var(--surface-3);border:2px solid transparent}
+.cand.sel .art{border-color:var(--accent)}
+.cand small{font-size:10px;color:var(--muted);line-height:1.35;display:block;overflow:hidden}
+.steps{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.steps li{display:grid;grid-template-columns:20px minmax(0,1fr);gap:8px;font-size:12.5px;color:var(--muted);align-items:start}
+.steps li b{color:var(--ink);font-weight:700}
+.steps .n{font-family:var(--font-mono);font-size:11px;color:var(--faint)}
+.steps li.done .n{color:var(--ok-ink)}
+
+/* 市場掛單卡 */
+.lst{display:grid;grid-template-columns:56px minmax(0,1fr);gap:11px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);align-items:center}
+.lst .art{width:56px;aspect-ratio:63/88;border-radius:6px;background:radial-gradient(circle at 36% 26%,rgba(236,192,99,.3),transparent 60%),var(--surface-3)}
+.lst .nm{font-size:13px;font-weight:700;line-height:1.35}
+.lst .pr{font-family:var(--font-mono);font-size:16px;margin-top:2px}
+.dealTag{display:inline-block;font-size:10.5px;font-weight:800;padding:2px 7px;border-radius:6px;background:var(--ok-wash);color:var(--ok-ink);margin-top:4px}
+.dealTag.mute{background:var(--surface-3);color:var(--muted);font-weight:600}
+
+/* 曲線 */
+.curve{width:100%;height:78px;display:block}
+.curve path{fill:none;stroke:var(--gold);stroke-width:2}
+.curve path.spend{stroke:var(--danger-ink);stroke-dasharray:4 3}
+.legend{display:flex;gap:12px;font-size:11px;color:var(--muted);margin-top:5px;flex-wrap:wrap}
+.legend i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:4px}
+
+/* 說明面板 */
+.notes{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:14px 15px;margin-bottom:12px}
+.notes h4{margin:0 0 8px;font-size:14px}
+.notes p{margin:0 0 9px;font-size:13px;line-height:1.72;color:var(--muted)}
+.notes p:last-child{margin-bottom:0}
+.notes strong{color:var(--ink)}
+.notes code{font-family:var(--font-mono);font-size:12px;background:var(--surface-2);padding:1px 5px;border-radius:5px;color:var(--ink);word-break:break-all}
+.verdict{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start;padding:11px 12px;border-radius:12px;margin-bottom:10px}
+.verdict.ok{background:var(--ok-wash);border:1px solid var(--ok)}
+.verdict.warn{background:var(--warn-wash);border:1px solid var(--warn)}
+.verdict.bad{background:var(--danger-wash);border:1px solid var(--danger)}
+.verdict .vk{font-size:11px;font-weight:800;letter-spacing:.05em;white-space:nowrap;padding-top:2px}
+.verdict.ok .vk{color:var(--ok-ink)} .verdict.warn .vk{color:var(--warn-ink)} .verdict.bad .vk{color:var(--danger-ink)}
+.verdict .vv{font-size:13px;line-height:1.7}
+.tblWrap{overflow-x:auto;margin:0 0 10px;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;font-size:12.5px;min-width:520px;width:100%}
+th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line-soft);white-space:nowrap}
+th{color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.02em}
+td.n{font-family:var(--font-mono);text-align:right}
+td.bad{color:var(--danger-ink)} td.warn{color:var(--warn-ink)} td.ok{color:var(--ok-ink)}
+
+/* 第二層 */
+.tier2{border:1px solid var(--line);border-left:3px solid var(--faint);border-radius:14px;background:var(--surface);padding:16px}
+.t2grp{margin-bottom:18px}
+.t2grp:last-child{margin-bottom:0}
+.t2grp h4{margin:0 0 4px;font-size:14px}
+.t2grp .gwhy{margin:0 0 10px;font-size:12.5px;color:var(--muted);line-height:1.65}
+.t2item{padding:9px 0;border-top:1px solid var(--line-soft)}
+.t2item .h{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-bottom:2px}
+.t2item .h b{font-size:13px}
+.t2item p{margin:0;font-size:12.5px;color:var(--muted);line-height:1.65}
+.t2item p em{font-style:normal;color:var(--ink)}
+.toc{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
+.toc a{font-size:12px;padding:7px 11px;border:1px solid var(--line);border-radius:999px;color:var(--muted);text-decoration:none;background:var(--surface)}
+.toc a:hover{color:var(--ink);border-color:var(--gold)}
+@media (max-width:420px){
+  .lab{padding:16px 12px 60px}
+  .phone{height:600px}
+  .phone.tall{height:660px}
+  .bar input[type=number]{width:100%}
+  .bar select{width:100%}
+}
+</style>
+</head>
+<body>
+<div class="lab">
+
+<h1>提升現有功能：現在 vs 改良後</h1>
+<p class="sub">四項<strong>已經在 VaultDraw 裡跑著、但可以做得更好</strong>的功能。每一項左邊是<strong>讀碼確認過的現況</strong>，右邊是改良後 —— 沒有對照就看不出價值，所以兩邊都要能點。<br>
+來源：<span class="src">docs/cardbase-comparison.md</span>、<span class="src">docs/vinciworld-comparison.md</span>、<span class="src">docs/open-issues.md</span>。第二層在最後一區，列出來但不做互動。</p>
+
+<div class="topbar">
+  <span class="lbl">主題</span>
+  <button class="tgl on" id="thDark" type="button">暗色</button>
+  <button class="tgl" id="thLight" type="button">亮色</button>
+  <span class="lbl" style="margin-left:8px">量測時間</span>
+  <span class="tiny muted">TCGdex 錨點為 2026-09-06 本機實測，31/31 命中</span>
+</div>
+
+<nav class="toc">
+  <a href="#s1">一 · 登記卡片</a>
+  <a href="#s2">二 · 參考價量級檢查</a>
+  <a href="#s3">三 · 卡冊成本基礎</a>
+  <a href="#s4">四 · 公平性入口</a>
+  <a href="#t2">第二層清單</a>
+</nav>
+
+<!-- =========================================================
+     一 · 登記卡片
+========================================================== -->
+<section class="sec" id="s1">
+  <div class="secHead">
+    <p class="kicker">第一層 · 一</p>
+    <h2>登記卡片：從手填變成拍照辨識</h2>
+    <p class="lede">現況：登記一張卡要<strong>手填卡名／系列／卡號</strong>，或從 TCGdex 目錄挑 —— 而目錄<strong>最準的搜法是日文卡名</strong>。一次只能登記一張，註解明寫「要登記三張就走三次」。<br>
+    為什麼重要：<strong>A-4 之後開池必須先登記卡</strong>，登記的摩擦直接決定有多少人開得成池。<br>
+    <span class="src">src/pages/CardUploadPage.vue:33-45,206-220</span> · <span class="src">src/lib/tcgdex-catalog.ts:8-24</span></p>
+  </div>
+
+  <div class="bar">
+    <div class="grp"><span class="lbl">右邊的失敗情境</span>
+      <button class="tgl on" data-f1="none" type="button">一切順利</button>
+      <button class="tgl warn" data-f1="barcode" type="button">條碼讀不到</button>
+      <button class="tgl warn" data-f1="mismatch" type="button">兩個來源不一致</button>
+      <button class="tgl danger" data-f1="timeout" type="button">辨識服務掛了</button>
+    </div>
+    <div class="grp"><button class="tgl" id="s1reset" type="button">重設兩邊</button></div>
+  </div>
+
+  <div class="stage">
+    <div class="phoneWrap">
+      <div class="phoneCap"><h3>現在</h3><span class="tag now">已上線</span><span class="note">互動次數 <b id="s1count" class="mono">0</b></span></div>
+      <div class="phone tall"><div class="scroll" id="s1now"></div><div class="chromeNav"><span>大廳</span><span>市場</span><b>卡冊</b><span>我的</span></div></div>
+    </div>
+    <div class="phoneWrap">
+      <div class="phoneCap"><h3>改良後</h3><span class="tag next">原型</span><span class="note">互動次數 <b id="s1count2" class="mono">0</b></span></div>
+      <div class="phone tall"><div class="scroll" id="s1next"></div><div class="chromeNav"><span>大廳</span><span>市場</span><b>卡冊</b><span>我的</span></div></div>
+    </div>
+  </div>
+
+  <div class="notes" id="s1notes"></div>
+</section>
+
+<!-- =========================================================
+     二 · 參考價
+========================================================== -->
+<section class="sec" id="s2">
+  <div class="secHead">
+    <p class="kicker">第一層 · 二</p>
+    <h2>參考價：從「賣家自己填」變成「有量級檢查」</h2>
+    <p class="lede">現況：<code>refPrice</code> 是賣家在一個 <code>type="number"</code> 輸入框裡宣告的數字，後端只檢查上限 <strong>10,000,000</strong>，<strong>零交叉檢查</strong>。<br>
+    而 TCGdex 的 <code>/v2/ja/cards/{id}</code> 回應裡<strong>本來就帶 Cardmarket 價</strong>，免 key、免費、零新依賴 —— VaultDraw 已經在用 TCGdex 取卡圖。<br>
+    <span class="src">src/pages/CardUploadPage.vue:273-279</span> · <span class="src">server/src/card-cert.ts:85 REF_PRICE_MAX</span> · <span class="src">docs/research-card-pricing.md §四</span></p>
+  </div>
+
+  <div class="bar">
+    <div class="grp"><span class="lbl">這張卡</span><select id="s2card"></select></div>
+    <div class="grp"><span class="lbl">賣家填的參考價</span><input type="number" id="s2price" min="0" max="10000000" step="10"><span class="tiny muted">點</span></div>
+    <div class="grp"><button class="tgl" id="s2demo" type="button">填回示範值</button></div>
+  </div>
+
+  <div class="stage">
+    <div class="phoneWrap">
+      <div class="phoneCap"><h3>現在</h3><span class="tag now">已上線</span><span class="note">填什麼就是什麼</span></div>
+      <div class="phone"><div class="scroll" id="s2now"></div><div class="chromeNav"><span>大廳</span><span>市場</span><b>卡冊</b><span>我的</span></div></div>
+    </div>
+    <div class="phoneWrap">
+      <div class="phoneCap"><h3>改良後</h3><span class="tag next">原型</span><span class="note">只提示，不硬擋</span></div>
+      <div class="phone"><div class="scroll" id="s2next"></div><div class="chromeNav"><span>大廳</span><span>市場</span><b>卡冊</b><span>我的</span></div></div>
+    </div>
+  </div>
+
+  <div class="notes" id="s2notes"></div>
+</section>
+
+<!-- =========================================================
+     三 · 成本基礎
+========================================================== -->
+<section class="sec" id="s3">
+  <div class="secHead">
+    <p class="kicker">第一層 · 三</p>
+    <h2>卡冊：加上「我當初花了多少」</h2>
+    <p class="lede">現況：卡冊有收藏總值與成長曲線，<strong>沒有成本基礎</strong>。而資料其實已經夠了 —— <code>draws.cost</code> 除以 <code>array_length(seats,1)</code> 就是每一張抽到的卡花了多少點；市場買的卡在 <code>points_ledger</code> 裡有 <code>vault-buy</code> 加 <code>ref_id</code>。<strong>缺的是一支查詢與一個決定。</strong><br>
+    <span class="src">server/migrations/002_core.sql:129-138,179-192</span> · <span class="src">server/src/routes/prizes.ts:347-387</span></p>
+  </div>
+
+  <div class="bar">
+    <div class="grp"><span class="lbl">右邊要看哪一版</span>
+      <button class="tgl on" data-v3="spend" type="button">A 版 · 只顯示支出</button>
+      <button class="tgl danger" data-v3="pnl" type="button">B 版 · 顯示差額</button>
+    </div>
+    <div class="grp"><span class="lbl">這個人的運氣</span>
+      <button class="tgl on" data-l3="down" type="button">抽輸了</button>
+      <button class="tgl" data-l3="up" type="button">抽贏了</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="phoneWrap">
+      <div class="phoneCap"><h3>現在</h3><span class="tag now">已上線</span><span class="note">只有收藏那一半</span></div>
+      <div class="phone"><div class="scroll" id="s3now"></div><div class="chromeNav"><span>大廳</span><span>市場</span><b>卡冊</b><span>我的</span></div></div>
+    </div>
+    <div class="phoneWrap">
+      <div class="phoneCap"><h3>改良後</h3><span class="tag next">原型</span><span class="note" id="s3cap">A 版</span></div>
+      <div class="phone"><div class="scroll" id="s3next"></div><div class="chromeNav"><span>大廳</span><span>市場</span><b>卡冊</b><span>我的</span></div></div>
+    </div>
+  </div>
+
+  <div class="notes" id="s3notes"></div>
+</section>
+
+<!-- =========================================================
+     四 · 公平性
+========================================================== -->
+<section class="sec" id="s4">
+  <div class="secHead">
+    <p class="kicker">第一層 · 四</p>
+    <h2>公平性：從「有但收起來」變成「看得到」</h2>
+    <p class="lede">現況：<code>FAIRNESS_UI = false</code>，<strong>站內七個入口全關</strong>，<code>/fairness</code> 與 <code>/fairness/:poolId</code> 兩條路由留著，後端的 commit-reveal、drand、<code>/reveal</code> 從沒停過。<br>
+    為什麼重要：<strong>Renaiss 宣稱 provably fair，但它的五組合約裡沒有任何隨機數來源、也找不到驗算頁；VaultDraw 真的做得到卻把入口關了。</strong><br>
+    <span class="src">src/lib/config.ts:14-30</span> · <span class="src">src/pages/pool/PoolProof.vue</span> · <span class="src">src/shared/fairness.ts:163-320</span></p>
+  </div>
+
+  <div class="bar">
+    <div class="grp"><span class="lbl">看哪一個畫面</span>
+      <button class="tgl on" data-p4="proof" type="button">池 · 驗證分頁</button>
+      <button class="tgl" data-p4="result" type="button">開卡結果</button>
+      <button class="tgl" data-p4="landing" type="button">首頁</button>
+      <button class="tgl" data-p4="me" type="button">我的</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="phoneWrap">
+      <div class="phoneCap"><h3>現在</h3><span class="tag now">已上線</span><span class="note mono">FAIRNESS_UI = false</span></div>
+      <div class="phone"><div class="scroll" id="s4now"></div><div class="chromeNav"><span>大廳</span><span>市場</span><span>卡冊</span><b>我的</b></div></div>
+    </div>
+    <div class="phoneWrap">
+      <div class="phoneCap"><h3>改良後</h3><span class="tag next">原型</span><span class="note mono">FAIRNESS_UI = true</span></div>
+      <div class="phone"><div class="scroll" id="s4next"></div><div class="chromeNav"><span>大廳</span><span>市場</span><span>卡冊</span><b>我的</b></div></div>
+    </div>
+  </div>
+
+  <div class="notes" id="s4notes"></div>
+</section>
+
+<!-- =========================================================
+     第二層
+========================================================== -->
+<section class="sec" id="t2">
+  <div class="secHead">
+    <p class="kicker">第二層 · 列出來，不做深</p>
+    <h2>其餘從兩份對照文件看到、但不是「提升現有功能」的東西</h2>
+    <p class="lede">下面每一項都不在第一層，理由分成三類：<strong>另一條路</strong>（做了會變成別人）、<strong>要換商業模式或要花錢</strong>、<strong>要法律或使用者拍板</strong>。<br>
+    這一區<strong>刻意沒有互動</strong> —— 它是清單，不是提案。</p>
+  </div>
+  <div class="tier2" id="t2list"></div>
+</section>
+
+</div>
+
+<script>
+'use strict';
+/* ==================================================================
+   資料：2026-09-06 本機實測 TCGdex /v2/ja/cards/{artId}
+   欄位：artId, 卡名, 鑑定機構, 分數, 現有 refPrice, avg7(EUR),
+         avg30(EUR), low(EUR), avg7 換算新台幣(@37.1959)
+   31 張示範卡（src/mocks/data.ts）31/31 全部拿得到 Cardmarket 價。
+================================================================== */
+var RATE = 37.1959;
+var CARDS = [["SV4a-349","噴火龍 ex UR","PSA",10,42000,245.99,267.82,209.9,9150],["SV4a-350","奇樹 SAR","PSA",10,28000,51.01,43.87,37,1897],["SV8a-237","太樂巴戈斯 ex UR","PSA",10,19800,5.12,5.29,3.99,190],["SV4a-354","牡丹 SAR","BGS",9.5,15600,19.57,20.7,16,728],["SV8a-236","皮卡丘 ex SAR","PSA",10,12800,45.13,68.3,30,1679],["SV3-125","噴火龍 ex SAR","PSA",9,9800,22.06,32.58,10,821],["SV4a-348","沙奈朵 ex UR","PSA",10,7600,136.23,147.92,119.79,5067],["SV4a-347","夢幻 ex UR","RAW",null,6400,569.89,604.47,350,21198],["SV8a-217","月亮伊布 ex SAR","RAW",null,5400,460.76,427.01,195,17138],["SV4a-341","謎擬Ｑ SAR","RAW",null,200,15.03,22.41,11.9,559],["SV8a-221","多龍巴魯托 ex SAR","RAW",null,4200,14.55,14.84,12.99,541],["SV8a-223","伊布 ex SAR","RAW",null,3800,61.86,51.31,32.5,2301],["SV8a-222","猛雷鼓 ex SAR","PSA",10,3400,11.17,11.87,8.8,415],["SV8a-211","太陽伊布 ex SAR","RAW",null,2600,72.44,81.69,40,2694],["SV3-128","大比鳥 ex SAR","RAW",null,2200,1.98,2.73,1.2,74],["SV4a-353","派帕 SAR","RAW",null,1800,8.49,8.84,6.5,316],["SV6-121","幸福蛋 ex SAR","RAW",null,1500,2.5,2.92,1.99,93],["SV6-124","八朔 SAR","RAW",null,1200,1.13,1.43,0.5,42],["SV6-120","多龍巴魯托 ex","RAW",null,980,5.71,5.58,4.4,212],["SV3-131","波琵 SAR","RAW",null,760,1.18,1.52,0.85,44],["SV8a-212","仙子伊布 ex","RAW",null,620,137.45,134.51,74.99,5113],["SV8a-209","雷伊布 ex","RAW",null,520,55.07,54.74,27,2048],["SV8a-205","水伊布 ex","RAW",null,460,75.54,71.54,34,2810],["SV8a-202","火伊布 ex","RAW",null,420,62.86,56.34,30,2338],["SV8a-200","葉伊布 ex","RAW",null,380,88.73,84.16,48.99,3300],["SV8a-206","冰伊布 ex","RAW",null,340,74.94,74.6,34.95,2787],["SV8a-210","鐵臂膀 ex","RAW",null,300,7.57,5.84,2,282],["SV8a-215","差不多娃娃 ex","RAW",null,240,6.41,4.99,3,238],["SV8a-219","桃歹郎 ex","RAW",null,180,3.63,4.07,2.89,135],["SV8a-207","海豚俠 ex","RAW",null,150,16.14,17.9,12,600],["SV8a-216","砂鐵蜥 ex","RAW",null,120,3.11,3.22,0.99,116]];
+
+function card(i){var c=CARDS[i];return{artId:c[0],name:c[1],grader:c[2],grade:c[3],refPrice:c[4],avg7:c[5],avg30:c[6],low:c[7],twd:c[8]};}
+function nf(n){return Number(n).toLocaleString('zh-TW');}
+function $(s){return document.querySelector(s);}
+function $$(s){return Array.prototype.slice.call(document.querySelectorAll(s));}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+/* 主題 */
+$('#thDark').onclick=function(){document.documentElement.setAttribute('data-theme','dark');$('#thDark').classList.add('on');$('#thLight').classList.remove('on');};
+$('#thLight').onclick=function(){document.documentElement.setAttribute('data-theme','light');$('#thLight').classList.add('on');$('#thDark').classList.remove('on');};
+
+/* 一組互斥按鈕的共用綁定 */
+function group(attr,onPick){
+  $$('[data-'+attr+']').forEach(function(b){
+    b.onclick=function(){
+      $$('[data-'+attr+']').forEach(function(x){x.classList.remove('on');});
+      b.classList.add('on');
+      onPick(b.getAttribute('data-'+attr));
+    };
+  });
+}
+
+/* ==================================================================
+   一 · 登記卡片
+================================================================== */
+var S1={fail:'none',stage:'idle',nowMode:'catalog',nowQuery:'',nowPicked:null,taps:0,taps2:0,confirmed:false};
+
+/* 目錄搜尋的實測行為：日文卡名才搜得到（src/lib/tcgdex-catalog.ts 的逐項紀錄）。
+   這裡用三個固定查詢模擬，不連外。 */
+function catalogHits(q){
+  q=(q||'').trim();
+  if(!q) return null;
+  if(/^[\x20-\x7E]+$/.test(q)) return [];               /* 全 ASCII：羅馬字／英文，查不到日版卡 */
+  if(q.indexOf('リザードン')>=0) return ['SV4a-349 リザードンex','SV2a-006 リザードンex','SV3-125 リザードンex'];
+  if(q.indexOf('テラパゴス')>=0) return ['SV8a-237 テラパゴスex'];
+  return [];
+}
+
+function renderS1Now(){
+  var hits=catalogHits(S1.nowQuery);
+  var h='';
+  h+='<div class="card"><h4>登記卡片</h4>';
+  h+='<div class="tabs">'+
+     '<button type="button" class="'+(S1.nowMode==='catalog'?'on':'')+'" data-s1m="catalog">搜尋卡片目錄</button>'+
+     '<button type="button" class="'+(S1.nowMode==='manual'?'on':'')+'" data-s1m="manual">目錄沒有這張卡</button></div>';
+  if(S1.nowMode==='catalog'){
+    h+='<p class="tiny muted" style="margin:0 0 9px">從目錄挑出正確的版本 —— 同一組卡號可能有價差極大的不同版本。</p>';
+    h+='<div class="fld"><span>搜尋卡名</span><input type="text" id="s1q" placeholder="例：リザードン" value="'+esc(S1.nowQuery)+'"></div>';
+    h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'+
+       '<button class="tgl" type="button" data-s1q="Charizard" style="min-height:36px;font-size:12px">貼上「Charizard」</button>'+
+       '<button class="tgl" type="button" data-s1q="リザードン" style="min-height:36px;font-size:12px">貼上「リザードン」</button></div>';
+    if(hits===null){
+      h+='<p class="tiny muted">輸入卡名開始搜尋。</p>';
+    }else if(hits.length===0){
+      h+='<div class="banner warn"><b>找不到符合的卡</b>目錄一律走 <code>/v2/ja/</code>，日版卡的權威名稱是日文。羅馬字與英文卡名查不到 —— 這不是壞掉，是目錄的語系就是這樣。</div>';
+    }else{
+      h+='<p class="tiny muted" style="margin:0 0 7px">'+hits.length+' 筆候選 —— 要從縮圖認出正確那一張</p><div class="cands">';
+      hits.forEach(function(t,i){
+        h+='<button class="cand '+(S1.nowPicked===i?'sel':'')+'" type="button" data-s1p="'+i+'"><span class="art"></span><small>'+esc(t)+'</small></button>';
+      });
+      h+='</div>';
+    }
+  }else{
+    h+='<div class="fld"><span>卡片名稱</span><input type="text" placeholder="例：皮卡丘"></div>';
+    h+='<div class="fld"><span>系列／彈別</span><input type="text" placeholder="例：SV2a"></div>';
+    h+='<div class="fld"><span>卡號</span><input type="text" placeholder="例：025/165"></div>';
+    h+='<div class="fld"><span>語言</span><select><option>日文</option><option>英文</option></select></div>';
+    h+='<div class="banner info">手填的卡<b>一定要</b>上傳正面照（<code>server/src/routes/cardbook.ts:113-130</code>）。</div>';
+  }
+  h+='</div>';
+
+  h+='<div class="card"><h4>鑑定資訊</h4>';
+  h+='<div class="tabs"><button type="button" class="on">裸卡</button><button type="button">PSA</button><button type="button">BGS</button><button type="button">ARS</button></div>';
+  h+='<div class="fld"><span>鑑定編號</span><input type="text" placeholder="卡殼標籤上的號碼"></div>';
+  h+='<div class="fld"><span>等級</span><input type="number" placeholder="10"></div>';
+  h+='<div class="fld"><span>參考價（點，選填）</span><input type="number" placeholder="選填"></div>';
+  h+='</div>';
+  h+='<div class="card"><p class="tiny muted" style="margin:0 0 10px">一次只能登記一張。要登記三張就走三次 —— <code>CardUploadPage.vue:33-36</code> 的註解原文。</p>'+
+     '<button class="btn" type="button" '+(S1.nowPicked===null&&S1.nowMode==='catalog'?'disabled':'')+' data-s1sub="1">登記進卡冊</button></div>';
+  $('#s1now').innerHTML=h;
+
+  var q=$('#s1q');
+  if(q){
+    q.oninput=function(){S1.nowQuery=q.value;S1.nowPicked=null;S1.taps++;bump();var p=q.selectionStart;renderS1Now();var q2=$('#s1q');if(q2){q2.focus();try{q2.setSelectionRange(p,p);}catch(e){}}};
+  }
+  $$('[data-s1m]').forEach(function(b){b.onclick=function(){S1.nowMode=b.getAttribute('data-s1m');S1.nowPicked=null;S1.taps++;bump();renderS1Now();};});
+  $$('[data-s1q]').forEach(function(b){b.onclick=function(){S1.nowQuery=b.getAttribute('data-s1q');S1.nowPicked=null;S1.taps++;bump();renderS1Now();};});
+  $$('[data-s1p]').forEach(function(b){b.onclick=function(){S1.nowPicked=Number(b.getAttribute('data-s1p'));S1.taps++;bump();renderS1Now();};});
+  var sub=$('[data-s1sub]');
+  if(sub) sub.onclick=function(){S1.taps++;bump();sub.textContent='已登記 1 張 —— 下一張請再走一次';};
+}
+
+function renderS1Next(){
+  var h='';
+  h+='<div class="card"><h4>登記卡片</h4>';
+
+  if(S1.stage==='idle'){
+    h+='<p class="tiny muted" style="margin:0 0 10px">對著卡拍一張，系統先讀，你再核對。讀不出來就退回手填 —— 這條路徑<b>不會擋住登記</b>。</p>';
+    h+='<div class="shot"><div class="slab"><div class="slabTag"><i>PSA</i><i class="hi">GEM MT 10</i><i>8234 5671</i></div><div class="slabArt"></div></div></div>';
+    h+='<button class="btn" type="button" data-s1shot="1">拍卡片正面與標籤</button>';
+  }else if(S1.stage==='reading'){
+    h+='<div class="shot"><div class="slab"><div class="slabTag"><i>PSA</i><i class="hi">GEM MT 10</i><i>8234 5671</i></div><div class="slabArt"></div></div><span class="scanline"></span></div>';
+    h+='<p class="sm muted">辨識中 —— 先掃條碼，再讀標籤文字。</p>';
+    h+='<ol class="steps"><li class="done"><span class="n">1</span><span><b>條碼</b> 有校驗碼，確定性，零邊際成本</span></li>'+
+       '<li><span class="n">2</span><span><b>標籤文字</b> 讀出「這串字是哪個欄位」</span></li>'+
+       '<li><span class="n">3</span><span><b>你確認</b> 每一格都可以改</span></li></ol>';
+  }else if(S1.stage==='fail'){
+    h+='<div class="banner bad"><b>辨識服務暫時無法使用</b>已經退回原本的手動流程，你可以照舊登記。這是加值路徑，它壞掉不該讓你多做任何事。</div>';
+    h+='<div class="fld"><span>搜尋卡名</span><input type="text" placeholder="例：リザードン"></div>';
+    h+='<button class="btn ghost" type="button" data-s1reset2="1">再試一次拍照</button>';
+  }else{
+    /* done */
+    var mism=(S1.fail==='mismatch');
+    var noBar=(S1.fail==='barcode');
+    h+='<div class="shot" style="aspect-ratio:16/7"><div class="slab" style="width:44%;height:88%"><div class="slabTag"><i>PSA</i><i class="hi">GEM MT 10</i><i>8234 5671</i></div><div class="slabArt"></div></div></div>';
+    h+='<div class="banner '+(mism?'warn':(noBar?'warn':'ok'))+'"><b>'+(mism?'兩個來源對不上，兩個都不預填':(noBar?'條碼讀不到，只有標籤文字這一個來源':'讀到了，請核對'))+'</b>'+
+       (mism?'條碼說 <code>82345671</code>，標籤文字說 <code>82345071</code>。編號是唯一索引的鍵，讀錯一位就是把別人的卡登記到自己名下 —— 這種欄位不交給會猜的東西，兩個值並列給你選。'
+            :(noBar?'鑑定編號請自己照著標籤打一次。其餘欄位照樣預填。':'下面每一格都是自動讀的，送出前請核對。任何一格都可以改。'))+'</div>';
+
+    if(mism){
+      h+='<div class="readRow"><div><span class="k">鑑定編號 · 條碼讀到</span><span class="v">82345671</span></div><span class="pill ok">條碼</span></div>';
+      h+='<div class="readRow"><div><span class="k">鑑定編號 · 標籤文字讀到</span><span class="v">82345071</span></div><span class="pill warn">文字</span></div>';
+      h+='<p class="tiny muted" style="margin:-2px 0 10px">兩個都沒有填進去。請看著實體卡選一個。</p>';
+    }else if(noBar){
+      h+='<div class="readRow dim"><div><span class="k">鑑定編號</span><span class="v">請自行輸入</span></div><span class="pill">未讀到</span></div>';
+    }else{
+      h+='<div class="readRow"><div><span class="k">鑑定編號</span><span class="v">82345671</span></div><span class="pill ok">條碼</span></div>';
+    }
+    h+='<div class="readRow"><div><span class="k">鑑定機構 · 等級</span><span class="v">PSA 10</span></div><span class="pill info">標籤</span></div>';
+    h+='<div class="readRow"><div><span class="k">套牌 · 卡號</span><span class="v">SV4a-349</span></div><span class="pill info">標籤</span></div>';
+    h+='<p class="tiny muted" style="margin:0 0 8px">把 <code>SV4a-349</code> 餵進既有的目錄查詢 <code>?id=eq:SV4a-349</code> —— 這一支是現成的，實測支援。<b>一個日文字都不用打。</b></p>';
+    h+='<div class="cands">'+
+       '<button class="cand sel" type="button"><span class="art"></span><small>SV4a-349<br>リザードンex</small></button>'+
+       '<button class="cand" type="button"><span class="art"></span><small>SV4a-350<br>キハダ</small></button>'+
+       '<button class="cand" type="button"><span class="art"></span><small>SV2a-006<br>リザードンex</small></button></div>';
+    h+='<p class="tiny muted" style="margin:8px 0 10px">目錄仍然是權威 —— 最後是<b>你</b>從候選裡點選，跟現在完全一樣。辨識只負責把搜尋條件填進去。</p>';
+    h+='<button class="btn" type="button" data-s1ok="1">'+(S1.confirmed?'已登記 1 張':'核對無誤，登記進卡冊')+'</button>';
+  }
+  h+='</div>';
+
+  if(S1.stage==='done'&&!S1.confirmed){
+    h+='<div class="card"><h4>順帶回答了一個沒答案的問題</h4><p class="tiny muted" style="margin:0">'+
+       '「萬一上傳的卡片是沒有經過檢驗的卡片，我該怎麼知道他是否真的持有這張」——<code>HANDOFF.md</code> 4.2 記著這句話至今沒有答案。'+
+       '一張<b>現拍的</b>標籤照片本身就是這個問題的一半。輸出只記風險分數，<b>不硬擋</b>。</p></div>';
+  }
+  $('#s1next').innerHTML=h;
+
+  var sh=$('[data-s1shot]');
+  if(sh) sh.onclick=function(){
+    S1.taps2++;bump();
+    S1.stage='reading';renderS1Next();
+    setTimeout(function(){S1.stage=(S1.fail==='timeout')?'fail':'done';renderS1Next();},1150);
+  };
+  var rs=$('[data-s1reset2]');
+  if(rs) rs.onclick=function(){S1.taps2++;bump();S1.stage='idle';renderS1Next();};
+  var ok=$('[data-s1ok]');
+  if(ok) ok.onclick=function(){S1.taps2++;S1.confirmed=true;bump();renderS1Next();};
+}
+
+function bump(){$('#s1count').textContent=S1.taps;$('#s1count2').textContent=S1.taps2;}
+
+group('f1',function(v){S1.fail=v;S1.stage='idle';S1.confirmed=false;renderS1Next();});
+$('#s1reset').onclick=function(){S1={fail:S1.fail,stage:'idle',nowMode:'catalog',nowQuery:'',nowPicked:null,taps:0,taps2:0,confirmed:false};bump();renderS1Now();renderS1Next();};
+
+$('#s1notes').innerHTML=
+ '<h4>可行性：做得到，但「辨識」這兩個字要拆成三段看</h4>'+
+ '<div class="verdict ok"><span class="vk">做得到</span><span class="vv"><b>鑑定編號 → 走條碼，不要走辨識。</b>PSA 新標籤背面的 QR 編的就是驗證頁連結，舊標籤正面有一維條碼。條碼有校驗碼、確定性、零邊際成本。這一欄是 <code>unique(grader, cert_no)</code> 的鍵，讀錯一位就是把別人的卡擋掉或把自己的卡登記成不存在的編號 —— 不交給會猜的東西。</span></div>'+
+ '<div class="verdict ok"><span class="vk">做得到</span><span class="vv"><b>卡片身分 → 用現成的目錄查詢，不需要新東西。</b>本機實測（2026-09-06）：<code>GET /v2/ja/cards?id=eq:SV8a-237</code> 回 <code>テラパゴスex</code>，<code>?name=like:リザードン</code> 回 49 筆。標籤上的 <code>SV4a-349</code> 一讀出來就直接餵得進去 —— <b>價值不在省下抄 8 位數，在讓賣家不用會打日文。</b></span></div>'+
+ '<div class="verdict warn"><span class="vk">卡在這</span><span class="vv"><b>標籤上的套牌到底印什麼，沒有人查證過。</b>PSA 標籤寫的是英文套牌名（<code>SHINY TREASURE EX</code>）還是 TCGdex 用的代碼（<code>SV4a</code>）？<code>docs/ai-opportunities.md</code> 自己標了這是整個提案的前提而且沒查。<b>動工前的第一件事是拿三張真實的日版 PSA 卡拍照看標籤。一小時，而它決定 3–4 週要不要花。</b></span></div>'+
+ '<div class="verdict bad"><span class="vk">做不到</span><span class="vv"><b>「拍卡面就認出是哪張卡」這件事，TCGdex 幫不上忙。</b>它是欄位查詢系統，<b>沒有</b>反向圖片搜尋、沒有感知雜湊、沒有以圖找卡。查證過它的篩選文件：只有 <code>eq:</code> / <code>like:</code> / <code>gt:</code> 這類文字與數值條件。所以能拍的是<b>標籤</b>（有文字），不是卡面。要做卡面比對得自己建圖庫與雜湊索引，那是另一個題目。</span></div>'+
+ '<div class="verdict warn"><span class="vk">離線</span><span class="vv"><b>裝置端做得到一半，而且 iOS 是那個貴的一半。</b>條碼在 Chrome／Android 有原生的 <code>BarcodeDetector</code>；<b>iOS 上所有瀏覽器都是 WebKit，全部沒有這支 API</b>（2026-09 查證仍然如此），要帶 zxing-wasm 約 250KB。而這個 repo 的前端<b>只有三個 runtime 依賴</b>（vue／vue-router／pinia），這一包要誠實算進成本。標籤文字的部分<b>離線做不到</b> —— 傳統 OCR（tesseract.js）要帶 2–4MB wasm，而且壓克力殼反光、手持歪斜、PSA／BGS／ARS 版面各不相同，它只吐文字不會告訴你「這串字是哪個欄位」。</span></div>'+
+ '<h4 style="margin-top:14px">成本</h4>'+
+ '<div class="tblWrap"><table><thead><tr><th>模型</th><th>單張</th><th>一個 60 張卡的池</th><th>1,000 張／月</th></tr></thead><tbody>'+
+ '<tr><td>claude-opus-5</td><td class="n">NT$1.23</td><td class="n">NT$74</td><td class="n">NT$1,230</td></tr>'+
+ '<tr><td>claude-sonnet-5</td><td class="n">NT$0.49</td><td class="n">NT$30</td><td class="n">NT$493</td></tr>'+
+ '<tr><td>claude-haiku-4-5</td><td class="n">NT$0.17</td><td class="n">NT$10</td><td class="n">NT$170</td></tr>'+
+ '</tbody></table></div>'+
+ '<p>那個 60 張卡的池若票價 300 點賣 200 張，票收是 NT$60,000 —— <strong>辨識成本是票收的 0.12%。這個量級下為了省錢降級不划算。</strong>但 <code>claude-haiku-4-5</code> 的影像上限只有 1568px，而 commit <code>970e0a4</code> 花一整輪實測才定出「1200px 是 8 位數編號的可讀下限、2400px 是留一級餘裕的選擇」—— 用它等於把自己量出來的那級餘裕丟掉。</p>'+
+ '<p><strong>工期 3–4 週，其中約一半跟辨識無關</strong>：條碼 3–5 天（含 iOS 的 wasm）、上傳管線 1 天、後端端點 3–5 天、前端接入 3–5 天、標註集與調校 5–8 天。<strong>但它現在不是最急的一項</strong> —— <code>open-issues.md</code> P-5 實測（2026-08-27）正式站 32/32 是假池，<strong>瓶頸不是「賣家嫌登記麻煩」，是「一個賣家都還沒有」</strong>。門檻：有 3 個以上真實賣家且有人抱怨過登記流程，或單一賣家一次要登記 20 張以上。</p>';
+
+/* ==================================================================
+   二 · 參考價量級檢查
+================================================================== */
+var S2={idx:2,price:19800};
+
+/* 鑑定等級對 RAW 錨點的合理倍數帶。
+   Cardmarket 報的是 RAW 價，PSA 10 本來就該有倍數 —— 拿 RAW 價去說一張
+   PSA 10 標高了，會讓誠實的賣家看起來像在騙人（eBay 做過同一件事被罵爆）。
+   所以帶寬是按鑑定等級開的，不是一條線。 */
+function band(grader,grade){
+  if(grader==='RAW') return [0.6,1.8];
+  if(grader==='PSA'&&grade>=10) return [1.3,6];
+  if(grader==='BGS'&&grade>=9.5) return [1.2,5];
+  return [1.0,4];
+}
+function judge(c,price){
+  var lo=band(c.grader,c.grade)[0],hi=band(c.grader,c.grade)[1];
+  var r=price/c.twd;
+  var vol=c.avg30/c.avg7;
+  var res={ratio:r,lo:lo,hi:hi,vol:(vol>1.5||vol<0.67)};
+  if(!price){res.lv='none';return res;}
+  if(r>=lo&&r<=hi){res.lv='ok';return res;}
+  var out=(r>hi)?(r/hi):(lo/r);
+  res.out=out;res.dir=(r>hi)?'high':'low';
+  res.lv=(out>=3)?'bad':'warn';
+  return res;
+}
+
+function renderS2(){
+  var c=card(S2.idx),p=S2.price,j=judge(c,p);
+  var gtxt=c.grader==='RAW'?'裸卡':(c.grader+' '+c.grade);
+
+  /* ---- 現在 ---- */
+  var h='<div class="card"><h4>登記卡片 · 鑑定資訊</h4>';
+  h+='<div class="rowline"><span class="muted">卡片</span><span class="v">'+esc(c.name)+'</span></div>';
+  h+='<div class="rowline"><span class="muted">鑑定</span><span class="v">'+gtxt+'</span></div>';
+  h+='<div class="fld" style="margin-top:12px"><span>參考價（點，選填）</span><input type="number" value="'+p+'" data-s2in="now"></div>';
+  h+='<p class="tiny muted" style="margin:0">選填、只顯示、不參與任何金額計算。後端唯一的檢查是上限 <code>10,000,000</code>。<b>沒有任何交叉檢查</b> —— 填什麼就是什麼。</p>';
+  h+='</div>';
+  h+='<div class="card"><h4>買家在市場看到的</h4>';
+  var disc=Math.round((0.55-1)*100);
+  h+='<div class="lst"><span class="art"></span><div><div class="nm">'+esc(c.name)+'</div><div class="pr">'+nf(Math.round(p*0.55/10)*10)+' 點</div>'+
+     '<span class="dealTag">低於標示價 '+disc+'%</span></div></div>';
+  h+='<p class="tiny muted" style="margin:9px 0 0">折數的分母就是上面那個賣家自己填的數字。平台印出這個綠色標籤，等於替一個它<b>答不出來</b>的基準背書。</p>';
+  h+='</div>';
+  $('#s2now').innerHTML=h;
+
+  /* ---- 改良後 ---- */
+  var h2='<div class="card"><h4>登記卡片 · 鑑定資訊</h4>';
+  h2+='<div class="rowline"><span class="muted">卡片</span><span class="v">'+esc(c.name)+'</span></div>';
+  h2+='<div class="rowline"><span class="muted">鑑定</span><span class="v">'+gtxt+'</span></div>';
+  h2+='<div class="fld" style="margin-top:12px"><span>參考價（點，選填）</span><input type="number" value="'+p+'" data-s2in="next"></div>';
+
+  if(j.lv==='none'){
+    h2+='<div class="banner info"><b>沒有標示</b>不填就是不填 —— 它會顯示成「未標示」，不會被當成 0。</div>';
+  }else if(j.lv==='ok'){
+    h2+='<div class="banner ok"><b>量級看起來合理</b>這張卡的歐洲 RAW 七日均價換算約 <b>'+nf(c.twd)+'</b> 點；'+gtxt+'的合理帶是 '+j.lo+'–'+j.hi+' 倍，你填的是 <b>'+j.ratio.toFixed(2)+'</b> 倍。</div>';
+  }else{
+    h2+='<div class="banner '+(j.lv==='bad'?'bad':'warn')+'"><b>'+(j.lv==='bad'?'這個數字跟市場行情差很多':'這個數字有點偏'+(j.dir==='high'?'高':'低'))+'</b>'+
+        '這張卡的歐洲 RAW 七日均價換算約 <b>'+nf(c.twd)+'</b> 點。'+gtxt+'的合理帶是 '+j.lo+'–'+j.hi+' 倍，你填的是 <b>'+j.ratio.toFixed(2)+'</b> 倍，'+
+        '約超出合理帶 <b>'+j.out.toFixed(1)+'</b> 倍。<br><b>我們不擋你送出</b> —— 但這個數字會被記下來，而且它決定這張卡在市場排序裡的位置。</div>';
+  }
+  if(j.vol&&j.lv!=='none'){
+    h2+='<div class="banner warn" style="margin-top:-4px"><b>這張卡最近劇烈波動</b>三十日均 €'+c.avg30+' vs 七日均 €'+c.avg7+'，月內振幅超過 50%。錨點本身要打折看。</div>';
+  }
+  h2+='<button class="btn" type="button" data-s2sub="1">照這個數字送出</button>';
+  h2+='<p class="tiny muted" style="margin:10px 0 0">錨點是 TCGdex 內建的 Cardmarket <code>avg7</code>（免 key、免費、當天更新）。不用 <code>trend</code>（演算法不透明）、不用 <code>low</code>（含毀損品）、<b>絕對不用 <code>avg1</code></b>（實測一天內擺盪 69%）。</p>';
+  h2+='</div>';
+
+  h2+='<div class="card"><h4>買家在市場看到的</h4>';
+  if(j.lv==='bad'){
+    h2+='<div class="lst"><span class="art"></span><div><div class="nm">'+esc(c.name)+'</div><div class="pr">'+nf(Math.round(p*0.55/10)*10)+' 點</div>'+
+        '<span class="dealTag mute">賣家標示 '+nf(p)+' 點 · 未通過量級檢查</span></div></div>';
+    h2+='<p class="tiny muted" style="margin:9px 0 0">折數標籤<b>不印</b>，這筆掛單也<b>不進</b>「低於標示價」排序與精選區。'+
+        '這條線跟 <code>refprice.ts</code> 的 <code>shownDiscount()</code> 是同一種東西：算式歸算式，<b>「願不願意把這個數字印出來」是政策</b>。</p>';
+  }else{
+    h2+='<div class="lst"><span class="art"></span><div><div class="nm">'+esc(c.name)+'</div><div class="pr">'+nf(Math.round(p*0.55/10)*10)+' 點</div>'+
+        '<span class="dealTag">低於標示價 '+disc+'%</span></div></div>';
+    h2+='<p class="tiny muted" style="margin:9px 0 0">量級過了，折數照印。<b>買家永遠看不到那個外部價</b> —— 它是給賣家看的內部護欄，不是給玩家看的估價。這條線不能越。</p>';
+  }
+  h2+='</div>';
+  $('#s2next').innerHTML=h2;
+
+  $$('[data-s2in]').forEach(function(el){
+    el.oninput=function(){S2.price=Math.max(0,Math.min(10000000,Number(el.value)||0));syncS2Bar();renderS2();};
+  });
+  var sb=$('[data-s2sub]');
+  if(sb) sb.onclick=function(){sb.textContent='已送出 —— 沒有被擋下來';sb.disabled=true;};
+}
+function syncS2Bar(){$('#s2price').value=S2.price;}
+
+(function initS2(){
+  var sel=$('#s2card'),o='';
+  CARDS.forEach(function(c,i){o+='<option value="'+i+'">'+esc(c[1])+' · '+(c[2]==='RAW'?'裸卡':c[2]+' '+c[3])+'</option>';});
+  sel.innerHTML=o;sel.value=String(S2.idx);
+  sel.onchange=function(){S2.idx=Number(sel.value);S2.price=card(S2.idx).refPrice;syncS2Bar();renderS2();};
+  $('#s2price').oninput=function(){S2.price=Math.max(0,Math.min(10000000,Number($('#s2price').value)||0));renderS2();};
+  $('#s2demo').onclick=function(){S2.price=card(S2.idx).refPrice;syncS2Bar();renderS2();};
+  syncS2Bar();
+})();
+
+(function s2notes(){
+  var rows=CARDS.map(function(c,i){var o=card(i);var j=judge(o,o.refPrice);return{o:o,j:j};});
+  rows.sort(function(a,b){return b.j.ratio-a.j.ratio;});
+  var pick=rows.slice(0,5).concat(rows.slice(-5));
+  var t='<div class="tblWrap"><table><thead><tr><th>artId</th><th>卡名</th><th>鑑定</th><th>refPrice</th><th>avg7 €</th><th>換算點</th><th>倍數</th><th>判定</th></tr></thead><tbody>';
+  pick.forEach(function(r){
+    var cls=r.j.lv==='bad'?'bad':(r.j.lv==='warn'?'warn':'ok');
+    var lvt=r.j.lv==='bad'?'差很多':(r.j.lv==='warn'?'偏'+(r.j.dir==='high'?'高':'低'):'合理');
+    t+='<tr><td class="mono">'+r.o.artId+'</td><td>'+esc(r.o.name)+'</td><td>'+(r.o.grader==='RAW'?'裸卡':r.o.grader+' '+r.o.grade)+'</td>'+
+       '<td class="n">'+nf(r.o.refPrice)+'</td><td class="n">'+r.o.avg7+'</td><td class="n">'+nf(r.o.twd)+'</td>'+
+       '<td class="n '+cls+'">'+r.j.ratio.toFixed(2)+'x</td><td class="'+cls+'">'+lvt+'</td></tr>';
+  });
+  t+='</tbody></table></div>';
+  var bad=rows.filter(function(r){return r.j.lv==='bad';}).length;
+  var warn=rows.filter(function(r){return r.j.lv==='warn';}).length;
+  var ok=rows.filter(function(r){return r.j.lv==='ok';}).length;
+
+  $('#s2notes').innerHTML=
+   '<h4>這不是理論 —— 我今天重跑了一次，31 張示範卡 31/31 拿得到價</h4>'+
+   '<p>2026-09-06 本機實測：<code>GET https://api.tcgdex.net/v2/ja/cards/{artId}</code>，<code>src/mocks/data.ts</code> 的 31 張卡<strong>全部</strong>回得到 <code>variants_detailed[].pricing.cardmarket</code>，'+
+   '資料更新時間 <code>2026-09-04</code>。免 API key、免費、零新依賴 —— VaultDraw 已經在用 TCGdex 取卡圖了。</p>'+
+   '<p>拿現有的 refPrice 逐張比對（歐元換算 @'+RATE+'，鑑定等級各自套合理倍數帶）：<strong>'+bad+' 張差很多、'+warn+' 張偏了、只有 '+ok+' 張落在合理帶</strong>。兩端各五張：</p>'+
+   t+
+   '<p><strong>這張表本身就是最強的論證</strong>：一旦有錨點，離譜的數字會自己跳出來，不需要人工審核每一張卡。而且它兩個方向都錯 —— 不是「賣家在騙」（這是示範資料），是<strong>這些數字從來沒有跟任何外部現實對過帳，於是錯得沒有方向性</strong>。</p>'+
+   '<h4 style="margin-top:14px">三個不能忽略的限制</h4>'+
+   '<p>一、<strong>Cardmarket 是歐洲的歐元價</strong>，不是日本行情也不是台灣行情。二、<strong>它只有 RAW</strong> —— 一張 PSA 10 旁邊放 RAW 價，會讓誠實的賣家看起來像在騙人（eBay 做過同一件事被賣家罵爆），所以原型的合理帶是<strong>按鑑定等級開的</strong>，不是一條線。三、<strong>用 <code>avg7</code></strong>，不要用 <code>trend</code>／<code>low</code>／<code>avg1</code>。</p>'+
+   '<p><strong>所以這一項的正確範圍是「量級檢查器」，不是「報價」。</strong>提醒只給賣家看、只提示不硬擋、畫面上永遠不對玩家顯示外部價 —— 越過這條線就變成「平台在估值」，而 <code>rules.md</code> 第四節寫得很清楚：平台唯一有約束力的數字是賣家宣告的<strong>買回價</strong>，那是一筆債不是一個估價。</p>'+
+   '<p><strong>代價</strong>：後端一支批次抓取，加 <code>anchor_price</code> / <code>anchor_at</code> / <code>anchor_source</code> 三個欄位，加登記與建池表單的提示。約 3–5 天。前置是先確認 <code>variantId</code> 有沒有貫穿全部路徑 —— 同一組卡號的普卡 €0.02 對大師球鏡面 €369，沒有它錨點會系統性錯掉。</p>';
+})();
+
+/* ==================================================================
+   三 · 成本基礎
+================================================================== */
+var S3={ver:'spend',luck:'down'};
+var LUCK={
+  down:{value:8400,unpriced:3,draws:8,drawCost:9600,buys:3,buyCost:2400,curve:[0,900,1500,2600,3100,4200,5300,6100,7000,8400]},
+  up:{value:19600,unpriced:2,draws:8,drawCost:9600,buys:3,buyCost:2400,curve:[0,900,1500,2600,3100,4200,9800,11200,15300,19600]}
+};
+function spark(vals,cls,max){
+  var w=320,h=70,mx=max||Math.max.apply(null,vals)||1;
+  var d=vals.map(function(v,i){return (i===0?'M':'L')+(i/(vals.length-1)*w).toFixed(1)+' '+(h-v/mx*(h-6)).toFixed(1);}).join(' ');
+  return '<path class="'+(cls||'')+'" d="'+d+'"/>';
+}
+function renderS3(){
+  var L=LUCK[S3.luck];
+  var spend=L.drawCost+L.buyCost;
+  var mx=Math.max(spend,L.value);
+
+  var h='<div class="card"><h4>卡冊總覽</h4>';
+  h+='<p class="tiny muted" style="margin:0 0 3px">已標示參考價合計</p>';
+  h+='<div class="big gold">'+nf(L.value)+'</div><div class="unitline">賣家標示，僅供參考 · 其中 '+L.unpriced+' 張未標示，在合計裡算 0</div>';
+  h+='<svg class="curve" viewBox="0 0 320 70" preserveAspectRatio="none" style="margin-top:12px">'+spark(L.curve,'',mx)+'</svg>';
+  h+='<div class="legend"><span><i style="background:var(--gold)"></i>收藏（已標示合計）</span></div>';
+  h+='<div class="rowline" style="margin-top:10px"><span class="muted">持有張數</span><span class="v">14</span></div>';
+  h+='<div class="rowline"><span class="muted">最高價那一張</span><span class="v">噴火龍 ex UR</span></div>';
+  h+='</div>';
+  h+='<div class="card"><p class="tiny muted" style="margin:0">卡冊只回答「你有什麼」。<b>「你花了多少」在錢包頁逐筆列著，但兩邊從來沒有被加在一起。</b></p></div>';
+  $('#s3now').innerHTML=h;
+
+  var h2='<div class="card"><h4>卡冊總覽</h4>';
+  h2+='<p class="tiny muted" style="margin:0 0 3px">已標示參考價合計</p>';
+  h2+='<div class="big gold">'+nf(L.value)+'</div><div class="unitline">賣家標示，僅供參考 · 其中 '+L.unpriced+' 張未標示，在合計裡算 0</div>';
+  h2+='<svg class="curve" viewBox="0 0 320 70" preserveAspectRatio="none" style="margin-top:12px">'+
+      spark(L.curve,'',mx)+spark([0,1200,2400,3600,4800,6000,7800,9600,10800,spend],'spend',mx)+'</svg>';
+  h2+='<div class="legend"><span><i style="background:var(--gold)"></i>收藏（已標示合計）</span><span><i style="background:var(--danger-ink)"></i>累計支出</span></div>';
+  h2+='</div>';
+
+  h2+='<div class="card"><h4>你在這裡花掉的</h4>';
+  h2+='<div class="big">'+nf(spend)+'</div><div class="unitline">點 · 這是帳本裡的真實數字，不是估值</div>';
+  h2+='<div style="margin-top:11px">';
+  h2+='<div class="rowline"><span class="muted">抽選 '+L.draws+' 次</span><span class="v">'+nf(L.drawCost)+' 點</span></div>';
+  h2+='<div class="rowline"><span class="muted">市場購入 '+L.buys+' 張</span><span class="v">'+nf(L.buyCost)+' 點</span></div>';
+  h2+='</div>';
+  h2+='<p class="tiny muted" style="margin:10px 0 0">來源：<code>draws.cost ÷ array_length(seats,1)</code> 加 <code>points_ledger</code> 的 <code>vault-buy</code>。<b>不需要任何新資料。</b></p>';
+  h2+='</div>';
+
+  if(S3.ver==='pnl'){
+    var diff=L.value-spend;
+    h2+='<div class="card" style="border-color:'+(diff<0?'var(--danger)':'var(--ok)')+'"><h4>淨值</h4>';
+    h2+='<div class="big '+(diff<0?'neg':'')+'">'+(diff<0?'−':'+')+nf(Math.abs(diff))+'</div><div class="unitline">點 · 已標示參考價合計 減去 累計支出</div>';
+    h2+='<div class="banner bad" style="margin-top:11px"><b>這個數字的分子是一個假數字</b>'+
+        '被減數 '+nf(L.value)+' 是 <code>Σ refPrice</code>，是<b>賣家自己填的</b>，而且 '+L.unpriced+' 張沒填的在裡面算 0。'+
+        '使用者會拿一個<b>真實的支出</b>去減一個<b>沒有依據的估值</b>，然後對那個差額產生真實的情緒。</div>';
+    h2+='<p class="tiny muted" style="margin:0">而且在抽選平台上，這個數字讀起來不是「投資結果」，是<b>「我賭輸了多少」</b>。同一個數字，兩種語意。</p>';
+    h2+='</div>';
+  }else{
+    h2+='<div class="card"><div class="banner info" style="margin:0"><b>刻意不做減法</b>'+
+        '收藏那個數字是賣家標的，支出這個數字是帳本記的。<b>平台不替一個不可靠的減法背書</b> —— 兩個數字都擺在你眼前，要不要相減是你的事。</div></div>';
+  }
+  $('#s3next').innerHTML=h2;
+  $('#s3cap').textContent=(S3.ver==='spend'?'A 版 · 只顯示支出':'B 版 · 顯示差額');
+}
+group('v3',function(v){S3.ver=v;renderS3();});
+group('l3',function(v){S3.luck=v;renderS3();});
+
+$('#s3notes').innerHTML=
+ '<h4>兩版都做出來了。我傾向 A 版，理由不是「怕嚇到人」</h4>'+
+ '<p><strong>A 版（只顯示支出）</strong>贏在一件事：<strong>它顯示的每一個數字都站得住。</strong>支出是帳本裡的真實紀錄（<code>draws.cost</code>、<code>points_ledger</code>），'+
+ '收藏合計是賣家標示而且旁邊寫著「其中 N 張未標示」。兩個數字各自誠實，並排放著，使用者自己會做那個減法 —— 而那個減法是<strong>他做的，不是平台做的</strong>。</p>'+
+ '<p><strong>B 版（顯示差額）</strong>把一個真實的分子（支出）跟一個沒有依據的被減數（<code>Σ refPrice</code>）綁在一起，'+
+ '產出一個看起來很權威、實際上分母是空的數字。<strong>這比不顯示更糟</strong>：使用者會對那個差額產生真實的情緒，而那個差額隨時可能因為某個賣家改了一次標價就跳動幾千點。'+
+ '把「抽輸了」切到「抽贏了」看一下右邊 —— <strong>B 版在贏的時候看起來像投資報表，那正是問題</strong>：它把抽卡框成投資，而 Renaiss 一邊印 EV 一邊要使用者簽「不得為投資目的使用本平台」，那是不該學的姿態。</p>'+
+ '<p><strong>但要講清楚 A 版不是逃避。</strong>拒絕加總一組使用者自己看得到的數字，是一種假裝 —— 錢包頁已經逐筆列出來了。'+
+ 'A 版做的是<strong>把加總做完（那是誠實），但不做那個不可靠的減法（那是紀律）</strong>。日本オリパ業界 2024 年有業者因當選機率虛偽表示被課徵金 780 萬円加停業 6 個月；'+
+ '一個敢讓使用者看見自己花了多少的平台，跟一個不敢的，監理眼中不是同一件事。</p>'+
+ '<p><strong>硬前提，不能跳過</strong>：這一項要等「參考價量級檢查」（第二項）先做完。在收藏合計站得住之前做成本基礎，等於把現有的問題放大 —— 而 B 版是放大得最厲害的那一版。'+
+ '<strong>代價</strong>：查詢與介面 2–3 天，但前置的量級檢查是 3–5 天，那才是真正的成本。</p>';
+
+/* ==================================================================
+   四 · 公平性入口
+================================================================== */
+var S4={p:'proof'};
+var SCREENS={
+  proof:{title:'池 · 驗證分頁',
+    now:function(){return ''+
+      '<div class="card"><h4>官方旗艦場 #58</h4><div class="tabs"><button type="button">總覽</button><button type="button">獎項</button><button type="button" class="on">驗證</button></div>'+
+      '<p style="margin:0 0 8px;font-size:15px">這一池的結果<b style="color:var(--accent)">不需要你信任我們</b></p>'+
+      '<p class="sm muted" style="margin:0 0 12px">籤序在開賣前就已洗好封存，承諾雜湊當時就公布了（見下方）；完抽後種子一併公開，事後改不了。</p>'+
+      '<div class="readRow"><div><span class="k">承諾雜湊 commit</span><span class="v">9f2c…a71e</span></div></div>'+
+      '<div class="readRow"><div><span class="k">client seed 來源</span><span class="v">drand round 4,829,117</span></div></div>'+
+      '<div class="banner info" style="margin-top:10px">貨款 100% 凍結於託管，賣家出貨後才釋放。</div>'+
+      '<p class="tiny" style="color:var(--faint);margin:10px 0 0">句子停在「材料都公布了」—— 因為那顆按鈕已經不在畫面上了。</p></div>';},
+    next:function(){return ''+
+      '<div class="card"><h4>官方旗艦場 #58</h4><div class="tabs"><button type="button">總覽</button><button type="button">獎項</button><button type="button" class="on">驗證</button></div>'+
+      '<p style="margin:0 0 8px;font-size:15px">這一池的結果<b style="color:var(--accent)">不需要你信任我們</b></p>'+
+      '<p class="sm muted" style="margin:0 0 12px">籤序在開賣前就已洗好封存並公布承諾雜湊；完抽後公開種子，<b>任何人都能重算一次比對</b>。</p>'+
+      '<div class="readRow"><div><span class="k">承諾雜湊 commit</span><span class="v">9f2c…a71e</span></div><span class="pill ok">開賣前公布</span></div>'+
+      '<div class="readRow"><div><span class="k">client seed 來源</span><span class="v">drand round 4,829,117</span></div><span class="pill ok">未來輪次</span></div>'+
+      '<div class="banner info" style="margin:10px 0">貨款 100% 凍結於託管，賣家出貨後才釋放。</div>'+
+      '<button class="btn" type="button" data-s4go="1">自己驗算這一池</button>'+
+      '<p class="tiny muted" style="margin:10px 0 0;text-decoration:underline;text-underline-offset:3px">公平性機制完整說明</p></div>';},
+    where:'第一位。這是唯一「使用者已經在懷疑的那一刻」—— 他人在池頁上，正在決定要不要掏點數。'},
+  result:{title:'開卡結果',
+    now:function(){return ''+
+      '<div class="card"><h4>你抽到了</h4><div style="display:flex;gap:8px;margin-bottom:10px">'+
+      '<span class="art" style="width:66px;aspect-ratio:63/88;border-radius:7px;background:radial-gradient(circle at 36% 26%,rgba(236,192,99,.4),transparent 60%),var(--surface-3);display:block"></span>'+
+      '<span class="art" style="width:66px;aspect-ratio:63/88;border-radius:7px;background:var(--surface-3);display:block"></span></div>'+
+      '<div class="rowline"><span class="muted">噴火龍 ex UR</span><span class="pill" style="background:var(--warn-wash);color:var(--warn-ink)">A 賞</span></div>'+
+      '<div class="rowline"><span class="muted">砂鐵蜥 ex</span><span class="pill">D 賞</span></div>'+
+      '<button class="btn ghost" type="button" style="margin-top:12px">回到大廳</button>'+
+      '<p class="tiny" style="color:var(--faint);margin:10px 0 0">這裡什麼都沒有。剛開完卡的那一秒是<b>整個產品裡懷疑心最強的一刻</b>，而它是空的。</p></div>';},
+    next:function(){return ''+
+      '<div class="card"><h4>你抽到了</h4><div style="display:flex;gap:8px;margin-bottom:10px">'+
+      '<span class="art" style="width:66px;aspect-ratio:63/88;border-radius:7px;background:radial-gradient(circle at 36% 26%,rgba(236,192,99,.4),transparent 60%),var(--surface-3);display:block"></span>'+
+      '<span class="art" style="width:66px;aspect-ratio:63/88;border-radius:7px;background:var(--surface-3);display:block"></span></div>'+
+      '<div class="rowline"><span class="muted">噴火龍 ex UR</span><span class="pill" style="background:var(--warn-wash);color:var(--warn-ink)">A 賞</span></div>'+
+      '<div class="rowline"><span class="muted">砂鐵蜥 ex</span><span class="pill">D 賞</span></div>'+
+      '<div class="banner ok" style="margin-top:12px"><b>你抽到的是第 137、138 號籤</b>這兩個號碼在開賣前就已經排好並封存了。這一池完抽後，你可以自己重算整條籤序，逐位比對。</div>'+
+      '<button class="btn" type="button" data-s4go="1">看這一池的驗算頁</button>'+
+      '<button class="btn ghost" type="button" style="margin-top:8px">回到大廳</button></div>';},
+    where:'第二位，而且它是這四個裡<b>最被低估</b>的。剛開完卡那一秒是整個產品懷疑心最強的一刻 —— 那句「你抽到的是第 137 號籤，而它開賣前就排好了」比任何說明頁都有力。'},
+  landing:{title:'首頁',
+    now:function(){return ''+
+      '<div class="card"><h4 style="font-size:20px">抽一張真的卡</h4>'+
+      '<p class="sm muted" style="margin:0 0 12px">日版鑑定卡的線上抽選。所有獎品開賣前封存，貨款託管，賣家出貨後才釋放。</p>'+
+      '<button class="btn" type="button">看看現在有哪些池</button></div>'+
+      '<div class="card"><h4>怎麼運作</h4>'+
+      '<div class="rowline"><span class="muted">1 · 挑一個池</span></div>'+
+      '<div class="rowline"><span class="muted">2 · 抽，立刻知道結果</span></div>'+
+      '<div class="rowline"><span class="muted">3 · 申請出貨或賣回給賣家</span></div>'+
+      '<p class="tiny" style="color:var(--faint);margin:10px 0 0">首頁一個字都沒有提可驗證性。<b>這是唯一沒有競品的東西，而它不在門口。</b></p></div>';},
+    next:function(){return ''+
+      '<div class="card"><h4 style="font-size:20px">抽一張真的卡</h4>'+
+      '<p class="sm muted" style="margin:0 0 12px">日版鑑定卡的線上抽選。所有獎品開賣前封存，貨款託管，賣家出貨後才釋放。</p>'+
+      '<button class="btn" type="button">看看現在有哪些池</button></div>'+
+      '<div class="card" style="border-color:var(--gold)"><h4>不是「相信我們」，是「自己算一次」</h4>'+
+      '<div class="rowline"><span class="muted">開池前</span><span class="v">公布 seed 的 SHA-256</span></div>'+
+      '<div class="rowline"><span class="muted">開賣時</span><span class="v">鎖定 drand 未來輪次</span></div>'+
+      '<div class="rowline"><span class="muted">完抽後</span><span class="v">公開 seed，你自己重算</span></div>'+
+      '<p class="tiny muted" style="margin:10px 0 10px">drand 的那一輪在承諾當下<b>全世界都還不知道</b>，包括我們 —— 所以我們挑不了對自己有利的籤序。</p>'+
+      '<button class="btn ghost" type="button" data-s4go="1">公平性驗證怎麼運作</button></div>';},
+    where:'第三位，而且要<b>克制</b>。首頁講機制講太多會變成技術炫耀；一個三行的區塊加一個連結就夠，重點是<b>它存在</b>。'},
+  me:{title:'我的',
+    now:function(){return ''+
+      '<div class="card"><h4>我的</h4>'+
+      '<div class="rowline"><span>錢包</span><span class="v muted">4,280 點</span></div>'+
+      '<div class="rowline"><span>我的卡冊</span></div>'+
+      '<div class="rowline"><span>訂單</span></div>'+
+      '<div class="rowline"><span>訓練家卡</span></div>'+
+      '<div class="rowline"><span>客服與聯絡</span></div>'+
+      '<p class="tiny" style="color:var(--faint);margin:10px 0 0">選單裡沒有「公平性驗證」那一項（<code>MePage.vue:96</code> 被 <code>FAIRNESS_UI</code> 濾掉了）。</p></div>';},
+    next:function(){return ''+
+      '<div class="card"><h4>我的</h4>'+
+      '<div class="rowline"><span>錢包</span><span class="v muted">4,280 點</span></div>'+
+      '<div class="rowline"><span>我的卡冊</span></div>'+
+      '<div class="rowline"><span>訂單</span></div>'+
+      '<div class="rowline"><span>訓練家卡</span></div>'+
+      '<div class="rowline" style="border-color:var(--gold)"><span>公平性驗證</span><span class="pill ok">新</span></div>'+
+      '<div class="rowline"><span>客服與聯絡</span></div>'+
+      '<p class="tiny muted" style="margin:10px 0 0">最後一位。選單項目是<b>回頭找得到</b>的路，不是說服人的路 —— 但少了它，看過一次的人就再也找不回去。</p></div>';}
+    ,where:'最後一位。它不負責說服，負責<b>讓看過的人找得回去</b>。'}
+};
+function renderS4(){
+  var S=SCREENS[S4.p];
+  $('#s4now').innerHTML=S.now();
+  $('#s4next').innerHTML=S.next();
+  $$('[data-s4go]').forEach(function(b){
+    b.onclick=function(){
+      $('#s4next').innerHTML=''+
+        '<div class="card"><h4>驗算 · 官方旗艦場 #58</h4>'+
+        '<div class="banner ok"><b>三項全部通過</b>不需要你貼任何東西 —— 資料直接從 <code>/v1/pools/58/reveal</code> 抓，在你的瀏覽器裡算完。</div>'+
+        '<div class="readRow"><div><span class="k">開賣前公布的 commit</span><span class="v">9f2c…a71e</span></div><span class="pill ok">相符</span></div>'+
+        '<div class="readRow"><div><span class="k">你的瀏覽器重算出的</span><span class="v">9f2c…a71e</span></div><span class="pill ok">相符</span></div>'+
+        '<div class="readRow"><div><span class="k">重算的籤序 vs 公布的</span><span class="v">250 / 250 位相符</span></div><span class="pill ok">相符</span></div>'+
+        '<div class="readRow"><div><span class="k">獎品數量 vs 宣告的</span><span class="v">60 / 60 相符</span></div><span class="pill ok">相符</span></div>'+
+        '<p class="tiny muted" style="margin:10px 0 0">這一頁是<b>現成的</b>（<code>FairnessPoolPage.vue</code> 呼叫 <code>shared/fairness.ts</code> 的 <code>verifyReveal()</code>，前後端共用同一份程式碼）。'+
+        '原型沒有重寫它 —— 它已經在跑，缺的只是進得來的門。</p>'+
+        '<button class="btn ghost" type="button" data-s4back="1">回上一頁</button></div>';
+      var bk=$('[data-s4back]');
+      if(bk) bk.onclick=function(){renderS4();};
+    };
+  });
+}
+group('p4',function(v){S4.p=v;renderS4();});
+
+$('#s4notes').innerHTML=
+ '<h4>入口該放哪：四個位置，按說服力排序</h4>'+
+ '<div class="verdict ok"><span class="vk">第 1 位</span><span class="vv"><b>池詳情的「驗證」分頁。</b>'+SCREENS.proof.where+'那一塊<b>本來就留著</b>（承諾雜湊、client seed 來源、託管聲明都在），只被拔掉兩個連結。放回去的成本是最低的。</span></div>'+
+ '<div class="verdict ok"><span class="vk">第 2 位</span><span class="vv"><b>開卡結果頁。</b>'+SCREENS.result.where+'</span></div>'+
+ '<div class="verdict warn"><span class="vk">第 3 位</span><span class="vv"><b>首頁。</b>'+SCREENS.landing.where+'</span></div>'+
+ '<div class="verdict warn"><span class="vk">第 4 位</span><span class="vv"><b>「我的」選單。</b>'+SCREENS.me.where+'</span></div>'+
+ '<h4 style="margin-top:14px">但先讀那段註解，不要看到這一條就直接翻布林值</h4>'+
+ '<p><code>src/lib/config.ts:14-29</code> 有一整段說明當初為什麼關：<strong>使用者要求「公平性驗證先收起來，之後再展示」</strong>。'+
+ '那是一個<strong>展示閘門</strong>，不是技術問題 —— 所以打開它是一個<strong>使用者的決定</strong>，不是工程判斷。這份原型能做的只有一件事：把「打開之後長什麼樣」擺出來，讓那個決定有東西可看。</p>'+
+ '<p><strong>為什麼值得現在問這個問題</strong>：Renaiss 把 <code>Provably Fair</code> 印在每一台機器的商品頁上當賣點，'+
+ '但它的五組合約裡<strong>沒有任何一個跟 VRF、randomness 有關</strong>，沒有 seed、沒有 commit、沒有 reveal、找不到給玩家重算的頁。'+
+ '它的 Merkle root 只證明了「池裡有哪些卡、開賣前鎖死」—— 而那一半 VaultDraw 也有（<code>manifest_hash</code>）。'+
+ '<strong>另一半 —— 隨機性 —— 只有 VaultDraw 有，然後把入口關了。</strong>Renaiss 有五百萬美元級的交易量與一句宣稱；VaultDraw 有一整套可重算的證明與零個真實賣家。</p>'+
+ '<p><strong>代價</strong>：一個布林值加七處入口的露出（<code>App.vue</code>、<code>AppHeader.vue</code>、<code>CommitHashBox.vue</code>、<code>DrawResultPage.vue</code>、<code>MePage.vue</code>、<code>LandingPage.vue</code>、<code>PoolOverview.vue</code>／<code>PoolShell.vue</code>／<code>PoolProof.vue</code>）。'+
+ '<strong>頁面本身一行都不用寫</strong> —— <code>FairnessPage.vue</code>、<code>FairnessPoolPage.vue</code> 與 <code>/reveal</code> 全部是現成而且在跑的。'+
+ '唯一要順手做的是 <code>PoolProof.vue</code> 那段隨開關換寫法的文案要換回來（它現在停在「材料都公布了」）。</p>';
+
+/* ==================================================================
+   第二層
+================================================================== */
+var TIER2=[
+ {g:'另一條路 —— 做了會讓 VaultDraw 變成一個比較差的別人',
+  why:'這一組單獨看每一項都合理，合起來就是把主線讓出去。判準：做完之後<b>抽選不會變好</b>，或者它直接稀釋掉抽選已經有的優勢。',
+  items:[
+   {t:'代幣化：把卡做成 NFT／鏈上資產',src:'VinciWorld D-1',tag:'紅線',
+    d:'Renaiss 的地基。卡一旦是 ERC-721 就可轉讓、可在任何 DEX 定價、可換回穩定幣。<em>不在第一層：它不是「把現有功能做得更好」，是在點數之外開第二條平台管不住的變現通道 —— 而「點數不能換回現金」是刑法 266 的紅線。</em><b>另一條線正在做這個題目的原型。</b>'},
+   {t:'平台即時買回（Renaiss 的 85%）',src:'VinciWorld D-2',tag:'紅線',
+    d:'抽到不想要的按一顆鈕換回錢。<em>不在第一層：電子遊戲場業管理條例 §14-II-2 明文禁止「買回提供給客人之獎品」，而且 HANDOFF.md 記著這個建議提過一次、查證後收回。</em>VaultDraw 已經有更強的版本 —— 賣家開賣前宣告、寫進 commit 雜湊、之後改不了的買回價。'},
+   {t:'無限池（Infinite Gacha）',src:'VinciWorld D-8',tag:'機制',
+    d:'Renaiss 從限量包改成無限池。<em>不在第一層：VaultDraw 的可驗算性建立在「固定總籤數的一個排列」上。沒有「全部」就沒有「排列」，也就沒有事後公開種子重算整條序列這回事 —— 做無限池等於主動放棄唯一沒有競品的東西。</em>'},
+   {t:'把「這張卡值多少」的即時估值當主功能',src:'CardBase D-4',tag:'定位',
+    d:'CardBase 的首頁大字是 What Is Your Collection Worth。<em>不在第一層：VaultDraw 唯一有約束力的數字是賣家宣告的買回價，那是一筆債不是一個估價。把估值抬成主功能，會讓使用者以為那個估值可以兌現。</em>這跟第一層第二項的差別在於：量級檢查是<b>給賣家看的內部護欄</b>，不是給玩家看的估價。'},
+   {t:'把抽選功能加進收藏管理（或反過來）',src:'CardBase D-7',tag:'定位',
+    d:'CardBase 的 Help 頁有一項叫 Pool Calculator，iOS 1.7.0 更新紀錄列了「抽獎」。<em>不在第一層：每加一項收藏管理功能，公平性機制要照顧的表面積就大一分。</em>'},
+   {t:'社群詐騙回報資料庫',src:'CardBase D-3',tag:'會變弱',
+    d:'CardBase 有 34 筆回報，自己在首頁寫 No record does not mean safe。<em>不在第一層：它會取代掉比較強的東西 —— VaultDraw 的違約紀錄是自動、客觀、灌不了的；社群回報是手動、主觀、可以被灌的。加一個弱訊號會稀釋一個強訊號。</em>已經有的正確做法是客服工單的檢舉分類。'},
+   {t:'積分／SBT／空投預期',src:'VinciWorld D-6',tag:'動機',
+    d:'連結社群得徽章、入金解鎖階級、推薦抽佣。<em>不在第一層：它把動機從「我想要這張卡」換成「我在賺未來的空投」，而那正好是射倖論述最怕看到的畫面。</em>VaultDraw 已經有更好的忠誠度資產：卡冊是真的、是自己的、可以公開分享。'},
+   {t:'排行榜',src:'VinciWorld C-1 附註',tag:'動機',
+    d:'Renaiss 的 Leaderboard 標 coming soon。<em>不在第一層：排行榜在抽卡場景裡就是把消費金額做成公開競賽。</em>'},
+   {t:'收藏展示的遊戲化（VinciWorld 的「房子」）',src:'VinciWorld C-1',tag:'另一條線',
+    d:'像素世界、蓋房子、展示收藏。<em>不在第一層：VinciWorld 還沒上線，這招有沒有用完全沒有證據；而且 VaultDraw 已經有這條線的兩個東西 —— 公開卡冊與訓練家卡片。先看那兩個有沒有人用。</em>'},
+   {t:'支援 One Piece／Lorcana／MTG',src:'CardBase D-2',tag:'另一條線',
+    d:'CardBase 鋪四種 TCG。<em>不在第一層：目錄窄是故意的 —— tcgdex-catalog.ts 的註解原文「這個平台賣的是日版鑑定卡」。而抽選一次只會抽同一種卡。</em>'},
+   {t:'卡片層級的價格歷史（7／30／90 天走勢）',src:'CardBase C-2',tag:'另一條線',
+    d:'CardBase 拿它當付費分界。<em>不在第一層：VaultDraw 的使用者不是來看走勢決定買賣時機的。</em>真正有用的變體是「同一張卡在本站的歷史成交價」，而那要先有成交量。'},
+   {t:'Builder Program／SSO／SDK',src:'VinciWorld C-2',tag:'另一條線',
+    d:'Renaiss 做基礎設施讓別人做前端，VinciWorld 是第一個用戶。<em>不在第一層：VaultDraw 沒有對外 API，也沒有第二個前端要接。</em>'},
+   {t:'置中評分／AI 分級預估',src:'CardBase C-3',tag:'凍著',
+    d:'掃同一張照片時順便量邊框算置中分。<em>不在第一層：它只在「裸卡上架」那條線上有意義，而那條線使用者說緩。</em>'}
+  ]},
+ {g:'要換商業模式，或要花錢',
+  why:'這一組的共同點是：它們不是「改一段程式」，是<b>要先有一個商業決定或一筆支出</b>。',
+  items:[
+   {t:'訂閱制',src:'CardBase C-4',tag:'商業',
+    d:'CardBase 收 HK$88／HK$218 月，證明收藏工具的訂閱在亞洲收得到錢。<em>不在第一層：平台抽成的管線已經整套蓋好（PLATFORM_FEE_RATE = 0，註解明講 0 是商業決定不是 TODO），改一個常數就生效。在一條蓋好的路旁邊再蓋一條新的，不是好的順序。</em>而且訂閱要另一套金流，而金流還沒接。'},
+   {t:'賣家手機號碼綁定',src:'CardBase B-2',tag:'要付費',
+    d:'一個帳號一個門號，擋的是批量換帳號，不是壞人。<em>不在第一層：要接簡訊供應商並付費，而且門檻是「第一次有人因違約被停權」—— 在那之前做是在防一個沒發生的攻擊。</em>明確<b>不要</b>做的：不收銀行帳號、不做社群回報。'},
+   {t:'鑑定卡的付費價格來源（JustTCG／PokemonPriceTracker）',src:'研究第 3 層',tag:'要付費',
+    d:'Cardmarket 只有 RAW 價，PSA 10 的錨點得另外買（約 $99／月起）。<em>不在第一層：第一層的量級檢查用「RAW 錨點乘上可設定的倍數上限」就成立，不需要買資料。這一層是之後的精度問題。</em>'},
+   {t:'把 VaultDraw 自己的成交價變成錨點',src:'CardBase B-3',tag:'要有量',
+    d:'points_ledger 的 vault-buy／order-receive／trade-buy 三種 reason 每一筆都帶 ref_id 與時間，join 回 listings.card 就是「哪一張卡、什麼鑑定等級、賣了多少點、什麼時候」。<b>這是最被低估的一條</b> —— 台幣、分得出鑑定等級、法遵是零。<em>不在第一層：現在的成交量實質為零（P-5 實測 32/32 是假池）。沒有量的統計比沒有統計更糟。</em>門檻：同一張卡累積 5 筆以上成交才顯示。'},
+   {t:'補 listings.sold_at 欄位',src:'CardBase 第五節第 5 項',tag:'順手',
+    d:'listings 表只有 live／sold／delisted，沒有成交時間，現在只能從 points_ledger 回推。<em>不在第一層：時間資訊沒有遺失，只是要繞路查。一支 migration、半天，早做便宜但不是急件。</em>'}
+  ]},
+ {g:'要法律或使用者拍板，工程做不了決定',
+  why:'這一組不是「怎麼做」的問題，是「做不做」的問題，而那個答案不在程式碼裡。',
+  items:[
+   {t:'鑑定編號查證',src:'CardBase B-4',tag:'卡在外部',
+    d:'<b>這是 CardBase 唯一明確做得比較好的一項</b>（它有六家鑑定公司的查詢頁，怎麼做到的查不到）。VaultDraw 曾經有 PSA 查證與快取表，029 整張 drop 掉，檔頭原文「帳號待核准全 403，重建不出來」。<em>不在第一層：接外部 API 卡在別人的核准窗口。</em><b>但有一塊今天就能做</b>：格式與上限的本地檢查、平台內交叉比對、把 PSA 官方頁當給買家看的連結 —— 1–2 天，不用等任何人。<b>先確認 029 之後本地檢查有沒有補回來。</b>'},
+   {t:'多幣別（HK$／US$ 標價）',src:'CardBase D-1',tag:'紅線',
+    d:'<em>不在第一層：理由是紅線不是取捨。點數不能換回現金，1 元＝1 點；加上外幣標價會把點數重新錨定到現金，也讓平台對一個它答不出來的匯率加行情負責。</em>CardBase 做得了是因為它不經手錢，VaultDraw 經手。'},
+   {t:'穩定幣／外幣入金、二級市場以可提出的資產結算、借貸抵押',src:'VinciWorld D-3／D-4／D-5',tag:'紅線',
+    d:'<em>不在第一層：三項都是同一條線的不同深度 —— 多幣別只是聯想，穩定幣是直接打通，抵押是多繞一層的變現。</em>市場現在是託管制、以點數結算、成交只有兩筆對沖分錄，那句「賣出所得為點數，不可提領現金或轉讓」現在是真的。'},
+   {t:'把期望值（EV）當賣點',src:'VinciWorld D-7',tag:'誤導',
+    d:'Renaiss 每台機器印 EV $51.82，而那是毛的 —— 扣掉自己的 85% 買回率之後是 92%。<em>不在第一層：玩家看到 108% 會讀成「平均賺 8%」。VaultDraw 的保底回饋率分子是賣家有義務付的錢，是淨的、被上下界夾住，已經比它誠實。</em>'},
+   {t:'「零手續費」當行銷賣點',src:'CardBase D-5',tag:'承諾風險',
+    d:'市場手續費與平台抽成現在確實都是 0%。<em>不在第一層：CardBase 的 0% 有結構性理由（不經手錢），VaultDraw 的沒有 —— 託管、保證金、爭議裁決都有真實成本。一旦講成賣點，之後調整費率就變成「背叛」而不是「調整」。</em>'},
+   {t:'具名不清的外部成交價',src:'CardBase D-6',tag:'法遵',
+    d:'CardBase 對它的成交價來源一個字都沒說。<em>不在第一層：Lawsnote 案一審創辦人 4 年徒刑、民事賠償約 1 億 545 萬，且法院認為違反網站使用規範即構成刑法 359 條的「無故」。公司在台灣，適用台灣法。</em>選資料源要用「誰的條款白紙黑字允許」，不是「誰的資料最好」。'},
+   {t:'接金流那天的退款與點數效期設計',src:'VinciWorld B-1',tag:'待金流',
+    d:'現在點數不能提領是因為<b>那條路不存在</b>（錢包 API 只有 GET，全 repo 搜 withdraw／payout／cashout 在 server 零命中）。<em>不在第一層：一接金流就會出現退款、重複扣款補償、爭議退回三條「錢往回走」的路徑，每一種都會被拿來當提領用。</em>門檻是第一筆真實儲值進帳那天。</em>'},
+   {t:'年齡與未成年',src:'VinciWorld B-3',tag:'待金流',
+    d:'Renaiss 只有一句「非針對兒童」，沒有機制 —— 它在 BVI，VaultDraw 在台灣，<b>這一項不要參考它</b>。<em>不在第一層：VaultDraw 自己的現況這一輪沒查，在查證之前不要假設有或沒有。</em>'},
+   {t:'準備好回答「為什麼沒有一鍵換回錢」',src:'VinciWorld B-2',tag:'是說法不是功能',
+    d:'Renaiss 主辦的展 2026-09-05 就在台北三創辦過，OKX Wallet 協辦，CardBase 也在同一場擺攤。<em>不在第一層：要做的是一段話不是一個功能。</em>「你的卡可以用賣家開賣前就承諾好的價格賣回給他 —— 那個價格寫在雜湊裡，他改不了。平台不買回自己送出的獎品，因為台灣明文禁止。」'},
+   {t:'rules.md 第六節補上 14 天的上界',src:'VinciWorld A-2',tag:'文件',
+    d:'程式碼有第三條釋放路徑（POOL_VAULT_ACCEPT_MS = 14 天，買家一直不申請出貨就自動釋放），rules.md 沒寫。<em>不在第一層：改一份 md，不動程式碼。</em>但它符合「現在對外寫出去的字不完整」這個判準，漏掉更糟。'},
+   {t:'鏈上錨定 commit 雜湊',src:'另一條線',tag:'另一條線',
+    d:'把每一池的承諾雜湊寫進一個外部的、有時間戳的地方，讓「開賣前就公布了」這件事不再只有平台自己作證。<em>不在第一層：使用者記在 MEMORY 裡的待辦是「寫進公開 GitHub repo，不上鏈」。</em><b>另一條線正在做這個題目的原型。</b>'}
+  ]}
+];
+(function renderT2(){
+  var h='';
+  TIER2.forEach(function(g){
+    h+='<div class="t2grp"><h4>'+esc(g.g)+'</h4><p class="gwhy">'+g.why+'</p>';
+    g.items.forEach(function(it){
+      h+='<div class="t2item"><div class="h"><b>'+esc(it.t)+'</b><span class="pill">'+esc(it.tag)+'</span><span class="pill info">'+esc(it.src)+'</span></div><p>'+it.d+'</p></div>';
+    });
+    h+='</div>';
+  });
+  $('#t2list').innerHTML=h;
+})();
+
+/* 初始渲染 */
+bump();
+renderS1Now();renderS1Next();
+renderS2();
+renderS3();
+renderS4();
+</script>
+</body>
+</html>
