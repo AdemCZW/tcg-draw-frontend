@@ -1,0 +1,1299 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Renaiss 模式原型 — 代幣化 / 抽包 / 買回 / 市場 / 贖回</title>
+<!--
+  docs/proto/tokenize-model.html
+  ================================================================
+  這是一個**獨立原型**，不進建置、不被 vite 掃到、不 import 任何正式碼。
+  用瀏覽器直接開檔即可（file://）。
+
+  它做的事：把 Renaiss（renaiss.xyz，BVI）那一套經濟設計**完整**做成可以點完的流程，
+  讓使用者自己看「錢從哪來、到哪去」，再跟現在的 VaultDraw 並排比較。
+
+  ⚠️ 這裡沒有任何真實的鏈、錢包、金鑰或交易。
+     所有 tx hash / 合約呼叫 / 代幣 ID 都是本機算出來的字串。
+     唯一「真的」的密碼學是 SHA-256 與 Merkle root／proof —— 那一段在瀏覽器裡真的跑。
+
+  ⚠️ 另一條線的原型是 docs/proto/chain-anchor.html（只錨定證據、不碰資產）。
+     兩份要能並排比較，所以這一份不動它的任何檔案。
+  ================================================================
+-->
+<style>
+:root{
+  --bg:#0d0c0f; --surface:#17161a; --surface-2:#1e1c22; --surface-3:#272430;
+  --line:#302d38; --line-soft:#222029;
+  --ink:#f4f1ee; --muted:#a49b96; --faint:#6f6862;
+  --accent:#f73b20; --accent-soft:#ff5236; --accent-wash:#2c1512; --on-accent:#fff;
+  --ok:#35c98a; --ok-wash:#11251c; --ok-ink:#4fd8a0;
+  --warn:#f0a13a; --warn-wash:#2a2114; --warn-ink:#f0a13a;
+  --danger:#ff5a4d; --danger-wash:#2c1614; --danger-ink:#ff5a4d;
+  --info-wash:#14203a; --info-ink:#6aa9f5;
+  --tier-a:#f2b544; --tier-b:#a98cff; --tier-c:#4fc9ef; --tier-d:#8f8880;
+  --r:14px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink); font-size:15px; line-height:1.7;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC","PingFang TC",
+    "Hiragino Sans","Microsoft JhengHei",sans-serif;
+  -webkit-text-size-adjust:100%;
+}
+.shell{max-width:1180px;margin:0 auto;padding:18px 14px 80px}
+h1{font-size:23px;line-height:1.35;margin:0 0 6px;font-weight:600;letter-spacing:-.01em}
+h2{font-size:18px;margin:0 0 10px;font-weight:600}
+h3{font-size:15px;margin:0 0 8px;font-weight:600}
+p{margin:0 0 10px}
+small{font-size:12.5px;line-height:1.6}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
+a{color:var(--info-ink)}
+hr{border:0;border-top:1px solid var(--line-soft);margin:16px 0}
+
+.sub{color:var(--muted);margin:0 0 14px;font-size:13.5px}
+.banner{
+  border:1px solid var(--warn);background:var(--warn-wash);color:var(--ink);
+  border-radius:var(--r);padding:11px 13px;margin:0 0 14px;font-size:13px;line-height:1.65
+}
+.banner b{color:var(--warn-ink)}
+
+/* ---- tabs ---- */
+nav.tabs{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;margin:0 0 14px;
+  border-bottom:1px solid var(--line-soft);-webkit-overflow-scrolling:touch}
+nav.tabs button{
+  flex:0 0 auto;background:var(--surface);color:var(--muted);border:1px solid var(--line);
+  border-radius:999px;padding:8px 15px;font-size:13.5px;cursor:pointer;font-family:inherit;white-space:nowrap
+}
+nav.tabs button[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+section[role=tabpanel][hidden]{display:none}
+
+/* ---- layout ---- */
+.cols{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+@media(min-width:900px){.cols.two{grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);align-items:start}}
+@media(min-width:760px){.cols.pair{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px}
+.card+.card{margin-top:12px}
+.card.tight{padding:11px 12px}
+
+/* ---- steps ---- */
+.step{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:14px;margin:0 0 12px;position:relative}
+.step.locked{opacity:.5}
+.step.done{border-color:#2b5c47}
+.step > header{display:flex;gap:10px;align-items:flex-start;margin:0 0 8px}
+.num{flex:0 0 auto;width:26px;height:26px;border-radius:8px;background:var(--surface-3);
+  color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600}
+.step.done .num{background:var(--ok-wash);color:var(--ok-ink)}
+.step > header h2{margin:0;font-size:16.5px;min-width:0}
+.step > header .st{margin-left:auto;flex:0 0 auto;font-size:11.5px;color:var(--faint);padding-top:4px}
+.step.done > header .st{color:var(--ok-ink)}
+
+.btn{background:var(--surface-3);color:var(--ink);border:1px solid var(--line);border-radius:10px;
+  padding:9px 14px;font-size:13.5px;cursor:pointer;font-family:inherit;min-width:0}
+.btn:hover:not(:disabled){border-color:var(--muted)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.ghost{background:transparent}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.sm{padding:6px 10px;font-size:12.5px;border-radius:8px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.row.end{justify-content:flex-end}
+
+/* ---- money flow strip ---- */
+.flowstrip{border:1px dashed var(--line);border-radius:12px;padding:10px 11px;margin:10px 0 0;background:var(--surface-2)}
+.flowstrip h4{margin:0 0 7px;font-size:12px;color:var(--faint);font-weight:600;letter-spacing:.04em}
+.mv{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:6px;align-items:center;
+  font-size:12.5px;padding:5px 0;border-top:1px solid var(--line-soft)}
+.mv:first-of-type{border-top:0}
+.mv .who{color:var(--muted);min-width:0;overflow-wrap:anywhere}
+.mv .who.r{text-align:right}
+.mv .amt{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--accent-soft);white-space:nowrap;
+  background:var(--accent-wash);border-radius:6px;padding:2px 7px}
+.mv .amt.in{color:var(--ok-ink);background:var(--ok-wash)}
+.mv .note{grid-column:1/-1;color:var(--faint);font-size:11.5px;margin-top:-2px}
+
+/* ---- chips / facts ---- */
+.chip{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 10px;
+  font-size:11.5px;border:1px solid var(--line);color:var(--muted);background:var(--surface-2)}
+.chip.warn{border-color:#5a4523;background:var(--warn-wash);color:var(--warn-ink)}
+.chip.ok{border-color:#245040;background:var(--ok-wash);color:var(--ok-ink)}
+.chip.bad{border-color:#5c2a26;background:var(--danger-wash);color:var(--danger-ink)}
+.chip.info{border-color:#26406b;background:var(--info-wash);color:var(--info-ink)}
+details.fact{margin:10px 0 0;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
+details.fact>summary{cursor:pointer;padding:9px 11px;font-size:12.5px;color:var(--muted);list-style:none}
+details.fact>summary::-webkit-details-marker{display:none}
+details.fact>summary::before{content:"＋ ";color:var(--faint)}
+details.fact[open]>summary::before{content:"− "}
+details.fact[open]>summary{color:var(--ink);border-bottom:1px solid var(--line-soft)}
+details.fact .body{padding:10px 11px;font-size:12.5px;line-height:1.75;color:var(--muted)}
+details.fact .body b{color:var(--ink);font-weight:600}
+
+/* ---- tables ---- */
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font-size:12.5px;min-width:0}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+th{color:var(--faint);font-weight:600;font-size:11.5px;white-space:nowrap}
+td.n,th.n{text-align:right;font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
+
+/* ---- token / prize cards ---- */
+.tok{border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:var(--surface-2);margin:8px 0 0}
+.tok .top{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.tok .nm{font-size:13.5px;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.tok .meta{font-size:11.5px;color:var(--faint);margin:2px 0 0;overflow-wrap:anywhere}
+.tier{font-size:11px;border-radius:6px;padding:1px 7px;font-weight:600;flex:0 0 auto}
+.tier.S{background:#3a2a08;color:var(--tier-a)} .tier.A{background:#2b2145;color:var(--tier-b)}
+.tier.B{background:#0f2c38;color:var(--tier-c)} .tier.C{background:#26242a;color:var(--tier-d)}
+
+/* ---- ledger ---- */
+.bals{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px;margin:0 0 10px}
+.bal{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-width:0}
+.bal .k{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bal .v{font-family:ui-monospace,Menlo,monospace;font-size:15px;margin-top:2px;overflow-wrap:anywhere}
+.bal.acc .v{color:var(--accent-soft)}
+.bal.pos .v{color:var(--ok-ink)}
+
+/* ---- inputs ---- */
+label.f{display:block;margin:0 0 10px;font-size:12.5px;color:var(--muted);min-width:0}
+label.f .lab{display:flex;justify-content:space-between;gap:8px;margin:0 0 4px}
+label.f .lab b{color:var(--ink);font-family:ui-monospace,Menlo,monospace;font-weight:500}
+input[type=range]{width:100%;accent-color:var(--accent);margin:0}
+input[type=number],input[type=text],select{
+  width:100%;background:var(--surface-3);border:1px solid var(--line);border-radius:9px;
+  color:var(--ink);padding:8px 10px;font-size:13.5px;font-family:inherit}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid var(--line-soft);font-size:13px}
+.kv:first-child{border-top:0}
+.kv .k{color:var(--muted);min-width:0}
+.kv .v{font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
+.kv.big .v{font-size:17px;color:var(--accent-soft)}
+.kv .fx{display:block;color:var(--faint);font-size:11px;font-family:ui-monospace,Menlo,monospace;
+  overflow-wrap:anywhere;white-space:normal}
+
+.bar{height:11px;border-radius:6px;background:var(--surface-3);overflow:hidden;display:flex;margin:8px 0 4px}
+.bar i{display:block;height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:11.5px;color:var(--muted)}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px;vertical-align:middle}
+
+.vs{border-left:3px solid var(--line);padding-left:11px}
+.vs.vd{border-left-color:var(--ok)}
+.vs.rn{border-left-color:var(--accent)}
+.vs h3{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tagvd{font-size:10.5px;color:var(--ok-ink);background:var(--ok-wash);border-radius:5px;padding:1px 6px}
+.tagrn{font-size:10.5px;color:var(--accent-soft);background:var(--accent-wash);border-radius:5px;padding:1px 6px}
+ul.tight{margin:6px 0 0;padding-left:18px}
+ul.tight li{margin:0 0 5px;font-size:12.5px;color:var(--muted)}
+ul.tight li b{color:var(--ink);font-weight:600}
+.srcnote{color:var(--faint);font-size:11.5px;margin-top:6px;overflow-wrap:anywhere}
+#selftest{font-size:12px;margin:0 0 12px}
+.err{color:var(--danger-ink)}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<h1>Renaiss 模式 —— 完整走一遍</h1>
+<p class="sub">
+  把 renaiss.xyz 那一套（代幣化 → 抽包 → 即時買回 → 站內市場 → 贖回實體卡）做成可以點完的原型，
+  每一步都印出錢的流向，並且跟現在的 VaultDraw 並排。
+  對照資料來自 <span class="mono">docs/vinciworld-comparison.md</span>（調查日 2026-09-06）。
+</p>
+
+<div class="banner">
+  <b>全部是模擬。</b>
+  這個檔案沒有連任何鏈、沒有錢包、沒有金鑰、沒有送出任何交易（含測試網），也沒有花任何錢。
+  畫面上的 tx hash、合約呼叫、代幣 ID、USDT 餘額全部是本機產生的字串，重新整理就沒了。
+  <b>唯一真的在跑的密碼學是 SHA-256 與 Merkle root／proof</b> —— 那一段在你的瀏覽器裡真的算，可以自己改資料看它壞掉。
+</div>
+
+<div id="selftest"></div>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" id="tb-flow"    aria-selected="true"  data-p="flow">流程（五步）</button>
+  <button role="tab" id="tb-compare" aria-selected="false" data-p="compare">並排對照</button>
+  <button role="tab" id="tb-cash"    aria-selected="false" data-p="cash">買回的現金流試算</button>
+  <button role="tab" id="tb-facts"   aria-selected="false" data-p="facts">決策資訊</button>
+</nav>
+
+<section role="tabpanel" id="p-flow" aria-labelledby="tb-flow">
+  <div class="cols two">
+    <div><div id="steps"></div></div>
+    <div id="books"></div>
+  </div>
+</section>
+
+<section role="tabpanel" id="p-compare" aria-labelledby="tb-compare" hidden>
+  <p class="sub">同一件事，兩種做法並排。左邊是<b>現在的 VaultDraw</b>（讀碼，行號為 2026-09-06 的 <span class="mono">main</span>），
+  右邊是<b>Renaiss 模式</b>（一手查證或業者宣稱，標在每一條旁邊）。</p>
+
+  <div class="card">
+    <h2>一、使用者付什麼、拿到什麼、能不能換回錢</h2>
+    <div class="cols pair">
+      <div class="vs vd">
+        <h3>VaultDraw <span class="tagvd">現況</span></h3>
+        <ul class="tight">
+          <li><b>付：</b>點數。1 元＝1 點，站內用。目前連儲值都還沒接（<span class="mono">TopupPage.vue:18</span> 直接 return），只有 <span class="mono">POST /admin/grant</span> 手動發放。</li>
+          <li><b>拿到：</b>一張真的卡進卡冊，四條路 —— 留著（有寄存期限）／申請出貨／<b>賣回給開池的賣家</b>／上架市場。</li>
+          <li><b>能不能換回錢：</b><b>不能，而且沒有那條程式路徑。</b>錢包 API 只有 GET（<span class="mono">server/src/routes/wallet.ts:10-17</span>）；全 repo 搜 withdraw／payout／cashout 在 <span class="mono">server/src</span> 零命中。</li>
+          <li><b>賣回的價格誰定：</b>賣家在<b>開賣前宣告</b>的絕對金額，封進 commit 雜湊（<span class="mono">fairness.ts:69-76</span>），開賣後改了對不上。錢從賣家帳戶出（<span class="mono">pool-settlement.ts:411,415</span>）。</li>
+        </ul>
+      </div>
+      <div class="vs rn">
+        <h3>Renaiss 模式 <span class="tagrn">一手</span></h3>
+        <ul class="tight">
+          <li><b>付：</b>BNB 鏈上的 <b>USDT</b>。從交易所買 USDT(BSC) → Top Up 轉進站內地址。</li>
+          <li><b>拿到：</b>一顆 <b>ERC-721</b>，對應一張存在第三方 Vault 的 PSA 卡。可轉移、可掛賣、可贖回實體。</li>
+          <li><b>能不能換回錢：</b><b>能。</b>85% 即時買回或二級市場賣掉 → USDT → 自託管錢包 → 交易所 → 法幣。</li>
+          <li><b>賣回的價格誰定：</b><b>平台</b>，按它自己的 platform valuation × 85%。<b>而 /terms 裡完全讀不到買回方案</b> —— 產品在做的事沒有寫進條款。</li>
+        </ul>
+      </div>
+    </div>
+    <div class="srcnote">來源：/gacha 商品頁 <span class="mono">Instant buyback 85%</span>、docs typescript-sdk <span class="mono">buybackGacha()</span>、/terms（皆一手，2026-09-06）。</div>
+  </div>
+
+  <div class="card">
+    <h2>二、平台的收入來源</h2>
+    <div class="cols pair">
+      <div class="vs vd">
+        <h3>VaultDraw <span class="tagvd">現況</span></h3>
+        <ul class="tight">
+          <li><b>抽卡抽成 0%</b> —— <span class="mono">pool-settlement.ts:30</span> <span class="mono">PLATFORM_FEE_RATE = 0</span>，<span class="mono">splitTicket()</span> 裡的 <span class="mono">if (fee &gt; 0)</span> 永遠不成立。</li>
+          <li><b>市場手續費 0%</b> —— 成交只有兩筆對沖分錄（<span class="mono">orders-service.ts:82-84</span>），沒有抽成那條分錄。</li>
+          <li><b>目前唯一會進平台帳戶的錢：沒收的保證金</b>（<span class="mono">orders-service.ts:89-90</span>）。也就是說<b>現在的商業模式是空的</b>，這是要面對的事實，不是優點。</li>
+        </ul>
+      </div>
+      <div class="vs rn">
+        <h3>Renaiss 模式 <span class="tagrn">一手＋推論</span></h3>
+        <ul class="tight">
+          <li><b>抽包的價差。</b>標示 EV 約售價的 108–109%，但只給 85% 即時買回 → 立刻變現的淨值約 <b>92–93%</b>。差額留在平台。〔算術是我做的〕</li>
+          <li><b>二級市場 2%</b> —— /terms：<span class="mono">2% of the Platform Valuation or sale amount</span>。</li>
+          <li><b>未來：</b>Lending／Borrowing 標 <span class="mono">coming soon</span>；保管費條款寫 <span class="mono">may be introduced in the future</span>。</li>
+          <li><b>不是</b>發幣：截至查證日無原生代幣。</li>
+        </ul>
+      </div>
+    </div>
+    <div class="srcnote">左邊那條「商業模式是空的」很重要：兩邊不是「誰比較貪」，是<b>一個已經有收入設計、一個還沒有</b>。</div>
+  </div>
+
+  <div class="card">
+    <h2>三、公平性怎麼證明</h2>
+    <div class="cols pair">
+      <div class="vs vd">
+        <h3>VaultDraw <span class="tagvd">讀碼</span></h3>
+        <ul class="tight">
+          <li><b>獎品清單承諾：</b><span class="mono">manifest_hash</span>，v4 含 grader／grade／certNo／refPrice／buyback／variantId（<span class="mono">fairness.ts:129-148</span>）。</li>
+          <li><b>server seed：</b><span class="mono">randomBytes(32)</span> ＋ <span class="mono">assertSeedEntropy()</span>（<span class="mono">pools-service.ts:159,162</span>）。</li>
+          <li><b>commit：</b><span class="mono">SHA256(server_seed ‖ manifest_hash)</span>，<b>開賣前公開</b>（<span class="mono">fairness.ts:163-170</span>）。</li>
+          <li><b>client seed：</b><b>drand 的未來輪次</b>（<span class="mono">FUTURE_ROUNDS = 4</span>，約兩分鐘後）—— 開池當下那個數字還不存在。</li>
+          <li><b>reveal：</b>售罄後才公開 seed（<span class="mono">pools-service.ts:833-838</span>），之前一律回 <span class="mono">null</span>。</li>
+          <li><b>自己重算：</b><span class="mono">verifyReveal()</span> ＋ <span class="mono">FairnessPoolPage.vue</span>，在瀏覽器逐位比對整條籤序。<br>
+            <span class="chip warn">但 <span class="mono">config.ts:30 FAIRNESS_UI = false</span> —— 站內入口全關</span></li>
+        </ul>
+      </div>
+      <div class="vs rn">
+        <h3>Renaiss 模式 <span class="tagrn">一手＋查不到</span></h3>
+        <ul class="tight">
+          <li><b>獎品清單承諾：</b>Merkle root，<span class="mono">A fingerprint of this pack's card pool, published on-chain before the drop.</span> —— <b>這一半跟 VaultDraw 等價。</b></li>
+          <li><b>隨機數來源：<span class="chip bad">查不到</span></b> docs 的 <span class="mono">contracts.md</span> 列出五組合約
+            （<span class="mono">TokenVendingMachineV3</span>、<span class="mono">CollectibleInventory</span>、<span class="mono">RenaissRegistry</span>、<span class="mono">OrderBook</span>、<span class="mono">TimelockController</span>）——
+            <b>沒有任何一個跟 VRF／randomness／fairness 有關。</b></li>
+          <li>沒有 seed、沒有 commit、沒有 reveal、沒有具名的 VRF 供應商、<b>找不到給玩家重算的驗算頁</b>。首頁那句
+            <span class="mono">every result is provably random and verifiable on-chain</span> 目前只有這句話本身。</li>
+          <li><b>而且它換不回來了：</b>Gacha V2 改成<b>無限池</b>之後，「固定籤數的一個排列」不存在，
+            事後公開種子重算整條序列這件事在數學上就沒有對象。</li>
+        </ul>
+      </div>
+    </div>
+    <div class="srcnote">在「流程」分頁的步驟 2 可以親手驗一次 Merkle proof，也可以按下「試著驗證抽選」看它撞牆 —— 那個撞牆是重點，不是 bug。</div>
+  </div>
+
+  <div class="card">
+    <h2>四、平台承擔什麼風險</h2>
+    <div class="cols pair">
+      <div class="vs vd">
+        <h3>VaultDraw <span class="tagvd">讀碼</span></h3>
+        <ul class="tight">
+          <li><b>買回的錢平台完全不出。</b>只有賣家↔卡主兩個帳戶；賣家的保留額付不出來就整筆 rollback（<span class="mono">SELLER_UNFUNDED</span>）。<b>平台沒有做市商部位，也沒有存貨。</b></li>
+          <li><b>不代管實體卡</b>（<span class="mono">migrations/021:57,132-138</span>）—— 也就是不承擔保管與遺失。</li>
+          <li><b>承擔的是履約風險：</b>託管、保證金、72h 出貨、7 天鑑賞、爭議裁決、違約累積（<span class="mono">escrow.ts:20-38</span>）。這一塊是平台自己扛的。</li>
+          <li>護欄夾的是<b>別人的</b>承諾：保底回饋率上界 100%（印鈔）、下界 25%（<span class="mono">economics.ts:48-50,129-132</span>）。</li>
+        </ul>
+      </div>
+      <div class="vs rn">
+        <h3>Renaiss 模式 <span class="tagrn">推論</span></h3>
+        <ul class="tight">
+          <li><b>即時買回 ＝ 平台變成做市商。</b>每一筆買回都是平台自己的現金流出，而且是<b>即時</b>的；買回的卡要重新賣出去才回本。</li>
+          <li><b>要準備多少現金與存貨，去「買回的現金流試算」分頁自己調參數。</b>那一頁把假設全部攤開讓你改。</li>
+          <li><b>定價權與付款義務同時在自己手上</b> —— 85% 的分母是平台自己的 valuation，而條款沒有寫死它。這是 <span class="mono">rules.md</span> 第四節講的「印鈔票」那個結構。</li>
+          <li><b>實體卡風險外包：</b>條款寫 <span class="mono">Assets are stored by third-party Vault providers</span>、<span class="mono">We do not provide custody or security services</span>。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>一頁摘要</h2>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>項目</th><th>VaultDraw（現況）</th><th>Renaiss 模式</th></tr></thead>
+      <tbody>
+        <tr><td>計價單位</td><td>點數（站內）</td><td>USDT（BNB 鏈）</td></tr>
+        <tr><td>能否換回現金</td><td>不能，無程式路徑</td><td>能（賣卡 → USDT → 交易所）</td></tr>
+        <tr><td>平台買回自己的獎品</td><td>不會（只有賣家↔卡主）</td><td>會，85%，平台出錢</td></tr>
+        <tr><td>買回價誰定</td><td>賣家，開賣前封進雜湊</td><td>平台，自己的估值，隨時可調</td></tr>
+        <tr><td>對外揭露的比率</td><td>保底回饋率（<b>淨</b>，有上下界）</td><td>Expected value（<b>毛</b>，約 109%）</td></tr>
+        <tr><td>池的形狀</td><td>固定籤數＋玩家自選籤位</td><td>無限池（Gacha V2）</td></tr>
+        <tr><td>清單承諾</td><td>manifest_hash</td><td>Merkle root</td></tr>
+        <tr><td>抽選隨機性</td><td>drand 未來輪次＋可重算</td><td>查不到來源</td></tr>
+        <tr><td>抽卡抽成</td><td>0%</td><td>內含於 EV 與買回率的價差</td></tr>
+        <tr><td>市場抽成</td><td>0%</td><td>2%</td></tr>
+        <tr><td>實體卡保管</td><td>不代管（卡在賣家手上）</td><td>第三方 Vault，平台明文免責</td></tr>
+        <tr><td>法律主體</td><td>台灣</td><td>Renaiss Network Limited（BVI）</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+
+<section role="tabpanel" id="p-cash" aria-labelledby="tb-cash" hidden>
+  <p class="sub">
+    「即時買回」把平台變成<b>做市商</b>：出價、收貨、壓庫存、等下一個買家。
+    這一頁把那件事算給你看。<b>所有假設都是輸入框，全部可以改</b> —— 下面每個數字旁邊都印著它的算式，
+    你不同意哪一個假設就直接改哪一個。
+  </p>
+
+  <div class="cols two">
+    <div>
+      <div class="card">
+        <h2>假設</h2>
+        <div class="row" style="margin-bottom:12px">
+          <button class="btn sm" id="ps-small">小規模：500 包／天</button>
+          <button class="btn sm" id="ps-claim">照它的新聞稿：單日 $700,000</button>
+          <button class="btn sm" id="ps-worst">極端：所有人都立刻賣回</button>
+          <button class="btn sm" id="ps-neg">讓損益翻負：EV 120%</button>
+        </div>
+        <div class="cols pair">
+          <div>
+            <label class="f"><span class="lab">每日抽包數 <b id="v-n">500</b></span>
+              <input type="number" id="i-n" value="500" min="1" step="1"></label>
+            <label class="f"><span class="lab">平均包價（USDT） <b id="v-p">48</b></span>
+              <input type="number" id="i-p" value="48" min="1" step="1"></label>
+            <label class="f"><span class="lab">標示 EV ÷ 售價 <b id="v-ev">108%</b></span>
+              <input type="range" id="i-ev" value="108" min="80" max="130" step="1"></label>
+            <label class="f"><span class="lab">抽完立刻賣回的比例 <b id="v-m">40%</b></span>
+              <input type="range" id="i-m" value="40" min="0" max="100" step="1"></label>
+          </div>
+          <div>
+            <label class="f"><span class="lab">買回率 <b id="v-bb">85%</b></span>
+              <input type="range" id="i-bb" value="85" min="50" max="100" step="1"></label>
+            <label class="f"><span class="lab">買回的卡平均幾天才再賣掉 <b id="v-d">14</b></span>
+              <input type="range" id="i-d" value="14" min="1" max="90" step="1"></label>
+            <label class="f"><span class="lab">補貨（收卡＋送 PSA＋入庫）前置天數 <b id="v-l">30</b></span>
+              <input type="range" id="i-l" value="30" min="1" max="120" step="1"></label>
+            <label class="f"><span class="lab">Tier S 上限單價（USDT） <b id="v-s">1500</b></span>
+              <input type="number" id="i-s" value="1500" min="100" step="50"></label>
+            <label class="f"><span class="lab">Tier S 機率 <b id="v-sp">1%</b></span>
+              <input type="range" id="i-sp" value="1" min="0.1" max="5" step="0.1"></label>
+          </div>
+        </div>
+      </div>
+      <div class="card" id="cash-notes">
+        <h2>這個試算用了什麼假設（也就是它哪裡會錯）</h2>
+        <ul class="tight">
+          <li><b>買回是即時的、再賣出是延遲的。</b>整個現金壓力來自這個時間差。壓在庫存裡的錢＝每日買回支出 × 再賣出天數。這是最關鍵的一條假設，而<b>「再賣出天數」我沒有任何 Renaiss 的實際數據</b>，預設 14 天是我猜的。</li>
+          <li><b>把「立刻賣回」當成當天發生。</b>真實情況會分散在幾天內，尖峰會比這裡算的低一點、但長尾更長。</li>
+          <li><b>大獎緩衝用 Poisson 近似</b>（λ ± 2√λ），只抓「同一天多開出幾張 Tier S」的抖動，<b>沒有</b>模擬連續多天的壞運。</li>
+          <li><b>無限池要持續補貨。</b>賣出去而沒有被賣回的卡是永久淨消耗，所以要備 <span class="mono">每日淨消耗 × 前置天數</span> 的存貨。</li>
+          <li><b>沒有算：</b>gas、USDT 出入金成本、第三方 Vault 保管費、PSA 送鑑成本與失敗率、退貨、詐欺、價格下跌造成的存貨減值。<b>這些全部只會讓需要的錢更多，不會更少。</b></li>
+          <li><b>「照它的新聞稿」那顆按鈕</b>用的是 GlobeNewswire 2026-02-11 那則的單日交易量 $700,000 ÷ 包價，換算成包數。那個數字是<b>業者自述</b>，沒有第三方查核，而且跟它其他公開數字對不上（見決策資訊分頁）。</li>
+        </ul>
+      </div>
+    </div>
+    <div id="cashout"></div>
+  </div>
+</section>
+
+<section role="tabpanel" id="p-facts" aria-labelledby="tb-facts" hidden>
+  <p class="sub">
+    這些事實會影響「要不要做」，所以放在原型裡面，不是放在對話裡。
+    <b>每一條都標了它的證據等級</b>，體例沿用 <span class="mono">docs/vinciworld-comparison.md</span>。
+  </p>
+
+  <div class="card">
+    <h3>法域：兩邊不在同一部法律底下</h3>
+    <ul class="tight">
+      <li><b>Renaiss Network Limited，英屬維京群島（BVI）。</b>/privacy 上的地址是
+        <span class="mono">Craigmuir Chambers, Road Town, Tortola</span>，條款準據法是 BVI 法。〔一手，2026-09-06〕</li>
+      <li><b>VaultDraw 的主體在台灣。</b>〔專案既有事實〕</li>
+      <li>所以下面兩條紅線，<b>不是「他們比較敢」，是不同法域</b>。同一個功能在 BVI 可以做、在台灣是另一回事。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3><span class="mono">docs/rules.md</span> 記著的兩條限制（逐字）</h3>
+    <ul class="tight">
+      <li>第一節：「<b>點數不能換回現金。</b>這不是產品選擇，是法律紅線（刑法 266 條的對價關係）。」</li>
+      <li>第四節：「平台買回自己送出的獎品在台灣是<b>明文禁止</b>的（電子遊戲場業管理條例第 14 條）」；
+        <span class="mono">HANDOFF.md:25</span> 補上條號：<b>第 14 條第 2 項第 2 款</b>，禁止「買回提供給客人之獎品」。</li>
+      <li>第四節同段還寫了第二個理由（跟法律無關）：「平台掏錢買回會變成印鈔票 —— 賣家可以把價格喊高再自己回收。」</li>
+    </ul>
+    <div class="srcnote">本原型的步驟 3 有一根「平台估值」的滑桿，就是把那句話變成可以手動撥的東西。</div>
+  </div>
+
+  <div class="card">
+    <h3>這個專案曾經提過 70% 回購，查證後收回</h3>
+    <p><span class="mono">docs/HANDOFF.md:25</span> 逐字記著：</p>
+    <p style="border-left:3px solid var(--line);padding-left:11px;color:var(--muted);font-size:13px">
+      「我曾經建議過 70% 回購當行銷賣點，<b>查證後發現違法並收回</b>」</p>
+    <ul class="tight">
+      <li>Renaiss 做的就是那件事，數字是 85%。</li>
+      <li>寫在這裡不是為了翻案也不是為了勸退，是因為<b>這一輪要做的原型正是那件被收回的事，你應該在看原型的時候就知道它有過這段歷史。</b></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>它的規模數字彼此對不上，而且全部是業者自述</h3>
+    <div class="scroll">
+    <table>
+      <thead><tr><th>時點</th><th>數字</th><th>來源</th><th>等級</th></tr></thead>
+      <tbody>
+        <tr><td>2026-02-11</td><td>單日交易量 $700,000；累計 $3M；註冊 160,000+；beta 抽出 7,117 張 PSA 卡</td><td>GlobeNewswire 新聞稿</td><td>業者宣稱</td></tr>
+        <tr><td>BETA 2.0 前後</td><td>用戶 220,000+；交易量 $4M</td><td>Phemex 轉載</td><td>業者宣稱</td></tr>
+        <tr><td>募資公告</td><td>$1.5M 種子輪（YZi Labs 領投）；<b>自稱營收約 $20M</b>；用戶 260,000+</td><td>The Block 新聞稿／CryptoBriefing</td><td>業者宣稱</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <ul class="tight">
+      <li><b>「累計交易量 $3–4M」跟「營收 $20M」不可能同時為真</b> —— 營收不會是交易量的五倍。</li>
+      <li>比較可能是各篇在講不同的量（GMV／抽包銷售額／累計流水），但<b>沒有一篇定義過口徑</b>，也沒有第三方查核。〔推論〕</li>
+      <li>引用時要連這句一起引，不要單挑一個數字當事實。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>它的產品跟它的條款不一致</h3>
+    <ul class="tight">
+      <li>每一台機器的商品頁都印著 <span class="mono">Instant buyback 85%</span>，SDK 有 <span class="mono">buybackGacha()</span>，結算幣別是 USDT。〔一手〕</li>
+      <li><b>但 /terms 裡讀不到任何買回方案。</b>〔一手〕</li>
+      <li>對使用者而言那是風險；對這個專案而言那是提醒：<b>買回這種承諾必須寫進具約束力的地方。</b>
+        VaultDraw 現在的做法是寫進 commit 雜湊（<span class="mono">fairness.ts:69-76</span>）。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>查不到的東西（不要用推測填滿）</h3>
+    <ul class="tight">
+      <li><b>隨機數怎麼產生</b> —— 首頁、四台機器商品頁、docs 全部 7 頁、contracts.md 五組合約、一般搜尋，全部沒有。<b>這是「provably random」的全部內容。</b></li>
+      <li><b>買回的時間窗、次數上限、85% 的分母誰定</b> —— 商品頁只有六個字，/terms 沒寫。
+        （搜尋會撈到「3 天內、85%→93% 分級」——<b>那是 Jupiter Gacha 的文件，不是 Renaiss 的</b>，不要套上去。）</li>
+      <li><b>贖回實體卡的費用與流程</b> —— 側欄有 Redemption，但費用、運費、時限、失敗怎麼辦全部沒有。
+        所以本原型步驟 5 的運費是<b>可輸入的假設值</b>，預設 25 只是佔位。</li>
+      <li><b>VinciWorld 實際長什麼樣</b> —— 目前只有候補名單頁；「像素世界蓋房子」只存在於 <span class="mono">&lt;meta description&gt;</span>。</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>它已經在台灣了</h3>
+    <ul class="tight">
+      <li><b>2026-09-05，FLAGSHIP Card Show Taiwan，台北三創 CLAPPER STUDIO，主辦是 Renaiss Protocol，OKX Wallet 協辦。</b>〔一手，luma 活動頁〕</li>
+      <li>更早：2026-02-28 台北社群交流會，含 Alpha 實體卡兌換。〔二手可信〕</li>
+      <li>意義不是「該不該上鏈」，而是<b>玩家對「線上抽卡」的預設印象可能會開始包含『抽到不喜歡可以按一顆鈕換回錢』</b>。</li>
+    </ul>
+  </div>
+</section>
+
+</div><!-- /shell -->
+<script>
+(function(){
+'use strict';
+
+/* ================================================================
+   1. SHA-256（純 JS，不依賴 crypto.subtle —— file:// 開檔也要能跑）
+   這一段是原型裡唯一「真的」的密碼學。下面有自我測試，壞了會在畫面最上方紅字。
+   ================================================================ */
+var K = new Uint32Array([
+0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+
+function rotr(x,n){ return ((x>>>n)|(x<<(32-n)))>>>0; }
+
+function sha256bytes(bytes){
+  var H=new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
+                         0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]);
+  var l=bytes.length, pad=((56-(l+1)%64)+64)%64, total=l+1+pad+8;
+  var m=new Uint8Array(total); m.set(bytes,0); m[l]=0x80;
+  var dv=new DataView(m.buffer);
+  var bits=l*8;
+  dv.setUint32(total-8, Math.floor(bits/4294967296)>>>0);
+  dv.setUint32(total-4, (bits>>>0));
+  var w=new Uint32Array(64);
+  for(var i=0;i<total;i+=64){
+    for(var t=0;t<16;t++) w[t]=dv.getUint32(i+t*4);
+    for(t=16;t<64;t++){
+      var x=w[t-15], y=w[t-2];
+      var s0=(rotr(x,7)^rotr(x,18)^(x>>>3))>>>0;
+      var s1=(rotr(y,17)^rotr(y,19)^(y>>>10))>>>0;
+      w[t]=(w[t-16]+s0+w[t-7]+s1)>>>0;
+    }
+    var a=H[0],b=H[1],c=H[2],d=H[3],e=H[4],f=H[5],g=H[6],h=H[7];
+    for(t=0;t<64;t++){
+      var S1=(rotr(e,6)^rotr(e,11)^rotr(e,25))>>>0;
+      var ch=((e&f)^((~e)&g))>>>0;
+      var t1=(h+S1+ch+K[t]+w[t])>>>0;
+      var S0=(rotr(a,2)^rotr(a,13)^rotr(a,22))>>>0;
+      var mj=((a&b)^(a&c)^(b&c))>>>0;
+      var t2=(S0+mj)>>>0;
+      h=g; g=f; f=e; e=(d+t1)>>>0; d=c; c=b; b=a; a=(t1+t2)>>>0;
+    }
+    H[0]=(H[0]+a)>>>0; H[1]=(H[1]+b)>>>0; H[2]=(H[2]+c)>>>0; H[3]=(H[3]+d)>>>0;
+    H[4]=(H[4]+e)>>>0; H[5]=(H[5]+f)>>>0; H[6]=(H[6]+g)>>>0; H[7]=(H[7]+h)>>>0;
+  }
+  var out='';
+  for(var j=0;j<8;j++){ out += ('00000000'+H[j].toString(16)).slice(-8); }
+  return out;
+}
+function sha256(str){ return sha256bytes(new TextEncoder().encode(str)); }
+
+/* ---- Merkle：leaf = sha256("leaf:"+json)，node = sha256("node:"+left+right)，奇數補自己 ---- */
+function leafHash(o){ return sha256('leaf:'+JSON.stringify(o)); }
+function buildLevels(leaves){
+  var levels=[leaves.slice()];
+  while(levels[levels.length-1].length>1){
+    var cur=levels[levels.length-1], nxt=[];
+    for(var i=0;i<cur.length;i+=2){
+      var L=cur[i], R=(i+1<cur.length)?cur[i+1]:cur[i];
+      nxt.push(sha256('node:'+L+R));
+    }
+    levels.push(nxt);
+  }
+  return levels;
+}
+function proofFor(levels, idx){
+  var pf=[], i=idx;
+  for(var L=0;L<levels.length-1;L++){
+    var lv=levels[L];
+    var sib = (i%2===0) ? ((i+1<lv.length)?lv[i+1]:lv[i]) : lv[i-1];
+    pf.push({h:sib, side:(i%2===0)?'R':'L'});
+    i=Math.floor(i/2);
+  }
+  return pf;
+}
+function verifyProof(leaf, pf, root){
+  var h=leaf;
+  for(var i=0;i<pf.length;i++){
+    h = (pf[i].side==='R') ? sha256('node:'+h+pf[i].h) : sha256('node:'+pf[i].h+h);
+  }
+  return h===root;
+}
+
+/* 自我測試：sha256("abc") 的標準答案 */
+(function(){
+  var got=sha256('abc');
+  var want='ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
+  var box=document.getElementById('selftest');
+  if(got===want){
+    box.innerHTML='<span class="chip ok">SHA-256 自我測試通過</span> '+
+      '<span class="mono" style="color:var(--faint)">sha256("abc") = '+got.slice(0,24)+'…</span>';
+  }else{
+    box.innerHTML='<span class="chip bad">SHA-256 自我測試失敗</span> '+
+      '<span class="mono err">得到 '+got+'</span>';
+  }
+})();
+
+/* ================================================================
+   2. 資料：卡池與機台
+   數字取自 renaiss.xyz /gacha 的公開標示（一手，2026-09-06）。
+   卡名與 cert 是我編的（原型），估值是為了讓四層 Tier 的區間對得上。
+   ================================================================ */
+var CARDS=[
+  {i:0,tier:'S',name:'Charizard VMAX SSR #074',cert:'PSA 10 · cert 84120931',val:1280},
+  {i:1,tier:'S',name:'Umbreon VMAX Alt Art #215',cert:'PSA 10 · cert 79004412',val:920},
+  {i:2,tier:'A',name:'Rayquaza VMAX Alt Art #218',cert:'PSA 9 · cert 71338206',val:212},
+  {i:3,tier:'A',name:'Giratina V Alt Art #185',cert:'PSA 10 · cert 88512740',val:148},
+  {i:4,tier:'B',name:'Mew VMAX Alt Art #268',cert:'PSA 9 · cert 66940185',val:88},
+  {i:5,tier:'B',name:'Lugia V Alt Art #186',cert:'PSA 9 · cert 70221934',val:71},
+  {i:6,tier:'C',name:'Pikachu V Promo #043',cert:'PSA 10 · cert 90113558',val:42},
+  {i:7,tier:'C',name:'Gardevoir ex SAR #233',cert:'PSA 9 · cert 68774120',val:33}
+];
+var MACHINES={
+  28:{price:28, ev:30.59},
+  48:{price:48, ev:51.82},
+  88:{price:88, ev:96.28}
+};
+/* Renaiss PANDORA 48 標示：S <1% / A 2% / B 13% / C 85%（加總 101%，因為 S 寫的是「<1%」）。
+   原型取 S=1、A=2、B=13、C=84 讓總和剛好 100，這個調整寫在畫面上。 */
+var ODDS={S:1,A:2,B:13,C:84};
+var COST_RATIO=0.80;  /* 平台取得成本 ＝ 估值 × 80%。**假設**，Renaiss 沒有公開進貨成本 */
+
+/* ================================================================
+   3. 狀態
+   ================================================================ */
+var S;
+function reset(){
+  S={
+    bal:{self:300, player:0, platform:0, buyer:5000, supplier:0, vaultco:0},
+    ledger:[], seq:0, feeTotal:0,
+    machine:48, vaulted:false, minted:false,
+    tokens:[],           /* {tid,i,tier,name,cert,val,where,listPrice} */
+    root:null, rootTx:null, leaves:null, levels:null, manifest:null,
+    draws:[], lastDraw:null, proofResult:null, randChecked:false,
+    valAdj:100, shipFee:25,
+    paid:0, got:0, transferred:0, sold:0, redeemed:0, boughtBack:0
+  };
+}
+reset();
+
+function fmt(n){
+  return (Math.round(n*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function fmt0(n){ return Math.round(n).toLocaleString('en-US'); }
+function hex(n){
+  var s='';
+  for(var i=0;i<n;i++) s+='0123456789abcdef'[Math.floor(Math.random()*16)];
+  return s;
+}
+function txh(){ return '0x'+hex(64); }
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+var NAMES={
+  self:'你的自託管錢包／交易所', player:'你（站內帳戶）', platform:'平台（Renaiss）',
+  buyer:'站內買家', supplier:'供貨商（卡的來源）', vaultco:'第三方 Vault'
+};
+
+/* 記一筆錢的移動。from/to 是 NAMES 的鍵，'-' 代表站外（不追蹤餘額） */
+function move(from,to,amt,label,note){
+  S.seq++;
+  if(from!=='-' && S.bal[from]!==undefined) S.bal[from]-=amt;
+  if(to!=='-'   && S.bal[to]!==undefined)   S.bal[to]  +=amt;
+  S.ledger.push({n:S.seq,from:from,to:to,amt:amt,label:label,note:note||''});
+}
+function mvHtml(list){
+  if(!list.length) return '';
+  var h='<div class="flowstrip"><h4>錢從哪來、到哪去</h4>';
+  list.forEach(function(m){
+    h+='<div class="mv"><span class="who">'+esc(NAMES[m.from]||m.from)+'</span>'+
+       '<span class="amt'+(m.in?' in':'')+'">'+(m.in?'+':'−')+' $'+fmt(m.amt)+'</span>'+
+       '<span class="who r">'+esc(NAMES[m.to]||m.to)+'</span>'+
+       (m.note?'<span class="note">'+m.note+'</span>':'')+'</div>';
+  });
+  return h+'</div>';
+}
+function heldByPlayer(){ return S.tokens.filter(function(t){return t.where==='player';}); }
+function inPlatform(){ return S.tokens.filter(function(t){return t.where==='platform';}); }
+
+/* ================================================================
+   4. 五個步驟
+   ================================================================ */
+function stepShell(n,title,state,done,locked,body){
+  return '<section class="step'+(done?' done':'')+(locked?' locked':'')+'" id="step-'+n+'">'+
+    '<header><span class="num">'+n+'</span><h2>'+title+'</h2>'+
+    '<span class="st">'+state+'</span></header>'+body+'</section>';
+}
+
+function renderSteps(){
+  var h='';
+  var M=MACHINES[S.machine];
+
+  /* ---------- 0 入金 ---------- */
+  var b0='';
+  if(!S.ledger.length && S.bal.player===0){
+    b0='<p>Renaiss 全站以 <b>BNB 鏈上的 USDT</b> 計價。你要先在交易所買 USDT(BSC)，'+
+       '再用 Top Up 轉進站內地址。<b>這一步就是把法幣世界接上站內餘額</b> —— 也是整條線的入口。</p>'+
+       '<div class="row"><button class="btn primary" data-act="topup">從交易所轉入 300 USDT</button></div>';
+  }else{
+    b0='<p>你把 300 USDT 從自託管錢包轉進了站內地址。站內餘額現在是 <b>$'+fmt(S.bal.player)+'</b>。</p>'+
+       mvHtml([{from:'self',to:'player',amt:300,note:'USDT(BSC) → 站內地址。gas 另計（BNB），本原型不模擬。'}])+
+       '<div class="row" style="margin-top:10px"><span class="chip info">這條路是雙向的 —— 步驟 4 有「提領」按鈕</span></div>';
+  }
+  b0+='<details class="fact"><summary>對照：VaultDraw 的同一步</summary><div class="body">'+
+      '<b>目前根本不能自行儲值。</b><span class="mono">src/pages/TopupPage.vue:18</span> 直接 <span class="mono">return</span>，'+
+      '註解寫「金流還沒接，點數由平台發放」；後端沒有任何 topup／payment／callback 端點，'+
+      '唯一的發放路徑是 <span class="mono">POST /admin/grant</span>。<br>'+
+      '而且那條路<b>只有單向</b>：錢包 API 只有 GET（<span class="mono">server/src/routes/wallet.ts:10-17</span>），'+
+      '全 repo 搜 withdraw／payout／cashout 在 <span class="mono">server/src</span> 零命中。'+
+      '</div></details>';
+  h+=stepShell(0,'入金（前置）',S.bal.player>0||S.ledger.length?'完成':'待執行',
+      S.ledger.length>0,false,b0);
+
+  /* ---------- 1 代幣化 ---------- */
+  var b1='';
+  var totalCost=CARDS.reduce(function(s,c){return s+Math.round(c.val*COST_RATIO);},0);
+  b1='<p>一張 PSA 鑑定卡怎麼變成一顆鏈上代幣：<b>實體卡先進保管庫，再照那張卡的 cert 鑄一顆 ERC-721</b>。'+
+     '代幣代表「我對保管庫裡那一張卡有請求權」。</p>';
+  if(!S.vaulted){
+    b1+='<div class="row"><button class="btn primary" data-act="vault">1a · 把 8 張卡送進第三方保管庫</button></div>';
+  }else{
+    b1+='<div class="row"><span class="chip ok">1a 完成 · 保管收據 '+esc(S.vaultReceipt||'')+'</span></div>';
+  }
+  if(S.vaulted && !S.minted){
+    b1+='<div class="row" style="margin-top:8px">'+
+        '<button class="btn primary" data-act="mint">1b · 鑄造 8 顆 ERC-721</button>'+
+        '<span class="chip">CollectibleInventory.mint()</span></div>';
+  }
+  if(S.minted){
+    b1+='<div class="row" style="margin-top:8px"><span class="chip ok">1b 完成 · 已鑄造 '+S.tokens.length+' 顆</span>'+
+        '<span class="chip mono">'+esc(S.mintTx.slice(0,18))+'…</span></div>'+
+        mvHtml([{from:'platform',to:'supplier',amt:totalCost,
+          note:'取得 8 張實體卡的成本。<b>假設進貨價＝估值 × 80%</b>（Renaiss 沒有公開進貨成本）。這筆錢在卡賣出去之前是壓著的 —— 這就是「存貨資金」。'}])+
+        '<div class="scroll" style="margin-top:10px"><table><thead><tr>'+
+        '<th>tokenId</th><th>卡</th><th class="n">平台估值</th><th>現在在誰手上</th></tr></thead><tbody>'+
+        S.tokens.map(function(t){
+          var whereTxt = t.where==='platform'?'平台庫存':t.where==='player'?'你':t.where==='self'?'你的自託管錢包':
+                         t.where==='listed'?'掛賣中（託管）':t.where==='buyerHeld'?'站內買家':'已銷毀';
+          return '<tr><td class="mono">#'+t.tid+'</td><td>'+esc(t.name)+
+            ' <span class="tier '+t.tier+'">'+t.tier+'</span></td><td class="n">$'+fmt(t.val)+
+            '</td><td>'+whereTxt+'</td></tr>';
+        }).join('')+'</tbody></table></div>';
+    var held=heldByPlayer();
+    b1+='<h3 style="margin-top:14px">1c · 持有與轉移</h3>'+
+        '<p>代幣一旦在你的錢包裡，<b>平台就管不住它了</b>：'+
+        '<span class="mono">safeTransferFrom</span> 可以把它送到任何地址，也可以拿去站外的市場掛賣。'+
+        '這正是「代幣化」跟「站內點數」在結構上最大的差別。</p>'+
+        '<div class="row"><button class="btn'+(held.length?'':'')+'" data-act="transfer"'+
+        (held.length?'':' disabled')+'>把一顆代幣轉出到自託管錢包</button>'+
+        (held.length?'':'<span class="chip">先到步驟 2 抽一包，才有代幣可以轉</span>')+'</div>';
+    if(S.transferred){
+      b1+='<div class="row" style="margin-top:8px"><span class="chip warn">已轉出 '+S.transferred+' 顆 —— 這幾顆現在在平台的規則之外</span></div>';
+    }
+  }
+  b1+='<details class="fact"><summary>誰對實體卡負責（Renaiss 條款原字）</summary><div class="body">'+
+      '<span class="mono">Assets are stored by third-party Vault providers</span>、'+
+      '<span class="mono">We do not provide custody or security services for Assets</span>（一手，/terms，2026-09-06）。<br>'+
+      '<b>對照 VaultDraw：</b>也不代管實體卡，但卡是留在<b>賣家</b>手上、由賣家直接寄給買家'+
+      '（<span class="mono">migrations/021:57,132-138</span>）—— 沒有代幣，所以也沒有「代幣與實體脫鉤」這個風險面。'+
+      '</div></details>';
+  h+=stepShell(1,'卡片代幣化',S.minted?'完成':'待執行',S.minted,false,b1);
+
+  /* ---------- 2 抽包 ---------- */
+  var b2='', locked2=!S.minted||S.bal.player<=0;
+  b2='<p>用 USDT 付款的 gacha。四台常駐機（PANDORA 28／48／88／248），<b>每包一張卡、沒有保底</b>。</p>'+
+     '<div class="row">';
+  [28,48,88].forEach(function(p){
+    b2+='<button class="btn sm'+(S.machine===p?' primary':'')+'" data-act="machine:'+p+'"'+
+        (S.root?' disabled':'')+'>PANDORA '+p+'</button>';
+  });
+  b2+='</div>'+
+      '<div class="scroll" style="margin-top:10px"><table><thead><tr><th>機台</th><th class="n">售價</th>'+
+      '<th class="n">標示 EV</th><th class="n">EV／售價</th><th class="n">×85% 買回後</th></tr></thead><tbody>'+
+      Object.keys(MACHINES).map(function(k){
+        var m=MACHINES[k];
+        return '<tr'+(String(S.machine)===k?' style="color:var(--ink)"':' style="color:var(--muted)"')+
+          '><td>PANDORA '+k+'</td><td class="n">$'+fmt(m.price)+'</td><td class="n">$'+fmt(m.ev)+
+          '</td><td class="n">'+(m.ev/m.price*100).toFixed(1)+'%</td>'+
+          '<td class="n" style="color:var(--warn-ink)">'+(m.ev/m.price*85).toFixed(1)+'%</td></tr>';
+      }).join('')+'</tbody></table></div>'+
+      '<div class="row" style="margin-top:8px"><span class="chip warn">標示 EV 是<b>毛的</b>：立刻按 85% 變現之後一致落在 92–93%</span><span class="chip">本原型只做 PANDORA 48 的卡池；換機台只改包價，卡池不變</span></div>';
+
+  b2+='<h3 style="margin-top:14px">2a · Merkle root（開賣前的承諾）</h3>';
+  if(!S.root){
+    b2+='<p>Renaiss 對 Merkle root 的說明原字：<span class="mono">A fingerprint of this pack\'s card pool, published on-chain before the drop.</span><br>'+
+        '按下去會<b>真的</b>用 SHA-256 把這 8 張卡做成一棵樹並算出 root。</p>'+
+        '<div class="row"><button class="btn primary" data-act="commit"'+(S.minted?'':' disabled')+'>產生 Merkle root 並「上鏈」公開</button>'+
+        (S.minted?'':'<span class="chip">先完成步驟 1</span>')+'</div>';
+  }else{
+    b2+='<div class="card tight" style="background:var(--surface-2)">'+
+        '<div class="kv"><span class="k">Merkle root</span><span class="v mono" style="font-size:11px">'+esc(S.root.slice(0,32))+'…</span></div>'+
+        '<div class="kv"><span class="k">公開交易（模擬）</span><span class="v mono" style="font-size:11px">'+esc(S.rootTx.slice(0,20))+'…</span></div>'+
+        '<div class="kv"><span class="k">葉子數</span><span class="v">'+S.leaves.length+'</span></div>'+
+        '</div>'+
+        '<div class="row" style="margin-top:8px"><span class="chip ok">這個 root 是真的算出來的</span>'+
+        '<span class="chip">葉 = sha256("leaf:"+JSON)，節點 = sha256("node:"+左+右)</span></div>';
+  }
+
+  b2+='<h3 style="margin-top:14px">2b · 抽</h3>';
+  var stock=inPlatform().length;
+  var canDraw = S.root && S.bal.player>=M.price && stock>0;
+  b2+='<div class="row"><button class="btn primary" data-act="draw"'+(canDraw?'':' disabled')+'>抽一包（$'+fmt(M.price)+'）</button>'+
+      '<span class="chip">機率 S 1% ／ A 2% ／ B 13% ／ C 84%</span>'+
+      '<span class="chip'+(stock?'':' bad')+'">平台庫存 '+stock+' 張</span></div>';
+  if(!S.root) b2+='<div class="row" style="margin-top:6px"><span class="chip">先做 2a 的承諾</span></div>';
+  else if(S.bal.player<M.price) b2+='<div class="row" style="margin-top:6px"><span class="chip bad">站內餘額不夠</span></div>';
+  else if(!stock) b2+='<div class="row" style="margin-top:6px"><span class="chip bad">庫存見底 —— 無限池要持續補貨，那筆錢在「現金流試算」那一頁</span></div>';
+
+  if(S.lastDraw){
+    var t=S.lastDraw;
+    b2+='<div class="tok"><div class="top"><span class="nm">'+esc(t.name)+'</span>'+
+        '<span class="tier '+t.tier+'">Tier '+t.tier+'</span></div>'+
+        '<div class="meta">'+esc(t.cert)+' · tokenId #'+t.tid+' · 平台估值 $'+fmt(t.val)+'</div></div>'+
+        mvHtml([{from:'player',to:'platform',amt:M.price,note:'抽包付款。這一筆<b>全額進平台</b>，之後平台再決定要不要花 85% 買回去。'}]);
+    b2+='<div class="row" style="margin-top:10px">'+
+        '<button class="btn sm" data-act="proof">驗證這張卡在不在承諾的卡池裡</button>'+
+        '<button class="btn sm" data-act="randcheck">試著驗證「抽選」本身</button></div>';
+    if(S.proofResult){
+      b2+='<div class="card tight" style="margin-top:8px;background:var(--surface-2)">'+
+          '<div class="row"><span class="chip '+(S.proofResult.ok?'ok':'bad')+'">'+
+          (S.proofResult.ok?'Merkle proof 驗證通過':'驗證失敗')+'</span>'+
+          '<span class="chip">'+S.proofResult.path.length+' 個兄弟雜湊</span></div>'+
+          '<div class="srcnote mono" style="margin-top:6px">leaf '+esc(S.proofResult.leaf.slice(0,16))+'…<br>'+
+          S.proofResult.path.map(function(p){return (p.side==='R'?'右 ':'左 ')+esc(p.h.slice(0,16))+'…';}).join('<br>')+
+          '<br>→ root '+esc(S.root.slice(0,16))+'…</div>'+
+          '<div class="srcnote">它證明的是：<b>這張卡在開賣前就在承諾的清單裡</b>，事後換不掉。'+
+          '它<b>沒有</b>證明你抽到它的過程是公平的。</div></div>';
+    }
+    if(S.randChecked){
+      b2+='<div class="card tight" style="margin-top:8px;background:var(--danger-wash);border-color:#5c2a26">'+
+          '<div class="row"><span class="chip bad">沒有可以驗的東西</span></div>'+
+          '<div class="srcnote" style="color:var(--ink)">'+
+          '這個原型的抽選用的是 <span class="mono">Math.random()</span>，因為<b>沒有東西可以模擬</b>：'+
+          'Renaiss 的 <span class="mono">docs/contracts.md</span> 列出五組合約（TokenVendingMachineV3、CollectibleInventory、'+
+          'RenaissRegistry、OrderBook、TimelockController），<b>沒有任何一個跟 VRF／randomness 有關</b>；'+
+          '沒有 seed、沒有 commit、沒有 reveal、找不到驗算頁。首頁那句 '+
+          '<span class="mono">every result is provably random</span> 目前只有這句話本身。<br><br>'+
+          '<b>VaultDraw 有的正是這一半</b>：server seed 的 commit 開賣前公開、client seed 用 drand 的<b>未來輪次</b>'+
+          '（開池當下那個數字還不存在）、售罄後公開 seed、<span class="mono">verifyReveal()</span> 讓你在瀏覽器重算整條籤序。'+
+          '<br>（但 <span class="mono">src/lib/config.ts:30 FAIRNESS_UI = false</span>，站內入口目前是關的。）'+
+          '</div></div>';
+    }
+  }
+  b2+='<details class="fact"><summary>這個原型跟真正的無限池差在哪（重要）</summary><div class="body">'+
+      '本原型的卡池是<b>固定 8 張</b>，所以我才給得出 Merkle proof —— 有「全部」才有得驗。<br>'+
+      'Renaiss 的 Gacha V2 是<b>無限池</b>：沒有固定總量，Merkle root 承諾的是「卡池的組成」而不是一份會被抽完的清單。<br>'+
+      '<b>而這正是取捨的核心</b>：VaultDraw 的可驗算性建立在「固定總籤數的一個排列」上'+
+      '（<span class="mono">fairness.ts:223-239</span> 把獎品展開成陣列再洗牌、<span class="mono">pools-service.ts:194</span> 開池時一次寫完整條籤序）。'+
+      '<b>沒有「全部」就沒有「排列」，也就沒有事後公開種子重算整條序列這回事。</b><br>'+
+      '另外：Renaiss 標示的機率是 S &lt;1% / A 2% / B 13% / C 85%，加總 101%（因為 S 寫的是「小於 1%」）。'+
+      '原型取 S=1、A=2、B=13、C=84 讓總和是 100。'+
+      '</div></details>';
+  h+=stepShell(2,'抽包（USDT 付款）',S.draws.length?('已抽 '+S.draws.length+' 包'):'待執行',
+      S.draws.length>0,locked2,b2);
+
+  /* ---------- 3 即時買回 ---------- */
+  var held=heldByPlayer();
+  var b3='<p>Renaiss 每一台機器的商品頁上都印著 <span class="mono">Instant buyback 85%</span>：'+
+     '抽到之後可以<b>立刻</b>按平台估值的 85% 賣回給平台，結算幣別是 USDT。'+
+     '<b>這一步的錢是平台自己出的。</b></p>';
+  if(!held.length){
+    b3+='<div class="row"><span class="chip">手上沒有代幣 —— 先到步驟 2 抽一包</span></div>';
+  }else{
+    b3+='<label class="f"><span class="lab">選一顆代幣</span><select id="sel-bb">'+
+        held.map(function(t){return '<option value="'+t.tid+'">#'+t.tid+' · '+esc(t.name)+'（Tier '+t.tier+'）</option>';}).join('')+
+        '</select></label>'+
+        '<label class="f"><span class="lab">平台估值調整 <b id="v-adj">'+S.valAdj+'%</b></span>'+
+        '<input type="range" id="i-adj" min="50" max="200" step="5" value="'+S.valAdj+'"></label>'+
+        '<div class="card tight" style="background:var(--surface-2)" id="bbbox">'+quoteHtml()+'</div>'+
+        '<div class="row" style="margin-top:10px"><button class="btn primary" data-act="buyback">立即賣回（85%）</button></div>';
+  }
+  if(S.boughtBack){
+    b3+='<div class="row" style="margin-top:10px"><span class="chip ok">已賣回 '+S.boughtBack+' 次</span></div>';
+  }
+  if(S.paid>0){
+    var pnl=S.got-S.paid;
+    b3+='<div class="card tight" style="margin-top:10px">'+
+        '<div class="kv"><span class="k">你到目前付出去的</span><span class="v">$'+fmt(S.paid)+'</span></div>'+
+        '<div class="kv"><span class="k">你到目前拿回來的</span><span class="v">$'+fmt(S.got)+'</span></div>'+
+        '<div class="kv big"><span class="k">淨</span><span class="v" style="color:'+(pnl>=0?'var(--ok-ink)':'var(--danger-ink)')+'">'+
+        (pnl>=0?'+':'−')+'$'+fmt(Math.abs(pnl))+'</span></div></div>';
+  }
+  b3+='<details class="fact"><summary>那根滑桿在示範什麼</summary><div class="body">'+
+      '<b>85% 的分母是平台自己的估值，而 /terms 裡完全沒有買回條款。</b>（一手，2026-09-06：商品頁印著 85%，條款讀不到。）<br>'+
+      '也就是說「85%」這個數字看起來是承諾，但它乘的那個數是平台自己定、隨時可調的。'+
+      '把滑桿拉到 50% 再看買回價 —— 買回率還是 85%，你拿到的錢少了一半。<br><br>'+
+      '<b>對照 VaultDraw：</b>買回價是<b>賣家在開賣前宣告的絕對金額</b>，封進 commit 雜湊'+
+      '（<span class="mono">fairness.ts:69-76</span>；缺買回價不給 commit，<span class="mono">pools-service.ts:140</span>），'+
+      '開賣後改了驗算就對不上。沒有滑桿可以拉。'+
+      '</div></details>'+
+      '<details class="fact"><summary>這一步在台灣的位置</summary><div class="body">'+
+      '<b>電子遊戲場業管理條例第 14 條第 2 項第 2 款</b>明文禁止「買回提供給客人之獎品」'+
+      '（<span class="mono">docs/rules.md</span> 第四節、<span class="mono">HANDOFF.md:25</span>）。<br>'+
+      '<span class="mono">HANDOFF.md:25</span> 還逐字記著：「我曾經建議過 70% 回購當行銷賣點，<b>查證後發現違法並收回</b>」——'+
+      '你現在按的這顆鈕就是那件事，數字是 85%。<br>'+
+      'Renaiss 做得到是因為主體是 <b>Renaiss Network Limited（英屬維京群島）</b>，準據法 BVI。'+
+      '<b>VaultDraw 的主體在台灣。</b>這是法域差別，不是膽量差別。<br><br>'+
+      '<span class="mono">rules.md</span> 第四節另外還有一個跟法律無關的理由：'+
+      '「平台掏錢買回會變成印鈔票 —— 賣家可以把價格喊高再自己回收。」上面那根滑桿就是那句話。'+
+      '</div></details>';
+  h+=stepShell(3,'即時買回（85%）',S.boughtBack?'完成':'待執行',S.boughtBack>0,!held.length&&!S.boughtBack,b3);
+
+  /* ---------- 4 站內二級市場 ---------- */
+  var b4='<p>代幣可以掛到站內的 OrderBook 賣給其他玩家。'+
+     '/terms 原字：<span class="mono">2% of the Platform Valuation or sale amount</span>（一手）。</p>';
+  var listed=S.tokens.filter(function(t){return t.where==='listed';});
+  if(held.length && !listed.length){
+    var d=held[0];
+    b4+='<label class="f"><span class="lab">選一顆代幣</span><select id="sel-mk">'+
+        held.map(function(t){return '<option value="'+t.tid+'">#'+t.tid+' · '+esc(t.name)+'（估值 $'+fmt(t.val)+'）</option>';}).join('')+
+        '</select></label>'+
+        '<label class="f"><span class="lab">你的開價（USDT）</span>'+
+        '<input type="number" id="i-price" value="'+Math.round(d.val*1.05)+'" min="1" step="1"></label>'+
+        '<div class="row"><button class="btn primary" data-act="list">掛賣</button></div>';
+  }else if(listed.length){
+    b4+='<div class="tok"><div class="top"><span class="nm">#'+listed[0].tid+' · '+esc(listed[0].name)+'</span>'+
+        '<span class="tier '+listed[0].tier+'">'+listed[0].tier+'</span></div>'+
+        '<div class="meta">掛賣中 · 開價 $'+fmt(listed[0].listPrice)+' · 代幣由 OrderBook 合約託管</div></div>'+
+        '<div class="row" style="margin-top:10px"><button class="btn primary" data-act="sell">模擬有人買走</button></div>';
+  }else{
+    b4+='<div class="row"><span class="chip">手上沒有代幣 —— 先到步驟 2 抽一包</span></div>';
+  }
+  if(S.sold){
+    b4+='<div class="row" style="margin-top:10px"><span class="chip ok">已成交 '+S.sold+' 筆</span>'+
+        '<span class="chip">平台抽成累計 $'+fmt(S.feeTotal)+'</span></div>';
+  }
+  b4+='<h3 style="margin-top:14px">錢真的可以離開站內</h3>'+
+      '<p>賣掉拿到的是 USDT。USDT 提回自託管錢包之後就跟平台無關了 —— 送到交易所就是新台幣。'+
+      '<b>這一顆鈕就是「點數不可換現金」那條紅線的反面。</b></p>'+
+      '<div class="row"><button class="btn" data-act="withdraw"'+(S.bal.player>0?'':' disabled')+
+      '>提領全部 $'+fmt(S.bal.player)+' 到自託管錢包</button></div>';
+  b4+='<details class="fact"><summary>對照：VaultDraw 的市場</summary><div class="body">'+
+      '同樣是站內二級市場，但<b>以點數結算、抽成 0%</b>：成交只有兩筆對沖分錄'+
+      '（<span class="mono">server/src/orders-service.ts:82-84</span>），沒有抽成那條分錄。'+
+      '託管制：貨款凍結、保證金、72h 出貨、7 天驗收（<span class="mono">src/shared/escrow.ts:20-38</span>）。<br>'+
+      '<span class="mono">MarketPage.vue:801</span> 對使用者寫的是「賣出所得為點數，不可提領現金或轉讓」——'+
+      '<b>那句話現在是真的</b>，因為提領那條路在程式碼裡不存在。<br>'+
+      '把結算幣別換成任何可以離開站內的東西，那句話就變成假的。'+
+      '</div></details>';
+  h+=stepShell(4,'站內二級市場（抽 2%）',S.sold?'完成':'待執行',S.sold>0,!held.length&&!listed.length&&!S.sold,b4);
+
+  /* ---------- 5 贖回實體卡 ---------- */
+  var b5='<p>把代幣<b>燒掉</b>，保管庫把那張實體卡寄給你。代幣消失，卡離開系統。</p>';
+  if(held.length){
+    b5+='<label class="f"><span class="lab">選一顆代幣</span><select id="sel-rd">'+
+        held.map(function(t){return '<option value="'+t.tid+'">#'+t.tid+' · '+esc(t.name)+'</option>';}).join('')+
+        '</select></label>'+
+        '<label class="f"><span class="lab">運費／贖回手續費（USDT） <span class="chip bad">查不到</span></span>'+
+        '<input type="number" id="i-ship" value="'+S.shipFee+'" min="0" step="1"></label>'+
+        '<div class="row"><button class="btn primary" data-act="redeem">申請贖回（burn）</button></div>';
+  }else{
+    b5+='<div class="row"><span class="chip">手上沒有代幣 —— 先到步驟 2 抽一包</span></div>';
+  }
+  if(S.redeemed){
+    b5+='<div class="row" style="margin-top:10px"><span class="chip ok">已贖回 '+S.redeemed+' 張，代幣已銷毀</span></div>'+
+        '<div class="card tight" style="margin-top:8px">'+
+        '<div class="srcnote" style="color:var(--ink)">贖回之後：代幣總量 −1、平台庫存永久 −1。'+
+        '<b>無限池要一直有卡可抽，所以每一次贖回都要補一張回來</b> —— 補貨的錢在「現金流試算」那一頁。</div></div>';
+  }
+  b5+='<details class="fact"><summary>為什麼運費那格標「查不到」</summary><div class="body">'+
+      '/gacha、/terms、docs、中文教學、一般搜尋都找不到 Renaiss 贖回的<b>費用、運費、時限、失敗怎麼辦</b>。'+
+      '側欄有 Redemption 這個項目，但內容沒有。所以這格是<b>可輸入的假設值</b>，預設 25 只是佔位，不是查到的數字。<br><br>'+
+      '<b>對照 VaultDraw：</b>出貨制度是寫死的 —— 申請出貨後賣家 72h 內寄出、7 天鑑賞期、'+
+      '逾期退點並記違約、違約累積到門檻不能再開池（<span class="mono">escrow.ts:20-26</span>）。'+
+      '這一項<b>目前 VaultDraw 具體得多</b>，因為對方那邊根本比不了。'+
+      '</div></details>';
+  h+=stepShell(5,'贖回實體卡',S.redeemed?'完成':'待執行',S.redeemed>0,!held.length&&!S.redeemed,b5);
+
+  h+='<div class="row end" style="margin-top:4px"><button class="btn ghost sm" data-act="reset">整條流程重來</button></div>';
+  document.getElementById('steps').innerHTML=h;
+  bindLive();
+}
+
+function selectedBB(){
+  var s=document.getElementById('sel-bb');
+  var held=heldByPlayer();
+  if(!held.length) return null;
+  if(!s) return held[0];
+  var t=held.filter(function(x){return String(x.tid)===s.value;})[0];
+  return t||held[0];
+}
+function quoteHtml(){
+  var t=selectedBB();
+  if(!t) return '';
+  var pv=t.val*S.valAdj/100, q=pv*0.85;
+  return '<div class="kv"><span class="k">這張卡的公開市場價（原型設定）</span><span class="v">$'+fmt(t.val)+'</span></div>'+
+    '<div class="kv"><span class="k">平台估值 platform valuation</span><span class="v">$'+fmt(pv)+'</span></div>'+
+    '<div class="kv big"><span class="k">買回價 ＝ 估值 × 85%</span><span class="v">$'+fmt(q)+'</span></div>';
+}
+function bindLive(){
+  var adj=document.getElementById('i-adj');
+  if(adj){
+    var upd=function(){
+      S.valAdj=+adj.value;
+      var lab=document.getElementById('v-adj'); if(lab) lab.textContent=S.valAdj+'%';
+      var box=document.getElementById('bbbox'); if(box) box.innerHTML=quoteHtml();
+    };
+    adj.addEventListener('input',upd);
+  }
+  var sel=document.getElementById('sel-bb');
+  if(sel) sel.addEventListener('change',function(){
+    var box=document.getElementById('bbbox'); if(box) box.innerHTML=quoteHtml();
+  });
+}
+
+/* ================================================================
+   5. 帳本面板
+   ================================================================ */
+function renderBooks(){
+  var h='<div class="card"><h2>餘額</h2><div class="bals">'+
+    '<div class="bal pos"><div class="k">你（站內 USDT）</div><div class="v">$'+fmt(S.bal.player)+'</div></div>'+
+    '<div class="bal pos"><div class="k">你的自託管錢包</div><div class="v">$'+fmt(S.bal.self)+'</div></div>'+
+    '<div class="bal acc"><div class="k">平台</div><div class="v">$'+fmt(S.bal.platform)+'</div></div>'+
+    '<div class="bal"><div class="k">站內買家</div><div class="v">$'+fmt(S.bal.buyer)+'</div></div>'+
+    '<div class="bal acc"><div class="k">平台抽成累計</div><div class="v">$'+fmt(S.feeTotal)+'</div></div>'+
+    '<div class="bal"><div class="k">平台庫存（張）</div><div class="v">'+inPlatform().length+'</div></div>'+
+    '</div>';
+  if(S.bal.platform<0){
+    h+='<div class="row"><span class="chip warn">平台是負的：它先掏錢買了 8 張卡當存貨。'+
+       '這筆錢要靠抽包收入回本 —— 那正是「現金流試算」在算的東西</span></div>';
+  }
+  h+='</div>';
+
+  var mine=S.tokens.filter(function(t){return t.where!=='platform';});
+  h+='<div class="card"><h2>代幣去向</h2>';
+  if(!mine.length){ h+='<p class="sub" style="margin:0">還沒有代幣離開平台庫存。</p>'; }
+  else{
+    h+='<div class="scroll"><table><thead><tr><th>tokenId</th><th>卡</th><th>位置</th></tr></thead><tbody>'+
+      mine.map(function(t){
+        var w={player:'你（站內）',self:'你的自託管錢包（平台管不到）',listed:'掛賣中（託管）',
+               buyerHeld:'站內買家',burned:'已銷毀（實體已寄出）'}[t.where]||t.where;
+        return '<tr><td class="mono">#'+t.tid+'</td><td>'+esc(t.name)+
+          ' <span class="tier '+t.tier+'">'+t.tier+'</span></td><td>'+w+'</td></tr>';
+      }).join('')+'</tbody></table></div>';
+  }
+  h+='</div>';
+
+  h+='<div class="card"><h2>帳本（每一筆錢的移動）</h2>';
+  if(!S.ledger.length){ h+='<p class="sub" style="margin:0">還沒有任何動作。從步驟 0 開始。</p>'; }
+  else{
+    h+='<div class="scroll"><table><thead><tr><th>#</th><th>從</th><th>到</th><th class="n">金額</th></tr></thead><tbody>'+
+      S.ledger.map(function(e){
+        return '<tr><td class="mono">'+e.n+'</td><td>'+esc(NAMES[e.from]||e.from)+'</td>'+
+          '<td>'+esc(NAMES[e.to]||e.to)+'</td><td class="n">$'+fmt(e.amt)+'</td></tr>'+
+          '<tr><td></td><td colspan="3" style="color:var(--faint);font-size:11.5px;padding-top:0">'+e.label+'</td></tr>';
+      }).join('')+'</tbody></table></div>';
+    var pnl=S.got-S.paid;
+    h+='<div class="kv" style="margin-top:10px"><span class="k">你付出去的</span><span class="v">$'+fmt(S.paid)+'</span></div>'+
+       '<div class="kv"><span class="k">你拿回來的</span><span class="v">$'+fmt(S.got)+'</span></div>'+
+       '<div class="kv big"><span class="k">淨</span><span class="v" style="color:'+(pnl>=0?'var(--ok-ink)':'var(--danger-ink)')+'">'+
+       (pnl>=0?'+':'−')+'$'+fmt(Math.abs(pnl))+'</span></div>';
+  }
+  h+='</div>';
+  document.getElementById('books').innerHTML=h;
+}
+
+function render(){ renderSteps(); renderBooks(); }
+
+/* ================================================================
+   6. 動作
+   ================================================================ */
+document.addEventListener('click',function(ev){
+  var b=ev.target.closest ? ev.target.closest('[data-act]') : null;
+  if(!b || b.disabled) return;
+  var a=b.getAttribute('data-act');
+  var M=MACHINES[S.machine];
+
+  if(a==='topup'){
+    move('self','player',300,'入金：USDT(BSC) 從自託管錢包轉進站內地址（Top Up）');
+  }
+  else if(a==='vault'){
+    S.vaulted=true; S.vaultReceipt='VLT-'+hex(8).toUpperCase();
+  }
+  else if(a==='mint'){
+    var cost=0;
+    S.tokens=CARDS.map(function(c,idx){
+      var v=c.val;
+      cost+=Math.round(v*COST_RATIO);
+      return {tid:1000+idx,i:c.i,tier:c.tier,name:c.name,cert:c.cert,val:v,where:'platform',listPrice:0};
+    });
+    S.mintTx=txh(); S.minted=true;
+    move('platform','supplier',cost,'取得 8 張實體卡的成本（假設進貨價＝估值 × 80%）。卡進保管庫、鏈上鑄出 8 顆 ERC-721');
+  }
+  else if(a==='transfer'){
+    var t0=heldByPlayer()[0];
+    if(t0){ t0.where='self'; S.transferred++; }
+  }
+  else if(a.indexOf('machine:')===0){
+    S.machine=+a.split(':')[1];
+  }
+  else if(a==='commit'){
+    S.manifest=S.tokens.map(function(t){
+      return {tokenId:t.tid, name:t.name, cert:t.cert, tier:t.tier, valuation:t.val};
+    });
+    S.leaves=S.manifest.map(leafHash);
+    S.levels=buildLevels(S.leaves);
+    S.root=S.levels[S.levels.length-1][0];
+    S.rootTx=txh();
+  }
+  else if(a==='draw'){
+    var pool=inPlatform();
+    if(!pool.length || S.bal.player<M.price) return;
+    var r=Math.random()*100, acc=0, tier='C';
+    var order=['S','A','B','C'];
+    for(var i=0;i<order.length;i++){ acc+=ODDS[order[i]]; if(r<acc){ tier=order[i]; break; } }
+    var cand=pool.filter(function(t){return t.tier===tier;});
+    if(!cand.length) cand=pool;
+    var got=cand[Math.floor(Math.random()*cand.length)];
+    move('player','platform',M.price,'抽一包 PANDORA '+S.machine+'：付款全額進平台');
+    got.where='player';
+    S.paid+=M.price; S.draws.push(got.tid); S.lastDraw=got;
+    S.proofResult=null; S.randChecked=false;
+  }
+  else if(a==='proof'){
+    var idx=-1;
+    for(var j=0;j<S.manifest.length;j++){ if(S.manifest[j].tokenId===S.lastDraw.tid){ idx=j; break; } }
+    if(idx>=0){
+      var leaf=S.leaves[idx], pf=proofFor(S.levels,idx);
+      S.proofResult={ok:verifyProof(leaf,pf,S.root), leaf:leaf, path:pf};
+    }
+  }
+  else if(a==='randcheck'){ S.randChecked=true; }
+  else if(a==='buyback'){
+    var tb=selectedBB();
+    if(!tb) return;
+    var q=Math.round(tb.val*S.valAdj/100*0.85*100)/100;
+    move('platform','player',q,'即時買回 85%：平台用自己的錢買回自己送出的獎品（估值 $'+fmt(tb.val*S.valAdj/100)+' × 85%）');
+    tb.where='platform'; S.got+=q; S.boughtBack++;
+  }
+  else if(a==='list'){
+    var sm=document.getElementById('sel-mk'), ip=document.getElementById('i-price');
+    var held2=heldByPlayer(); if(!held2.length) return;
+    var tl=held2.filter(function(x){return sm && String(x.tid)===sm.value;})[0]||held2[0];
+    tl.listPrice=Math.max(1, ip?+ip.value:Math.round(tl.val*1.05));
+    tl.where='listed';
+  }
+  else if(a==='sell'){
+    var ts=S.tokens.filter(function(t){return t.where==='listed';})[0];
+    if(!ts) return;
+    var price=ts.listPrice, fee=Math.round(price*0.02*100)/100;
+    move('buyer','player',price-fee,'二級市場成交：買家付 $'+fmt(price)+'，你實得 98%');
+    move('buyer','platform',fee,'平台抽成 2%（/terms：2% of the Platform Valuation or sale amount）');
+    S.feeTotal+=fee; S.got+=price-fee; ts.where='buyerHeld'; S.sold++;
+  }
+  else if(a==='withdraw'){
+    var amt=S.bal.player;
+    if(amt<=0) return;
+    move('player','self',amt,'提領 USDT 到自託管錢包 —— 從這裡送到交易所就是法幣');
+  }
+  else if(a==='redeem'){
+    var sr=document.getElementById('sel-rd'), is=document.getElementById('i-ship');
+    var held3=heldByPlayer(); if(!held3.length) return;
+    var tr=held3.filter(function(x){return sr && String(x.tid)===sr.value;})[0]||held3[0];
+    S.shipFee=is?Math.max(0,+is.value):S.shipFee;
+    if(S.shipFee>0){
+      move('player','platform',S.shipFee,'贖回運費／手續費（**假設值**，Renaiss 沒有公開）');
+      S.paid+=S.shipFee;
+    }
+    tr.where='burned'; S.redeemed++;
+  }
+  else if(a==='reset'){ reset(); }
+  else return;
+
+  render();
+});
+
+/* ================================================================
+   7. 買回的現金流試算
+   核心問題：即時買回 ＝ 平台變成做市商。它要準備多少現金與存貨？
+   ================================================================ */
+var CI=['n','p','ev','m','bb','d','l','s','sp'];
+function cv(id){ var e=document.getElementById('i-'+id); return e?+e.value:0; }
+function setv(id,val){ var e=document.getElementById('i-'+id); if(e) e.value=val; }
+
+function calcCash(){
+  var N=Math.max(1,cv('n')), P=Math.max(1,cv('p')), EV=cv('ev')/100, M=cv('m')/100,
+      BB=cv('bb')/100, D=Math.max(1,cv('d')), L=Math.max(1,cv('l')),
+      Smax=cv('s'), sp=cv('sp')/100;
+
+  document.getElementById('v-n').textContent=fmt0(N);
+  document.getElementById('v-p').textContent=fmt0(P);
+  document.getElementById('v-ev').textContent=Math.round(EV*100)+'%';
+  document.getElementById('v-m').textContent=Math.round(M*100)+'%';
+  document.getElementById('v-bb').textContent=Math.round(BB*100)+'%';
+  document.getElementById('v-d').textContent=D;
+  document.getElementById('v-l').textContent=L;
+  document.getElementById('v-s').textContent=fmt0(Smax);
+  document.getElementById('v-sp').textContent=(sp*100).toFixed(1)+'%';
+
+  var V=P*EV;                    /* 平均每包抽到的卡，平台估值 */
+  var R=N*P;                     /* 每日票收 */
+  var B=N*M*V*BB;                /* 每日買回支出 */
+  var net=R-B;
+  var tied=B*D;                  /* 壓在「買回回來還沒賣掉」的存貨上的現金 */
+  var lam=N*sp;                  /* 每日 Tier S 期望張數 */
+  var peakS=lam+2*Math.sqrt(lam);
+  var spike=peakS*Smax*BB;       /* 單日大獎買回的尖峰 */
+  var burnCards=N*(1-M);         /* 每日淨消耗張數（賣出去且沒被賣回） */
+  var restockCards=burnCards*L;
+  var restockCash=restockCards*V*COST_RATIO;
+  var total=tied+spike+restockCash;
+
+  var pctTied=total?tied/total*100:0, pctSpike=total?spike/total*100:0, pctRe=total?restockCash/total*100:0;
+
+  var h='<div class="card"><h2>每天</h2>'+
+    '<div class="kv"><span class="k">票收<span class="fx">N × P = '+fmt0(N)+' × '+fmt0(P)+'</span></span><span class="v">$'+fmt0(R)+'</span></div>'+
+    '<div class="kv"><span class="k">買回支出<span class="fx">N × 賣回比例 × (P × EV比) × 買回率</span></span><span class="v" style="color:var(--danger-ink)">−$'+fmt0(B)+'</span></div>'+
+    '<div class="kv big"><span class="k">淨現金</span><span class="v" style="color:'+(net>=0?'var(--ok-ink)':'var(--danger-ink)')+'">'+
+      (net>=0?'+':'−')+'$'+fmt0(Math.abs(net))+'</span></div>'+
+    '<div class="kv"><span class="k">賣回一包要吐回去多少（佔售價）<span class="fx">EV比 × 買回率 = '+Math.round(EV*100)+'% × '+Math.round(BB*100)+'%</span></span><span class="v" style="color:'+(EV*BB>=1?'var(--danger-ink)':'var(--ink)')+'">'+(EV*BB*100).toFixed(1)+'%</span></div>'+
+    '<div class="srcnote">淨現金 ＝ 票收的 '+(R?(net/R*100).toFixed(1):'0')+'%。'+
+      (net<0?'<b style="color:var(--danger-ink)">負的：每多賣一包就多虧一次，規模越大洞越大。</b>':'')+'</div>'+
+    '</div>';
+
+  h+='<div class="card"><h2>要先準備多少錢</h2>'+
+    '<div class="bar">'+
+      '<i style="width:'+pctTied.toFixed(1)+'%;background:var(--accent)"></i>'+
+      '<i style="width:'+pctSpike.toFixed(1)+'%;background:var(--warn)"></i>'+
+      '<i style="width:'+pctRe.toFixed(1)+'%;background:var(--info-ink)"></i>'+
+    '</div>'+
+    '<div class="legend"><span><i style="background:var(--accent)"></i>買回庫存</span>'+
+    '<span><i style="background:var(--warn)"></i>大獎尖峰</span>'+
+    '<span><i style="background:var(--info-ink)"></i>補貨存貨</span></div>'+
+    '<div class="kv" style="margin-top:10px"><span class="k">壓在買回庫存的現金<span class="fx">每日買回支出 × 再賣出天數 = '+fmt0(B)+' × '+D+'</span></span><span class="v">$'+fmt0(tied)+'</span></div>'+
+    '<div class="kv"><span class="k">單日大獎緩衝<span class="fx">(λ+2√λ) × '+fmt0(Smax)+' × '+Math.round(BB*100)+'%，λ = N × S機率 = '+lam.toFixed(2)+'</span></span><span class="v">$'+fmt0(spike)+'</span></div>'+
+    '<div class="kv"><span class="k">補貨存貨（'+fmt0(restockCards)+' 張）<span class="fx">N × (1−賣回比例) × 前置天數 × 估值 × 進貨成本率</span></span><span class="v">$'+fmt0(restockCash)+'</span></div>'+
+    '<div class="kv big"><span class="k">合計準備金</span><span class="v">$'+fmt0(total)+'</span></div>'+
+    '<div class="srcnote">相當於它公開的種子輪募資 <b>$1.5M</b> 的 <b>'+(total/1500000).toFixed(2)+' 倍</b>。'+
+    '（募資金額是業者宣稱，見決策資訊分頁。）</div>'+
+    '</div>';
+
+  h+='<div class="card"><h2>換句話說</h2><ul class="tight">'+
+    '<li>每天有 <b>'+fmt0(N*M)+'</b> 個人抽完立刻按買回鈕，平台當天就要吐出 <b>$'+fmt0(B)+'</b> 現金。</li>'+
+    '<li>那些卡要等平均 <b>'+D+' 天</b>才變回現金，所以隨時有 <b>$'+fmt0(tied)+'</b> 卡在存貨裡。</li>'+
+    '<li>每天淨消耗 <b>'+fmt0(burnCards)+' 張</b>卡，補貨要 '+L+' 天，所以要一直備著 <b>'+fmt0(restockCards)+' 張</b>（$'+fmt0(restockCash)+'）。</li>'+
+    '<li>運氣壞的那一天（同時開出約 '+peakS.toFixed(1)+' 張 Tier S 又都要求買回）要多準備 <b>$'+fmt0(spike)+'</b>。</li>'+
+    (M>=0.99&&net>=0?'<li><b>就算所有人都立刻賣回，每日損益仍然是正的</b> —— 因為 EV比 × 買回率 = '+(EV*BB*100).toFixed(1)+'%，小於 100%。<b>壓力不在損益表，在準備金與存貨周轉。</b>要讓損益翻負，這個乘積要超過 100%（例如 EV 120% × 85% = 102%）—— 右上有一顆按鈕可以直接看。</li>':'')+
+    '<li><b>這些錢跟「賺不賺」是兩回事</b>：就算每天淨現金是正的，這筆準備金也要先躺在那裡。</li>'+
+    '</ul></div>';
+
+  h+='<div class="card"><h2>對照：VaultDraw 現在的同一格</h2><ul class="tight">'+
+    '<li><b>$0。</b>買回的錢從<b>賣家</b>的保留額出（<span class="mono">pool-settlement.ts:411,415</span>），'+
+    '賣家付不出來就整筆 rollback（<span class="mono">SELLER_UNFUNDED</span>），平台帳戶不在這條路上。</li>'+
+    '<li><b>存貨也是 $0</b>：卡是賣家的、放在賣家手上，平台不代管（<span class="mono">migrations/021:57,132-138</span>）。</li>'+
+    '<li>平台承擔的是<b>履約風險</b>（託管、保證金、爭議、違約累積），不是<b>價格風險與流動性風險</b>。</li>'+
+    '<li><b>這是這個模式最大的一個差別</b>：Renaiss 那套要一筆很大的營運資金，VaultDraw 這套不用 —— '+
+    '代價是 VaultDraw 現在<b>沒有收入設計</b>。兩件事要一起看。</li>'+
+    '</ul></div>';
+
+  document.getElementById('cashout').innerHTML=h;
+}
+
+/* ================================================================
+   8. 分頁與初始化
+   ================================================================ */
+document.querySelectorAll('nav.tabs button').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('nav.tabs button').forEach(function(b){ b.setAttribute('aria-selected','false'); });
+    btn.setAttribute('aria-selected','true');
+    ['flow','compare','cash','facts'].forEach(function(p){
+      document.getElementById('p-'+p).hidden = (p!==btn.getAttribute('data-p'));
+    });
+    window.scrollTo(0,0);
+  });
+});
+
+CI.forEach(function(id){
+  var e=document.getElementById('i-'+id);
+  if(e) e.addEventListener('input',calcCash);
+});
+document.getElementById('ps-small').addEventListener('click',function(){
+  setv('n',500); setv('p',48); setv('ev',108); setv('m',40); setv('bb',85); setv('d',14); setv('l',30); calcCash();
+});
+document.getElementById('ps-claim').addEventListener('click',function(){
+  setv('n',Math.round(700000/48)); setv('p',48); setv('ev',108); setv('m',40); setv('bb',85); setv('d',14); setv('l',30); calcCash();
+});
+document.getElementById('ps-worst').addEventListener('click',function(){
+  setv('m',100); calcCash();
+});
+document.getElementById('ps-neg').addEventListener('click',function(){
+  setv('m',100); setv('ev',120); calcCash();
+});
+
+render();
+calcCash();
+})();
+</script>
+</body>
+</html>

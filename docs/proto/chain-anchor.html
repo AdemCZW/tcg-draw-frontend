@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>承諾的外部時間戳 · 原型</title>
+<style>
+/* ------------------------------------------------------------------
+   色票抄自 src/styles/tokens.css（只抄這份原型用得到的那些）。
+   這份檔案刻意自包含：不連外、不載字體、不吃專案的 CSS。
+   ——「不連外」是這份原型的一部分論述：它證明驗算不需要任何伺服器。
+------------------------------------------------------------------- */
+:root{
+  --bg:#0d0c0f; --surface:#17161a; --surface-2:#1e1c22; --surface-3:#272430;
+  --line:#302d38; --line-soft:#222029;
+  --ink:#f4f1ee; --muted:#a49b96; --faint:#6f6862;
+  --accent:#f73b20; --on-accent:#fff; --accent-soft:#ff5236; --accent-wash:#2c1512;
+  --tier-a:#f2b544; --tier-b:#a98cff; --tier-c:#4fc9ef; --tier-d:#8f8880;
+  --gold-deep:#ecc063;
+  --ok:#35c98a; --warn:#f0a13a; --danger:#ff5a4d;
+  --ok-wash:#11251c; --warn-wash:#2a2114; --danger-wash:#2c1614;
+  --ok-ink:#4fd8a0; --warn-ink:#f0a13a; --danger-ink:#ff5a4d;
+  --info-wash:#14203a; --info-ink:#6aa9f5;
+  --scrim:rgba(0,0,0,.67); --field:#0f1115;
+  --font-body:"Inter","Noto Sans TC",system-ui,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,monospace;
+  --radius:18px;
+}
+:root[data-theme="light"]{
+  --bg:#fdfbfa; --surface:#fff; --surface-2:#f6f2f0; --surface-3:#efe9e6;
+  --line:#e8e0dc; --line-soft:#f0eae7;
+  --ink:#1a1614; --muted:#7a706b; --faint:#a89f9a;
+  --accent:#f73b20; --accent-soft:#f84d35; --accent-wash:#fde8e4;
+  --tier-a:#e0961b; --tier-b:#8b6ff0; --tier-c:#3aa5c9; --tier-d:#a49a92;
+  --gold-deep:#b9801c;
+  --ok:#23a06a; --warn:#d98324; --danger:#e0453a;
+  --ok-wash:#eaf7ee; --warn-wash:#fdf4e3; --danger-wash:#fdeceb;
+  --ok-ink:#1c7d68; --warn-ink:#8a5108; --danger-ink:#b3251c;
+  --info-wash:#e8effa; --info-ink:#1e4e8c;
+  --scrim:rgba(0,0,0,.45); --field:#f6f2f0;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:14px;line-height:1.65;-webkit-font-smoothing:antialiased}
+button{font:inherit;cursor:pointer;color:inherit}
+input,select{font:inherit;color:inherit}
+a{color:var(--info-ink)}
+
+.wrap{max-width:900px;margin:0 auto;padding:18px 14px 80px}
+h1{font-size:21px;margin:0 0 6px;line-height:1.35}
+h2{font-size:16px;margin:0 0 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+h3{font-size:13px;margin:16px 0 6px;color:var(--muted);letter-spacing:.02em}
+p{margin:0 0 10px}
+.lede{color:var(--muted);font-size:13.5px;margin:0 0 14px}
+.lede strong{color:var(--ink)}
+
+/* ---------- 真的／模擬 標記：這份原型最重要的一個視覺約定 ---------- */
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;
+  padding:2px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap;line-height:1.6}
+.tag.real{background:var(--ok-wash);color:var(--ok-ink);border-color:var(--ok)}
+.tag.sim{background:var(--warn-wash);color:var(--warn-ink);border-color:var(--warn)}
+.tag.n{background:var(--surface-3);color:var(--muted);border-color:var(--line)}
+
+.legend{display:grid;gap:8px;border:1px solid var(--line);border-radius:14px;
+  background:var(--surface);padding:12px 13px;margin:0 0 18px}
+.legend .row{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:var(--muted)}
+.legend .row b{color:var(--ink);font-weight:600}
+
+/* ---------- 步驟導覽 ---------- */
+.steps{position:sticky;top:0;z-index:30;background:var(--bg);
+  padding:8px 0 9px;margin:0 0 14px;border-bottom:1px solid var(--line-soft);
+  display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.steps button{flex:0 0 auto;min-height:40px;padding:0 12px;border:1px solid var(--line);
+  border-radius:10px;background:var(--surface-2);font-size:12.5px;white-space:nowrap}
+.steps button .n{font-family:var(--font-mono);color:var(--faint);margin-right:5px}
+.steps button.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:700}
+.steps button.on .n{color:var(--on-accent);opacity:.75}
+
+section.card{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);
+  padding:15px 14px;margin:0 0 14px;scroll-margin-top:64px}
+section.card > .why{font-size:12.5px;color:var(--muted);margin:0 0 12px}
+section.card > .why strong{color:var(--ink)}
+
+.kv{display:grid;gap:9px;margin:10px 0}
+/* grid / flex 的子項預設 min-width:auto，會被裡面那條 40 位元的雜湊撐開，
+   於是整頁在 393px 橫向溢出。這三行是「窄螢幕不跑版」的全部。 */
+.kv > div,.grid2 > *,.calc > div{min-width:0}
+.tscroll{max-width:100%}
+.kv .k{font-size:11.5px;font-weight:700;color:var(--muted);letter-spacing:.02em;
+  display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:2px}
+.hash{font-family:var(--font-mono);font-size:12px;line-height:1.55;word-break:break-all;
+  background:var(--field);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.hash.ok{border-color:var(--ok);background:var(--ok-wash);color:var(--ok-ink)}
+.hash.bad{border-color:var(--danger);background:var(--danger-wash);color:var(--danger-ink)}
+pre.hash{margin:0;overflow-x:auto;white-space:pre;word-break:normal}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+.tscroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--field)}
+.tscroll table{min-width:520px}
+th,td{padding:7px 9px;text-align:left;border-bottom:1px solid var(--line-soft);vertical-align:top}
+th{font-size:11px;color:var(--muted);font-weight:700;white-space:nowrap}
+tbody tr:last-child td{border-bottom:0}
+td.num{font-family:var(--font-mono);text-align:right;white-space:nowrap}
+.tier{display:inline-block;min-width:20px;text-align:center;font-weight:800;font-size:11px;
+  border-radius:6px;padding:1px 5px}
+.tier.A{background:var(--tier-a);color:#241a02}
+.tier.B{background:var(--tier-b);color:#fff}
+.tier.C{background:var(--tier-c);color:#03222c}
+.tier.D{background:var(--tier-d);color:#1a1614}
+td.diff{background:var(--danger-wash);color:var(--danger-ink);font-weight:700}
+
+.note{border-left:3px solid var(--line);padding:2px 0 2px 11px;font-size:12.5px;color:var(--muted);margin:10px 0}
+.note.warn{border-color:var(--warn);color:var(--warn-ink)}
+.note.danger{border-color:var(--danger);color:var(--danger-ink)}
+.note.info{border-color:var(--info-ink)}
+
+.btnrow{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0 4px}
+.btnrow .lbl{width:100%;font-size:11.5px;font-weight:700;color:var(--muted)}
+.tgl{min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:10px;
+  background:var(--surface-2);font-size:12.5px}
+.tgl.on{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:700}
+.tgl.safe.on{background:var(--ok);border-color:var(--ok);color:#04140d}
+
+.checks{display:grid;gap:7px;margin:10px 0 0}
+.chk{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;
+  border:1px solid var(--line);border-radius:11px;padding:8px 10px;background:var(--surface-2)}
+.chk .mark{flex:0 0 20px;font-weight:800;text-align:center;font-family:var(--font-mono)}
+.chk.pass{border-color:var(--ok);background:var(--ok-wash)} .chk.pass .mark{color:var(--ok-ink)}
+.chk.fail{border-color:var(--danger);background:var(--danger-wash)} .chk.fail .mark{color:var(--danger-ink)}
+.chk.skip{opacity:.55}
+.chk b{font-weight:700}
+.chk .sub{display:block;color:var(--muted);font-size:11.5px;margin-top:1px}
+.chk.pass .sub,.chk.fail .sub{color:inherit;opacity:.85}
+
+.verdict{border-radius:13px;padding:11px 12px;font-weight:700;font-size:13.5px;
+  display:flex;gap:9px;align-items:center;margin:12px 0 0;flex-wrap:wrap}
+.verdict.ok{background:var(--ok-wash);color:var(--ok-ink);border:1px solid var(--ok)}
+.verdict.bad{background:var(--danger-wash);color:var(--danger-ink);border:1px solid var(--danger)}
+.verdict .sm{font-weight:500;font-size:12px;opacity:.9;flex:1 1 200px}
+
+.seats{display:grid;grid-template-columns:repeat(auto-fill,minmax(38px,1fr));gap:4px;margin:8px 0}
+.seat{aspect-ratio:1;border-radius:7px;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;font-size:9.5px;font-family:var(--font-mono);border:1px solid var(--line-soft)}
+.seat .no{font-size:8.5px;opacity:.65}
+.seat.A{background:var(--tier-a);color:#241a02;border-color:var(--tier-a)}
+.seat.B{background:var(--tier-b);color:#fff;border-color:var(--tier-b)}
+.seat.C{background:var(--tier-c);color:#03222c;border-color:var(--tier-c)}
+.seat.D{background:var(--surface-2);color:var(--muted)}
+.seat.mismatch{outline:2px solid var(--danger);outline-offset:-2px}
+
+.grid2{display:grid;gap:11px}
+@media(min-width:760px){ .grid2{grid-template-columns:1fr 1fr} }
+
+.calc label{display:block;font-size:11.5px;font-weight:700;color:var(--muted);margin:0 0 4px}
+.calc input[type=number],.calc select{width:100%;min-height:44px;padding:0 10px;border-radius:10px;
+  border:1px solid var(--line);background:var(--field)}
+.calc input[type=range]{width:100%;accent-color:var(--accent);min-height:34px}
+.out{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:9px;margin:12px 0 0}
+.out .o{border:1px solid var(--line);border-radius:12px;padding:9px 11px;background:var(--surface-2)}
+.out .o b{display:block;font-size:11px;color:var(--muted);font-weight:700}
+.out .o .v{font-family:var(--font-mono);font-size:18px;font-weight:600;margin-top:1px}
+.out .o .d{font-size:11px;color:var(--muted);margin-top:1px}
+.out .o.hot{border-color:var(--accent)}
+
+ul.tight{margin:6px 0 10px;padding-left:19px}
+ul.tight li{margin:0 0 5px}
+.cant{border:1px solid var(--danger);background:var(--danger-wash);border-radius:14px;padding:13px 14px}
+.cant h2{color:var(--danger-ink)}
+.cant li{color:var(--ink)}
+.cant li b{color:var(--danger-ink)}
+
+.foot{color:var(--faint);font-size:11.5px;margin:22px 0 0;line-height:1.7}
+.themebtn{position:fixed;right:10px;bottom:10px;z-index:60;min-height:40px;padding:0 12px;
+  border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:12px;
+  box-shadow:0 4px 18px rgba(0,0,0,.3)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>「開賣前就封存了」這句話，誰能作證？</h1>
+  <p class="lede">
+    VaultDraw 現在已經有 commit-reveal、drand 未來輪次、開賣前寫死的籤序、開獎後公開的 server seed，
+    以及可以在瀏覽器裡自己重算的 <code>verifyReveal()</code>。<br>
+    <strong>唯一缺的是：「這份承諾在開賣前就存在」目前只有我們自己的資料庫說了算。</strong>
+    這份原型把整條流程走一遍，示範外部時間戳補的是哪一格 —— <strong>只做這件事，不做別的。</strong>
+  </p>
+  <p class="lede" style="border-left:3px solid var(--accent);padding-left:11px">
+    <strong>先講結論，因為它跟標題不一樣：走完第 6 節的成本與死線分析之後，
+    這份原型的建議是「不上鏈」</strong> —— 改用免費的 RFC 3161 公開 TSA（秒回、$0、不用持有加密貨幣），
+    加 OpenTimestamps 當長期底墊。鏈在這裡是被評估的選項之一，不是預設答案。
+    <span style="color:var(--muted)">完整判斷寫在 <code>docs/chain-anchoring.md</code>。</span>
+  </p>
+
+  <div class="legend">
+    <div class="row"><span class="tag real">真的</span><span><b>驗算、雜湊、Merkle 樹全部在你的瀏覽器現算</b>，用的是 <code>src/shared/fairness.ts</code> 經 esbuild 去掉型別後的同一份程式碼（<code>docs/proto/build-anchor-proto.mjs</code> 產生，沒有手抄）。drand 第 <span class="mono">6440151</span> 輪的亂數是 2026-09-06 從 <code>api.drand.sh</code> 抓下來的真值。</span></div>
+    <div class="row"><span class="tag sim">模擬</span><span><b>鏈上那一段全部是假的</b> —— 交易雜湊、區塊高度、區塊時間、gas 價格都是編出來的。<b>這份原型沒有連任何鏈、沒有錢包、沒有金鑰、沒有送出任何交易</b>，主網測試網都沒有。</span></div>
+    <div class="row"><span class="tag n">界線</span><span>這裡<b>只錨定雜湊</b>。沒有代幣、沒有 NFT、沒有加密貨幣計價、沒有平台買回、連上錢包也買不到賣不掉任何東西。鏈在這裡只是一台<b>沒有人能改的公證時鐘</b>。</span></div>
+  </div>
+
+  <nav class="steps" id="steps">
+    <button data-go="s1"><span class="n">1</span>封存</button>
+    <button data-go="s2"><span class="n">2</span>錨定上鏈</button>
+    <button data-go="s3"><span class="n">3</span>開獎</button>
+    <button data-go="s4"><span class="n">4</span>任何人重算</button>
+    <button data-go="s5"><span class="n">5</span>竄改實驗</button>
+    <button data-go="s6"><span class="n">6</span>批次與成本</button>
+    <button data-go="s7"><span class="n">!</span>不能證明什麼</button>
+  </nav>
+
+  <!-- ============ 1 封存 ============ -->
+  <section class="card" id="s1">
+    <h2>1 · 開賣前封存 <span class="tag real">真的</span></h2>
+    <p class="why">
+      賣家把獎品清單填完、按下開池的那一刻，後端做三件事（<code>server/src/pools-service.ts</code> <code>commitPool()</code>）：
+      產生 32 bytes 的 <code>server_seed</code>、把獎品清單序列化成 <strong>manifest v4</strong> 並雜湊、
+      再把兩者綁成一個 <code>commit_hash</code>。同時鎖定一個<strong>還沒發生</strong>的 drand 輪次當 client seed 來源。
+    </p>
+
+    <h3>獎品清單（40 籤）</h3>
+    <div class="tscroll">
+      <table id="manifestTable"><thead><tr>
+        <th>賞</th><th>卡</th><th>版本</th><th class="num">張數</th><th class="num">參考價</th><th class="num">買回價</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+    <p class="note">
+      <strong>版本（variantId）也在承諾裡。</strong> 同一組卡號 SV2a-025 的普卡與大師球鏡面實測價差約 18,000 倍
+      —— v4 以前這兩張在承諾裡是同一個東西。
+    </p>
+
+    <h3>序列化成一個決定性的字串（每一行一個獎項，欄位以 <code>|</code> 分隔）</h3>
+    <pre class="hash" id="manifestStr"></pre>
+
+    <div class="kv">
+      <div><div class="k">manifest_hash ＝ SHA256(上面那串)</div><div class="hash" id="mHash"></div></div>
+      <div><div class="k">server_seed（開賣時<strong>不</strong>公開，開獎後才給）</div><div class="hash" id="sSeed"></div></div>
+      <div><div class="k">commit_hash ＝ SHA256(server_seed ‖ manifest_hash) <span class="tag n">開賣前公開</span></div><div class="hash" id="cHash"></div></div>
+      <div><div class="k">client_seed 來源 <span class="tag n">封存時鎖定</span></div><div class="hash" id="cSrc"></div></div>
+    </div>
+    <p class="note info">
+      drand 每 30 秒出一輪，封存時鎖定的是「現在這輪 + 4」，大約兩分鐘後才會出現。
+      <strong>那個數字在封存的當下還不存在，所以賣家沒辦法反覆試到對自己有利的籤序。</strong>
+    </p>
+  </section>
+
+  <!-- ============ 2 錨定 ============ -->
+  <section class="card" id="s2">
+    <h2>2 · 錨定 <span class="tag sim">鏈上那一段是模擬</span></h2>
+    <p class="why">
+      <strong>要錨的是 <code>commit_hash</code>，時機是「commit 寫進資料庫之後、池變成 open 開始賣之前」。</strong>
+      不是 <code>manifest_hash</code>：那只綁獎品清單，不綁種子。也不是開獎後才錨：那時候錨什麼都證明不了，
+      因為要證明的正是「這份承諾在開賣前就長這樣」。
+    </p>
+
+    <h3>死線不是「開賣前」，是「drand 那一輪出現之前」<span class="tag n">這一段是這份原型最重要的判斷</span></h3>
+    <p style="font-size:12.5px;color:var(--muted);margin:0 0 8px">
+      錨定要擋的攻擊很具體：<strong>平台看到 drand 的亂數之後，回頭把資料庫裡的 <code>server_seed</code>
+      和 <code>commit_hash</code> 改掉</strong>，試到一組讓自己人中 A 賞的種子，再宣稱「本來就是這個」。
+      commit_hash 存在我們自己的資料庫裡，我們改得動。
+    </p>
+    <div class="tscroll" style="margin:0 0 8px"><table><thead><tr>
+      <th>時刻</th><th>程式在哪</th><th>發生什麼</th><th>錨定來得及嗎</th>
+    </tr></thead><tbody>
+      <tr><td class="num">T</td><td><code>commitPool()</code></td><td>種子產生、commit 寫進 DB、鎖定 drand 第 R 輪</td><td>—</td></tr>
+      <tr><td class="num">T+2 分</td><td>drand</td><td><b>第 R 輪的亂數公開</b>（<code>FUTURE_ROUNDS = 4</code>，4 × 30 秒）</td><td><b style="color:var(--danger-ink)">死線</b></td></tr>
+      <tr><td class="num">T+2 分</td><td><code>openPool()</code></td><td>算完 40 個籤位寫進 <code>pool_seats</code>，開始賣</td><td>已經太晚</td></tr>
+    </tbody></table></div>
+    <p class="note danger">
+      <strong>錨定晚於 drand 那一輪，就完全擋不到磨種子這件事</strong> —— 它只證明「這串東西在那個晚一點的時刻存在」，
+      而攻擊正好發生在那之前。所以預算是<strong>約兩分鐘</strong>。<br>
+      這個預算是可以調的：<code>FUTURE_ROUNDS</code> 從 4 改成 40 就變成 20 分鐘，
+      代價是賣家按下開池到真的開賣之間要多等 18 分鐘。<strong>這是一個產品決定，不是技術限制。</strong>
+    </p>
+
+    <h3>要上鏈的那 32 bytes 從哪來</h3>
+    <p style="font-size:12.5px;color:var(--muted);margin:0 0 8px">
+      直接錨 <code>commit_hash</code> 也可以，但那樣鏈上看不出它是哪個池的承諾。所以先做一個
+      <strong>錨定葉子（leaf）</strong>：把池編號、承諾、清單雜湊、manifest 版本、drand 輪次、總籤數
+      串成一段有網域前綴的字串再雜湊。前綴 <code>vaultdraw/anchor/v1</code> 是為了讓這個雜湊
+      不可能跟別的用途撞在一起。
+    </p>
+    <div class="kv">
+      <div><div class="k">leaf 原文（preimage）</div><pre class="hash" id="leafPre"></pre></div>
+      <div><div class="k">leaf ＝ SHA256(原文) <span class="tag real">現算</span></div><div class="hash" id="leafHash"></div></div>
+    </div>
+
+    <h3>單筆錨定：一個池一筆交易</h3>
+    <div class="kv">
+      <div><div class="k">交易的 calldata（32 bytes）<span class="tag real">現算</span></div><div class="hash" id="calldata"></div></div>
+      <div><div class="k">交易紀錄 <span class="tag sim">以下四行全部是編的</span></div>
+        <pre class="hash" id="txSingle"></pre></div>
+    </div>
+    <p class="note warn">
+      <strong>模擬的部分到此為止。</strong> 上面那筆交易不存在，雜湊是我用 leaf 再雜湊一次假裝出來的，
+      區塊高度與時間也是編的。真的要做的話，是一個只會呼叫一次 <code>0x</code> 資料交易的自有位址，
+      對方是誰不重要 —— <strong>錨定不需要智慧合約，把 32 bytes 寫進 calldata 就夠了。</strong>
+    </p>
+
+    <h3>批次錨定：一天的池打包成一棵 Merkle 樹 <span class="tag real">樹是現算的</span></h3>
+    <p style="font-size:12.5px;color:var(--muted);margin:0 0 8px">
+      每個池錨一筆會很貴（見第 6 節）。改成一天收集 N 個 leaf、算出一個 Merkle root、
+      <strong>一天只送一筆交易</strong>。任何人要驗證某個池有沒有在那一天被錨定，
+      只需要 root、自己那片 leaf、以及 <span id="proofLen">—</span> 個兄弟節點雜湊。
+    </p>
+    <div class="calc" style="margin:0 0 10px">
+      <label for="batchN">那一天有幾個池：<span class="mono" id="batchNv">100</span></label>
+      <input type="range" id="batchN" min="1" max="500" value="100" step="1">
+    </div>
+    <div class="kv">
+      <div><div class="k">Merkle root（這一筆才是真正上鏈的 32 bytes）</div><div class="hash" id="mroot"></div></div>
+      <div><div class="k">我們這個池的 inclusion proof（<span id="proofLen2">—</span> 個雜湊）</div><pre class="hash" id="proof"></pre></div>
+      <div><div class="k">拿 leaf + proof 重算 root <span class="tag real">現算比對</span></div><div class="hash" id="proofCheck"></div></div>
+    </div>
+    <p class="note danger">
+      <strong>但按照上面那條死線，一天一包其實把整件事做掉了。</strong>
+      一天打一包，錨定會晚於 drand 那一輪最多 24 小時 ——
+      <strong>磨種子那條路完全沒被擋到</strong>，剩下的只有「我們到當天結束為止公布的是這一份」這個弱很多的主張。
+      要讓批次還有意義，包的間隔必須小於 <code>FUTURE_ROUNDS</code> 給的預算（現在是兩分鐘），
+      也就是一天要打 720 包 —— 那時候批次已經沒有在省錢了。
+    </p>
+    <p class="note">
+      <strong>所以批次的結論是：在便宜的鏈上不要批次，在貴的鏈上批次也救不了。</strong>
+      這個 Merkle 示範留在這裡是因為它<strong>另有一個用途</strong> ——
+      如果哪天要證明的是「<strong>那一天所有的池</strong>都被錨了、沒有偷偷跳過作弊的那幾個」，
+      一天一包、並公開那一包涵蓋的池編號區間，正好是做那件事的形狀。
+      <span style="color:var(--muted)">（那是另一個問題，這份原型沒有解。）</span>
+    </p>
+  </section>
+
+  <!-- ============ 3 開獎 ============ -->
+  <section class="card" id="s3">
+    <h2>3 · 開獎 <span class="tag real">真的</span></h2>
+    <p class="why">
+      封存後約兩分鐘，鎖定的 drand 輪次出現，那個亂數變成 <code>client_seed</code>，
+      系統用 <code>HMAC-SHA256(server_seed, client_seed)</code> 的位元流跑 Fisher-Yates
+      把 40 個籤位一次排完寫進資料庫。售罄或關池之後，<code>server_seed</code> 才公開。
+    </p>
+    <div class="kv">
+      <div><div class="k">client_seed ＝ drand 第 6440151 輪的 randomness <span class="tag real">2026-09-06 實抓</span></div><div class="hash" id="cSeed"></div></div>
+      <div><div class="k">server_seed <span class="tag n">開獎後才公開</span></div><div class="hash" id="sSeed2"></div></div>
+    </div>
+    <h3>公布的籤序（1 號籤在左上）</h3>
+    <div class="seats" id="seats"></div>
+  </section>
+
+  <!-- ============ 4 重算 ============ -->
+  <section class="card" id="s4">
+    <h2>4 · 任何人重算，再跟鏈上紀錄比對 <span class="tag real">verifyReveal() 現跑</span></h2>
+    <p class="why">
+      下面五條檢查，<strong>前四條是 <code>verifyReveal()</code> 自己回報的</strong>（同一支函式、同一份程式碼）。
+      <strong>第五條是這份原型加的新東西</strong> —— 把重算出來的 leaf 拿去跟鏈上那筆錨定比對。
+      前四條回答「這份資料自己前後一致嗎」，第五條回答「這份承諾是不是開賣前就存在」。
+    </p>
+    <div class="checks" id="checks"></div>
+    <div class="verdict" id="verdict"></div>
+  </section>
+
+  <!-- ============ 5 竄改 ============ -->
+  <section class="card" id="s5">
+    <h2>5 · 竄改實驗：按一下，看它壞在哪 <span class="tag real">真的重算</span></h2>
+    <p class="why">
+      假設平台在開賣後偷偷動手腳，然後把動過的資料端給你驗。按下面任一顆鈕，
+      上面第 4 節會<strong>立刻用改過的資料重跑一次真的 <code>verifyReveal()</code></strong>。
+      注意每一種竄改壞在第幾條 —— <strong>有一種只有第五條抓得到，那一條正是這份原型要補的東西。</strong>
+    </p>
+    <div class="btnrow" id="tampers">
+      <span class="lbl">選一種竄改（再按一次取消）</span>
+      <button class="tgl safe on" data-t="none">沒有竄改</button>
+      <button class="tgl" data-t="buyback">開賣後偷偷調低 A 賞買回價</button>
+      <button class="tgl" data-t="variant">把大師球鏡面換成同卡號的普卡</button>
+      <button class="tgl" data-t="qty">A 賞清單寫 1 張，實際排 0 張</button>
+      <button class="tgl" data-t="seed">開獎時換一顆 server seed</button>
+      <button class="tgl" data-t="anchor">資料全對，但鏈上根本沒錨過這個池</button>
+    </div>
+    <div class="note" id="tamperNote"></div>
+    <h3>現在算出來的 vs 開賣前公布的</h3>
+    <div class="kv grid2">
+      <div><div class="k">manifest_hash（現算）</div><div class="hash" id="mHashNow"></div></div>
+      <div><div class="k">commit_hash（現算）</div><div class="hash" id="cHashNow"></div></div>
+      <div><div class="k">leaf（現算）</div><div class="hash" id="leafNow"></div></div>
+      <div><div class="k">leaf（鏈上那筆錨的）<span class="tag sim">模擬</span></div><div class="hash" id="leafChain"></div></div>
+    </div>
+  </section>
+
+  <!-- ============ 6 成本 ============ -->
+  <section class="card" id="s6">
+    <h2>6 · 這要花多少錢 <span class="tag sim">價格是假設值，可以自己改</span></h2>
+    <p class="why">
+      下面每一條鏈的「單筆成本」都是可以改的輸入格 —— <strong>因為 gas 會變，寫死一個數字三個月後就是騙人。</strong>
+      預設值是 2026-09 的量級估計，<strong>不是報價</strong>。要當真請自己查當下的 gas 與幣價再填進去。
+      一筆錨定交易 ＝ 22,280 gas（EIP-7623 的 calldata floor：21,000 ＋ 32 bytes 全非零）；L2 還要加上寫進 L1 的資料費 —— <strong>但 blob 之後那一塊只佔 Base 總成本的 0.8%</strong>。<br>預設值是 2026-09-05 從台灣直連各鏈 RPC 實測的 gas 與當日幣價算出來的，<strong>是那一個時點的快照，不是報價</strong>。
+    </p>
+    <div class="calc grid2">
+      <div>
+        <label for="chain">鏈</label>
+        <select id="chain"></select>
+      </div>
+      <div>
+        <label for="perTx">單筆錨定成本（USD）</label>
+        <input type="number" id="perTx" step="0.0001" min="0">
+      </div>
+      <div>
+        <label for="pools">每天幾個池：<span class="mono" id="poolsV">100</span></label>
+        <input type="range" id="pools" min="1" max="1000" value="100">
+      </div>
+      <div>
+        <label for="batches">每天送幾筆交易（1 ＝ 一天一包）：<span class="mono" id="batchesV">1</span></label>
+        <input type="range" id="batches" min="1" max="48" value="1">
+      </div>
+    </div>
+    <div class="out" id="costOut"></div>
+    <p class="note" id="chainNote"></p>
+
+    <h3>不上鏈的替代方案</h3>
+    <div class="tscroll">
+      <table id="altTable"><thead><tr>
+        <th>做法</th><th>成本／年</th><th>時間戳來自</th><th>過得了 2 分鐘死線嗎</th><th>要害</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+    <p class="note info" id="recommend"></p>
+  </section>
+
+  <!-- ============ 7 不能證明什麼 ============ -->
+  <section class="card cant" id="s7">
+    <h2>! · 這件事不能證明什麼</h2>
+    <p style="margin:0 0 10px">
+      錨定只證明一件事，而且只有一件：
+      <strong>「這串 32 bytes 在那個區塊的時間之前就已經存在了。」</strong>
+      把它講得比這更大，就是變成另一個 Renaiss。以下每一條都<strong>還是</strong>要靠別的東西保證：
+    </p>
+    <ul class="tight">
+      <li><b>不證明獎品清單誠實。</b> 賣家可以在開賣前就把一張爛卡標成 A 賞、把參考價灌水。
+        錨定只讓他<strong>改不了</strong>，不讓他<strong>一開始就誠實</strong>。</li>
+      <li><b>不證明實體卡真的存在。</b> 平台不代管實體卡，系統不知道賣家手上有沒有那張卡。
+        錨一份不存在的卡的雜湊，鏈會照收不誤。</li>
+      <li><b>不證明鑑定編號是真的。</b> <code>certNo</code> 只是一個賣家填的字串，PSA 查證已經移除。
+        錨定會把一個假的鑑定編號忠實地封存起來。</li>
+      <li><b>不證明平台在別的地方沒作弊。</b> 出貨、市場撮合、點數帳、客服裁決、
+        「哪些池被放到首頁」—— 全部不在這個雜湊裡。</li>
+      <li><b>不證明「所有的池」都被錨了。</b> 鏈上有這一筆，只代表<strong>這一個</strong>池被錨了。
+        平台大可以只錨乖乖的池、對作弊的池跳過不錨。
+        <span style="color:var(--muted)">（能堵的做法是錨一條連續的雜湊鏈或每天固定發一包並公開池編號區間 —— 那是下一步，這份原型沒做。）</span></li>
+      <li><b>不證明賣家會履行買回。</b> 買回價寫進承諾只讓它<strong>改不了</strong>；
+        真的付得出來靠的是保留額與違約機制，不是鏈。</li>
+      <li><b>對 99% 的使用者，它不會讓人更信任。</b> 會自己算雜湊的人本來就少。
+        錨定真正的用途是：<strong>吵起來的時候，第三方可以獨立判斷誰在說謊。</strong>
+        它是給爭議準備的，不是給行銷用的。</li>
+    </ul>
+    <p style="margin:10px 0 0">
+      <b>還有一條要對自己誠實的：</b>
+      錨定沒有讓 VaultDraw 的公平性變好 —— commit-reveal 與 drand 早就在跑了。
+      它只是把「<strong>開賣前就封存了</strong>」這句話的<strong>見證人</strong>，
+      從「我們自己的資料庫」換成「一台我們關不掉的時鐘」。
+      <strong>提升的是可爭議性，不是隨機性。</strong>
+    </p>
+  </section>
+
+  <p class="foot">
+    原型檔案：<code>docs/proto/chain-anchor.html</code>（自包含，不連外）。
+    驗算程式碼由 <code>docs/proto/build-anchor-proto.mjs</code> 從 <code>src/shared/fairness.ts</code> 機械產生。<br>
+    這份原型沒有動 <code>src/</code>、<code>server/</code> 或任何進建置的東西，也沒有連上任何鏈。
+  </p>
+</div>
+
+<button class="themebtn" id="themebtn">切換亮／暗</button>
+
+<script>
+/* ==== FAIRNESS:BEGIN (generated — 不要手改) ==== */
+var Fairness = (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key) && key !== except)
+          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    }
+    return to;
+  };
+  var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+  // src/shared/fairness.ts
+  var fairness_exports = {};
+  __export(fairness_exports, {
+    bytesToHex: () => bytesToHex,
+    commitOf: () => commitOf,
+    commitV2: () => commitV2,
+    hexToBytes: () => hexToBytes,
+    manifestHashOf: () => manifestHashOf,
+    manifestString: () => manifestString,
+    seatSequence: () => seatSequence,
+    sha256Hex: () => sha256Hex,
+    verifyReveal: () => verifyReveal
+  });
+  var subtle = globalThis.crypto.subtle;
+  var te = new TextEncoder();
+  var bytesToHex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  function hexToBytes(hex) {
+    const clean = hex.trim().toLowerCase();
+    if (clean.length % 2 || /[^0-9a-f]/.test(clean)) throw new Error("not hex");
+    const out = new Uint8Array(clean.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+    return out;
+  }
+  async function sha256Hex(data) {
+    const buf = typeof data === "string" ? te.encode(data) : data;
+    return bytesToHex(new Uint8Array(await subtle.digest("SHA-256", buf)));
+  }
+  var commitOf = (serverSeedHex) => sha256Hex(hexToBytes(serverSeedHex));
+  function manifestString(prizes, version = 2) {
+    const v = (x) => x === null || x === void 0 ? "" : String(x);
+    return [...prizes].sort((a, b) => a.prizeId < b.prizeId ? -1 : a.prizeId > b.prizeId ? 1 : 0).map((p) => {
+      const cols = [
+        p.prizeId,
+        p.tier,
+        p.total,
+        p.name,
+        v(p.setCode),
+        v(p.cardNo),
+        v(p.grader),
+        v(p.grade),
+        v(p.certNo),
+        v(p.refPrice)
+      ];
+      if (version >= 3) cols.push(v(p.buyback));
+      if (version >= 4) cols.push(v(p.variantId));
+      return cols.map(v).join("|");
+    }).join("\n");
+  }
+  var manifestHashOf = (prizes, version = 2) => sha256Hex(manifestString(prizes, version));
+  async function commitV2(serverSeedHex, manifestHash) {
+    const seed = hexToBytes(serverSeedHex);
+    const man = hexToBytes(manifestHash);
+    const buf = new Uint8Array(seed.length + man.length);
+    buf.set(seed, 0);
+    buf.set(man, seed.length);
+    return sha256Hex(buf);
+  }
+  async function hmacKey(seed) {
+    return subtle.importKey("raw", seed, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  }
+  var Stream = class {
+    constructor(key, client) {
+      this.key = key;
+      this.client = client;
+    }
+    buf = new Uint8Array(0);
+    pos = 0;
+    counter = 0;
+    async refill() {
+      const msg = new Uint8Array(this.client.length + 4);
+      msg.set(this.client, 0);
+      new DataView(msg.buffer).setUint32(this.client.length, this.counter++, false);
+      this.buf = new Uint8Array(await subtle.sign("HMAC", this.key, msg));
+      this.pos = 0;
+    }
+    async u32() {
+      if (this.pos + 4 > this.buf.length) await this.refill();
+      const v = new DataView(this.buf.buffer, this.buf.byteOffset).getUint32(this.pos, false);
+      this.pos += 4;
+      return v;
+    }
+    /**
+     * [0, n) 的均勻整數。用拒絕取樣，不用取餘數。
+     * 取餘數在 n 不整除 2^32 時有偏差 —— 偏差很小，但「很小」在公平性驗證裡
+     * 等於「有」，會被拿來質疑。拒絕取樣的期望重試次數 < 2，成本可忽略。
+     */
+    async below(n) {
+      if (n <= 0 || n > 4294967295) throw new Error("bad range");
+      const limit = 4294967296 - 4294967296 % n;
+      for (; ; ) {
+        const v = await this.u32();
+        if (v < limit) return v % n;
+      }
+    }
+  };
+  async function seatSequence(serverSeedHex, clientSeed, prizes) {
+    const seq = [];
+    for (const p of [...prizes].sort((a, b) => a.prizeId < b.prizeId ? -1 : 1)) {
+      if (!Number.isInteger(p.total) || p.total < 0) throw new Error(`bad total for ${p.prizeId}`);
+      for (let i = 0; i < p.total; i++) seq.push(p.prizeId);
+    }
+    const s = new Stream(await hmacKey(hexToBytes(serverSeedHex)), te.encode(clientSeed));
+    for (let i = seq.length - 1; i > 0; i--) {
+      const j = await s.below(i + 1);
+      const t = seq[i];
+      seq[i] = seq[j];
+      seq[j] = t;
+    }
+    return seq;
+  }
+  async function verifyReveal(r) {
+    const version = r.manifest ? r.manifestVersion ?? 2 : 1;
+    const fail = (reason) => ({ ok: false, reason, version });
+    if (r.manifest) {
+      const byId = new Map(r.prizes.map((p) => [p.prizeId, p.total]));
+      for (const m of r.manifest) {
+        if (byId.get(m.prizeId) !== m.total) {
+          return fail(`\u734E\u54C1\u300C${m.name}\u300D\u7684\u5F35\u6578\u5C0D\u4E0D\u4E0A\uFF1A\u6E05\u55AE\u8AAA ${m.total}\uFF0C\u7C64\u5E8F\u7528\u7684\u662F ${byId.get(m.prizeId) ?? "\uFF08\u6C92\u6709\u9019\u4E00\u9805\uFF09"}`);
+        }
+      }
+      if (byId.size !== r.manifest.length) {
+        return fail(`\u734E\u9805\u6578\u91CF\u5C0D\u4E0D\u4E0A\uFF1A\u6E05\u55AE ${r.manifest.length} \u9805\uFF0C\u7C64\u5E8F\u7528\u4E86 ${byId.size} \u9805`);
+      }
+      const expect = await commitV2(r.serverSeed, await manifestHashOf(r.manifest, version));
+      if (expect !== r.commitHash.toLowerCase()) {
+        return fail("commit \u5C0D\u4E0D\u4E0A\uFF1Aserver_seed \u6216\u734E\u54C1\u5167\u5BB9\u88AB\u63DB\u904E");
+      }
+    } else if (await commitOf(r.serverSeed) !== r.commitHash.toLowerCase()) {
+      return fail("commit \u5C0D\u4E0D\u4E0A\uFF1Aserver_seed \u88AB\u63DB\u904E");
+    }
+    const total = r.prizes.reduce((a, p) => a + p.total, 0);
+    if (r.publishedSequence.length !== total) {
+      return fail(`\u7C64\u6578\u4E0D\u7B26\uFF1A\u5BA3\u544A ${total}\uFF0C\u516C\u5E03 ${r.publishedSequence.length}`);
+    }
+    const seq = await seatSequence(r.serverSeed, r.clientSeed, r.prizes);
+    for (let i = 0; i < seq.length; i++) {
+      if (seq[i] !== r.publishedSequence[i]) {
+        return fail(`\u7B2C ${i + 1} \u865F\u7C64\u4E0D\u7B26\uFF1A\u91CD\u7B97 ${seq[i]}\uFF0C\u516C\u5E03 ${r.publishedSequence[i]}`);
+      }
+    }
+    return { ok: true, version };
+  }
+  return __toCommonJS(fairness_exports);
+})();
+/* ==== FAIRNESS:END ==== */
+</script>
+
+<script>
+(() => {
+'use strict'
+const F = window.Fairness
+const $ = id => document.getElementById(id)
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
+
+/* ------------------------------------------------------------------
+   資料。manifest 與 server seed 是為這份 demo 造的（不是線上的真池），
+   但**每一個雜湊都是用真的程式碼現算的**，沒有一個是抄進來的字串。
+   client_seed 是 drand 第 6440151 輪的真值。
+------------------------------------------------------------------- */
+const POOL = {
+  id: 'pool-2026-0906-017',
+  serverSeed: '9c1f7a3e5b20d4886af0c73e1d95b2640ea87f31cc45d9b0726e18a3f45c9d07',
+  clientSeedSource: 'drand:6440151',
+  clientSeed: 'a959b4948edfab1fc810b697bc249d3da3574b7f142cdef9235e64f4c38ebc97',
+  commitVersion: 4
+}
+const BASE_MANIFEST = [
+  { prizeId:'p-a1', tier:'A', total:1,  name:'ピカチュウ（マスターボールミラー）', setCode:'SV2a', cardNo:'025', grader:'PSA', grade:10, certNo:'92831744', refPrice:38000, buyback:26000, variantId:'masterball-reverse' },
+  { prizeId:'p-b1', tier:'B', total:3,  name:'リザードン ex（SAR）',              setCode:'SV3',  cardNo:'201', grader:'PSA', grade:9,  certNo:'92831802', refPrice:9800,  buyback:6400,  variantId:'holo' },
+  { prizeId:'p-c1', tier:'C', total:12, name:'ミュウツー ex（RR）',                setCode:'SV1a', cardNo:'078', grader:null,  grade:null, certNo:null,     refPrice:900,   buyback:520,   variantId:'holo' },
+  { prizeId:'p-d1', tier:'D', total:24, name:'ヒトカゲ（通常）',                   setCode:'SV3',  cardNo:'013', grader:null,  grade:null, certNo:null,     refPrice:120,   buyback:60,    variantId:null }
+]
+const clone = m => m.map(x => ({ ...x }))
+const countsOf = m => m.map(x => ({ prizeId:x.prizeId, total:x.total }))
+const LEAF_PREFIX = 'vaultdraw/anchor/v1'
+
+/* 開賣前公布、且已經錨上鏈的那一組。全部現算一次，之後不再改。 */
+const published = {}
+let tamper = 'none'
+let batchN = 100
+
+const leafPreimage = (poolId, commitHash, manifestHash, version, src, total) =>
+  `${LEAF_PREFIX}|${poolId}|${commitHash}|${manifestHash}|${version}|${src}|${total}`
+
+/* ---------- Merkle：sha256(左‖右)，奇數時複製最後一個 ---------- */
+async function merkle(leavesHex, index) {
+  let level = leavesHex.slice()
+  const proof = []
+  let idx = index
+  while (level.length > 1) {
+    if (level.length % 2) level.push(level[level.length - 1])
+    const sib = idx ^ 1
+    proof.push({ hash: level[sib], side: (idx % 2) ? 'left' : 'right' })
+    const next = []
+    for (let i = 0; i < level.length; i += 2) {
+      const a = F.hexToBytes(level[i]), b = F.hexToBytes(level[i + 1])
+      const buf = new Uint8Array(64); buf.set(a, 0); buf.set(b, 32)
+      next.push(await F.sha256Hex(buf))
+    }
+    level = next
+    idx = Math.floor(idx / 2)
+  }
+  return { root: level[0], proof }
+}
+async function merkleVerify(leaf, proof) {
+  let cur = leaf
+  for (const step of proof) {
+    const a = F.hexToBytes(step.side === 'left' ? step.hash : cur)
+    const b = F.hexToBytes(step.side === 'left' ? cur : step.hash)
+    const buf = new Uint8Array(64); buf.set(a, 0); buf.set(b, 32)
+    cur = await F.sha256Hex(buf)
+  }
+  return cur
+}
+
+/* ---------- 竄改：每一種都對應一條真實存在的攻擊 ---------- */
+const TAMPERS = {
+  none:    { label:'沒有竄改', note:'資料原封不動。四條驗算檢查全過，鏈上的 leaf 也對得上。' },
+  buyback: { label:'調低 A 賞買回價', note:'賣家在有人抽到大獎之後，把 A 賞的買回價從 26,000 偷偷改成 3,000。<strong>買回價從 manifest v3 起就在承諾裡</strong>，所以清單雜湊會變、commit 對不上。' },
+  variant: { label:'換掉卡片版本', note:'把大師球鏡面換成<strong>同一組卡號</strong>的普卡。卡名、系列、卡號逐字相同 —— v3 以前的承諾抓不到這一手，<strong>v4 加了 variantId 才堵住</strong>。實測兩張卡價差約 18,000 倍。' },
+  qty:     { label:'清單與籤序張數不一致', note:'清單上寫「A 賞 1 張」，實際排籤序時用 0 張。兩邊各自看起來都對，合起來是假的 —— <code>verifyReveal()</code> 第一條檢查就是為了這個。' },
+  seed:    { label:'換一顆 server seed', note:'開獎時公布一顆不是原本那顆的種子（例如挑一顆能讓自己人中大獎的）。commit 立刻對不上。' },
+  anchor:  { label:'根本沒錨過', note:'資料完全誠實、四條檢查全過 —— <strong>但鏈上找不到這個池的 leaf</strong>。這代表「開賣前就封存了」這句話沒有任何外部見證，只剩平台自己的資料庫在背書。<strong>這一種只有第 5 條抓得到，正是這份原型存在的理由。</strong>' }
+}
+function applyTamper(mode) {
+  const m = clone(BASE_MANIFEST)
+  let seed = POOL.serverSeed
+  if (mode === 'buyback') m[0].buyback = 3000
+  if (mode === 'variant') { m[0].variantId = 'normal'; m[0].name = 'ピカチュウ（通常）'; m[0].refPrice = 20 }
+  if (mode === 'qty') m[0].total = 1   // 見下：籤序那邊改用 0 張
+  if (mode === 'seed') seed = 'deadbeef' + POOL.serverSeed.slice(8)
+  return { manifest: m, seed }
+}
+
+/* ================= 初始化：算出「開賣前公布」的那一組 ================= */
+async function boot() {
+  const manifest = clone(BASE_MANIFEST)
+  const counts = countsOf(manifest)
+  published.manifest = manifest
+  published.total = counts.reduce((a, p) => a + p.total, 0)
+  published.manifestStr = F.manifestString(manifest, 4)
+  published.manifestHash = await F.manifestHashOf(manifest, 4)
+  published.commitHash = await F.commitV2(POOL.serverSeed, published.manifestHash)
+  published.sequence = await F.seatSequence(POOL.serverSeed, POOL.clientSeed, counts)
+  published.leafPre = leafPreimage(POOL.id, published.commitHash, published.manifestHash, 4, POOL.clientSeedSource, published.total)
+  published.leaf = await F.sha256Hex(published.leafPre)
+  /* 模擬的鏈上紀錄：交易雜湊是拿 leaf 再雜湊一次假裝出來的，區塊高度與時間是編的 */
+  published.tx = {
+    hash: '0x' + (await F.sha256Hex('fake-tx|' + published.leaf)),
+    block: 41_882_106,
+    at: '2026-09-06 14:07:22 UTC',
+    chain: 'Base（模擬）'
+  }
+
+  renderStatic()
+  await renderBatch()
+  await renderVerify()
+  renderCost()
+}
+
+/* ---------------- 第 1、3 節：靜態渲染 ---------------- */
+function renderStatic() {
+  const tb = $('manifestTable').querySelector('tbody')
+  tb.innerHTML = published.manifest.map(p => `<tr data-pid="${p.prizeId}">
+    <td><span class="tier ${p.tier}">${p.tier}</span></td>
+    <td data-c="name">${esc(p.name)}<br><span style="color:var(--muted);font-size:11px">${esc(p.setCode)}-${esc(p.cardNo)}${p.grader ? ' · ' + esc(p.grader) + ' ' + p.grade : ''}</span></td>
+    <td data-c="variantId" style="font-family:var(--font-mono);font-size:11px">${p.variantId ? esc(p.variantId) : '—'}</td>
+    <td class="num" data-c="total">${p.total}</td>
+    <td class="num" data-c="refPrice">${p.refPrice.toLocaleString()}</td>
+    <td class="num" data-c="buyback">${p.buyback.toLocaleString()}</td>
+  </tr>`).join('')
+
+  $('manifestStr').textContent = published.manifestStr
+  $('mHash').textContent = published.manifestHash
+  $('sSeed').textContent = published.serverSeedMasked ?? '（封存階段不公開）'
+  $('sSeed2').textContent = POOL.serverSeed
+  $('cHash').textContent = published.commitHash
+  $('cSrc').textContent = POOL.clientSeedSource + '　（第 6440151 輪，封存當下還沒發生）'
+  $('cSeed').textContent = POOL.clientSeed
+  $('leafPre').textContent = published.leafPre
+  $('leafHash').textContent = published.leaf
+  $('calldata').textContent = '0x' + published.leaf
+  const t = published.tx
+  $('txSingle').textContent =
+    `chain      ${t.chain}\ntx         ${t.hash}\nblock      ${t.block.toLocaleString()}\nblockTime  ${t.at}`
+  $('leafChain').textContent = published.leaf
+
+  const tierOf = {}
+  published.manifest.forEach(p => tierOf[p.prizeId] = p.tier)
+  $('seats').innerHTML = published.sequence.map((pid, i) =>
+    `<div class="seat ${tierOf[pid]}" data-seat="${i}"><span class="no">${i + 1}</span>${tierOf[pid]}</div>`).join('')
+}
+
+/* ---------------- 第 2 節：Merkle 批次 ---------------- */
+async function renderBatch() {
+  const n = batchN
+  const mine = Math.min(16, n - 1)          // 我們的池在第幾片葉子
+  const leaves = []
+  for (let i = 0; i < n; i++) {
+    leaves.push(i === mine ? published.leaf
+      : await F.sha256Hex(`${LEAF_PREFIX}|pool-2026-0906-${String(i).padStart(3, '0')}|filler`))
+  }
+  const { root, proof } = await merkle(leaves, mine)
+  const back = await merkleVerify(published.leaf, proof)
+  $('mroot').textContent = root
+  $('proofLen').textContent = proof.length
+  $('proofLen2').textContent = proof.length
+  $('proof').textContent = proof.length
+    ? proof.map((p, i) => `${String(i).padStart(2, '0')} ${p.side === 'left' ? '←' : '→'} ${p.hash}`).join('\n')
+    : '（只有一個池，樹只有一片葉子，不需要 proof）'
+  const ok = back === root
+  $('proofCheck').textContent = back + (ok ? '　✓ 跟 root 一致' : '　✗ 不一致')
+  $('proofCheck').className = 'hash ' + (ok ? 'ok' : 'bad')
+}
+
+/* ---------------- 第 4、5 節：真的跑 verifyReveal() ---------------- */
+async function renderVerify() {
+  const { manifest, seed } = applyTamper(tamper)
+  /* 「qty」那一種是伺服器兩邊給不同的張數：清單說 1 張，排籤序時用 0 張。
+     這裡忠實重現那個情境 —— 籤序用的 counts 跟 manifest 不一致。 */
+  const counts = tamper === 'qty'
+    ? countsOf(manifest).map(c => c.prizeId === 'p-a1' ? { ...c, total: 0 } : c)
+    : countsOf(manifest)
+
+  const mHashNow = await F.manifestHashOf(manifest, 4)
+  const cHashNow = await F.commitV2(seed, mHashNow)
+  const totalNow = counts.reduce((a, p) => a + p.total, 0)
+  const leafNow = await F.sha256Hex(
+    leafPreimage(POOL.id, published.commitHash, mHashNow, 4, POOL.clientSeedSource, totalNow))
+
+  /* ★ 這裡呼叫的是 src/shared/fairness.ts 裡那一支 verifyReveal，一個字都沒改 */
+  const res = await F.verifyReveal({
+    serverSeed: seed,
+    commitHash: published.commitHash,          // 開賣前公布、已錨上鏈的那個
+    clientSeed: POOL.clientSeed,
+    prizes: counts,
+    publishedSequence: published.sequence,
+    manifest,
+    manifestVersion: 4
+  })
+
+  const anchored = tamper !== 'anchor'
+  const leafMatch = anchored && leafNow === published.leaf
+
+  /* 把 verifyReveal 的單一 reason 攤成四條給人看。
+     判斷哪一條掛掉是照它的 reason 字串分類 —— 顯示用，結論一律以 res.ok 為準。 */
+  const r = res.reason ?? ''
+  const failedAt =
+    /張數對不上|獎項數量對不上/.test(r) ? 0 :
+    /commit 對不上/.test(r) ? 1 :
+    /籤數不符/.test(r) ? 2 :
+    /號籤不符/.test(r) ? 3 : -1
+
+  const rows = [
+    ['清單張數 vs 排籤序用的張數一致', '不查這個的話，伺服器可以清單寫 1 張、排序用 0 張，兩邊各自對得上'],
+    ['commit 對得上（種子 + 獎品清單都沒被換）', 'SHA256(server_seed ‖ manifest_hash) ＝ 開賣前公布的 commit_hash'],
+    ['總籤數跟宣告的一致', `宣告 ${totalNow}，公布的籤序長度 ${published.sequence.length}`],
+    ['重算的籤序跟公布的逐位相同', '用公開的種子重跑 Fisher-Yates，40 個位置一個一個比']
+  ]
+  let html = rows.map((row, i) => {
+    let cls = 'pass', mark = '✓', sub = row[1]
+    if (failedAt === i) { cls = 'fail'; mark = '✗'; sub = esc(r) }
+    else if (failedAt > -1 && i > failedAt) { cls = 'skip'; mark = '·'; sub = '前一條就掛了，這條沒跑到' }
+    return `<div class="chk ${cls}"><span class="mark">${mark}</span>
+      <span><b>${i + 1}. ${row[0]}</b><span class="sub">${sub}</span></span></div>`
+  }).join('')
+
+  html += `<div class="chk ${leafMatch ? 'pass' : 'fail'}"><span class="mark">${leafMatch ? '✓' : '✗'}</span>
+    <span><b>5. 這份承諾在開賣前就存在（鏈上錨定）</b><span class="sub">${
+      !anchored ? '鏈上找不到這個池的 leaf —— 前四條全過，但「開賣前就封存了」沒有任何外部見證'
+      : leafMatch ? `leaf 對得上鏈上第 ${published.tx.block.toLocaleString()} 塊的紀錄（區塊時間 ${published.tx.at}，早於開賣）`
+      : '重算的 leaf 跟鏈上錨的那個不一樣 —— 現在給我看的清單，不是開賣前錨進去的那一份'
+    }</span></span></div>`
+  $('checks').innerHTML = html
+
+  const allOk = res.ok && leafMatch
+  const v = $('verdict')
+  v.className = 'verdict ' + (allOk ? 'ok' : 'bad')
+  v.innerHTML = allOk
+    ? `<span>✓ 通過</span><span class="sm">manifest v${res.version}。這個池的籤序在開賣前就定了，而且鏈上有那一刻的時間戳。</span>`
+    : `<span>✗ 沒通過</span><span class="sm">${esc(res.reason ?? '鏈上沒有這個池的錨定紀錄')}</span>`
+
+  $('mHashNow').textContent = mHashNow
+  $('mHashNow').className = 'hash ' + (mHashNow === published.manifestHash ? 'ok' : 'bad')
+  $('cHashNow').textContent = cHashNow
+  $('cHashNow').className = 'hash ' + (cHashNow === published.commitHash ? 'ok' : 'bad')
+  $('leafNow').textContent = leafNow
+  $('leafNow').className = 'hash ' + (leafMatch ? 'ok' : 'bad')
+  $('leafChain').textContent = anchored ? published.leaf : '（鏈上沒有這個池的紀錄）'
+  $('leafChain').className = 'hash ' + (anchored ? '' : 'bad')
+
+  const t = TAMPERS[tamper]
+  $('tamperNote').className = 'note ' + (tamper === 'none' ? '' : 'danger')
+  $('tamperNote').innerHTML = `<strong>${t.label}：</strong>${t.note}`
+
+  // 表格上把被改動的格子標紅
+  document.querySelectorAll('#manifestTable td.diff').forEach(td => td.classList.remove('diff'))
+  const changed = { buyback:['buyback'], variant:['variantId','name','refPrice'], qty:['total'] }[tamper]
+  if (changed) {
+    const tr = document.querySelector('#manifestTable tr[data-pid="p-a1"]')
+    changed.forEach(c => tr?.querySelector(`td[data-c="${c}"]`)?.classList.add('diff'))
+  }
+  // 籤序上標出對不上的位置
+  const seq = res.ok ? published.sequence : await F.seatSequence(seed, POOL.clientSeed, counts).catch(() => null)
+  document.querySelectorAll('#seats .seat').forEach((el, i) => {
+    el.classList.toggle('mismatch', !!seq && seq[i] !== published.sequence[i])
+  })
+}
+
+/* ---------------- 第 6 節：成本 ---------------- */
+/* 預設值是 2026-09 的量級估計，不是報價。每一格都可以改。
+   算法：一筆 21,000 gas 的交易 + 32 bytes calldata（512 gas）。 */
+const CHAINS = [
+  { id:'op',      name:'Optimism',                usd:0.0000591, conf:'~2 秒',  ok:true,
+    note:'實測最便宜的 L2（2026-09-05 從台灣直連 GasPriceOracle 預編譯取得）。L2 執行費 $0.0000555 ＋ 寫進 L1 的資料費 $0.0000036 —— <strong>blob 之後 L1 資料費只佔 6%</strong>。' },
+  { id:'base',    name:'Base（OP Stack L2）',     usd:0.000334,  conf:'~2 秒',  ok:true,
+    note:'比 Optimism 貴 5.6 倍，但一年只差 $10 —— <strong>不值得為這個做選型</strong>。真正的差別是 basescan 的連結一般人看得懂。要上鏈的話這是預設選擇。L1 資料費只佔 0.8%。' },
+  { id:'sol',     name:'Solana（memo）',          usd:0.000519,  conf:'次秒級', ok:true,
+    note:'固定 5,000 lamports/簽章，實測近 150 個 slot 的 priority fee 全是 0。memo 是無狀態程式，<strong>不用付 rent</strong>。但它<strong>不繼承 Ethereum 的安全性</strong>，而錨定的價值 100% 來自「這條鏈的歷史不能被我們改寫」。' },
+  { id:'polygon', name:'Polygon PoS',             usd:0.000544,  conf:'~2 秒',  ok:true,
+    note:'gas 高（257 gwei）但幣價低所以總價不高。<strong>不建議</strong>：獨立 PoS 鏈，不繼承 Ethereum 的安全性。' },
+  { id:'arb',     name:'Arbitrum One',            usd:0.001096,  conf:'~1 秒',  ok:true,
+    note:'把 L1 成本折算進 L2 gas 單位，所以看起來比 OP Stack 貴。同一個量級，選型上分不出高下。' },
+  { id:'eth',     name:'Ethereum L1（@0.45 gwei）', usd:0.0248,  conf:'~12 秒', ok:true,
+    note:'22,280 gas（EIP-7623 的 calldata floor）。<strong>問題不是貴，是波動</strong> —— 實測快照 0.087 gwei，同時點的 fast 是 2.07 gwei，差 24 倍；尖峰 10 gwei 時單筆變 $0.55、一年 $20,154。為了「錨在 L1」這個敘事買這個曝險不划算。' },
+  { id:'blob',    name:'EIP-4844 blob（陷阱）',    usd:0.0000015, conf:'~12 秒', ok:false,
+    note:'數字最漂亮（塞滿 4096 個雜湊後每個 $0.0000015），<strong>但 blob 資料約 18 天就會被信標鏈剪除</strong> —— 之後沒人能重建原文，長期時間戳直接失效。<strong>這是陷阱選項。</strong>' },
+  { id:'btc',     name:'Bitcoin 直寫 OP_RETURN',  usd:0.140,     conf:'~10 分〜1 小時', ok:false,
+    note:'實測費率 1 sat/vB 時 $0.14／筆，但費率會暴衝 —— 20 sat/vB 就變 $2.80。<strong>而且你想要的 Bitcoin 背書，OpenTimestamps 免費就給你了</strong>，沒有理由自己管 UTXO 跟 RBF。' }
+]
+function renderCost() {
+  const sel = $('chain')
+  sel.innerHTML = CHAINS.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')
+  sel.value = 'base'
+  $('perTx').value = CHAINS.find(x => x.id === 'base').usd
+  const upd = () => {
+    const c = CHAINS.find(x => x.id === sel.value)
+    const per = Number($('perTx').value) || 0
+    const pools = Number($('pools').value)
+    const batches = Number($('batches').value)
+    $('poolsV').textContent = pools
+    $('batchesV').textContent = batches
+    const noBatchDay = per * pools
+    const batchDay = per * batches
+    const fmt = v => v >= 1 ? '$' + v.toFixed(2) : '$' + v.toFixed(4)
+    const worstLagH = (24 / batches)
+    $('costOut').innerHTML = `
+      <div class="o"><b>不批次 · 每天</b><div class="v">${fmt(noBatchDay)}</div><div class="d">${pools} 筆交易</div></div>
+      <div class="o"><b>不批次 · 每年</b><div class="v">${fmt(noBatchDay * 365)}</div><div class="d">錨定與開賣同一刻</div></div>
+      <div class="o hot"><b>批次 · 每天</b><div class="v">${fmt(batchDay)}</div><div class="d">${batches} 筆交易</div></div>
+      <div class="o hot"><b>批次 · 每年</b><div class="v">${fmt(batchDay * 365)}</div><div class="d">一年只省 ${fmt((noBatchDay - batchDay) * 365)}</div></div>
+      <div class="o" style="border-color:var(--danger)"><b>換掉的是什麼</b><div class="v">${worstLagH < 1 ? Math.round(worstLagH * 60) + ' 分' : worstLagH.toFixed(1) + ' 小時'}</div><div class="d" style="color:var(--danger-ink)">最壞情況下錨定晚於 drand 那一輪這麼久${worstLagH * 60 > 2 ? ' —— 磨種子完全沒擋到' : ' —— 還在死線內'}</div></div>`
+    const deadlineOk = c.ok
+    $('chainNote').innerHTML =
+      `<strong>${esc(c.name)}</strong>　確認時間 ${esc(c.conf)}　`
+      + (deadlineOk ? '<span class="tag real">過得了 2 分鐘死線</span>' : '<span class="tag sim">不建議</span>')
+      + `<br>${c.note}`
+  }
+  sel.addEventListener('change', () => { $('perTx').value = CHAINS.find(x => x.id === sel.value).usd; upd() })
+  ;['perTx', 'pools', 'batches'].forEach(id => $(id).addEventListener('input', upd))
+  upd()
+
+  /* 下面每一格都是 2026-09-05 從台灣網路實測或直接讀原始碼得到的，不是印象。 */
+  const ALTS = [
+    ['<b>什麼都不做（現況）</b>', '$0', '我們自己的資料庫', '<b style="color:var(--danger-ink)">—</b>',
+     '爭議時沒有第三方可以判斷誰在說謊。<strong>這正是要解決的問題。</strong>'],
+    ['寫進公開的 GitHub repo', '$0', 'GitHub 的 commit 時間', '<b style="color:var(--danger-ink)">✗ 不成立</b>',
+     '<strong>commit 時間來自本機時鐘，GitHub 不驗證也不標記</strong> —— 改系統時間就能偽造任意時間。而且 repo 是我們控制的，可以 force push。<strong>作為外部時間戳完全不成立。</strong>'],
+    ['<b>RFC 3161 公開 TSA（免費）</b>', '$0', '一家 CA 的簽章時鐘', '<b style="color:var(--ok-ink)">✓ 秒回</b>',
+     '2026-09-05 從台灣實測 <strong>12 家全部存活</strong>（DigiCert／Sectigo／SSL.com／FreeTSA／Apple／Microsoft…），回的是簽好章的標準 token，3.9〜6.9 KB。單家是單點信任 —— <strong>但同時打三家互相獨立的，三家要一起跟我們串供才假得了</strong>，成本還是 $0。'],
+    ['<b>OpenTimestamps（→ Bitcoin）</b>', '$0', 'Bitcoin 區塊', '<b style="color:var(--danger-ink)">✗ 6〜12 小時</b>',
+     '實測 9 台公開 calendar 有 8 台活著，全部同步在同一個區塊高度。<strong>但原始碼寫死 <code>--btc-min-tx-interval</code> 預設 21,600 秒 × random(1,2) → 6〜12 小時才寫一次 Bitcoin</strong>，加上 6 個確認與 conf-target 1008 的低費策略，完整背書要數小時到一兩天。<strong>過不了死線，只能當第二層。</strong>'],
+    ['Sigstore Rekor 透明日誌', '$0', '公開的 append-only 日誌', '<b style="color:var(--ok-ink)">✓ 秒級</b>',
+     '實測 `rekor.sigstore.dev` 活著（tree size 4,163,431），可用自產金鑰存非軟體 artifact。<strong>但官方明講每年會換實例、舊實例會關掉、不要 hardcode URL</strong> —— 長期存證押在這上面不合適。'],
+    ['憑證透明度（CT log）', '約 $0', 'CT log 的 SCT', '<b style="color:var(--warn-ink)">△ 分鐘〜24h</b>',
+     'SHA-256 的 hex 是 64 字元，<strong>而 DNS 單一 label 上限 63 字元 —— 塞不進去</strong>，要先 base32。還要 100 個 DNS-01 挑戰、受 Let\'s Encrypt 每 7 天 50 張憑證的限制，而且本質是把 CA 當資料儲存用。<strong>不建議。</strong>'],
+    ['自己上 L2（本原型示範的做法）', '見上方試算', '公開鏈的區塊時間', '<b style="color:var(--ok-ink)">✓ 1〜2 秒</b>',
+     'Base 每池錨一筆、一天 100 個池 ＝ <strong>一年 $12</strong>。錢完全不是問題。代價是公司要持有加密貨幣付 gas，<strong>而台灣的《虛擬資產服務法》2026-06-30 三讀通過、改為許可制，「只持幣付 gas 算不算經營業務」目前沒有明文豁免也沒有函釋</strong>。']
+  ]
+  $('altTable').querySelector('tbody').innerHTML = ALTS.map(a =>
+    `<tr><td>${a[0]}</td><td class="num">${a[1]}</td><td>${a[2]}</td><td class="num">${a[3]}</td><td>${a[4]}</td></tr>`).join('')
+
+  $('recommend').innerHTML = `
+    <strong>這份原型的判斷：不上鏈。用 RFC 3161 打三家獨立 TSA，外加 OpenTimestamps 當長期底墊。兩個都是 $0。</strong>
+    <br><br>
+    走到這個結論的路徑很簡單 —— <strong>先看死線，再看錢</strong>：
+    <br>① 錨定必須早於 drand 那一輪，預算約兩分鐘。這一條就刷掉了 OpenTimestamps（6〜12 小時）與 GitHub（時間本身可偽造）。
+    <br>② 剩下過得了死線的：各條 L2、Solana、Rekor、RFC 3161 TSA。
+    <br>③ 這幾個裡面，<strong>只有 TSA 同時做到「秒回、$0、而且不用持有加密貨幣」</strong>。
+    <br>④ 單家 TSA 是單點信任 —— <strong>那就打三家</strong>（實測 12 家全活）。三家要一起跟我們串供才假得了，成本還是 $0。
+    <br>⑤ 再把當天的 Merkle root 丟 OpenTimestamps，幾小時後補上 Bitcoin 等級的背書。<strong>它過不了死線，但當第二層剛剛好。</strong>
+    <br><br>
+    <strong>上鏈唯一真正被打敗的地方不是錢（一年 $12），是持幣。</strong>
+    台灣的《虛擬資產服務法》2026-06-30 三讀通過、從登記制改成許可制，
+    而「非金融公司只持幣付 gas 算不算經營虛擬資產業務」<strong>法條沒有明文豁免、子法未定、查不到官方函釋</strong>。
+    為了一個 TSA 免費就能做到的東西去踩那個不確定性，加上開錢包、管私鑰、監控餘額（錢包空了池就開不了），
+    <strong>不划算。</strong>
+    <br><br>
+    <strong>要上鏈也只在一種情況下：產品敘事需要「使用者自己在 basescan 上點得到那一筆」。</strong>
+    那就 Base、每池一筆、$12/年，卡在 <code>committed → open</code> 之間當硬閘門。
+    <br><br>
+    <strong>但不論走哪一條，第一步都不是上鏈，是把 leaf 的格式定死並公開</strong>
+    —— 上面那段 <code>vaultdraw/anchor/v1|…</code> 的原文規格，才是任何人能獨立驗證的前提。
+    格式沒定，錨到哪裡都一樣沒用；而且它成本是零、不碰任何紅線，
+    <strong>光是公開規格就已經讓第三方可以自己收集並保存這些 leaf</strong>，那本身就是一個我們管不到的見證人。`
+}
+
+/* ---------------- 綁事件 ---------------- */
+$('tampers').addEventListener('click', e => {
+  const b = e.target.closest('button[data-t]'); if (!b) return
+  tamper = (b.dataset.t === tamper) ? 'none' : b.dataset.t
+  document.querySelectorAll('#tampers .tgl').forEach(x => {
+    x.classList.toggle('on', x.dataset.t === tamper)
+    x.classList.toggle('safe', x.dataset.t === 'none')
+  })
+  renderVerify()
+  $('s4').scrollIntoView({ behavior:'smooth', block:'start' })
+})
+$('batchN').addEventListener('input', e => {
+  batchN = Number(e.target.value); $('batchNv').textContent = batchN; renderBatch()
+})
+$('steps').addEventListener('click', e => {
+  const b = e.target.closest('button[data-go]'); if (!b) return
+  document.querySelectorAll('#steps button').forEach(x => x.classList.toggle('on', x === b))
+  $(b.dataset.go).scrollIntoView({ behavior:'smooth', block:'start' })
+})
+$('themebtn').addEventListener('click', () => {
+  const r = document.documentElement
+  r.dataset.theme = r.dataset.theme === 'light' ? 'dark' : 'light'
+})
+
+boot().then(() => { document.body.dataset.ready = '1' })
+})()
+</script>
+</body>
+</html>
