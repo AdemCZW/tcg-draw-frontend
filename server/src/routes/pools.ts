@@ -281,7 +281,8 @@ const PrizeIn = z.object({
 }).refine(p => !p.card.certNo || p.total <= 1, {
   /* 一個鑑定編號只對應一張實體卡。開 total > 1 等於宣告「這 N 個籤位都會
      發出同一張 PSA #xxxx」—— 那是平台聲稱要防的一卡多賣，卻由建池端自己打穿。
-     後果不只是名不副實：listings_cert_live 是 unique(cert_no) where status='live'，
+     後果不只是名不副實：listings_cert_live 是 unique(grader, cert_no)
+     where status='live' and cert_no is not null（038 之前少了 grader，見那支遷移），
      所以第一個得主上架之後，其餘 N−1 個人上架全部被擋，
      而且會被告知「這張卡已經在市場上了」—— 他們的卡根本沒上架過。 */
   message: '有鑑定編號的卡只能開 1 籤 —— 一個編號對應一張實體卡'

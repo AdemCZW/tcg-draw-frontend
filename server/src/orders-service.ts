@@ -212,7 +212,8 @@ async function notifyTransition(tx: Tx, o: Order) {
  *   1 買家付了點數、收到實體卡，但他的卡冊裡什麼都沒有 —— 平台的紀錄上
  *     那張卡仍然掛在賣家名下。
  *   2 賣家可以一直重賣同一張卡。訂單完成後 listings.status 變成 'sold'，
- *     listings_prize_live / listings_cert_live 兩條唯一索引都是
+ *     listings_prize_live / listings_cert_live（後者 038 起是 unique(grader, cert_no)）
+ *     兩條唯一索引都是
  *     `where status = 'live'`，所以它們立刻不再擋 —— 再上架一次就過了。
  *     沒有鑑定編號的卡（RAW，certNo = null）連「同時」都擋不住：
  *     cert 索引跳過 null，所以同一張卡可以同時掛出好幾筆有效掛單，
