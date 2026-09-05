@@ -209,11 +209,17 @@ setInterval(() => {
   /* 池的生命週期也要有人推。原本這條掃描只掃訂單，而開賣與揭曉
      只有 HTTP 端點、前端沒有任何地方呼叫 —— 池建好就停在 committed、
      售完就停在 sold_out，server_seed 永遠不公開，公平性驗證跑不到。 */
-  /* 寄存到期只發提醒，不改任何規則（見 pools-service.ts 的 sweepStashExpiry）。
-     失敗不能影響其他掃描 —— 這是三條裡最不重要的一條。 */
+  /* 寄存到期：提醒快到期的，並**自動替買家申請出貨**（D-1，見
+     pools-service.ts 的 sweepStashExpiry）。
+     這一條現在會動 prizes / pool_settlements / shipments，不再只是通知 ——
+     但它仍然是獨立 catch 的：失敗不能連累其他掃描，而漏掉的那幾張下一輪
+     （五分鐘後）會再被撈到，狀態不會算錯。
+     地址是個資，所以這裡只印張數，一個字都不印內容。 */
   sweepStashExpiry()
-    .then(({ warned, expired }) => {
-      if (warned || expired) console.log(`[stash] 提醒 ${warned} 張快到期、${expired} 張已過期`)
+    .then(({ warned, shipped, noAddress }) => {
+      if (warned || shipped || noAddress) {
+        console.log(`[stash] 提醒 ${warned} 張快到期、自動出貨 ${shipped} 張、${noAddress} 張缺收件資料`)
+      }
     })
     .catch(e => console.error('[stash] 失敗', e))
 

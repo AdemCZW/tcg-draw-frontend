@@ -15,7 +15,10 @@ import {
 import type { Tx } from './db.js'
 import { sql as sqlRoot } from './db.js'
 import { credit } from './money.js'
-import { creditDraw } from './pool-settlement.js'
+/* markShipRequested：寄存到期自動出貨要掛上賣家的 72 小時出貨時鐘，
+   走的就是買家自己申請出貨時的同一支（見 sweepStashExpiry 的說明）。 */
+import { creditDraw, markShipRequested } from './pool-settlement.js'
+import { POOL_SHIP_DEADLINE_MS } from './shared/pool-settlement.js'
 import { notify } from './notify.js'
 
 export const STASH_DAYS = 90
@@ -497,29 +500,110 @@ export async function releasePledgedCards(tx: Tx, poolId: string): Promise<numbe
 }
 
 /**
- * 寄存到期的提醒。
+ * 寄存到期：**自動替買家申請出貨**（open-issues.md 的 D-1，使用者拍板）。
  *
  * ── 為什麼需要這個 ─────────────────────────────────────────────────
- * prizes.stash_expires_at 從 002 就存在，抽卡時填 90 天後，然後**沒有
- * 任何一行程式讀過它** —— 那個期限是寫著好看的。
+ * prizes.stash_expires_at 從 002 就存在，抽卡時填 90 天後，然後很長一段
+ * 時間**沒有任何一行程式讀過它** —— 那個期限是寫著好看的。039 之後這支
+ * 開始發提醒，但仍然「到期不代表任何後果」：一個期限如果過了什麼都不會
+ * 發生，它就不是期限，是一句文案。
  *
  * 而「寄存」這個詞本身是誤導的：卡不在平台的保險庫，在**賣家的抽屜裡**
  * （平台不代管實體卡，見 docs/HANDOFF.md 4.2）。所以「卡就放在卡冊」的
  * 真實意思是「要求一個陌生人無限期替你保管一張值錢的卡，而他已經收完
- * 錢了」—— 票金在 14 天後就結清入袋，義務卻沒有終點。
+ * 錢了」—— 票金 14 天就結清入袋，義務卻沒有終點。90 天就是那個終點。
  *
- * ── 這一支**只通知，不改任何規則** ──────────────────────────────────
- * 到期不扣卡、不強制出貨、不影響任何功能。理由是卡不在平台手上，
- * 平台沒有辦法強迫任何人寄任何東西；能做的只有讓雙方知道。
- * 先看實際上有多少卡會放到期，再決定要不要做後面那些（自動出貨、
- * 保管費、逾期凍結），那是政策問題不是技術問題。
+ * ── 到期做什麼：替買家建出貨申請 ───────────────────────────────────
+ * 走的是**買家自己按「申請出貨」時走的同一條路**（routes/prizes.ts 的
+ * POST /prizes/ship）：建一張 shipments、把卡改成 ship_requested、
+ * 呼叫 markShipRequested() 掛上賣家的 72 小時出貨時鐘。
  *
- * 冪等靠 notify() 的 refId（007 的唯一索引 (user_id, kind, ref_id)）——
- * 這支掛在五分鐘一次的掃描上，沒有它每個人每五分鐘收一次同樣的提醒。
+ * 「同一條路」是刻意的，也是這支唯一該做的事 —— 賣家逾期不寄的後果
+ * （F-5 的 ship_default_at / markShipDefault()、違約次數、滿額不能再開池）
+ * 已經長在 sweepSettlements() 裡，自動出貨只要把時鐘掛上去，那一整套就
+ * 自己接手了。另造一條平行的逾期路等於讓「賣家欠一張卡」有兩個定義。
+ *
+ * ── 只碰 stashed，這不是偷懶 ───────────────────────────────────────
+ * listed：卡正掛在市場上，強制出貨會跟掛單打架（掛單的 prize_id 唯一索引、
+ *   成交後的 releasePrize 都預期那一列是 listed）。而且主人正在處理它 ——
+ *   他選擇賣掉而不是收貨，那也是一種「處理完寄存」。
+ * in_pool：賣家自己押在池上的卡，從來沒被抽走過，沒有買家、沒有收件人。
+ * ship_requested / shipped：已經在路上了，再建一張就是重複出貨。
+ * recycled / refunded：已經不是他的卡。
+ * in_book：卡在自己手上（custodian = owner），沒有東西要寄。
+ *
+ * 剩下 stashed 這一個狀態，正好就是「錢付了、卡還在別人抽屜裡」那一種。
+ *
+ * ── 沒填收件地址的人 ───────────────────────────────────────────────
+ * 出貨要地址，而地址是 users 表的 real_name / phone / address_*（006），
+ * 全部允許空值。沒填就**不建出貨單**，改發一則「去補收件資料」。
+ * 為什麼不建：賣家的出貨頁（routes/sellers.ts 的 /settlements）是用
+ * shipments.address 餵地址的，沒有地址那一欄會是 null —— 賣家會看到一筆
+ * 「你欠一張卡、期限 72 小時」卻不知道要寄去哪，而且逾期會真的記他違約。
+ * 那是平台自己製造出來、對方無法履行的義務。
+ *
+ * ── 冪等 ───────────────────────────────────────────────────────────
+ * 這支掛在五分鐘一次的排程上，出貨那一段又會動錢與義務，所以「同一張卡
+ * 不能被建出兩筆出貨單」是硬需求。三層：
+ *   1. 撈候選只看 status = 'stashed'，而建單的同一個交易就把它改成
+ *      ship_requested —— 下一輪掃描根本撈不到它。
+ *   2. 交易裡 `for update` 重鎖重判（候選是無鎖撈的，可能已經被買家
+ *      自己申請出貨了）。
+ *   3. 通知走 notify() 的 refId（007 的唯一索引 (user_id, kind, ref_id)）。
+ *
+ * ── 鎖序 ───────────────────────────────────────────────────────────
+ * 全站鎖序是 **prizes → sellers → settlements → shipments**（見
+ * pool-settlement.ts 檔頭）。這支：先 `order by id` 整批鎖 prizes，
+ * 再讓 markShipRequested 動 pool_settlements，最後 insert shipments。
+ * 上鎖階段結束之後不再要求新的 prizes 列鎖 —— 那正是 regress-deadlock
+ * 第 3 組壓出 40P01 的形狀（握著共用列還在拿新列）。
+ * 這支不碰 sellers：違約次數是 sweepSettlements 那邊記的，不是這裡。
+ *
+ * ── 這一輪刻意不做「延長寄存」 ─────────────────────────────────────
+ * 讓買家按一下就延 90 天，期限就又回到「不代表任何後果」——
+ * 只是把「永遠不處理」換成「每 90 天按一次」。代價是：真的還不想收貨的
+ * 買家會被迫收貨（或收到之後自己再上架）。目前的出口是**上架賣掉**與
+ * **接受買回價**，兩條都在卡冊上按得到；到期前兩週的提醒就是講這件事的。
+ * 如果實際跑起來抱怨集中在這一點，再回來討論延長要付出什麼代價
+ * （例如延長要收保管費、或延長次數有上限）—— 那是政策問題不是技術問題。
  */
 const STASH_WARN_MS = 14 * DAY
 
-export async function sweepStashExpiry(): Promise<{ warned: number; expired: number }> {
+/**
+ * 一輪最多自動出貨幾張。
+ *
+ * 不是效能考量，是**爆炸半徑**：這支替使用者做決定並讓賣家背上有罰則的
+ * 義務，萬一條件寫錯，一輪 100 張比一輪 100000 張好收拾。掃描五分鐘一次，
+ * 積壓的量幾輪就消化完。
+ */
+const AUTO_SHIP_BATCH = 100
+
+/** 一張出貨單最多幾張卡。跟 routes/prizes.ts 的 ShipBody 同一個上限 */
+const SHIP_MAX_PER_SHIPMENT = 50
+
+/**
+ * 「收件資料填齊了」的判斷，**只寫這一次**。
+ *
+ * 條件跟 routes/prizes.ts 的 ShipBody 對齊（name / phone / line1 / city 必填，
+ * zip 選填），寫成 SQL 片段是為了讓「撈可以自動出貨的」與「撈缺地址的」
+ * 是同一條規則的正反面 —— 兩邊各寫一次的話，某天改了其中一邊，就會有一批
+ * 卡兩邊都撈不到，永遠卡在到期狀態而且沒有人收到任何通知。
+ */
+const addressReady = sqlRoot`
+  btrim(coalesce(u.real_name, ''))     <> ''
+  and length(btrim(coalesce(u.phone, ''))) >= 8
+  and btrim(coalesce(u.address_line1, '')) <> ''
+  and btrim(coalesce(u.address_city, ''))  <> ''
+`
+
+/** 收件地址。**個人資料：不進 log、不進網址、不進通知內文。** */
+interface ShipAddress {
+  name: string; phone: string; line1: string; city: string; zip?: string
+}
+
+export async function sweepStashExpiry(): Promise<{
+  warned: number; expired: number; shipped: number; noAddress: number
+}> {
   const now = Date.now()
 
   /* 只看 stashed。listed / ship_requested / shipped 的卡主人正在處理它，
@@ -536,33 +620,214 @@ export async function sweepStashExpiry(): Promise<{ warned: number; expired: num
       userId: r.user_id, kind: 'system',
       title: '卡片的寄存期限快到了',
       body: `${r.name ?? '你的卡'} 再過兩週就滿 ${STASH_DAYS} 天寄存期。`
-        + '卡目前還在賣家手上 —— 想拿到實體卡就申請出貨，不然也可以上架賣掉。'
-        + '期限到了不會沒收，只是提醒你這張卡放很久了。',
-      link: '/me/cards',
-      /* refId 帶 id 而不是帶日期：同一張卡的同一種提醒只發一次，
-         而卡的 id 是穩定的。帶日期的話跨過午夜就會再發一次。 */
-      refId: 'stash-warn:' + r.id
+        + '期限到了我們會自動替你申請出貨，把卡從賣家那裡寄給你 —— '
+        + '請先確認「我的資料」裡的收件人、電話、地址是最新的。'
+        + '不想收實體卡的話，也可以在期限前上架賣掉或接受買回價。',
+      /* refId 換了前綴（原本是 stash-warn:）。到期的後果從「什麼都不會發生」
+         變成「自動出貨」，舊那則的內文（「期限到了不會沒收」）現在是錯的 ——
+         沿用舊前綴的話，已經收過舊提醒的人永遠不會收到正確的那一則，
+         而他們正是最可能被自動出貨嚇到的一群。
+         帶 id 而不是帶日期：同一張卡的同一種提醒只發一次，卡的 id 是穩定的；
+         帶日期的話跨過午夜就會再發一次。 */
+      link: '/me/profile',
+      refId: 'stash-warn2:' + r.id
     })
   }
 
-  const over = await sqlRoot<{ id: string; user_id: string; name: string | null }[]>`
-    select id, user_id, card->>'name' as name from prizes
-     where status = 'stashed' and stash_expires_at <= ${now}
+  const shipped = await autoShipExpired(now)
+  const noAddress = await warnMissingAddress(now)
+
+  return { warned: soon.length, expired: shipped + noAddress, shipped, noAddress }
+}
+
+/**
+ * 到期而且收件資料填齊的：**建出貨申請**。回傳實際出貨的張數。
+ *
+ * `exists (... pool_settlements ...)` 那一段是刻意的守衛：自動出貨的全部
+ * 意義是「讓賣家真的把卡寄出來」，而那個義務住在結算列上
+ * （markShipRequested 只會動 held 與 released 兩種）。沒有結算列的
+ * stashed 卡（測試素材、或某條路徑寫壞留下的）建出來的是一張**沒有人
+ * 有義務履行**的出貨單：賣家的出貨頁 join 的是 pool_settlements，
+ * 他連看都看不到，而買家的卡會永遠停在 ship_requested。
+ * 寧可不動它 —— 那種列本來就該由 monitor 抓出來，不該由這支蓋掉。
+ */
+async function autoShipExpired(now: number): Promise<number> {
+  /* 第一段：無鎖撈候選，照 id 排序（第二段要照同一個順序上鎖）。 */
+  const cand = await sqlRoot<{ id: string }[]>`
+    select p.id
+      from prizes p join users u on u.id = p.user_id
+     where p.status = 'stashed'
+       and p.stash_expires_at <= ${now}
+       and ${addressReady}
+       and exists (
+         select 1 from pool_settlements st
+          where st.prize_id = p.id and st.status in ('held', 'released')
+       )
+     order by p.id
+     limit ${AUTO_SHIP_BATCH}
+  `
+  if (!cand.length) return 0
+  const ids = cand.map(c => c.id).sort()
+
+  return await sqlRoot.begin(async tx => {
+    /* 第二段：照全站鎖序先把 prizes 整批鎖起來（order by id —— `= any(...)`
+       本身不保證上鎖順序），而且**鎖完之後不再要新的 prizes 列鎖**。
+       重帶 where：候選是無鎖撈的，這幾張可能已經被買家自己申請出貨、
+       上架、或接受買回價了。 */
+    const locked = await tx<{ id: string; user_id: string }[]>`
+      select id, user_id from prizes
+       where id = any(${ids}) and status = 'stashed' and stash_expires_at <= ${now}
+       order by id
+       for update
+    `
+    if (!locked.length) return 0
+
+    /* 按人分組：一張出貨單就是一個包裹，同一個人到期的卡該一起寄，
+       不是一張卡一張單。 */
+    const byUser = new Map<string, string[]>()
+    for (const r of locked) {
+      const list = byUser.get(r.user_id) ?? []
+      list.push(r.id)
+      byUser.set(r.user_id, list)
+    }
+
+    let done = 0
+    for (const [userId, cards] of byUser) {
+      /* 地址在鎖之後再讀一次：上面那次是無鎖快照，使用者可能剛好把資料清空。
+         填不齊就整個人跳過 —— 這一輪不出貨，下一輪 warnMissingAddress
+         會提醒他去補。 */
+      const [u] = await tx<{
+        real_name: string | null; phone: string | null
+        address_zip: string | null; address_city: string | null; address_line1: string | null
+      }[]>`
+        select real_name, phone, address_zip, address_city, address_line1
+          from users where id = ${userId}
+      `
+      const addr = toShipAddress(u)
+      if (!addr) continue
+
+      /* 一張單最多 50 張（同 ShipBody 的上限）—— 一次到期 80 張的人
+         會拿到兩張單，那也是他手動申請時會拿到的樣子。 */
+      for (let i = 0; i < cards.length; i += SHIP_MAX_PER_SHIPMENT) {
+        const prizeIds = cards.slice(i, i + SHIP_MAX_PER_SHIPMENT)
+        const shipmentId = 'sh-' + randomBytes(5).toString('hex')
+
+        await tx`
+          insert into shipments (id, user_id, prize_ids, address, created_at)
+          values (${shipmentId}, ${userId}, ${prizeIds}, ${addr as never}, ${now})
+        `
+        await tx`update prizes set status = 'ship_requested' where id = any(${prizeIds})`
+        /* 賣家的 72 小時出貨時鐘。少了這一行，出貨單會進佇列卻沒有任何
+           後果 —— 那正是 F-5，而 F-5 已經修好了，這裡只是接上去。 */
+        await markShipRequested(tx, prizeIds, now)
+
+        /* ── 買家：這件事是平台替你做的，講清楚為什麼、以及他還能做什麼 ──
+           **地址一個字都不放進內文**（個資），只說「去確認」。 */
+        await notify({
+          userId, kind: 'shipment',
+          title: `${prizeIds.length} 張卡已自動申請出貨`,
+          body: `這些卡放滿了 ${STASH_DAYS} 天寄存期。實體卡一直在賣家手上，`
+            + '所以期限到了我們會自動替你申請出貨，把卡寄到你留的收件地址。'
+            + '請到「我的資料」確認收件人、電話、地址正確 —— 有錯請盡快聯絡客服更正。'
+            + '收到卡片後記得到卡冊按確認收貨。',
+          link: '/me/profile', refId: 'stash-autoship:' + shipmentId
+        }, tx)
+
+        /* ── 賣家：時鐘已經開始跑了，以及不寄的後果 ──────────────────
+           條件跟 markShipRequested 剛剛寫的兩個 UPDATE 對齊（正常路徑的
+           awaiting_ship、以及票金已釋放但還欠卡的 released）。
+           group by seller_id：一批到期可以橫跨多個賣家，每個人只該收到
+           一則、而且只看到自己那幾張的數量。
+           refId 綁出貨單 id，前綴跟買家自己申請那條（ship-req:）分開 ——
+           內文不一樣（這一則要解釋「買家沒按，是期限到了」），
+           共用前綴會讓先發生的那一則把另一則擋掉。 */
+        const owed = await tx<{ seller_id: string; n: number }[]>`
+          select st.seller_id, count(*)::int as n
+            from pool_settlements st
+           where st.prize_id = any(${prizeIds})
+             and st.ship_due_at is not null and st.shipped_at is null
+             and st.status in ('awaiting_ship', 'released')
+           group by st.seller_id
+        `
+        for (const o of owed) {
+          await notify({
+            userId: o.seller_id, kind: 'shipment',
+            title: '寄存期滿，這些卡要出貨了',
+            body: `${o.n} 張卡放滿 ${STASH_DAYS} 天寄存期，系統已自動替買家申請出貨 —— `
+              + `不是買家臨時按的，是期限到了。請在 ${POOL_SHIP_DEADLINE_MS / 3_600_000} 小時內寄出，`
+              /* 兩種後果都要講，因為兩種都可能發生：票金還在保留額裡的會退款給買家
+                 （refund），已經結算出去的不退款、只記違約（markShipDefault，F-5）。
+                 只講其中一種，另一種發生時賣家會覺得平台說謊。 */
+              + '逾期會記一次違約；票金還沒結算的話還會退款給買家。'
+              + '記違約不代表義務結清 —— 卡還是要寄。收件地址在出貨頁上。',
+            link: '/seller/shipping', refId: 'stash-autoship-seller:' + shipmentId
+          }, tx)
+        }
+        done += prizeIds.length
+      }
+    }
+    return done
+  })
+}
+
+/**
+ * 到期但收件資料不齊的：只提醒去補，**不建出貨單**（理由見 sweepStashExpiry
+ * 檔頭）。回傳被卡住的張數。
+ *
+ * 為什麼按人聚合而不是按卡：一個人缺的是同一份資料，缺 20 張就發 20 則
+ * 只是把唯一一則有用的訊息埋掉。
+ *
+ * refId 帶年月：**這一則不能只發一次**。它擋住的是整個機制 —— 沒補資料，
+ * 卡就永遠停在到期狀態，而一則六個月前被滑掉的通知等於沒發過。
+ * 但也不能每次掃描都發（五分鐘一次），所以折成一個月一則。
+ */
+async function warnMissingAddress(now: number): Promise<number> {
+  const rows = await sqlRoot<{ user_id: string; n: number }[]>`
+    select p.user_id, count(*)::int as n
+      from prizes p join users u on u.id = p.user_id
+     where p.status = 'stashed'
+       and p.stash_expires_at <= ${now}
+       and not (${addressReady})
+     group by p.user_id
      limit 200
   `
-  for (const r of over) {
+  const month = new Date(now).toISOString().slice(0, 7)
+  let stuck = 0
+  for (const r of rows) {
+    stuck += r.n
     await notify({
-      userId: r.user_id, kind: 'system',
-      title: '卡片已超過寄存期限',
-      body: `${r.name ?? '你的卡'} 已經超過 ${STASH_DAYS} 天的寄存期。`
-        + '這張卡仍然是你的，功能也沒有任何限制 —— 但它一直放在賣家那裡，'
-        + '時間越久越難處理。建議申請出貨或上架。',
-      link: '/me/cards',
-      refId: 'stash-over:' + r.id
+      userId: r.user_id, kind: 'shipment',
+      title: '有卡片到期要出貨，但收件資料還沒填',
+      body: `你有 ${r.n} 張卡放滿了 ${STASH_DAYS} 天寄存期，本來會自動申請出貨，`
+        + '但「我的資料」裡的收件人、電話、地址還沒填齊，出不了貨。'
+        + '補齊之後系統會自動接手，你不用再按任何按鈕。',
+      link: '/me/profile', refId: `stash-noaddr:${r.user_id}:${month}`
     })
   }
+  return stuck
+}
 
-  return { warned: soon.length, expired: over.length }
+/**
+ * users 那五欄 → 出貨用的收件地址。填不齊回 null。
+ *
+ * 條件跟 routes/prizes.ts 的 ShipBody 逐項對齊，長度也照它截 ——
+ * users 那幾欄的長度是 routes/auth.ts 的 Profile 擋的，兩份 schema 現在
+ * 一致，但截一次的成本是零，而不截的代價是自動出貨會因為長度而整批失敗。
+ *
+ * **回傳值是個人資料**：不可以進 console.log、不可以進網址、不可以進通知內文。
+ */
+function toShipAddress(u: {
+  real_name: string | null; phone: string | null
+  address_zip: string | null; address_city: string | null; address_line1: string | null
+} | undefined): ShipAddress | null {
+  if (!u) return null
+  const name = (u.real_name ?? '').trim().slice(0, 40)
+  const phone = (u.phone ?? '').trim().slice(0, 20)
+  const line1 = (u.address_line1 ?? '').trim().slice(0, 120)
+  const city = (u.address_city ?? '').trim().slice(0, 40)
+  const zip = (u.address_zip ?? '').trim().slice(0, 10)
+  if (!name || phone.length < 8 || !line1 || !city) return null
+  return zip ? { name, phone, line1, city, zip } : { name, phone, line1, city }
 }
 
 /** sold_out → revealed。從此 server_seed 可以公開 */
