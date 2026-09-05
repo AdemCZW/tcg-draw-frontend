@@ -15,6 +15,7 @@ import { auth as authRoutes } from './routes/auth.js'
 import { wallet } from './routes/wallet.js'
 import { pools } from './routes/pools.js'
 import { prizes } from './routes/prizes.js'
+import { shipments } from './routes/shipments.js'
 import { cardbook } from './routes/cardbook.js'
 import { trainerCard } from './routes/trainer-card.js'
 import { line } from './routes/line.js'
@@ -156,6 +157,14 @@ app.route('/v1/auth', authRoutes)
 app.route('/v1/wallet', wallet)
 app.route('/v1/pools', pools)
 app.route('/v1/prizes', prizes)
+/* 買家自己的出貨單。**這條路在 699e239 之前整段不存在** —— shipments 只有
+   routes/admin.ts 讀得到，出貨單對它的主人本身是不存在的東西。
+   寄存到期會自動替買家建單（D-1）之後這件事變成問題：卡的狀態自己變了，
+   而他沒有任何地方看得出「是誰建的」與「會寄到哪」。
+   自己一個前綴，理由同 /v1/cardbook：這支整組要登入（use('*', requireAuth)），
+   掛在 /v1 底下會把 public.ts 那些公開端點一起變成要登入。
+   複數 /v1/shipments 不會跟任何既有路徑打架（後台那半在 /v1/admin/shipments）。 */
+app.route('/v1/shipments', shipments)
 /* 卡片上傳入庫（登記手上的實體卡進卡冊）。自己一個前綴：
    這支整組要登入（use('*', requireAuth)），不能掛在 /v1 底下
    把公開端點一起變成要登入（同 /v1/seller 那條的理由）。 */

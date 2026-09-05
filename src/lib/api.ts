@@ -250,6 +250,61 @@ export interface PrizeSummary {
  */
 export type PrizeSort = 'acquired' | 'dupes' | 'value'
 
+/**
+ * 買家自己的一張出貨單（`GET /v1/shipments/*`）。
+ *
+ * **`shipTo` 是遮罩過的，後端不會回全文**（決定寫在
+ * `server/src/routes/shipments.ts` 的檔頭）：這一份資料要回答的只有
+ * 「這是不是我現在住的地方」，而全文會流經前端記憶體、瀏覽器快取與截圖。
+ * 前端不需要、也拿不到原文，所以不會有人不小心把它印到 console 或
+ * 塞進網址 —— 那條路在後端就已經封起來了。
+ */
+export interface BuyerShipment {
+  id: string
+  /** 平台側的履行進度。賣家標出貨時後端會一起把它改成 shipped */
+  status: 'requested' | 'packed' | 'shipped' | 'delivered'
+  /**
+   * 這張單是誰建的。**卡冊那一格要講的就是這個**：
+   * `auto-stash-expiry` = 寄存期滿系統自動申請的，他沒有按過任何按鈕。
+   */
+  origin: 'auto-stash-expiry' | 'self'
+  createdAt: number | null
+  shippedAt: number | null
+  tracking: string | null
+  shipTo: {
+    /** 恆為 true。留著是為了讓讀到這份資料的人知道不能拿去當寄件資料 */
+    masked: true
+    /** 縣市與郵遞區號給全文 —— 粗到指不到人，卻是「是不是這裡」最強的訊號 */
+    city: string
+    zip: string
+    nameMasked: string
+    phoneMasked: string
+    line1Masked: string
+  }
+  /**
+   * 這張單上的地址跟他**現在**的收件資料不一樣。
+   * 自動那條路上代表「單建好之後他改過資料，而單是快照」；
+   * 自己申請那條路上是正常的（那條允許單次覆寫），所以要看 origin 再決定講不講。
+   */
+  differsFromProfile: boolean
+  /** 地址現在改不改得了。目前恆為 false，理由見後端檔頭 */
+  addressEditable: boolean
+  /** 最早的那個「賣家還沒寄」的期限（毫秒）。全部寄出了就是 null */
+  sellerDueAt: number | null
+  sellerOverdue: boolean
+  cards: {
+    prizeId: string
+    name: string | null
+    tier: string | null
+    /** 卡片自己的狀態。跟 status 是兩件事：單可以是 requested 而某一張已 shipped */
+    prizeStatus: string
+    sellerName: string | null
+    sellerDueAt: number | null
+    sellerShippedAt: number | null
+    settlementStatus: string | null
+  }[]
+}
+
 /** 只把有值的參數放進 query string —— 帶 cursor=null 會被後端當成不合法的游標 */
 function qs(o: Record<string, unknown>): string {
   const p = new URLSearchParams()
@@ -744,6 +799,62 @@ export const api = {
     return http<{ shipmentId: string }>('/v1/prizes/ship', {
       method: 'POST', json: { prizeIds, address }
     })
+  },
+
+  /**
+   * 一張卡現在在哪一張出貨單上。查不到（還沒申請、不是自己的卡）回 null。
+   *
+   * ---- 為什麼卡冊需要這一支 ----
+   * 寄存期滿時系統會**自動替買家申請出貨**（server 的 D-1／699e239）。
+   * 買家沒有按過任何按鈕，卡冊上那一格卻自己從「寄存中」變成「待出貨」——
+   * 而在這支之前，前端沒有任何辦法說出「這是系統做的」或「會寄到哪」。
+   * 通知裡有講，但通知是一次性的訊息，不是他隨時看得到的狀態。
+   *
+   * 用 prizeId 反查而不是拉整份出貨單清單：卡冊是按卡片分頁的，手上只有
+   * 卡片 id；拉清單再自己比對的話，一個有幾十張單的人要為了一格字
+   * 把整份清單抓回來。
+   *
+   * **404 回 null 不丟錯**：對這一格來說「沒有出貨單」是一種正常狀態
+   * （在卡冊上大多數卡本來就沒有），不是需要顯示錯誤的失敗。
+   * 其他錯誤照樣往外丟 —— 斷網要看得出來是斷網。
+   */
+  async shipmentForPrize(prizeId: string): Promise<BuyerShipment | null> {
+    if (MOCK) {
+      await delay(120)
+      const p = mock.userPrizes.find(x => x.id === prizeId)
+      if (!p || (p.status !== 'ship_requested' && p.status !== 'shipped')) return null
+      /* mock 也要有兩種來源，否則「自動」那一種在本機開發時永遠看不到 ——
+         而它正是這一格要解決的那一種。用 id 的最後一碼分流，穩定且不需要
+         在假資料裡多開一個欄位。 */
+      const auto = /[02468ace]$/i.test(prizeId)
+      return {
+        id: 'sh-mock-' + prizeId.slice(-6),
+        status: p.status === 'shipped' ? 'shipped' : 'requested',
+        origin: auto ? 'auto-stash-expiry' : 'self',
+        createdAt: Date.now() - 86_400_000, shippedAt: null, tracking: null,
+        shipTo: { masked: true, city: '台北市大安區', zip: '106', nameMasked: '王⋯', phoneMasked: '⋯678', line1Masked: '示範路⋯8 樓' },
+        differsFromProfile: false, addressEditable: false,
+        sellerDueAt: p.status === 'shipped' ? null : Date.now() + 36 * 3_600_000,
+        sellerOverdue: false,
+        cards: [{
+          prizeId, name: p.card.name, tier: p.tier, prizeStatus: p.status,
+          sellerName: '示範賣家', sellerDueAt: null, sellerShippedAt: null, settlementStatus: null
+        }]
+      }
+    }
+    try {
+      return await http<BuyerShipment>(`/v1/shipments/for-prize/${encodeURIComponent(prizeId)}`)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null
+      throw e
+    }
+  },
+
+  /** 我的出貨單，新到舊。給之後的「出貨紀錄」頁用；卡冊那一格走上面那支 */
+  async myShipments(opts: PageOpts = {}): Promise<Page<BuyerShipment>> {
+    if (MOCK) { await delay(150); return { items: [], nextCursor: null } }
+    return http<Page<BuyerShipment>>(
+      `/v1/shipments${qs({ cursor: opts.cursor, limit: opts.limit })}`, { signal: opts.signal })
   },
 
   /** 我的賣家狀態。null = 還沒申請過 */
