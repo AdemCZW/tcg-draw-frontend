@@ -16,6 +16,8 @@ import { publicCard } from '../card-public.js'
 import { lockSpender, walletOf } from '../money.js'
 import { notify } from '../notify.js'
 import { subscribe } from '../notify-stream.js'
+import { DAY } from '../shared/escrow.js'
+import { STASH_DAYS } from '../pools-service.js'
 import { PageQuery, decodeCursor, encodeCursor, isNumeric, slicePage } from '../pagination.js'
 
 /* =====================================================================
@@ -210,6 +212,72 @@ social.post('/trade-offers', async c => {
   return c.json(r)
 })
 
+/**
+ * 一筆邀約牽涉的那張卡「還剩幾天寄存」。
+ *
+ * ── 為什麼要有（D-2 的第二個缺口）────────────────────────────────
+ * 交易邀約成交走的是庫內轉移：只換 user_id，`custodian_id` 不動，
+ * 所以 `stash_expires_at` **刻意不重設**（理由見下面 accept 那一段與
+ * migrations/039）。後果是出價方可能換到一張明天就到期的卡，
+ * 而到期之後系統會**自動替他申請出貨**（pools-service.ts 的
+ * autoShipExpired）—— 「剩幾天」有真實後果，不只是一則提醒。
+ * 市場那條路已經在 GET /orders/listings/:id/stash 講出來了；
+ * 邀約這條路上一輪整條沒有揭露，出價方在按下出價與被接受之間，
+ * 沒有任何一格畫面告訴他這件事。
+ *
+ * ── 為什麼不新開一支端點、而是塞進既有的列表 ──────────────────────
+ * 市場那支是**單張掛單的細節頁**，一頁一張卡，額外打一次很合理。
+ * 邀約是**列表**：收發匣各 100 筆，每一筆都是一張卡。照抄成
+ * `/trade-offers/:id/stash` 等於一頁 200 次往返，而且多開一支
+ * 用 offer id 定址的端點就多一個要自己驗身分的地方。
+ * 塞進列表則是同一個 join、零額外往返，權限也直接沿用列表本來的
+ * 「只回 me 是任一方的邀約」—— 不可能出現「看得到邀約卻看不到天數」
+ * 或反過來的不一致。
+ *
+ * ── 跟市場那支怎麼保持同一個答案 ──────────────────────────────────
+ * 形狀（expiresAt / daysLeft / totalDays / heldByOther）、每一欄的定義、
+ * 無條件進位、14 天警示門檻、以及 DAY 與 STASH_DAYS 兩個常數，全部跟
+ * routes/orders.ts 的那支對齊，常數更是 import 同一份。
+ * 抽不成共用函式是這一輪的檔案界線（orders.ts 由另一條線持有），
+ * 所以改由 regress-offer-stash.ts 釘住：同一張卡分別走市場端點與這支，
+ * daysLeft 必須逐字相同。這個 repo 為「同一個資訊兩份實作」吃過虧
+ * （賣家統計曾經列表與單頁給出不同答案），那次沒有測試釘著。
+ *
+ * ── 不適用的情況回 null，不回 0 ────────────────────────────────────
+ * 卡已經離開 stashed（申請出貨、寄出、進了實體卡冊）就沒有「剩幾天」
+ * 可言：寄存掃描只看 stashed，那一欄從此不再被讀（見 039）。
+ * 0 在使用者眼裡是「今天到期」，那是完全不同的一句話。
+ */
+interface OfferStash {
+  expiresAt: number
+  daysLeft: number
+  totalDays: number
+  heldByOther: boolean
+}
+
+function offerStash(
+  prizeStatus: unknown, expiresAt: unknown, custodianId: unknown
+): OfferStash | null {
+  if (prizeStatus !== 'stashed' || expiresAt === null || expiresAt === undefined) return null
+  const exp = Number(expiresAt)
+  if (!Number.isFinite(exp)) return null
+  return {
+    expiresAt: exp,
+    /* 無條件進位，跟 routes/orders.ts 逐字相同：剩 0.2 天要說「剩 1 天」。
+       0 天在使用者眼裡等於已經過期，而過期是用負數表達的另一件事。 */
+    daysLeft: Math.ceil((exp - Date.now()) / DAY),
+    totalDays: STASH_DAYS,
+    /* 只回布林值、不回 custodian 是誰 —— 那是別人的個資，
+       而且跟「這張卡會不會跟著到我手上」這個決定無關。
+       定義**逐字沿用 orders.ts**：「有沒有人在保管這張實體卡」，不是
+       「保管人是不是看的人」。前一版寫成相對於看的人，結果同一張卡、
+       同一個人，從市場頁問與從邀約頁問會拿到不同的布林值 ——
+       那正是這一輪要避免的「同一個資訊兩套真相」。收件匣那一側
+       （持卡人看自己的卡）不需要這個欄位來寫文案，前端就不用它。 */
+    heldByOther: typeof custodianId === 'string' && custodianId !== ''
+  }
+}
+
 /** 收到的與送出的，一次給 —— 分兩個端點的話前端要打兩次才畫得出一個列表 */
 social.get('/trade-offers', async c => {
   const me = c.get('userId')
@@ -222,15 +290,25 @@ social.get('/trade-offers', async c => {
      incoming 的卡是自己的，但仍然走同一條路：一個端點兩套規則，
      下一個改這裡的人會挑錯邊。真的要看自己的編號在 /me/cards，
      這份列表從頭到尾只畫得出卡名（src/pages/OffersPage.vue）。 */
+  /* 寄存那三欄是**算料，不是回傳欄位**：解構掉再回。
+     custodian_id 尤其不能跟著出去 —— 它是「某張實體卡現在在誰的抽屜裡」，
+     而 o.* 這種寫法一旦多 select 一欄就自動多回一欄，
+     這正是上面那段檔頭要防的那種無聲外洩。 */
   const strip = (rows: readonly Record<string, unknown>[]) =>
-    rows.map(o => ({ ...o, card: publicCard(o.card) }))
+    rows.map(({ prize_status, stash_expires_at, custodian_id, ...o }) => ({
+      ...o,
+      card: publicCard(o.card),
+      stash: offerStash(prize_status, stash_expires_at, custodian_id)
+    }))
 
   const [incoming, outgoing] = await Promise.all([
-    sql`select o.*, p.card, coalesce(u.display_name, u.name) as from_name
+    sql`select o.*, p.card, p.status as prize_status, p.stash_expires_at, p.custodian_id,
+               coalesce(u.display_name, u.name) as from_name
         from trade_offers o join prizes p on p.id = o.prize_id
         join users u on u.id = o.from_user
         where o.to_user = ${me} order by o.created_at desc limit 100`,
-    sql`select o.*, p.card, coalesce(u.display_name, u.name) as to_name
+    sql`select o.*, p.card, p.status as prize_status, p.stash_expires_at, p.custodian_id,
+               coalesce(u.display_name, u.name) as to_name
         from trade_offers o join prizes p on p.id = o.prize_id
         join users u on u.id = o.to_user
         where o.from_user = ${me} order by o.created_at desc limit 100`
@@ -300,7 +378,10 @@ social.post('/trade-offers/:id/accept', async c => {
        跟庫內轉移一樣只換 owner、不搬實體卡（custodian_id 沒動），
        寄存的時鐘量的是實體卡在原賣家那裡放了多久，換人擁有不會讓它歸零。
        交易邀約這條更需要守住這一點 —— 兩個帳號互相接受出價的成本是零，
-       重設的話那個時鐘可以被無限往後推。 */
+       重設的話那個時鐘可以被無限往後推。
+       代價（出價方換到的可能是一張明天就到期、而且到期會自動出貨的卡）
+       由揭露承擔：GET /trade-offers 每一筆都帶 stash，出價方在這筆邀約
+       還沒被接受、還收得回來的時候就看得到（見那支的檔頭）。 */
     await tx`update prizes set user_id = ${o.from_user}, acquired_at = ${Date.now()} where id = ${o.prize_id}`
 
     // 同一張卡上其他人還在等的出價全部作廢：卡已經不是我的了，不可能再答應

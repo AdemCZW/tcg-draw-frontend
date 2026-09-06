@@ -50,13 +50,62 @@ const counterpart = (o: TradeOffer) =>
 /** 邀約的時間點是「多久以前發生的」，但它牽涉金額，所以仍給到分鐘的絕對時間 */
 function fmtWhen(v: string | number | null): string {
   if (v === null) return ''
-  const t = typeof v === 'number' ? v : Date.parse(v)
+  /* created_at 是 bigint，postgres.js 會以**字串**回傳（"1757…"），
+     Date.parse 吃不下那種字串會回 NaN，整行時間就無聲消失，只剩一個「送出」。
+     純數字字串先當毫秒時間戳；其他字串（mock 的 ISO 日期）才交給 Date.parse。 */
+  const t = typeof v === 'number' ? v : /^\d+$/.test(v) ? Number(v) : Date.parse(v)
   if (!Number.isFinite(t)) return ''
   const d = new Date(t)
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 const fmtPts = (n: number) => n.toLocaleString('zh-TW')
+
+/* ── 寄存剩餘天數（D-2）────────────────────────────────────────────────
+   為什麼這一頁非講不可：邀約成交走的是庫內轉移，只換擁有者、不搬實體卡，
+   所以 prizes.stash_expires_at **不會重新計算**。出價方換到手的可能是一張
+   明天就到期的卡，而到期之後系統會自動替他申請出貨（把實體卡從保管人
+   那裡寄到他留的地址）—— 有真實後果，不是一則可以滑掉的提醒。
+
+   ── 為什麼不照抄 MarketListingPage 那一套 ──────────────────────────
+   那頁是一張卡的細節頁：資訊塊在頁面流裡、可能被捲過去，所以要在購買
+   確認列裡再講一次。這頁不一樣，兩處都不一樣：
+
+   1 它是列表。每一列都是一張卡，一列塞一段四行說明就沒有人讀得完。
+     所以「還很久」只給一行淡字，「快到期」才升級成整塊警示 ——
+     資訊密度跟它的後果成正比。
+   2 它有兩種讀者，而且立場相反。收件匣那張卡是**我的**（我要交出去），
+     寄件匣那張卡是**別人的**（我要換進來）。同一個天數對兩邊的意思不同：
+     一邊是「對方接手剩下的」，另一邊是「我接手剩下的、而且到期會自動
+     寄到我這裡」。所以文案照分頁分岔，不共用一句。
+   3 出價方**沒有確認步驟**可以再講一次 —— 按下接受的是持卡人。
+     出價方在這一頁能做的只有收回，所以那句話必須留在列身上。
+     反過來，接受才是這一頁唯一不可逆的動作，確認條那一句就只給收件匣。 */
+
+/** 跟後端寄存提醒的 STASH_WARN_MS、以及市場頁的門檻同一個值 */
+const STASH_WARN_DAYS = 14
+const urgent = (o: TradeOffer) => !!o.stash && o.stash.daysLeft <= STASH_WARN_DAYS
+/** 過期用負數表示，所以「剩 -3 天」要翻成「已經過了 3 天」 */
+const stashLabel = (o: TradeOffer) => {
+  const d = o.stash?.daysLeft ?? 0
+  return d <= 0 ? `寄存期限已經過了 ${-d} 天` : `寄存期限剩 ${d} 天`
+}
+/** 快到期時多給的那一句。收件匣講對方接手，寄件匣講自己接手＋自動出貨 */
+const stashWhy = (o: TradeOffer) => {
+  const total = o.stash?.totalDays ?? 90
+  if (tab.value === 'incoming') {
+    /* 持卡人看的是自己的卡，卡在誰手上他本來就知道，不必再講一次。
+       heldByOther 的定義是「有沒有人在保管」（跟市場端點同一個定義），
+       不是「保管人是不是你」—— 拿它在這一側寫「還在保管人手上」，
+       遇到保管人就是持卡人自己的情況會講錯話，所以這一側乾脆不用它。 */
+    return `寄存期是抽中之日起 ${total} 天，過戶不會重新計算 —— 對方接手的是剩下的天數。`
+  }
+  /* 出價方看的是別人的卡：有人在保管 ＝ 換到手實體卡不會跟著過來，
+     這句話對他才是新資訊 */
+  const held = o.stash?.heldByOther ? '實體卡還在保管人手上，' : ''
+  return `${held}寄存期是抽中之日起 ${total} 天，換到手不會重新計算 —— 你接手的是剩下的天數。`
+    + '期限到了系統會自動替你申請出貨，記得先把「我的資料」的收件資料填齊。'
+}
 
 async function load() {
   loading.value = true
@@ -173,6 +222,19 @@ function switchTab(k: Tab) {
         <span class="who">{{ tab === 'incoming' ? '出價者' : '持卡人' }} {{ counterpart(o) }}</span>
       </p>
 
+      <!-- 寄存剩餘天數。位置在金額正下方、動作列上方：出價方要換的是這張卡的
+           剩餘天數，那是跟金額同一層的決策資訊，不是註腳。
+           只畫還在等回覆的那幾筆 —— 已回應的是歷史，那張卡的時鐘由卡冊負責，
+           在這裡再倒數一次只會讓人以為還能做什麼。 -->
+      <p
+        v-if="o.stash && o.status === 'pending'"
+        class="stash" :class="urgent(o) ? 'urgent' : 'calm'"
+      >
+        <span class="sTag">{{ stashLabel(o) }}</span>
+        <!-- 還很久的不解釋：一行淡字就夠了。快到期才值得佔掉一列的高度 -->
+        <span v-if="urgent(o)" class="sWhy">{{ stashWhy(o) }}</span>
+      </p>
+
       <p v-if="o.message" class="msg">「{{ o.message }}」</p>
       <p class="when">
         {{ fmtWhen(o.created_at) }} 送出<span v-if="o.responded_at"> · {{ fmtWhen(o.responded_at) }} 回覆</span>
@@ -186,6 +248,12 @@ function switchTab(k: Tab) {
           <p class="cfm">
             接受後 <strong class="mono">{{ fmtPts(o.points) }}</strong> 點會入帳，
             「{{ o.card?.name || o.prize_id }}」會過戶給 {{ counterpart(o) }}。這個動作沒有還原鍵。
+            <!-- 快到期的話在按下確定的那一刻再講一次。理由同市場頁：上面那一塊
+                 可能被捲過去，這一句跟金額在同一段話裡，躲不掉。
+                 只有收件匣有這一段 —— 這一頁唯一不可逆的動作就是接受。 -->
+            <span v-if="urgent(o)" class="cfmStash">
+              這張卡的{{ stashLabel(o) }}，過戶不會重新計算 —— {{ counterpart(o) }} 接手的是剩下的天數。
+            </span>
           </p>
           <div class="acts">
             <button type="button" class="btn sm" :disabled="busy === o.id" @click="confirming = null">取消</button>
@@ -288,6 +356,22 @@ h1 { font-size: 22px; margin: 0; flex: 1; min-width: 0; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+/* 寄存剩餘天數。兩種樣式差在**份量**不只是顏色：
+   還很久（calm）是一行淡字，不佔背景、不撐高列高，因為它不是新聞；
+   快到期（urgent）升成一整塊警示底，因為它會改變出價方的決定。 */
+.stash { margin: 5px 0 0; font-size: 12px; line-height: 1.55; }
+.stash.calm { color: var(--muted); }
+.stash.urgent {
+  padding: 7px 9px; border-radius: 10px;
+  background: var(--warn-wash); color: var(--warn-ink);
+}
+.sTag { font-weight: 700; }
+/* 說明另起一行：跟天數擠同一行的話，手機上會被折成很難讀的參差兩段 */
+.sWhy { display: block; margin-top: 2px; font-weight: 400; line-height: 1.6; }
+.stash.urgent .sWhy { color: color-mix(in srgb, var(--warn-ink) 80%, var(--muted)); }
+/* 確認條裡的那一句：跟著金額走，不另開一塊 */
+.cfmStash { display: block; margin-top: 4px; color: var(--warn-ink); font-weight: 600; }
+
 /* 留言可能很長，但它不是決策依據 —— 收成兩行，要看全文再點進對話 */
 .msg {
   margin: 5px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted);
@@ -302,7 +386,9 @@ h1 { font-size: 22px; margin: 0; flex: 1; min-width: 0; }
 .acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 /* 只有一顆時不撐滿：收回是低頻動作，不該長得跟主要動作一樣大 */
 .acts.one { grid-template-columns: minmax(0, auto); justify-content: start; }
-.acts .btn { min-width: 0; padding: 7px 14px; font-size: 13px; min-height: 38px; }
+/* 44px 是拇指的最小可靠命中高度；這一列旁邊現在多了警示塊，
+   按錯「接受」的代價又是不可逆的過戶，不能再省這 6px */
+.acts .btn { min-width: 0; padding: 7px 14px; font-size: 13px; min-height: 44px; }
 
 /* 桌機：邀約是清單資料，拉滿 1180px 會變成一排超寬空盒 */
 @media (min-width: 721px) {
