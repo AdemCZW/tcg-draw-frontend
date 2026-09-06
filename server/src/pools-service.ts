@@ -596,6 +596,26 @@ const addressReady = sqlRoot`
   and btrim(coalesce(u.address_city, ''))  <> ''
 `
 
+/**
+ * 「這張卡有人有義務把它寄出去」的守衛。
+ *
+ * 跟 addressReady 同一個道理：撈「可以自動出貨的」與撈「缺地址卡住的」必須是
+ * 同一條規則，兩邊各寫一次就會有一批卡兩邊都撈不到。而這一段原本只寫在
+ * autoShipExpired 裡，warnMissingAddress 沒有 —— 後果不是漏撈，是**發出一則
+ * 兌現不了的承諾**：沒有結算列的卡就算補齊地址也不會被自動出貨，而那則提醒
+ * 說的是「補齊之後系統會自動接手」。
+ *
+ * 為什麼一定有這種卡：017_pool_settlement.sql 明寫「既有的 draws 不回填
+ * pool_settlements」，所以 017 之前抽中、還放在卡冊裡的卡全部沒有結算列 ——
+ * 而它們是站上最老的卡，幾乎都已經過了 90 天。
+ */
+const hasShipObligation = sqlRoot`
+  exists (
+    select 1 from pool_settlements st
+     where st.prize_id = p.id and st.status in ('held', 'released')
+  )
+`
+
 /** 收件地址。**個人資料：不進 log、不進網址、不進通知內文。** */
 interface ShipAddress {
   name: string; phone: string; line1: string; city: string; zip?: string
@@ -659,10 +679,7 @@ async function autoShipExpired(now: number): Promise<number> {
      where p.status = 'stashed'
        and p.stash_expires_at <= ${now}
        and ${addressReady}
-       and exists (
-         select 1 from pool_settlements st
-          where st.prize_id = p.id and st.status in ('held', 'released')
-       )
+       and ${hasShipObligation}
      order by p.id
      limit ${AUTO_SHIP_BATCH}
   `
@@ -788,6 +805,7 @@ async function warnMissingAddress(now: number): Promise<number> {
      where p.status = 'stashed'
        and p.stash_expires_at <= ${now}
        and not (${addressReady})
+       and ${hasShipObligation}
      group by p.user_id
      limit 200
   `
