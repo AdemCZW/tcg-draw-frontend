@@ -93,7 +93,12 @@ export default defineConfig(({ mode }) => ({
     }
   },
   server: {
-    port: 5173,
+    /* 預設仍是 5173（R2 的 CORS 允許清單裡放的就是 http://localhost:5173，
+       本機要把 R2 的圖讀進 canvas —— 訓練家卡那條路 —— 就必須是這個埠）。
+       但同一台機器上可能已經有別的 session 佔著它，所以讓外部用 PORT 指定：
+       寫死的話那種情況下 dev server 根本起不來。
+       ⚠️ 用非 5173 的埠時，R2 那條路會因為 CORS 而讀不到圖，其餘功能不受影響。 */
+    port: Number(process.env.PORT) || 5173,
     proxy: {
       // Point to FastAPI once the backend exists
       '/api': {
