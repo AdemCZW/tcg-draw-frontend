@@ -345,8 +345,16 @@ const num = (v: number) => sql`${String(v)}::text::numeric`
  * 不像的當成「沒有標示」（NULL）。
  * `nullif(…, 0)` 讓 0 也算沒有標示 —— 0 當分母是除以零，而且 0 讀起來是
  * 「這張卡不值錢」，跟「沒有標示」是兩件事，兩者都不該進折數。
+ *
+ * ⚠️ 小數點寫成 `[.]` 而不是 `\.`：這串字面量在 tagged template 裡，
+ * JS 會先做一次跳脫處理，`\.` 在 cooked 字串中變成單獨一個 `.`，
+ * 送到 Postgres 的就是「任意字元」—— `'1x5' ~ '^[0-9]+(.[0-9]+)?$'` 為真，
+ * 於是髒資料通過檢查再進 `::numeric`，正好爆掉這段註解要防的那個 22P02。
+ * （實測：`'axb' ~ '^a\.b$'` 經 postgres.js 送出回 true。）
+ * `\\.` 也能修，但下一個編輯的人很容易再手滑刪成一個；`[.]` 沒有跳脫層，
+ * 讀到什麼就是送出什麼。regress-public 的「小數點不是萬用字元」釘住這條。
  */
-const REF_NUM = sql`(case when card->>'refPrice' ~ '^[0-9]+(\.[0-9]+)?$'
+const REF_NUM = sql`(case when card->>'refPrice' ~ '^[0-9]+([.][0-9]+)?$'
                           then nullif((card->>'refPrice')::numeric, 0) end)`
 
 /** 折數本身。沒有基準就是 NULL —— 跟顯示層（src/lib/refprice.ts）同一條紀律 */
@@ -441,8 +449,12 @@ const GRADER_NORM = sql`coalesce(upper(nullif(btrim(card->>'grader'), '')), 'RAW
  * Hono 把它翻成 500：**一筆髒資料就讓整個市場的篩選變成伺服器故障**。
  * 先用正規表示式確認它長得像數字，不像的當成「沒有分數」（NULL），
  * NULL >= 9 是 unknown，那一列自然落在結果外，不會炸也不會被誤收。
+ *
+ * ⚠️ 小數點同樣寫成 `[.]` 而不是 `\.`，理由見 REF_NUM 上方那段：
+ * tagged template 會把 `\.` 吃成 `.`，變成任意字元，`"9x5"` 這種值
+ * 會通過檢查再進 `::numeric`，就是這段註解要防的 22P02。
  */
-const GRADE_NUM = sql`(case when card->>'grade' ~ '^[0-9]+(\.[0-9]+)?$'
+const GRADE_NUM = sql`(case when card->>'grade' ~ '^[0-9]+([.][0-9]+)?$'
                             then (card->>'grade')::numeric end)`
 
 /**

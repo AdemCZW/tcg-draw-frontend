@@ -16,7 +16,21 @@
  *        而且驗算還算得過 —— 後面那半是這條的反向，沒驗等於沒做。
  *   L-1  掛單價的十種畸形輸入全部 400、訊息中文可讀，一個 500 都不能有。
  *   L-2  沒登入抓得到的每一條回應，整包遞迴掃不到 certNo，也掃不到實際編號字串。
+ *
+ * 之後補進來的第五條：
+ *
+ *   R-1  REF_NUM / GRADE_NUM 的小數點必須是**字面上的點**。
+ *        那兩段守衛寫在 tagged template 裡，`\.` 會被 JS 的跳脫處理吃成 `.`
+ *        —— 送到 Postgres 的是「任意字元」，於是 `"1x5"` 通過守衛再進
+ *        `::numeric`，正好造成守衛本來要防的 22P02（HTTP 500）。
+ *        這一條直接往資料庫塞髒值再打端點，寫法退回 `\.` 就會紅。
+ *
+ * ⚠️ R-1 之後這支**自己也會連資料庫**（髒值只能從那一側造，見該段說明），
+ *    所以跑的時候除了 DEV_LOGIN_SECRET 還要給 DATABASE_URL 與 JWT_SECRET，
+ *    而且要指到**伺服器正在用的那個庫**，不是另外一個。
  */
+import { sql } from './db.js'
+
 const base = (process.argv[2] ?? 'http://localhost:8091').replace(/\/$/, '')
 const devSecret = process.env.DEV_LOGIN_SECRET
 const devHeaders = () => {
@@ -365,6 +379,67 @@ head('A-6 反向：revealed 的 manifest 仍然有 certNo，而且驗算過得�
      只可能是被遮掉了。種子裡的 RAW 池 certNo 本來就是 null，不能只看第一個。 */
   ck('★ 至少一個池的 manifest 裡真的有 certNo（公平性證據沒被遮掉）', withCert > 0,
     `檢查了 ${checked} 個 revealed 的池，沒有一個 manifest 帶編號`)
+}
+
+head('R-1 refPrice / grade 的守衛：小數點不可以是萬用字元')
+{
+  /* ── 這一條為什麼要直接碰資料庫 ──────────────────────────────────
+     REF_NUM / GRADE_NUM 是「髒 jsonb 進來也不能 500」的守衛，而髒值**進不了
+     HTTP 路徑**：上架與卡冊的 zod 都把 refPrice / grade 收成數字。也就是說
+     這道守衛保護的情境只能從資料庫那一側造出來 —— 純黑箱測試碰不到它，
+     碰不到就等於沒釘住，寫法退回去也不會有人發現。
+     其他 regress 也是這樣直接下 SQL（見 regress-sellers.ts）。 */
+
+  /* 先把陷阱本身印出來：這不是在驗 Postgres，是在證明「為什麼要寫 [.]」。
+     `'^a\.b$'` 在 tagged template 的 cooked 字串裡是 `^a.b$`，所以 'axb' 會中。 */
+  const [trap] = await sql<{ eaten: boolean; kept: boolean }[]>`
+    select ('axb' ~ '^a\.b$') as eaten, ('axb' ~ '^a[.]b$') as kept`
+  ck('★ 陷阱存在：tagged template 把 \\. 吃成 .（axb 中了 ^a\\.b$）', trap!.eaten === true)
+  ck('★ [.] 沒有這個問題（axb 不中 ^a[.]b$）', trap!.kept === false)
+
+  const dirty = `rgx${RUN}`
+  /* 兩筆髒掛單：refPrice="1x5" 打 REF_NUM（deal 排序會算 DEAL_KEY），
+     grade="9x5" 打 GRADE_NUM（minGrade 篩選會算它）。
+     兩個值都刻意長成「數字 ＋ 一個非點字元 ＋ 數字」——
+     正確的守衛不收，被吃掉反斜線的守衛會收，然後炸在 ::numeric。 */
+  const basecard = { id: 'c-rgx', name: `髒值測試-${dirty}`, artId: 'rgx-1', cardNo: '001/001', setCode: 'rgx' }
+  await sql`delete from listings where id like ${dirty + '%'}`
+  await sql`insert into listings (id, card, price, seller_id, seller_name, delivery, status, listed_at)
+            values (${dirty + '-ref'}, ${sql.json({ ...basecard, refPrice: '1x5', grader: 'RAW', grade: null })},
+                    1000, 'u-seller', '測試賣家', 'vault', 'live', now()),
+                   (${dirty + '-grade'}, ${sql.json({ ...basecard, refPrice: 1000, grader: 'PSA', grade: '9x5' })},
+                    1000, 'u-seller', '測試賣家', 'vault', 'live', now())`
+
+  try {
+    /* deal 排序會對每一列算 DEAL_KEY，髒的那一列一定會被算到（limit 100 蓋得住）。
+       守衛對的時候它是「沒有標示」→ 退到哨兵；守衛被吃掉就是 22P02 → 500。 */
+    const r1 = await fetch(`${base}/v1/listings?sort=deal&limit=100`)
+    ck('★ refPrice="1x5" 不會讓 deal 排序回 500', r1.status === 200, `HTTP ${r1.status}`)
+    const b1 = r1.ok ? await json(r1) : { items: [] }
+    const found = (b1.items ?? []).find((l: Any) => l.id === dirty + '-ref')
+    /* 還在清單裡才算「被當成沒有標示」；不在的話可能是被整批吞掉，那是另一種壞法 */
+    ck('refPrice 髒的那一筆仍然列得出來（當成沒有標示，不是被丟掉）', !!found)
+
+    /* minGrade 走 GRADE_NUM。"9x5" 不是分數，NULL >= 9 是 unknown，那一列落在結果外 */
+    const r2 = await fetch(`${base}/v1/listings?minGrade=9&limit=100`)
+    ck('★ grade="9x5" 不會讓 minGrade 篩選回 500', r2.status === 200, `HTTP ${r2.status}`)
+    const b2 = r2.ok ? await json(r2) : { items: [] }
+    ck('grade 髒的那一筆不會被當成 ≥9 收進來',
+      !(b2.items ?? []).some((l: Any) => l.id === dirty + '-grade'))
+
+    /* 反向：正常的小數分數還是要收得到 —— 只把守衛改成 `^[0-9]+$`
+       也能讓上面三條變綠，但那會把 PSA 9.5 整批弄不見。 */
+    await sql`insert into listings (id, card, price, seller_id, seller_name, delivery, status, listed_at)
+              values (${dirty + '-half'}, ${sql.json({ ...basecard, refPrice: 1000, grader: 'BGS', grade: '9.5' })},
+                      1000, 'u-seller', '測試賣家', 'vault', 'live', now())`
+    const r3 = await fetch(`${base}/v1/listings?minGrade=9&limit=100`)
+    const b3 = r3.ok ? await json(r3) : { items: [] }
+    ck('★ grade="9.5" 仍然算得出 9.5（守衛沒有連小數一起擋掉）',
+      (b3.items ?? []).some((l: Any) => l.id === dirty + '-half'), `HTTP ${r3.status}`)
+  } finally {
+    await sql`delete from listings where id like ${dirty + '%'}`
+    await sql.end()
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
