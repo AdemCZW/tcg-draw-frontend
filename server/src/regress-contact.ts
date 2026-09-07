@@ -84,6 +84,24 @@ const badLogin = (email: string, ip: string) =>
     body: JSON.stringify({ email, password: 'definitely-not-the-password' })
   })
 
+/**
+ * 把某個 IP 的**突發桶**計數清掉（= 模擬「15 分鐘過去了」）。
+ *
+ * 為什麼需要這個：/v1/contact 有兩層限流，兩層都以來源計數 ——
+ * 第一層是 rate-limit.ts 的 `contact-ip:` 桶（15 分鐘），第二層是
+ * routes/contact.ts 自己數 contact_messages 的日配額（24 小時）。
+ * 第一層的門檻已經緊到跟第二層同一個量級，所以**只要在同一個 15 分鐘裡連送，
+ * 永遠是第一層先擋** —— 想驗第二層就得先讓第一層復原。真實情境裡它會自己
+ * 過期，測試不能等 15 分鐘，所以直接把那一列刪掉。
+ *
+ * 回傳刪掉幾列，呼叫端要檢查：清不到東西（例如桶的前綴被改名）時必須紅在
+ * 「清不掉」這件事上，而不是變成「悄悄跳過第一層」然後在別的地方紅。
+ */
+const clearBurst = async (ip: string) => {
+  const rows = await sql`delete from login_attempts where key = ${`contact-ip:${ip}`} returning key`
+  return rows.length
+}
+
 /** 後台佇列 —— **前端那一頁真的會打的那支**，不是自己去查資料庫。 */
 const adminList = (token: string, scope = 'new', limit = 100) =>
   fetch(`${base}/v1/admin/contact?scope=${scope}&limit=${limit}`,
@@ -166,7 +184,11 @@ head('已登入：身分會被帶上，客服因此有脈絡')
 /* ══ 畸形輸入 ════════════════════════════════════════════════ */
 head('畸形輸入：擋得掉，而且錯誤訊息是給人看的')
 {
-  const ip = '198.51.100.110'
+  /* **每一個案例用自己的 IP。** 共用一個的話這一段會偷偷相依於突發桶的門檻
+     （下面有 10 個案例，門檻只要調到 10 以下，整段就會變成一串 429，
+     而紅字講的是「假 email 沒有回 400」—— 跟限流一點關係都看不出來）。
+     限流有它自己的段落在驗，這一段只驗輸入驗證。 */
+  const caseIp = (i: number) => `198.51.100.${170 + i}`
   const cases: [string, unknown, RegExp][] = [
     ['空白的內文', goodBody({ body: '     ' }), /多寫幾個字|不完整/],
     ['太短的內文', goodBody({ body: '救我' }), /多寫幾個字/],
@@ -179,8 +201,8 @@ head('畸形輸入：擋得掉，而且錯誤訊息是給人看的')
     ['整包不是 JSON 物件', 'nope', /./],
     ['少一半欄位', { topic: 'other' }, /./]
   ]
-  for (const [label, body, re] of cases) {
-    const r = await send(ip, body)
+  for (const [i, [label, body, re]] of cases.entries()) {
+    const r = await send(caseIp(i), body)
     const j = await r.json() as { error?: string; message?: string }
     ck(`${label} → 400`, r.status === 400, `${r.status} ${JSON.stringify(j).slice(0, 120)}`)
     ck(`${label} 的訊息是看得懂的中文`, re.test(j.message ?? ''), j.message)
@@ -253,30 +275,46 @@ head('限流反向：正常節奏的真人全程 200')
 
 head('限流反向：換一個網路不受牽連')
 {
-  /* 先把某個 IP 的日配額用光，再從另一個 IP 送 —— 必須照常。 */
+  /* 先把某個 IP 打到被擋，再從另一個 IP 送 —— 必須照常。
+     這裡不在意是哪一層擋的（兩層都以來源計數，先撞到哪一層都行），
+     這一段驗的只有「桶是以來源分的，別的來源不受牽連」。 */
   const hot = '198.51.100.121'
-  for (let i = 0; i < 10; i++) await send(hot, goodBody())
-  const blocked = await send(hot, goodBody())
+  let blocked = await send(hot, goodBody())
+  for (let i = 0; i < 40 && blocked.status !== 429; i++) blocked = await send(hot, goodBody())
   ck('前一個 IP 確實被擋了', blocked.status === 429, `${blocked.status}`)
   const other = await send('198.51.100.122', goodBody())
   ck('另一個 IP 照常送得出去', other.status === 200, `${other.status}`)
 }
 
-/* ══ 限流 · 正向：日配額 ═══════════════════════════════════════ */
+/* ══ 限流 · 正向：日配額 ═══════════════════════════════════════
+   DAILY_MAX 是 routes/contact.ts 的第二層（10 則／24 小時／來源），
+   跟 rate-limit.ts 的第一層是**兩個不同的數字**，不要混用。 */
 head('限流正向：日配額 第 10 則成功、第 11 則被擋')
 const DAILY_MAX = 10
 {
   const ip = '198.51.100.130'
+  /* 每一次送出前先把第一層（15 分鐘的突發桶）清掉 = 模擬時間經過。
+     不清的話第一層會先擋 —— 它的門檻已經緊到跟日配額同一個量級，
+     於是這一整段的斷言寫著日配額、回來的卻是突發桶的訊息，
+     而紅字指的地方跟真正該驗的東西無關（這正是這一段原本壞掉的樣子）。 */
+  const cleared: number[] = []
+  const sendDaily = async () => { cleared.push(await clearBurst(ip)); return send(ip, goodBody()) }
+
   let lastOk = 0, firstBlocked = 0
   for (let i = 1; i <= DAILY_MAX + 1; i++) {
-    const r = await send(ip, goodBody())
+    const r = await sendDaily()
     if (r.status === 200) lastOk = i
     if (r.status === 429) { firstBlocked = i; break }
   }
+  /* 清不到東西時要紅在這裡：桶的前綴改名（或第一層被拿掉）之後，
+     上面那一圈會變成「其實沒有隔離第一層」，而那會讓下面每一條斷言
+     都在驗另一件事。 */
+  ck('第一層的計數真的清得掉（桶的前綴沒有改名）', cleared.some(n => n > 0),
+    `${cleared.length} 次清除，刪掉的列數 ${cleared.join(',')}`)
   ck(`前 ${DAILY_MAX} 則都收下`, lastOk === DAILY_MAX, `最後成功的是第 ${lastOk} 則`)
   ck(`第 ${DAILY_MAX + 1} 則被擋`, firstBlocked === DAILY_MAX + 1, `第 ${firstBlocked} 則才被擋`)
 
-  const r = await send(ip, goodBody())
+  const r = await sendDaily()
   ck('被擋時回 429', r.status === 429, `${r.status}`)
   const retry = Number(r.headers.get('retry-after'))
   ck('429 帶 Retry-After 而且是合理的秒數（<= 24 小時）',
@@ -293,25 +331,50 @@ const DAILY_MAX = 10
 
 /* ══ 限流 · 正向：突發桶（畸形請求也要計數） ═══════════════════
    這一段驗的是「只計成功的話，用畸形 body 猛打的機器人永遠碰不到限制」。
-   contact-ip: 的門檻是 rate-limit.ts 對未知前綴的退回值（40 次／15 分鐘）——
-   數字是繼承來的，見 routes/contact.ts 的說明。 */
-head('限流正向：畸形請求也計數，第 41 次被擋')
-const BURST_MAX = 40
+
+   **門檻不寫死。** 上一版寫死 40（那是 rate-limit.ts 對未知前綴的退回值
+   MAX_FAILS_IP），後來 contact-ip: 拿到自己的門檻 MAX_CONTACT_IP，
+   寫死的數字就過期了 —— 而它紅的地方（「第 41 次沒被擋」）跟這一段真正
+   要驗的行為完全無關，讀的人分不出是產品壞了還是測試髒了。
+   正確的做法是**先量出門檻，再對量到的值做行為斷言**：門檻是產品的政策
+   參數（rate-limit.ts 隨時可以調鬆調緊），行為才是這支測試的驗收標準。
+
+   （更理想的是直接讀 rate-limit.ts 的 MAX_CONTACT_IP，但那個常數沒有
+   export，而這一輪不能動那支檔案。把它 export 出來之後，這裡可以再加一條
+   「量到的門檻 === MAX_CONTACT_IP」。） */
+head('限流正向：畸形請求也計數，桶滿之後連合法請求也擋')
 {
   const ip = '198.51.100.140'
+  /* 只是防呆的上界：桶要是完全沒生效，這一圈不能變成無窮迴圈。
+     取一個明顯高於任何合理門檻的值 —— 它不是被驗的數字。 */
+  const PROBE_CAP = 300
+  const codes: number[] = []
   let firstBlocked = 0
-  for (let i = 1; i <= BURST_MAX + 1; i++) {
-    /* 一律送畸形 body：這些都不會寫進資料庫，所以日配額永遠不會觸發，
-       擋下來的只可能是突發桶。 */
+  for (let i = 1; i <= PROBE_CAP; i++) {
+    /* 一律送畸形 body：這些都不會寫進資料庫，所以第二層（日配額，它數的是
+       contact_messages 的列數）永遠不會觸發 —— 擋下來的只可能是突發桶。 */
     const r = await send(ip, { topic: 'other' })
     if (r.status === 429) { firstBlocked = i; break }
+    codes.push(r.status)
   }
-  ck(`第 ${BURST_MAX + 1} 次被擋（前 ${BURST_MAX} 次都只是 400）`,
-    firstBlocked === BURST_MAX + 1, `第 ${firstBlocked} 次被擋`)
+  /* **這一條是這一段的主體。** bump 的時機要是移到驗證之後（或整個拿掉），
+     畸形請求一次都不會被計到，這一圈會跑滿 PROBE_CAP 次都不被擋。 */
+  ck('畸形請求也會把桶打滿（驗證失敗的請求同樣計數）', firstBlocked > 0,
+    `送了 ${PROBE_CAP} 次畸形請求都沒被擋`)
+  ck('被擋之前每一次都只是 400（沒有任何一則被寫進去）',
+    codes.every(s => s === 400), `出現過的狀態碼：${[...new Set(codes)].join(',')}`)
+  if (firstBlocked > 0) console.log(`     · 量到的突發門檻：${firstBlocked - 1} 次／窗（第 ${firstBlocked} 次被擋）`)
+
   const r = await send(ip, goodBody())
   ck('桶滿之後連合法的請求也擋（桶是以來源計，不是以內容計）', r.status === 429, `${r.status}`)
-  ck('帶 Retry-After', !!r.headers.get('retry-after'))
-  const j = await r.json() as { message?: string }
+  const retry = Number(r.headers.get('retry-after'))
+  /* 擋下來的必須是**第一層**。上面全是畸形請求，一則都沒進資料庫，
+     所以日配額不可能觸發；如果這裡回的是日配額的訊息（小時／信箱），
+     代表兩層的判斷順序或計數來源被改過了。 */
+  ck('帶 Retry-After，而且是短窗的秒數（<= 15 分鐘，這是第一層不是日配額）',
+    retry > 0 && retry <= 15 * 60, String(retry))
+  const j = await r.json() as { error?: string; message?: string }
+  ck('錯誤代號是這支專用的', j.error === 'TOO_MANY_CONTACTS', String(j.error))
   ck('訊息講得出還要等幾分鐘', /分鐘後再試/.test(j.message ?? ''), j.message)
 }
 

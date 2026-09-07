@@ -45,6 +45,9 @@
 import { randomBytes } from 'node:crypto'
 import { sql } from './db.js'
 import { sweepSettlementsAll } from './pool-settlement.js'
+/* 佈景用：種子裡有帳號的 id 跟 handle 對不起來，dev-login 那條路換不到
+   它們可用的 token（詳見下面 asSeller 的說明）。 */
+import { issueToken } from './auth.js'
 
 const base = (process.argv[2] ?? 'http://localhost:8051').replace(/\/$/, '')
 const devSecret = process.env.DEV_LOGIN_SECRET
@@ -238,7 +241,7 @@ async function availableOf(userId: string) {
          select points  as x from trade_offers where from_user = ${userId} and status = 'pending'
        ) t)::text as locked`
   const points = Number(r?.points ?? 0), reserved = Number(r?.reserved ?? 0), locked = Number(r?.locked ?? 0)
-  return { points, reserved, available: points - reserved - locked }
+  return { points, reserved, locked, available: points - reserved - locked }
 }
 
 /* ---------------- 佈景：帳號、籤位 ---------------- */
@@ -352,12 +355,44 @@ const ADDRESS = { name: '壓測收件', phone: '0912345678', line1: '併發路 1
 const sellerHandles = new Map<string, string>(
   (await sql<{ id: string; handle: string }[]>`select id, handle from users`).map(u => [u.id, u.handle]))
 const sellerToken = new Map<string, string>()
+/**
+ * 拿一個**既有賣家**的 token。
+ *
+ * 為什麼不能只是「dev-login 回 200 就好」：dev-login 是照 handle **反推** id 的
+ * （auth.ts 的 ensureUser：`id = 'u-' + handle`），而種子裡有帳號的 id 跟 handle
+ * 對不起來 —— `u-official` 的 handle 是 `vaultdraw`。這種情況下 ensureUser 撞到
+ * handle 唯一鍵、`on conflict do nothing`，但仍然回它自己算的 `u-vaultdraw`，
+ * 而那個帳號根本不存在；issueToken 照樣簽得出來（session 版本查不到就當 0），
+ * 於是 **dev-login 回 200 並附一張每次呼叫都會 401 的 token**。
+ * regress-inventory.ts 也記過同一個坑（它的做法是繞開 u-official 另開帳號，
+ * 但 V-2 非用它名下的籤位不可 —— buyback > ticket 的籤位有一半以上是它的）。
+ *
+ * 這件事之所以會炸在很遠的地方（第 8 組讀 `/v1/wallet` 的 `available` 時
+ * TypeError），就是因為沒有人檢查前置步驟。所以這裡把兩件事都釘死：
+ *   1 dev-login 回的 userId 必須就是我們要的那一個；不是的話直接簽一張給
+ *     正確 id 的（取既有帳號的 token 是**佈景**不是被測行為 —— 跟這支直接
+ *     import sweepSettlementsAll 同一個理由）。
+ *   2 不管走哪一條，最後都要拿 `/v1/auth/me` 確認那張 token 真的是那個人的。
+ *     失敗就在**這裡**炸，訊息裡帶著 sellerId 與 handle。
+ */
 async function asSeller(sellerId: string) {
   const cached = sellerToken.get(sellerId)
   if (cached) return cached
   const h = sellerHandles.get(sellerId)
   if (!h) throw new Error(`找不到賣家 ${sellerId} 的 handle`)
-  const t = await login(h, '賣家')
+
+  const r = await hit('/v1/auth/dev-login', {
+    method: 'POST', headers: { 'content-type': 'application/json', ...devHeaders() },
+    body: JSON.stringify({ handle: h, name: '賣家' })
+  })
+  if (r.status !== 200) throw new Error(`dev-login ${h}（${sellerId}）: ${r.status} ${r.text}`)
+  const t = r.body.userId === sellerId ? r.body.token as string : await issueToken(sellerId)
+
+  const me = await call(t, '/v1/auth/me')
+  if (me.status !== 200 || me.body?.user?.id !== sellerId) {
+    throw new Error(`拿不到 ${sellerId}（handle ${h}）可用的 token：`
+      + `dev-login 回的是 ${r.body.userId}，/v1/auth/me ${me.status} ${me.text.slice(0, 120)}`)
+  }
   sellerToken.set(sellerId, t)
   return t
 }
@@ -1096,9 +1131,24 @@ head('8 V-2：SELLER_UNFUNDED 併發 + 完全回滾')
       /* availableOf() 是照著 money.ts 的 walletOf() 重寫的 —— 對照一次，
          免得算式漂掉之後這一整組驗的是另一件事。 */
       const t = await asSeller(seat.sellerId)
-      const w = (await call(t, '/v1/wallet')).body.wallet
-      ck('availableOf() 跟 /v1/wallet 對得起來', Number(w.available) === av.available,
-        `端點 ${w.available} / 測試算的 ${av.available}`)
+      const wr = await call(t, '/v1/wallet')
+      /* **先斷言前置步驟，再讀欄位。** 少了這一條的時候，一個 401 會讓
+         下一行變成 `undefined.available` 的 TypeError —— 整支測試在第 8 組
+         中途崩掉，而崩的位置跟真正的原因（換不到可用的 token）毫無關係。
+         現在它紅在「讀不到錢包」這句話上，訊息裡就有狀態碼。 */
+      ck(`賣家 ${seat.sellerId} 讀得到自己的錢包`,
+        wr.status === 200 && !!wr.body?.wallet, `${wr.status} ${wr.text.slice(0, 120)}`)
+      const w = wr.body?.wallet ?? {}
+      /* 四項都比，不只比 available：只比 available 的話，這一輪的賣家
+         剛好沒有在途訂單（凍結是 0），算式裡整項漏掉 locked 照樣全綠 ——
+         實測過，那個變異一條紅字都沒有。
+         注意兩邊的 locked **不同名同義**：money.ts:67 的 locked 是「總凍結」
+         （訂單／交易邀約 + 保留額），這支的 locked 只算訂單／交易邀約，
+         保留額另外放在 reserved。所以比的是 locked + reserved。 */
+      ck('availableOf() 跟 /v1/wallet 對得起來（points / reserved / locked / available）',
+        Number(w.points) === av.points && Number(w.reserved) === av.reserved
+        && Number(w.locked) === av.locked + av.reserved && Number(w.available) === av.available,
+        `端點 ${JSON.stringify(w)} / 測試算的 ${JSON.stringify(av)}`)
       walletChecked = true
     }
     const needTopUp = (seat.buyback - 1) - (av.available + amount)
