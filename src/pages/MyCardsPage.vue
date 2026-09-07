@@ -7,6 +7,7 @@ import CardArt from '@/components/CardArt.vue'
 import Tilt3D from '@/components/Tilt3D.vue'
 import TierBadge from '@/components/TierBadge.vue'
 import CertTag from '@/components/CertTag.vue'
+import ShipmentNote, { hasShipmentNote, invalidateShipments } from '@/components/ShipmentNote.vue'
 import ValueCurve from '@/components/ValueCurve.vue'
 import ListSentinel from '@/components/ListSentinel.vue'
 import BottomActionBar from '@/components/BottomActionBar.vue'
@@ -299,6 +300,33 @@ const statusShort: Record<UserPrize['status'], string> = {
    一次只展開一張，收合時把該卡的定價表單與回收確認一起關掉，
    否則下次展開會停在上次的半途，看起來像自己跳出來的。 */
 const openCard = ref<string | null>(null)
+
+/* ---- 出貨單那一格（ShipmentNote）掛在哪 ----
+
+   要補的是 699e239 留下的洞：寄存滿 90 天時系統會**自動替買家申請出貨**，
+   卡冊上那一格自己從「寄存中」變成「待出貨」，而使用者沒有按過任何按鈕、
+   也沒有任何地方看得出**是誰申請的**與**會寄到哪**。
+
+   ⚠️ 一疊同款卡（total > 1）不掛：出貨單是**單張實體卡**的事實，
+   跟賞別、狀態同一條線（見 .sTags 那一段）。三張同款卡可能一張在自動出貨的
+   單上、兩張還在寄存中，拿 head 那一張的單去講整疊就是說錯話。
+   預設排序（取得時間）根本不分組，所以實務上這一格幾乎都是單張。 */
+const hasShipInfo = (g: CardRow) =>
+  g.total === 1 && (g.head.status === 'ship_requested' || g.head.status === 'shipped')
+
+/**
+ * 這一格的展開面板要放什麼，null = 這一格沒有面板。
+ *
+ * 面板本來只有「寄存中」有（申請出貨／換回點數）。現在多一種身分：
+ * 待出貨與已出貨的卡放**出貨單的說明**。兩種內容不會同時出現 ——
+ * 卡的狀態是互斥的 —— 所以共用同一個 .pop 是對的，不必另開一塊。
+ */
+function popKind(g: CardRow): 'actions' | 'shipment' | null {
+  if (selecting.value) return null
+  if (g.head.status === 'stashed') return 'actions'
+  if (hasShipInfo(g)) return 'shipment'
+  return null
+}
 /* 帶時區的 ISO 字串，直接切前 10 碼會在 UTC+8 的深夜差一天。
    解析不了就原樣回傳 —— 卡冊上少一個好看的日期，比顯示 Invalid Date 好。
    讀的是 acquiredAt 不是 wonAt：買來的卡「取得」的是成交那天，
@@ -544,6 +572,13 @@ async function submitShip() {
     })
     // 以伺服器為準重讀，不要自己猜狀態 —— 這正是先前那個 bug 的成因
     list.reset()
+    /* 出貨單的快取也要一起作廢，理由跟上面那一行一模一樣：剛剛才多出
+       一張單，而那份快取是這一頁**唯一**的出貨單來源。不清的話，
+       剛送出的那幾張卡會變成「待出貨、但點不開任何說明」——
+       畫面說有事發生，追問下去卻什麼都沒有。
+       清完不必在這裡重拉：list.reset() 會讓那幾格重新掛載，
+       ShipmentNote 的 onMounted 自己會去拉一次。 */
+    invalidateShipments()
     await refreshSummary()
     flash(`已送出 ${ids.length} 張的出貨申請，平台處理後會通知你。`)
     shipOpen.value = false
@@ -1300,6 +1335,38 @@ async function copyLink() {
             </button>
           </Tilt3D>
 
+          <!-- ---- 出貨單：卡圖右上角那一枚小標 ----
+               掛在 .artBox 底下（position: relative）而不是 .sTags 裡：
+               那一排是 flex-wrap，第三個膠囊會換行擠掉卡面。
+               元件本體是 position: absolute，**不進版面流**，所以這一格
+               不會因為多了它而比同排其他格高（7d1d864 的教訓就是這件事）。
+               「自動」兩個字只在系統自動申請的單上出現 —— 自己按過申請出貨
+               的人不需要被提醒他自己做過什麼。
+               它同時是這一頁**唯一**去拉出貨單的地方：元件在模組層共用一份
+               快取，24 格掛上來也只有一個請求在飛。 -->
+          <ShipmentNote v-if="hasShipInfo(g)" :prize-id="g.head.id" variant="mark" />
+
+          <!-- ---- 出貨單：展開熱區 ----
+               寄存中的卡靠底下那顆「操作」展開，但那顆按鈕是**版面流裡的
+               元素**（44px）。待出貨／已出貨的卡底下放的是一行取得日期
+               （20px），把它換成按鈕的話，有出貨單的那一格就會比同排的
+               已回收、已退還高 24px —— 正是這一輪要避免的事。
+               所以熱區改成疊在卡圖上的透明按鈕：inset: 0，不進版面流，
+               而且整張卡圖都是它，遠大於 44px 的觸控下限。
+
+               只在**真的有出貨單可看**時才掛（hasShipmentNote）：點開一個
+               空面板比沒得點更糟。它是 absolute，資料回來時補上去也不會
+               讓任何一格跳動。 -->
+          <button
+            v-if="popKind(g) === 'shipment' && hasShipmentNote(g.head.id)"
+            type="button" class="noteHit"
+            data-pop="trigger"
+            :aria-expanded="openCard === g.head.id"
+            :aria-controls="`cardpop-${g.head.id}`"
+            :aria-label="`${g.head.card.name} 的出貨說明`"
+            @click="toggleCard(g.head.id, $event)"
+          ></button>
+
           <!-- ---- 展開的操作面板 ----
                疊在卡圖上，不是插在卡片裡。插在卡片裡的話那一格會變高，
                格線的列高由最高的那一格決定，整列跟著長高、下面每一列都往下推 ——
@@ -1316,11 +1383,17 @@ async function copyLink() {
                內容多也絕不會超出卡圖那個框（所以格線高度恆定）。
                卡名放在面板第一行 —— 卡圖下半部的 .scrim（賞別／卡名／市值）
                會被蓋掉，不補一行的話展開之後就認不出這是哪一張卡了。 -->
+          <!-- v-if 從「寄存中」放寬到「這一格有沒有面板」：待出貨與已出貨的卡
+               現在也有一個面板，裡面放的是出貨單的說明（見 popKind）。 -->
           <div
-            v-if="openCard === g.head.id && g.head.status === 'stashed' && !selecting"
+            v-if="openCard === g.head.id && popKind(g)"
             :id="`cardpop-${g.head.id}`"
             data-pop="panel"
-            class="pop" role="group" :aria-label="`${g.head.card.name} 的操作`" tabindex="-1"
+            class="pop" role="group"
+            :aria-label="popKind(g) === 'shipment'
+              ? `${g.head.card.name} 的出貨說明`
+              : `${g.head.card.name} 的操作`"
+            tabindex="-1"
           >
             <p class="popName">{{ g.head.card.name }}</p>
             <!-- 一疊同款卡時，這裡的動作作用在其中一張。講出來，不要讓人以為
@@ -1331,11 +1404,25 @@ async function copyLink() {
             <p v-if="g.total > 1" class="popQty">
               這一款共 <b class="mono">{{ g.total }}</b> 張，以下動作只作用在其中 1 張。
             </p>
-            <!-- 鑑定編號與寄存期限：決定要不要出貨／回收時才需要，所以收在這裡 -->
+            <!-- 鑑定編號兩種面板都要：它是「這到底是我哪一張卡」的答案，
+                 跟接下來要做什麼無關。寄存期限只有寄存中才有意義 ——
+                 卡已經在出貨的路上了，寄存期限講的是一件不會再發生的事。 -->
             <CertTag :card="g.head.card" />
-            <span class="mono muted exp">寄存至 {{ g.head.stashExpiresAt }}</span>
+            <span v-if="popKind(g) === 'actions'" class="mono muted exp">
+              寄存至 {{ g.head.stashExpiresAt }}
+            </span>
 
-            <div class="acts">
+            <!-- ---- 出貨單的說明 ----
+                 .pop 是 absolute + max-height: 100%，貼著卡圖下緣往上長，
+                 再長也不會超出卡圖 —— 所以這裡放多少行都不影響格線高度。
+                 內容（誰申請的、寄到哪、賣家的期限、地址不對怎麼辦）
+                 整段在元件裡，這一頁不重寫一份。 -->
+            <ShipmentNote
+              v-if="popKind(g) === 'shipment'"
+              :prize-id="g.head.id" variant="detail"
+            />
+
+            <div v-if="popKind(g) === 'actions'" class="acts">
               <button type="button" class="btn primary sm" @click="openShip(g.head)">申請出貨</button>
               <!-- 文案刻意不寫「回收 +N 點」：那句話讀起來像平台保證收購，
                    而實際上這是**賣家掛出來的報價**，錢從賣家那個池的保留額出，
@@ -2294,6 +2381,20 @@ h1 { font-size: 22px; margin: 0 0 6px; }
    overflow 不設 hidden —— 面板本來就完全在卡圖範圍內，設了只會在
    內容真的超出時把它默默切掉，而不是讓下面的 max-height 去接。 */
 .artBox { position: relative; min-width: 0; }
+
+/* ---- 出貨說明的展開熱區 ----
+   跟 .hit（選取模式那顆）同一個手法：inset: 0 疊在卡圖上，**不進版面流**，
+   所以有出貨單的那一格不會比同排其他格高一分一毫。
+   z-index 給 1：要壓過 .scrim（卡圖上的文字遮罩，本身 pointer-events: none），
+   但要讓 .pop（z-index: 2）在展開時蓋在它上面 —— 面板裡有連結要點得到。
+   看不見不等於不存在：它有 aria-label、進得了 Tab 順序，
+   focus-visible 時畫一圈外框，鍵盤使用者知道自己停在哪。 */
+.noteHit {
+  position: absolute; inset: 0; z-index: 1;
+  padding: 0; border: 0; background: none; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.noteHit:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: 12px; }
 
 /* 貼卡圖下緣往上長。三個數字是這塊的全部：
    left/right/bottom: 0 讓它跟卡圖切齊；height 由內容決定（內容少就露出多一點

@@ -661,6 +661,29 @@ export async function sweepStashExpiry(): Promise<{
 }
 
 /**
+ * 自動出貨發給**買家**的那一則通知，怎麼認出來。
+ *
+ * ⚠️ 這不是一個「方便的常數」，是一份**跨檔案的契約**。
+ * `shipments` 沒有 source 欄位（那要一支新的 migration），所以
+ * `routes/shipments.ts` 是用「買家名下有沒有這一則通知」反推出
+ * 「這張出貨單是系統自動建的」——「你沒有按過任何按鈕」那句話的唯一依據。
+ *
+ * 契約有**兩個**欄位，不是只有前綴：那支端點的 exists 同時比對 kind 與 ref_id。
+ * 兩邊各抄一份字面值的話，改動這一邊不會有任何東西壞掉、不會有測試變紅 ——
+ * 買家端的「自動」標記只是**默默地**全部翻成「這是你自己申請的」，
+ * 而那正好是這整條線要修的那個誤會本身。所以兩個欄位一起 export，
+ * 並且只有這一處寫得出它們的值。
+ *
+ * ⚠️ 賣家那一則的 refId 是 `'stash-autoship-seller:'`，它**以這個前綴開頭**。
+ * 現在兩邊都用等值比對（`ref_id = 前綴 || id`）所以撞不到；哪天有人把判準
+ * 改成 `like 前綴 || '%'`，賣家那一則就會被算進買家的判斷裡。
+ */
+export const AUTO_SHIP_NOTICE = {
+  kind: 'shipment',
+  refPrefix: 'stash-autoship:'
+} as const
+
+/**
  * 到期而且收件資料填齊的：**建出貨申請**。回傳實際出貨的張數。
  *
  * `exists (... pool_settlements ...)` 那一段是刻意的守衛：自動出貨的全部
@@ -741,13 +764,15 @@ async function autoShipExpired(now: number): Promise<number> {
         /* ── 買家：這件事是平台替你做的，講清楚為什麼、以及他還能做什麼 ──
            **地址一個字都不放進內文**（個資），只說「去確認」。 */
         await notify({
-          userId, kind: 'shipment',
+          /* kind 與 refId 都取自 AUTO_SHIP_NOTICE：買家端是靠這兩個欄位
+             認出「這張單不是你建的」，不是靠這裡碰巧寫了什麼字。 */
+          userId, kind: AUTO_SHIP_NOTICE.kind,
           title: `${prizeIds.length} 張卡已自動申請出貨`,
           body: `這些卡放滿了 ${STASH_DAYS} 天寄存期。實體卡一直在賣家手上，`
             + '所以期限到了我們會自動替你申請出貨，把卡寄到你留的收件地址。'
             + '請到「我的資料」確認收件人、電話、地址正確 —— 有錯請盡快聯絡客服更正。'
             + '收到卡片後記得到卡冊按確認收貨。',
-          link: '/me/profile', refId: 'stash-autoship:' + shipmentId
+          link: '/me/profile', refId: AUTO_SHIP_NOTICE.refPrefix + shipmentId
         }, tx)
 
         /* ── 賣家：時鐘已經開始跑了，以及不寄的後果 ──────────────────
@@ -777,6 +802,10 @@ async function autoShipExpired(now: number): Promise<number> {
                  只講其中一種，另一種發生時賣家會覺得平台說謊。 */
               + '逾期會記一次違約；票金還沒結算的話還會退款給買家。'
               + '記違約不代表義務結清 —— 卡還是要寄。收件地址在出貨頁上。',
+            /* 賣家這一則**刻意不共用** AUTO_SHIP_NOTICE.refPrefix：那個常數的
+               意思是「買家端用來認出自動出貨的那把鑰匙」，這一則不在那條線上
+               （它掛在賣家名下，買家端的 exists 連看都看不到它）。
+               名字長得像是歷史，不是相依。 */
             link: '/seller/shipping', refId: 'stash-autoship-seller:' + shipmentId
           }, tx)
         }

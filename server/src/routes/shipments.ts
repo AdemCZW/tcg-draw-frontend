@@ -50,16 +50,12 @@ import { z } from 'zod'
 import { sql } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { PageQuery, decodeCursor, encodeCursor, isNumeric, slicePage } from '../pagination.js'
-
-export const shipments = new Hono()
-shipments.use('*', requireAuth)
-
 /**
  * 「這張單是系統自動建的」這件事**現在只有一個地方記得**：
- * 自動出貨在建單的**同一個交易**裡發給買家的那一則通知，
- * 它的 ref_id 是 `stash-autoship:<出貨單 id>`（`pools-service.ts`）。
- * 買家自己申請那條（`routes/prizes.ts`）不會發這一則 —— 那條路上
- * 只有賣家收到 `ship-req:<id>`，買家沒有任何通知（他自己按的，不用通知他）。
+ * 自動出貨在建單的**同一個交易**裡發給買家的那一則通知
+ * （kind + ref_id 前綴，兩個都是判準）。買家自己申請那條
+ * （`routes/prizes.ts`）不會發這一則 —— 那條路上只有賣家收到
+ * `ship-req:<id>`，買家沒有任何通知（他自己按的，不用通知他）。
  *
  * 所以「有這一則 = 自動、沒有 = 自己申請」是一條**精確**的規則，不是猜的：
  *   ‧ 兩條路都只有一支程式碼寫 shipments（全站 insert 只有那兩處）
@@ -67,12 +63,19 @@ shipments.use('*', requireAuth)
  *   ‧ ref_id 帶著隨機的出貨單 id，撞不到 007 的 (user_id, kind, ref_id) 唯一索引
  *   ‧ 站上沒有任何一條路會刪 notifications（只有標已讀）
  *
- * ⚠️ **但這是推導出來的，不是記下來的。** 真正該有的是
+ * **值本身從發通知的那一支拿**（`pools-service.ts` 的 AUTO_SHIP_NOTICE），
+ * 這一頭不另外抄一份字面值：兩份字面值不一致時沒有任何東西會壞掉、
+ * 沒有測試會變紅，只有畫面上的「自動」標記默默全部消失。
+ *
+ * ⚠️ **這仍然是推導出來的，不是記下來的。** 真正該有的是
  * `shipments.source` 一欄（建單當下寫死），那需要一支新的 migration ——
  * 這一輪不開新的遷移編號（040 留給別條線）。之後補上那一欄時，
  * 這個 `exists` 就該換成讀那一欄，而且**只要換這一處**。
  */
-const AUTO_REF_PREFIX = 'stash-autoship:'
+import { AUTO_SHIP_NOTICE } from '../pools-service.js'
+
+export const shipments = new Hono()
+shipments.use('*', requireAuth)
 
 /** 遮罩記號。刻意用一個字元，不用重複的星號 —— 星號的個數會洩漏長度 */
 const MASK = '⋯'
@@ -153,11 +156,12 @@ interface ShipmentRow {
 const shipmentCols = (me: string) => sql`
   select sh.id, sh.status, sh.tracking, sh.created_at, sh.shipped_at,
          sh.prize_ids, sh.address,
-         /* 「這張單是系統自動建的」的唯一判準，理由見 AUTO_REF_PREFIX */
+         /* 「這張單是系統自動建的」的唯一判準，理由見 AUTO_SHIP_NOTICE 的匯入處。
+            kind 與前綴都來自那一份契約，這裡一個字面值都不寫。 */
          exists (
            select 1 from notifications n
-            where n.user_id = sh.user_id and n.kind = 'shipment'
-              and n.ref_id = ${AUTO_REF_PREFIX} || sh.id
+            where n.user_id = sh.user_id and n.kind = ${AUTO_SHIP_NOTICE.kind}
+              and n.ref_id = ${AUTO_SHIP_NOTICE.refPrefix} || sh.id
          ) as auto,
          u.real_name as cur_name, u.phone as cur_phone,
          u.address_zip as cur_zip, u.address_city as cur_city, u.address_line1 as cur_line1
@@ -202,9 +206,56 @@ const cardCols = sql`
 const num = (v: string | number | null): number | null =>
   v == null ? null : Number(v)
 
-async function toView(row: ShipmentRow, now: number) {
-  const cards = await sql<CardRow[]>`${cardCols} where p.id = any(${row.prize_ids}) order by p.id`
+/**
+ * 一批出貨單的卡片，**一次查完**。回傳「出貨單 id → 那張單上的卡」。
+ *
+ * ── 為什麼一定要批次 ────────────────────────────────────────────────
+ * 改前 `toView()` 每張單各查一次卡片，`limit=100` 就是 1 + 100 條查詢。
+ * 而卡冊那一格（ShipmentNote.vue）掛上去之後，**每次進卡冊都會打這支**，
+ * 所以這條路從「之後才會用到的清單端點」變成了熱路徑。
+ * 實測 limit=50：改前 51 條（1 + 50），而且因為 `Promise.all` 同時發，
+ * 連線池被逼著多開 9 條連線、每條再付一次型別目錄查詢，log 裡是 61 條。
+ *
+ * 做法照 `routes/public.ts` 的 `sellerViews()`（同一個問題上一輪的解法）：
+ * 把所有 id 攤平去重、一次撈回來、在記憶體裡分回各張單。
+ *
+ * ── 順序要跟改前逐字一樣 ────────────────────────────────────────────
+ * 改前每張單是 `order by p.id`。這裡讓查詢照 p.id 排一次，再照那個順序
+ * 往各張單的陣列裡 push —— 而不是照 `prize_ids` 陣列在資料庫裡的存放順序。
+ * 兩者不一定相同（建單時是按批切的），照存放順序會讓同一張單的卡片順序
+ * 在這次重構之後默默改變。
+ *
+ * ── `::text[]` 是明寫的 ─────────────────────────────────────────────
+ * 理由同 sellerViews：不寫的話參數型別留給 describe 階段推斷，
+ * 那正是 public.ts 的排序游標踩過的坑。
+ */
+async function cardsByShipment(rows: ShipmentRow[]): Promise<Map<string, CardRow[]>> {
+  const out = new Map<string, CardRow[]>()
+  /* 先把每張單都放一個空陣列：一張單上的卡全被刪掉（或 id 對不上）時，
+     呼叫端拿到的要是「沒有卡」而不是 undefined。 */
+  const owners = new Map<string, string[]>()
+  for (const r of rows) {
+    out.set(r.id, [])
+    for (const pid of r.prize_ids ?? []) {
+      const list = owners.get(pid)
+      if (list) list.push(r.id)
+      else owners.set(pid, [r.id])
+    }
+  }
+  if (!owners.size) return out
 
+  const all = await sql<CardRow[]>`
+    ${cardCols} where p.id = any(${[...owners.keys()]}::text[]) order by p.id
+  `
+  /* 同一張卡理論上只在一張單上，但退款／逾期取消之後可能被建第二次
+     （`for-prize` 的註解講的就是這件事），所以一張卡要能分進多張單。 */
+  for (const card of all) {
+    for (const shipmentId of owners.get(card.id) ?? []) out.get(shipmentId)!.push(card)
+  }
+  return out
+}
+
+function toView(row: ShipmentRow, now: number, cards: CardRow[]) {
   /* 還欠著的期限裡最早的那一個。已經寄出的（settle_shipped_at 不是 null）
      不算 —— 那張卡的義務結束了，把它的期限拿來當整張單的期限，
      使用者會看到一個早就過去的日期而且不知道那是誰的。 */
@@ -299,8 +350,12 @@ shipments.get('/', async c => {
   `
   const page = slicePage(rows, limit, r => encodeCursor([String(r.created_at), String(r.id)]))
   const now = Date.now()
+  /* 這一頁的卡片一次撈完。**要在 slicePage 之後**：rows 多撈了一張
+     （limit + 1）用來判斷還有沒有下一頁，那一張不會回給使用者，
+     替它查卡片是白花一次 IO。 */
+  const cards = await cardsByShipment(page.items)
   return c.json({
-    items: await Promise.all(page.items.map(r => toView(r, now))),
+    items: page.items.map(r => toView(r, now, cards.get(r.id) ?? [])),
     nextCursor: page.nextCursor
   })
 })
@@ -332,7 +387,7 @@ shipments.get('/for-prize/:prizeId', async c => {
   /* 卡不是他的、卡沒有出貨單、單不是他的 —— 三種都是同一句 404。
      分開講的話，「這張卡有單但不是你的」就變成一個可以查的事實。 */
   if (!row) return c.json({ error: 'NOT_FOUND', message: '找不到這張出貨單' }, 404)
-  return c.json(await toView(row, Date.now()))
+  return c.json(toView(row, Date.now(), (await cardsByShipment([row])).get(row.id) ?? []))
 })
 
 /** GET /v1/shipments/:id —— 單張。不是自己的一律 404（理由見檔頭） */
@@ -343,5 +398,5 @@ shipments.get('/:id', async c => {
 
   const [row] = await sql<ShipmentRow[]>`${shipmentCols(me)} and sh.id = ${id.data} limit 1`
   if (!row) return c.json({ error: 'NOT_FOUND', message: '找不到這張出貨單' }, 404)
-  return c.json(await toView(row, Date.now()))
+  return c.json(toView(row, Date.now(), (await cardsByShipment([row])).get(row.id) ?? []))
 })

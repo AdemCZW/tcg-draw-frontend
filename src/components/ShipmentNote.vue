@@ -86,7 +86,31 @@ export async function loadShipments(force = false): Promise<void> {
   return inflight
 }
 
-/** 出貨狀態改變之後（例如按了「申請出貨」）叫這一支，下次讀會重新拉 */
+/**
+ * 這張卡現在有沒有一張出貨單可以說明。
+ *
+ * 卡冊拿它決定「這一格點下去有沒有東西可看」—— **只有真的有東西時才掛
+ * 那個展開熱區**，不然使用者會點開一個空面板。
+ *
+ * 回傳值是反應式的（`byPrize` 是 shallowRef，整份換掉），所以資料拉回來
+ * 之後畫面會自己補上熱區；而那個熱區是 `position: absolute`，
+ * 補上的那一瞬間不會動到任何一格的高度 —— 這一頁最不能發生的事就是
+ * 「資料到了，版面跳一下」（7d1d864）。
+ */
+export function hasShipmentNote(prizeId: string): boolean {
+  return byPrize.value.has(prizeId)
+}
+
+/**
+ * 出貨狀態改變之後（例如按了「申請出貨」）叫這一支，下次讀會重新拉。
+ *
+ * **登出也要叫。** 這份快取活在模組層，也就是活在「這個分頁」上，
+ * 不是活在「這個使用者」上：同一個分頁 A 登出、B 登入，B 掛上來的
+ * ShipmentNote 會直接命中 A 留下的 Map（`loaded` 還是 true，連請求
+ * 都不會發），於是 B 在自己的卡冊上讀到 A 的出貨單。遮罩過的沒錯，
+ * 但遮罩是給**本人**看的，換一個人就不是「少一點的自己的資料」，
+ * 是「別人的資料」。接在 `stores/auth.ts` 的 logout() 上。
+ */
 export function invalidateShipments() {
   loaded = false
   byPrize.value = new Map()

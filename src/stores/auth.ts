@@ -23,6 +23,27 @@ function save(u: User | null) {
   try { u ? localStorage.setItem(KEY, JSON.stringify(u)) : localStorage.removeItem(KEY) }
   catch { /* 無痕模式沒關係 */ }
 }
+/**
+ * 換人（或沒人）時，把「跟著分頁活著、但內容屬於某一個人」的模組層快取清掉。
+ *
+ * 目前只有一份：`ShipmentNote.vue` 的出貨單索引。它放在模組層是對的
+ * （卡冊一頁 24 格只該打一次請求），但模組層的壽命是**這個分頁**，
+ * 不是這次登入 —— 同一個分頁 A 登出、B 登入，B 的卡冊會直接命中
+ * A 留下的那份 Map（連請求都不會發），畫面上就是別人的出貨單。
+ * 遮罩過的沒錯，但遮罩是給本人看的；換一個人看，它就是別人的個資。
+ *
+ * 動態 import 的理由跟同檔 refresh() 裡那句 `import('@/lib/api')` 一樣：
+ * ShipmentNote → api.ts → 這個 store 是一圈相依，靜態 import 會轉不出來。
+ * 非同步不影響正確性 —— 清除發生在「登出」與「下一個人登入完成」之間，
+ * 那中間至少隔著一次使用者操作與一次網路來回。
+ * catch 吞掉：登出這條路不能因為一份快取清不掉就走不完。
+ */
+function dropPerUserCaches() {
+  void import('@/components/ShipmentNote.vue')
+    .then(m => m.invalidateShipments())
+    .catch(() => {})
+}
+
 function mockId() {
   const h = Math.floor(Math.random() * 0xffff).toString(16).toUpperCase().padStart(4, '0')
   return { id: 'u-' + h, name: 'VD-' + h }
@@ -49,7 +70,10 @@ export const useAuthStore = defineStore('auth', {
            /v1/auth/me 會逾時或連不上，那時 token 仍在 —— 一律清 user 的話，
            使用者每次後端冷啟動都會被踢回登入頁，症狀還像帳號出問題，最傷信任。
            連不上就保留上一次記住的登入狀態，等後端醒來下一個請求自然恢復。 */
-        if (!token.get()) { this.user = null; save(null) }
+        /* 憑證真的失效那條路等同一次登出（只是不是他按的），所以快取
+           也要跟著清 —— 不然「token 過期 → 換一個人登入」會留下同一個
+           破口，而那條路比按登出更常發生。 */
+        if (!token.get()) { this.user = null; save(null); dropPerUserCaches() }
         else console.warn('[auth] /me 暫時連不上，保留登入狀態', e instanceof Error ? e.message : e)
       }
       /* 拿到身分之後**順手把餘額也問一次**。
@@ -130,6 +154,12 @@ export const useAuthStore = defineStore('auth', {
       this.user = null
       save(null)
       token.clear()
+      /* localStorage 那兩份是這裡自己清的，但屬於這個人的東西不只放在
+         localStorage 裡。見 dropPerUserCaches 的說明。
+         「登出所有裝置」勾了「連這台也登出」時走的也是這一支
+         （LoginMethods.vue），所以那條路一起接上了；沒勾的那條是
+         同一個人繼續用這台裝置，快取本來就該留著。 */
+      dropPerUserCaches()
     }
   }
 })

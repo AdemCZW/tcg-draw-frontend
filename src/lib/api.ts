@@ -349,6 +349,40 @@ function toListing(l: Any): Listing {
   }
 }
 
+/**
+ * 展示模式下，一張卡的出貨單。沒有出貨單就回 null。
+ *
+ * 抽成一支是因為**兩支端點必須說同一件事**：卡冊那一格讀的是清單
+ * （`myShipments`），而單張查詢（`shipmentForPrize`）是另一條路 ——
+ * 各自造一份假資料的話，同一張卡在兩個地方會是兩種來源。
+ */
+function mockShipmentFor(prizeId: string): BuyerShipment | null {
+  const p = mock.userPrizes.find(x => x.id === prizeId)
+  if (!p || (p.status !== 'ship_requested' && p.status !== 'shipped')) return null
+  /* mock 也要有兩種來源，否則「自動」那一種在本機開發時永遠看不到 ——
+     而它正是這一格要解決的那一種。用 id 的末碼分流，穩定且不需要在假資料裡
+     多開一個欄位。
+     門檻是「末碼 >= 5」而不是奇偶：mock 卡冊裡會有出貨單的只有 up3 與 up5
+     兩張，奇偶分流會把兩張分到同一邊，於是展示模式下永遠只看得到其中一種。
+     這樣切剛好 up5 是自動、up3 是自己申請，兩條分支都在畫面上。 */
+  const tail = prizeId.slice(-1).toLowerCase()
+  const auto = /[5-9a-f]/.test(tail)
+  return {
+    id: 'sh-mock-' + prizeId.slice(-6),
+    status: p.status === 'shipped' ? 'shipped' : 'requested',
+    origin: auto ? 'auto-stash-expiry' : 'self',
+    createdAt: Date.now() - 86_400_000, shippedAt: null, tracking: null,
+    shipTo: { masked: true, city: '台北市大安區', zip: '106', nameMasked: '王⋯', phoneMasked: '⋯678', line1Masked: '示範路⋯8 樓' },
+    differsFromProfile: false, addressEditable: false,
+    sellerDueAt: p.status === 'shipped' ? null : Date.now() + 36 * 3_600_000,
+    sellerOverdue: false,
+    cards: [{
+      prizeId, name: p.card.name, tier: p.tier, prizeStatus: p.status,
+      sellerName: '示範賣家', sellerDueAt: null, sellerShippedAt: null, settlementStatus: null
+    }]
+  }
+}
+
 /* 這裡原本有一支 applyWallet()，由下面每一支端點自己記得呼叫。
    它已經搬到 lib/http.ts 的傳輸層 —— 只要後端回應帶 wallet 就會套用，
    不再有「這支忘了呼叫」這種漏（見那支的說明）。 */
@@ -821,26 +855,7 @@ export const api = {
   async shipmentForPrize(prizeId: string): Promise<BuyerShipment | null> {
     if (MOCK) {
       await delay(120)
-      const p = mock.userPrizes.find(x => x.id === prizeId)
-      if (!p || (p.status !== 'ship_requested' && p.status !== 'shipped')) return null
-      /* mock 也要有兩種來源，否則「自動」那一種在本機開發時永遠看不到 ——
-         而它正是這一格要解決的那一種。用 id 的最後一碼分流，穩定且不需要
-         在假資料裡多開一個欄位。 */
-      const auto = /[02468ace]$/i.test(prizeId)
-      return {
-        id: 'sh-mock-' + prizeId.slice(-6),
-        status: p.status === 'shipped' ? 'shipped' : 'requested',
-        origin: auto ? 'auto-stash-expiry' : 'self',
-        createdAt: Date.now() - 86_400_000, shippedAt: null, tracking: null,
-        shipTo: { masked: true, city: '台北市大安區', zip: '106', nameMasked: '王⋯', phoneMasked: '⋯678', line1Masked: '示範路⋯8 樓' },
-        differsFromProfile: false, addressEditable: false,
-        sellerDueAt: p.status === 'shipped' ? null : Date.now() + 36 * 3_600_000,
-        sellerOverdue: false,
-        cards: [{
-          prizeId, name: p.card.name, tier: p.tier, prizeStatus: p.status,
-          sellerName: '示範賣家', sellerDueAt: null, sellerShippedAt: null, settlementStatus: null
-        }]
-      }
+      return mockShipmentFor(prizeId)
     }
     try {
       return await http<BuyerShipment>(`/v1/shipments/for-prize/${encodeURIComponent(prizeId)}`)
@@ -850,9 +865,22 @@ export const api = {
     }
   },
 
-  /** 我的出貨單，新到舊。給之後的「出貨紀錄」頁用；卡冊那一格走上面那支 */
+  /**
+   * 我的出貨單，新到舊。**卡冊那一格走的就是這一支**（ShipmentNote.vue
+   * 在模組層拉一次建索引，24 格共用；一格一個 `/for-prize` 是 24 個請求）。
+   *
+   * mock 從 userPrizes 現算：改前這裡回的是空清單，於是展示模式與
+   * `scripts/bottom-nav/occlusion.mjs`（跑的正是 VITE_API_URL='' 的展示模式）
+   * 底下，卡冊上那一格**永遠不會出現** —— 版面檢查等於什麼都沒檢查到。
+   */
   async myShipments(opts: PageOpts = {}): Promise<Page<BuyerShipment>> {
-    if (MOCK) { await delay(150); return { items: [], nextCursor: null } }
+    if (MOCK) {
+      await delay(150)
+      const items = mock.userPrizes
+        .map(p => mockShipmentFor(p.id))
+        .filter((s): s is BuyerShipment => s !== null)
+      return { items, nextCursor: null }
+    }
     return http<Page<BuyerShipment>>(
       `/v1/shipments${qs({ cursor: opts.cursor, limit: opts.limit })}`, { signal: opts.signal })
   },
