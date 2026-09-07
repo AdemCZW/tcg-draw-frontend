@@ -1346,24 +1346,55 @@ async function copyLink() {
                快取，24 格掛上來也只有一個請求在飛。 -->
           <ShipmentNote v-if="hasShipInfo(g)" :prize-id="g.head.id" variant="mark" />
 
-          <!-- ---- 出貨單：展開熱區 ----
-               寄存中的卡靠底下那顆「操作」展開，但那顆按鈕是**版面流裡的
-               元素**（44px）。待出貨／已出貨的卡底下放的是一行取得日期
-               （20px），把它換成按鈕的話，有出貨單的那一格就會比同排的
-               已回收、已退還高 24px —— 正是這一輪要避免的事。
-               所以熱區改成疊在卡圖上的透明按鈕：inset: 0，不進版面流，
-               而且整張卡圖都是它，遠大於 44px 的觸控下限。
+          <!-- ---- 卡圖左上角的短暫狀態 ----
+               「剛收進卡冊」與「已入帳 +N 點」原本各佔版面流的一列，
+               所以剛登記完的那一格會比同排其他格高 20~24px，整排跟著錯開。
+               這兩句都是**一次性**的（一次導頁、一次回收），為了它們讓
+               同排每一張卡跳位，代價不成比例 —— 搬到卡圖上，不進版面流。
+               包一層 .flags 而不是各自 absolute：兩句理論上可以同時出現
+               （剛收進來的卡也可以馬上回收），各自定位會疊在一起。
+               整層 pointer-events: none，不擋底下那顆展開熱區。
+               放在 .pop 之前：同為 z-index 1 時由 DOM 順序決定誰在上面，
+               面板展開時這兩枚要被蓋住。 -->
+          <div class="flags">
+            <p v-if="g.members.some(m => justGot.has(m.id))" class="fresh-tag" role="status">剛收進卡冊</p>
+            <p v-if="justRecycled && g.members.some(m => m.id === justRecycled!.id)" class="got" role="status">
+              已入帳 <strong class="mono">+{{ justRecycled.points.toLocaleString() }}</strong> 點
+            </p>
+          </div>
 
-               只在**真的有出貨單可看**時才掛（hasShipmentNote）：點開一個
-               空面板比沒得點更糟。它是 absolute，資料回來時補上去也不會
+          <!-- 「操作」的角標。它只是視覺提示，真正按得到的是底下那顆 inset: 0
+               的熱區 —— 所以 pointer-events: none，不必自己湊 44px。
+               面板展開時收起來：面板不一定蓋滿卡圖，留著會變成
+               「明明開著卻還寫操作」。要收合點卡圖任一處（熱區還在）或點別處。 -->
+          <span
+            v-if="popKind(g) === 'actions' && openCard !== g.head.id"
+            class="actMark" aria-hidden="true"
+          >操作<i class="chev"></i></span>
+
+          <!-- ---- 展開熱區：出貨說明與「操作」共用同一顆 ----
+               這一顆現在服務兩種卡。以前寄存中的卡在卡片底下有一顆 44px 的
+               通欄按鈕，待出貨的卡底下只有一行 20px 的取得日期 —— 同一排
+               就差 24px，格線 align-items: start，高度差直接看得出來。
+               現在兩種都走這一顆：inset: 0 疊在卡圖上，不進版面流，
+               所以每一格的高度都只是「卡圖 + 一行取得日期」。
+               觸控目標從 44px 變成整張卡圖，比原本更大。
+               看得見的提示分別是右上角的 .actMark 與 ShipmentNote 的 .mark。
+
+               出貨那一種多一個條件（hasShipmentNote）：點開一個空面板比
+               沒得點更糟，而出貨單是非同步拉回來的。寄存中不必等資料，
+               面板內容就在手上。它是 absolute，資料回來時補上去也不會
                讓任何一格跳動。 -->
           <button
-            v-if="popKind(g) === 'shipment' && hasShipmentNote(g.head.id)"
+            v-if="popKind(g) === 'actions'
+              || (popKind(g) === 'shipment' && hasShipmentNote(g.head.id))"
             type="button" class="noteHit"
             data-pop="trigger"
             :aria-expanded="openCard === g.head.id"
             :aria-controls="`cardpop-${g.head.id}`"
-            :aria-label="`${g.head.card.name} 的出貨說明`"
+            :aria-label="popKind(g) === 'actions'
+              ? `${g.head.card.name} 的操作`
+              : `${g.head.card.name} 的出貨說明`"
             @click="toggleCard(g.head.id, $event)"
           ></button>
 
@@ -1439,19 +1470,14 @@ async function copyLink() {
           </div>
         </div>
 
-        <p v-if="g.members.some(m => justGot.has(m.id))" class="fresh-tag" role="status">剛收進卡冊</p>
-
-        <p v-if="justRecycled && g.members.some(m => m.id === justRecycled!.id)" class="got" role="status">
-          已入帳 <strong class="mono">+{{ justRecycled.points.toLocaleString() }}</strong> 點
-        </p>
-
         <!-- ---- 這一格底下那一行 ----
-             三種身分，同一個位置，所以格線的列高不會因為狀態不同而跳動：
-               選取模式 + 一疊  → 數量選擇器（− N/可上架 ＋）
-               寄存中 + 沒在選取 → 「操作」
-               其餘             → 取得日期
-             「這一疊有幾張已經上架」不放這裡，放卡圖上的膠囊那一排 ——
-             一疊寄存中的卡在這個位置本來就已經要放「操作」了。 -->
+             只剩兩種身分，而且非選取模式下**永遠是取得日期**：
+               選取模式 + 一疊 → 數量選擇器（− N/可上架 ＋）
+               其餘            → 取得日期
+             原本這裡還有第三種（寄存中放一顆 44px 的「操作」），那正是
+             同一排卡片長短不一的來源 —— 有按鈕的那一格比只有日期的高 24px。
+             按鈕已經搬到卡圖上（.actMark + .noteHit，都不進版面流），
+             所以每一格現在都是「卡圖 + 一行 20px」，高度恆定。 -->
 
         <!-- 數量選擇器。使用者原話：「不知道能不能做成一次選擇『要上架／出貨
              幾張』的功能」。分組之後這件事才有地方掛 —— 在扁平清單上
@@ -1480,21 +1506,6 @@ async function copyLink() {
             @click="setGroupPick(g, pickedInGroup(g.key) + 1)"
           >＋</button>
         </div>
-
-        <!-- 寄存中才有動作可做，收成一顆按鈕；其餘狀態只留一行取得日期，
-             讓每一列的高度不會被「有按鈕的那張」整列撐高 -->
-        <button
-          v-else-if="g.head.status === 'stashed' && !selecting"
-          type="button" class="more" :class="{ on: openCard === g.head.id }"
-          data-pop="trigger"
-          :aria-expanded="openCard === g.head.id"
-          :aria-controls="`cardpop-${g.head.id}`"
-          :aria-label="`${g.head.card.name} 的操作`"
-          @click="toggleCard(g.head.id, $event)"
-        >
-          <span>{{ openCard === g.head.id ? '收起' : '操作' }}</span>
-          <span class="chev" aria-hidden="true"></span>
-        </button>
 
         <p v-else class="meta mono">取得 {{ wonDay(g.head.acquiredAt) }}</p>
       </div>
@@ -2314,26 +2325,45 @@ h1 { font-size: 22px; margin: 0 0 6px; }
   font-variant-numeric: tabular-nums; text-shadow: 0 1px 3px rgba(0, 0, 0, .75);
 }
 
-/* ---- 展開鈕 ----
-   三顆通欄按鈕收成一顆。44px 是 touch.css 的觸控門檻，
-   在兩欄格線下這顆是整張卡唯一要按的東西，寧可給滿。 */
-.more {
-  width: 100%; min-height: 44px; padding: 0 10px;
-  display: flex; align-items: center; justify-content: center; gap: 7px;
-  border: 1px solid var(--line); border-radius: var(--pill);
-  background: var(--surface-2); color: var(--ink);
-  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
-  transition: background .15s, color .15s, border-color .15s;
+/* ---- 「操作」的角標 ----
+   前一版這裡是卡片底下一顆 44px 的通欄按鈕。它在版面流裡，於是同一排
+   「寄存中」的卡比「待出貨／已回收」的卡高 24px —— 格線是 align-items: start，
+   高度差直接看得出來，就是使用者說的「長短不一」。
+
+   現在改成兩個東西：這一枚純視覺的角標，加上底下那顆 inset: 0 的 .noteHit。
+   兩個都是 absolute，都不進版面流，所以每一格的高度只剩
+   「卡圖 + 一行取得日期」，跟不能操作的卡完全一樣。
+
+   pointer-events: none：它不負責被按，觸控目標是整張卡圖（遠大於 44px），
+   所以這一枚可以做得小，不必自己湊到門檻。
+   位置跟 ShipmentNote 的 .mark 對稱（都在右上角），而兩者互斥 ——
+   hasShipInfo 要求 ship_requested/shipped，popKind('actions') 要求 stashed。
+   顏色刻意不用 accent：accent 那一枚講的是「這張卡發生了什麼事」，
+   這一枚講的是「這裡可以按」，兩種語意不該長得一樣。 */
+.actMark {
+  position: absolute; top: 8px; right: 8px; z-index: 1;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; font-weight: 700; line-height: 1.4; letter-spacing: .04em;
+  padding: 3px 8px; border-radius: var(--pill);
+  /* 卡圖的底色不可控（深卡、亮卡都有），所以這裡刻意不走主題權杖：
+     固定的半透明黑底 + 白字，在任何一張卡面上都讀得到。
+     跟 .scrim 同一個道理。 */
+  background: rgba(0, 0, 0, .66); color: #fff;
+  white-space: nowrap; pointer-events: none;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .28);
 }
-.more.on { background: var(--ink); color: var(--bg); border-color: transparent; }
-.more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .chev {
-  width: 7px; height: 7px; flex: none;
+  width: 6px; height: 6px; flex: none;
   border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
   transform: translateY(-2px) rotate(45deg);
-  transition: transform .18s;
 }
-.more.on .chev { transform: translateY(2px) rotate(-135deg); }
+/* 熱區拿到鍵盤焦點時，角標跟著亮起來 —— 熱區本身是透明的，
+   只有外框的話看不出「被點亮的是那顆操作」。 */
+/* 相鄰選擇器在這裡用不了：.actMark 在 DOM 上排在 .noteHit **前面**
+   （角標要畫在面板下方，靠 DOM 順序決定同層級的堆疊）。所以走 :has()。 */
+.artBox:has(.noteHit:focus-visible) .actMark {
+  background: var(--accent); color: var(--on-accent);
+}
 /* 不能操作的卡沒有按鈕，改放取得日期 —— 剛好也是曲線圖上的橫軸 */
 .meta { margin: 0; min-height: 20px; display: flex; align-items: center; font-size: 11px; color: var(--faint); }
 
@@ -2466,18 +2496,33 @@ strong { font-size: 14px; }
 /* 剛拿到的那張：外框 + 一行字。只靠外框不夠 ——
    色覺檢測下強調色與底色的分離度不保證，一定要有文字把話講完。 */
 .item.fresh { outline: 2px solid var(--accent); outline-offset: -1px; }
-.fresh-tag {
-  margin: 0; font-size: 12px; font-weight: 700;
-  color: var(--accent); letter-spacing: .04em;
-  /* 格線子元素：長卡名不該把整欄撐寬 */
-  min-width: 0;
-}
 
-.got {
-  margin: 0; font-size: 12.5px; color: var(--ok);
-  font-weight: 600;
+/* ---- 卡圖左上角的短暫狀態 ----
+   「剛收進卡冊」與「已入帳 +N 點」以前各佔版面流的一列。它們都是一次性的，
+   卻讓那一格永久性地比同排其他格高 —— 搬到卡圖上疊著，版面流就回到
+   「卡圖 + 一行日期」。
+   整層 pointer-events: none，底下那顆展開熱區照樣按得到；兩句同時出現時
+   靠這個 grid 上下排開，不會互相蓋住。
+   max-width 留 8px 給右上角的另一枚小標（出貨／操作），兩邊不會撞在一起。 */
+.flags {
+  position: absolute; top: 8px; left: 8px; z-index: 1;
+  display: grid; gap: 4px; justify-items: start;
+  max-width: calc(100% - 16px); pointer-events: none;
 }
-.got strong { color: var(--ok); }
+/* 這兩枚都是蓋在滿版彩色卡圖上的，跟 .scrim、ShipmentNote 的 .mark 一樣
+   走固定色而不是主題權杖：卡面的亮度不受主題控制。
+   底色用強調色／成功色，字色跟著配對的 on-* 走，對比才有保證。 */
+.fresh-tag, .got {
+  margin: 0; min-width: 0;
+  font-size: 10px; font-weight: 700; line-height: 1.4; letter-spacing: .04em;
+  padding: 3px 8px; border-radius: var(--pill);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .28);
+}
+.fresh-tag { background: var(--accent); color: var(--on-accent); }
+.got { background: var(--ok); color: #fff; }
+.got strong { color: inherit; font-size: inherit; }
 
 /* 回收確認 —— 撐滿卡片寬度，讓報價與警語不被擠成兩欄 */
 .confirm {
