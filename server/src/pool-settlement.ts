@@ -19,6 +19,11 @@
  *   賣家  −amount 'pool-ticket-refund'   ref = settlementId
  *   平台  −fee    'pool-fee-refund'      ref = settlementId
  *   買家  +票價   'pool-refund'          ref = settlementId
+ *   ── 卡在市場上轉手過、買家實付高於票金時，多一組（見 defaultGap）──
+ *   賣家  −差額   'pool-default-charge'        ref = settlementId
+ *   買家  +差額   'pool-default-compensation'  ref = settlementId
+ *   這一組的差額以賣家的可動用餘額為上限，扣不滿的部分**不寫分錄**
+ *   （不讓餘額變負數），改由客服接手 —— 所以 delta 相加仍然是 0。
  * 回收（recycled，買家接受賣家的報價）：
  *   賣家  −報價   'pool-recycle-out'     ref = settlementId
  *   買家  +報價   'pool-recycle-in'      ref = settlementId
@@ -34,6 +39,7 @@ import { Rollback } from './db.js'
 import { sql as root } from './db.js'
 import { credit, lockSpender, walletOf } from './money.js'
 import { notify } from './notify.js'
+import { notifyStaff } from './tickets.js'
 import { PLATFORM_ID } from './orders-service.js'
 import {
   POOL_SHIP_DEADLINE_MS, RESERVED_STATUSES, SELLER_DEFAULT_LIMIT, applySettlementDeadline,
@@ -276,6 +282,32 @@ export async function release(
 }
 
 /**
+ * 買家實付與票金之間的落差，也就是違約的賣家要補的金額。
+ *
+ * 「買家實付」＝ 這張卡最後一次**庫內轉移**的成交價。只看 vault 是有理由的：
+ * 需寄送（ship）的成交會把實體卡一起交出去，卡到了新主人手上之後就沒有
+ * 「賣家還欠一張卡」這回事，那條路根本走不到退款這裡。
+ *
+ * 沒有轉手過就直接回 0，連查都不用查 —— 抽中的人自己拿回票金，
+ * 本來就沒有落差。這也是絕大多數的情況，順便省掉一次查詢。
+ *
+ * 讀 listings 而不是 orders：庫內轉移**不建訂單**
+ * （routes/orders.ts 的 vault 分支 return { order: null }），
+ * 成交價只有掛單那一列留得住。
+ */
+async function defaultGap(tx: Tx, s: SettlementRow): Promise<number> {
+  if (s.ownerId === s.buyerId) return 0
+  const [sale] = await tx<{ price: string }[]>`
+    select price::text as price from listings
+     where prize_id = ${s.prizeId} and status = 'sold' and delivery = 'vault'
+     order by listed_at desc limit 1
+  `
+  const paid = Number(sale?.price)
+  if (!Number.isFinite(paid)) return 0
+  return Math.max(0, paid - (s.amount + s.fee))
+}
+
+/**
  * 退款：賣家逾期未出貨。
  *
  * 錢從保留額原路退回買家，賣家的違約次數加一。
@@ -298,13 +330,67 @@ export async function refund(tx: Tx, s: SettlementRow, now: number) {
      再退他一次票金等於他收兩次，而真正拿不到卡的新主人一毛都沒有。 */
   await credit(tx, s.ownerId, s.amount + s.fee, 'pool-refund', s.id)
 
+  /* ── 轉手過的卡：退票金不夠，而且會獎勵違約 ──────────────────────────
+     F-2 解決了「退給誰」，沒有解決「退多少」。庫內轉移不搬動實體卡，
+     所以一張票金 100 的卡可以在市場上以 5,000 成交、實體仍在原賣家手上。
+     照票金退的話：
+
+       買家   花 5,000 買、拿回 100，差額 4,900 沒有任何人賠
+       賣家   被扣 100，留下一張市價 5,000 的卡
+
+     第二行才是重點 —— 這不只是不公平，是一個**會被利用的套利**：
+     卡漲上去之後，賣家寧可違約也不要出貨，而現行設計正好獎勵他這樣做。
+     出貨義務越有價值，違約的誘因越大，剛好反了。
+
+     所以差額由違約的那一方補。他開池時就接下了交付義務，
+     卡在市場上漲價是他可預見的風險，不是買家該承擔的。 */
+  /* 兩個數字要活到下面的通知：使用者要看的是「我實際拿回多少」與
+     「還差多少沒補到」，不是我們內部的科目。 */
+  let compensated = 0
+  let shortfall = 0
+  const gap = await defaultGap(tx, s)
+  if (gap > 0) {
+    /* **這裡不呼叫 lockSpender。** 賣家的 users 那一列在掃描的上鎖階段
+       就整批鎖好了（見 sweepSettlements 第三段）。那一段的整個重點是
+       「上鎖階段結束之後不再要求任何新的列鎖」—— 在迴圈中途多要一個
+       users 鎖，正好是 regress-deadlock.ts 第 3 組壓出來的那個形狀。
+       鎖已經在手上，所以這裡只要讀。
+       順序也對得上：這筆保留額在上面幾行已經解開，available 是對的。 */
+    const w = await walletOf(s.sellerId, tx)
+    compensated = Math.min(gap, Math.max(0, w.available))
+    shortfall = gap - compensated
+    if (compensated > 0) {
+      await credit(tx, s.sellerId, -compensated, 'pool-default-charge', s.id)
+      await credit(tx, s.ownerId, compensated, 'pool-default-compensation', s.id)
+    }
+    /* 扣不滿就**不讓帳戶變負數**。負餘額是 monitor.ts 的 critical 檢查，
+       那條是用來抓 bug 的；一筆合理的違約債務把它點亮，只會製造警報疲勞，
+       而真正的 bug 就淹在裡面了（那個檔案開頭自己寫了這件事）。
+       扣不到的部分交給人：客服有完整的佇列，這種案子本來就需要人判斷
+       （要不要動用其他求償手段、要不要直接停權）。 */
+    if (shortfall > 0) {
+      await notifyStaff('pool-shortfall:' + s.id, '違約差額扣不足，需要人工處理',
+        `結算 ${s.id}：差額 ${gap} 點，只從賣家扣到 ${compensated} 點。`
+        + '買家實付與票金的落差沒有補齊，請聯絡雙方。', '/admin/tickets', tx)
+    }
+  }
+
   await tx`update prizes set status = 'refunded' where id = ${s.prizeId}`
   await tx`update sellers set default_count = default_count + 1 where id = ${s.sellerId}`
 
+  /* 內文寫**實際退回的總額**，不是票金。轉手過的卡兩者不一樣，
+     而使用者對得上的數字是他帳戶真的多了多少，不是我們的科目名稱。
+     重新查一次餘額太重，改用同一組數字自己加 —— 上面剛寫完的那幾筆
+     就是全部的來源。 */
+  const refunded = s.amount + s.fee + compensated
   await notify({
     userId: s.ownerId, kind: 'system',
-    title: '賣家逾期未出貨，已退還票金',
-    body: `${s.amount + s.fee} 點已經退回你的帳戶。`,
+    title: '賣家逾期未出貨，已退還',
+    body: `${refunded} 點已經退回你的帳戶。`
+      + (shortfall > 0
+        ? `你買進的價格比原始票金高 ${shortfall} 點，這部分賣家的餘額不足以補齊，`
+          + '客服會另外跟你聯絡。'
+        : ''),
     /* 原本寫的是 '/wallet' —— 前端沒有這條路由（只有 '/me/wallet'，
        見 src/router/index.ts），點下去會掉進 404 的 catch-all。
        通知的價值一半在「點得進去」，指錯地方等於只剩一半。 */
@@ -319,7 +405,14 @@ export async function refund(tx: Tx, s: SettlementRow, now: number) {
   await notify({
     userId: s.sellerId, kind: 'system',
     title: '逾期未出貨，票金已退還買家',
-    body: `${s.amount} 點從你的帳戶收回，並記一次違約（滿 ${SELLER_DEFAULT_LIMIT} 次不能再開池）。`,
+    /* 差額那一筆也要講。賣家看到的數字如果只有票金，他會以為違約的代價
+       就是那 100 點，而實際上被收回的可能是好幾千 —— 對不上的帳單
+       比嚴厲的帳單更容易變成客訴。 */
+    body: `${s.amount + compensated} 點從你的帳戶收回`
+      + (compensated > 0
+        ? `（票金 ${s.amount} 點，加上買家實付高出票金的差額 ${compensated} 點）`
+        : '')
+      + `，並記一次違約（滿 ${SELLER_DEFAULT_LIMIT} 次不能再開池）。`,
     link: '/seller/shipping', refId: 'pool-refund-seller:' + s.id
   }, tx)
   return true
@@ -532,15 +625,29 @@ export async function sweepSettlements(tx: Tx, userId?: string): Promise<number>
    * 把上鎖跟做事分成兩個階段。上鎖階段結束之後**不再要求任何新的列鎖**，
    * 所以「握著共用列還在拿新列」這個形狀就不存在了；而兩個階段內部都照
    * id 排序，兩支交易對同一批列的請求順序一致，排隊而不是互等。
-   * 順序固定成 prizes → sellers，跟全站的 prizes → settlements → shipments
-   * 疊在一起就是一條總序。
+   * 順序固定成 prizes → users → sellers，跟全站的
+   * prizes → settlements → shipments 疊在一起就是一條總序。
+   * （users 是後來加的第三張表 —— refund() 要從違約賣家的餘額補差額，
+   *  下面那三行有完整說明。）
    *
    * （`order by id` 不是裝飾：`= any(...)` 本身不保證上鎖順序。
    *  同樣的寫法見 routes/admin.ts 的後台出貨。）
    */
   const prizeIds = [...new Set(due.map(c => c.prize_id as string))].sort()
   await tx`select id from prizes where id = any(${prizeIds}) order by id for update`
+  /* 第三張表：賣家的**帳戶**列（users）。
+     refund() 現在會在買家實付高於票金時，從違約賣家的可動用餘額補差額
+     （見 defaultGap），而那是一筆會動錢的判斷 —— 沒有這一列的鎖，
+     賣家同時在別處花錢就會被扣成負數，而負餘額是 monitor.ts 的 critical。
+
+     鎖在**這裡**而不是在 refund() 裡面，理由就是這一段開頭那一大段：
+     迴圈中途要新鎖正是 regress-deadlock.ts 第 3 組壓出來的形狀。
+
+     擺在 prizes 之後、sellers 之前，是為了跟既有路徑疊得起來：
+     回收那條（routes/prizes.ts 的 /:id/recycle → acceptRecycle）是
+     prizes → users，這裡照抄同一個相對順序就不會多出新的邊。 */
   const sellerIds = [...new Set(due.map(c => c.seller_id as string))].sort()
+  await tx`select id from users where id = any(${sellerIds}) order by id for update`
   await tx`select id from sellers where id = any(${sellerIds}) order by id for update`
 
   let changed = 0
