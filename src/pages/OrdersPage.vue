@@ -42,6 +42,11 @@ import type { Order, Seller } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 import CopyLine from '@/components/CopyLine.vue'
 import SellerChip from '@/components/SellerChip.vue'
+/* 「點數現在在哪裡」與「提出問題」兩塊跟賣家的出貨頁共用同一支元件：
+   兩頁講的是同一筆錢與同一條求助管道，各寫一份遲早會分岔，
+   而分岔的那一份會對使用者講錯誰拿得到錢。 */
+import PointsFlow from '@/components/PointsFlow.vue'
+import OrderIssue from '@/components/OrderIssue.vue'
 import { api } from '@/lib/api'
 import { MOCK } from '@/lib/config'
 import { useMediaQuery } from '@/composables/useMediaQuery'
@@ -226,10 +231,9 @@ interface BuyerView {
   steps: BuyerStep[]
   /** 我現在該做什麼、還是只要等 */
   todo: string
-  /** 錢在哪：鎖了多少、什麼時候會動、動去哪一邊 */
-  money: string
-  /** 這筆點數還鎖著（決定顏色：鎖著是金色，結掉了是灰的） */
-  held: boolean
+  /* 「錢在哪」原本是這裡的第四個欄位（money / held）。它搬進 PointsFlow 了 ——
+     同一句話賣家那一頁也要講，而且要講得出金額與保證金。留在這裡的話，
+     同一筆錢會有兩份文案，改一份就會跟另一份對不起來。 */
 }
 
 /**
@@ -245,7 +249,6 @@ interface BuyerView {
  * INSPECT_DAYS），不寫死 —— 規則改了文案要自己跟上。
  */
 function buyerViewOf(o: Order): BuyerView {
-  const pts = o.price.toLocaleString()
   const S = (label: string, state: BuyerStep['state']): BuyerStep => ({ label, state })
   const paid = S('付款・點數鎖住', 'done')
 
@@ -254,50 +257,36 @@ function buyerViewOf(o: Order): BuyerView {
       return {
         steps: [paid, S('賣家寄出', 'now'), S('我確認收到', 'todo')],
         todo: '現在不用做什麼，等賣家寄出就好。想問寄送方式或運費，用你們原本的聯絡方式直接找賣家，報上面的訂單編號最快。',
-        money: `${pts} 點鎖在託管裡，賣家還拿不到。賣家 ${SHIP_HOURS} 小時內沒按「我已寄出」，系統會自動取消並把這筆點數全額退回你的帳戶，同時沒收他的保證金。`,
-        held: true
       }
     case 'shipped':
       return {
         steps: [paid, S('賣家已寄出', 'done'), S('我確認收到', 'now')],
         todo: '卡收到後按「我已收到」，款項才會放給賣家。沒收到、或東西跟描述不符，就按「我要申訴」—— 申訴要附完整未剪輯的開箱影片，所以拆封前先開始錄。',
-        money: `${pts} 點還鎖著。你按下「我已收到」的那一刻放款給賣家；你一直沒有動作的話，${DELIVER_DAYS} 天後視同送達，再過 ${INSPECT_DAYS} 天自動放款。`,
-        held: true
       }
     case 'delivered':
       return {
         steps: [paid, S('賣家已寄出', 'done'), S('驗收中', 'now')],
         todo: `已經算送達了，現在是 ${INSPECT_DAYS} 天驗收期。卡沒問題就按「我已收到」提早結案；有問題一定要在驗收期內按「我要申訴」，期滿就來不及了。`,
-        money: `${pts} 點還鎖著。驗收期滿自動放款給賣家 —— 在那之前你都還可以申訴。`,
-        held: true
       }
     case 'disputed':
       return {
         steps: [paid, S('賣家已寄出', 'done'), S('爭議處理中', 'now')],
         todo: '客服正在看這一筆。在補件期限內把證據補齊（開箱影片、外箱與卡況照片）會比較快；過了期限就依現有的證據裁決。',
-        money: `${pts} 點還鎖著，兩邊都拿不到。裁決判你就全額退回你的帳戶，判賣家就放款給他。`,
-        held: true
       }
     case 'completed':
       return {
         steps: [S('付款', 'done'), S('賣家已寄出', 'done'), S('已完成', 'done')],
         todo: '這筆結束了，沒有要做的事。卡後來才發現有問題請開客服工單 —— 訂單本身已經不能再申訴。',
-        money: `${pts} 點已經放款給賣家，不再鎖在託管裡。`,
-        held: false
       }
     case 'refunded':
       return {
         steps: [S('付款', 'done'), S('爭議裁決', 'done'), S('已退款', 'done')],
         todo: '爭議判你，這筆已經退款結案。沒有要做的事。',
-        money: `${pts} 點已全額退回你的帳戶，可以直接拿去買別的。`,
-        held: false
       }
     case 'cancelled':
       return {
         steps: [S('付款', 'done'), S('賣家逾期未寄出', 'done'), S('已取消・退款', 'done')],
         todo: `賣家在 ${SHIP_HOURS} 小時內沒有寄出，系統自動取消了這筆。沒有要做的事，他的保證金已經被沒收。`,
-        money: `${pts} 點已全額退回你的帳戶。`,
-        held: false
       }
   }
 }
@@ -676,18 +665,19 @@ async function doDispute(o: Order) {
 
         <!-- 3. 我現在能做什麼 / 該等什麼 -->
         <p class="todo">{{ r.bv.todo }}</p>
-
-        <!-- 4. 錢的狀態。買家的錢被鎖著，這是他第二想知道的事 -->
-        <p class="money" :class="{ held: r.bv.held }">
-          <svg class="mIco" viewBox="0 0 16 16" aria-hidden="true">
-            <rect x="2.2" y="6.4" width="11.6" height="7.4" rx="1.8"
-                  fill="none" stroke="currentColor" stroke-width="1.4" />
-            <path d="M5.2 6.4V4.6a2.8 2.8 0 0 1 5.6 0v1.8" fill="none"
-                  stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-          </svg>
-          <span>{{ r.bv.money }}</span>
-        </p>
       </section>
+
+      <!-- 錢的狀態。一顆元件服務兩種角色，位置卻剛好都對：
+           買家的 .mine 就在上面，所以它落在「誰要寄給我 → 走到哪 →
+           我該做什麼 → 我的錢在哪」的第四順位；賣家沒有 .mine，同一塊就直接
+           接在卡片抬頭下面 —— 而賣家點進來的第一個問題正是「我什麼時候拿得到錢」。
+           side 跟著 r.role 走：同一個 escrowed，賣家要聽到「你寄出才會放款」，
+           買家要聽到「你的點數還在平台保管」。
+           不放進 .mine 裡面：那一塊的底色就是 --surface-2，這一塊疊上去會糊成一片。 -->
+      <PointsFlow
+        src="market" :side="r.role" :status="r.o.status"
+        :amount="r.o.price" :deposit="r.o.deposit"
+      />
 
       <!-- 訂單編號：雙方在 LINE 上對話時唯一的共同代號。兩邊都看得到、
            兩邊都複製得走 —— 少了它，「我那張噴火龍」在賣家那邊可能有三筆 -->
@@ -798,6 +788,15 @@ async function doDispute(o: Order) {
           <button type="button" class="btn sm ghost" @click="store.resolve(r.o.id, 'seller')">裁決：判賣家</button>
         </template>
       </div>
+
+      <!-- 「我要問一件事」。它跟上面那顆「我要申訴」是兩件事：申訴會凍結點數、
+           要開箱影片、之後不能再確認收貨；這一顆不動錢，只開一張客服工單。
+           所以它自成一列、長得也不一樣（虛線外框），而且**不分狀態**都給 ——
+           已結案的訂單申訴不了，那正是最需要有地方可以問的時候。 -->
+      <OrderIssue
+        src="market" :ref-id="r.o.id" :card-name="r.o.card.name"
+        :side="r.role" :status-text="STATUS_TEXT[r.o.status]"
+      />
 
     </article>
 
@@ -1205,21 +1204,6 @@ a.who2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 
 .todo { font-size: 12.5px; line-height: 1.8; color: var(--ink); margin: 12px 0 0; }
-
-/* 錢的狀態自己一格。買家問完「卡到哪了」的下一句一定是「那我的錢呢」，
-   混在上面那段說明裡會被讀掉 */
-.money {
-  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px;
-  align-items: start;
-  margin: 10px 0 0; padding: 9px 11px;
-  border-radius: var(--radius); background: var(--surface);
-  font-size: 11.5px; line-height: 1.75; color: var(--muted);
-}
-.money span { min-width: 0; overflow-wrap: anywhere; }
-.mIco { width: 15px; height: 15px; flex: none; margin-top: 2px; color: var(--faint); }
-/* 還鎖著的那些才上色。結案的訂單再標一次金色只會讓人以為錢還卡著 */
-.money.held { background: var(--warn-wash); }
-.money.held .mIco { color: var(--gold); }
 
 .lead {
   font-size: 12.5px; line-height: 1.8; color: var(--muted); margin: 0; min-width: 0;

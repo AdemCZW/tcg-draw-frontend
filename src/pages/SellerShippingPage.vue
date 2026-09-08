@@ -37,6 +37,11 @@ import CardArt from '@/components/CardArt.vue'
 import CopyLine from '@/components/CopyLine.vue'
 import BottomActionBar from '@/components/BottomActionBar.vue'
 import SourceTag from '@/components/SourceTag.vue'
+/* 這兩塊跟訂單頁共用同一支元件。這一頁講的是同一筆錢的賣家那一側，
+   各寫一份遲早會分岔 —— 而分岔的那一份會對賣家講錯「什麼時候拿得到錢」。 */
+import PointsFlow from '@/components/PointsFlow.vue'
+import OrderIssue from '@/components/OrderIssue.vue'
+import { useKeyboardInset } from '@/composables/useKeyboardInset'
 import {
   settlementDeadline, SELLER_DEFAULT_LIMIT,
   POOL_SHIP_DEADLINE_MS, POOL_INSPECT_MS, POOL_VAULT_ACCEPT_MS,
@@ -142,6 +147,12 @@ interface Job {
   ship: ShipView
   /** 市場訂單專屬：逾期未出貨會沒收的保證金。池那條路沒有保證金 */
   deposit: number
+  /* 下面兩個是給 PointsFlow 的原始狀態。**不能拿 statusT 去餵它** ——
+     那是這一頁自己寫的賣家視角文案，餵給元件等於讓文案再翻譯一次文案。
+     錢的去向要從狀態機的原始值推，跟這一頁顯示什麼無關。 */
+  status: SettlementStatus | OrderStatus
+  /** F-5：票金已入帳但卡還沒寄。只看 status 會把它講成「結束了」 */
+  owesCard: boolean
 }
 
 /** 收件資訊攤平成畫面直接用得到的樣子，順便算出缺哪幾項 */
@@ -244,7 +255,9 @@ function poolJob(r: SellerSettlement): Job {
        server/src/routes/sellers.ts）。expected 表示「這個階段本來就該有」——
        held 的卡買家還沒申請出貨，沒地址是正確的，不該顯示成缺件。 */
     ship: shipViewOf(r.shipTo, actionable),
-    deposit: 0
+    deposit: 0,
+    status: r.status,
+    owesCard: owes
   }
 }
 
@@ -277,7 +290,9 @@ function marketJob(o: Order): Job {
     actionable,
     rule: MARKET_RULE,
     ship: shipViewOf(shipToOf(o), o.status === 'escrowed'),
-    deposit: o.deposit
+    deposit: o.deposit,
+    status: o.status,
+    owesCard: false
   }
 }
 
@@ -457,6 +472,12 @@ async function submitShip() {
 /* 底部列只在「等你寄出」這個分頁、而且真的有東西可選時才浮出。
    空列浮在下緣是純粹的遮擋。 */
 const barOpen = computed(() => tab.value === 'ship' && toShip.value.length > 0 && !sheet.value)
+
+/* 軟鍵盤讓位（--kb）。這一頁的出貨面板與每一列的「提出問題」面板都是
+   position: fixed 貼底，而 fixed 貼的是版面視窗、不是 visualViewport ——
+   不讓位的話送出鍵會躲到鍵盤底下。掛在頁面層而不是每個 OrderIssue 裡：
+   一頁上有幾十列，讓位是全域的一份，不該有幾十個監聽器搶著寫同一個變數。 */
+useKeyboardInset()
 </script>
 
 <template>
@@ -625,6 +646,15 @@ const barOpen = computed(() => tab.value === 'ship' && toShip.value.length > 0 &
       <!-- 兩種來源混在同一份清單裡，不標規則會讓賣家拿池的時限去套市場的卡 -->
       <p v-if="j.bucket !== 'done'" class="ruleLine muted">{{ j.rule }}</p>
 
+      <!-- 「這筆錢現在在誰手上」。擺在寄件依據**正上方**是刻意的：
+           賣家往下要做的動作就是寄出，而這一塊要講的正是「你寄出之前這筆
+           不會入帳」。兩者分開放的話，那句話會變成一則跟動作無關的說明。
+           side 固定是 seller —— 這一頁只有賣家看得到。 -->
+      <PointsFlow
+        :src="j.src" side="seller" :status="j.status"
+        :amount="j.amount" :deposit="j.deposit" :owes-card="j.owesCard"
+      />
+
       <!--
         寄件依據。權限判斷在伺服器的 SQL 做完了（池那邊見 routes/sellers.ts
         的 lateral join，市場那邊見 routes/orders.ts 的 canShip）：有值就是可以顯示。
@@ -670,6 +700,15 @@ const barOpen = computed(() => tab.value === 'ship' && toShip.value.length > 0 &
           只標記這筆已出貨
         </button>
       </div>
+
+      <!-- 「我要問一件事」。跟買家那邊的「我要申訴」是兩條路：申訴會凍結點數、
+           要開箱影片；這一顆只開一張客服工單，不動錢。**不分狀態**都給 ——
+           賣家最需要問的往往是已經逾期、或買家一直不確認的那幾筆。
+           `.acts` 是 label 化的上半塊之外，所以放在這裡按下去不會順手把整列選起來。 -->
+      <OrderIssue
+        :src="j.src" :ref-id="j.id" :card-name="j.card.name"
+        side="seller" :status-text="j.statusT"
+      />
     </article>
 
     <!-- 多筆的操作列。定位、讓位、進出場動畫都在 BottomActionBar 裡
