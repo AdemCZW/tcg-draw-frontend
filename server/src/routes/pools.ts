@@ -39,6 +39,34 @@ const STATUS_LABEL: Record<string, string> = {
   refunded: '已退款'
 }
 
+/**
+ * 「所以我現在該做什麼」。
+ *
+ * 這一段本來是一句寫死的「它已經押在別的池裡、掛在市場上、或在出貨流程中」，
+ * 對**保管庫**那一格是錯的 —— 那張卡三種都不是，它只是實體還沒到你手上。
+ * 而保管庫正好是最常撞到這道閘的一格（抽中的卡、在市場上買到的庫內卡
+ * 都是這個狀態），等於最常見的情況拿到最不準的說明。
+ *
+ * 每一格都要講得出下一步。講不出下一步的錯誤訊息，跟只說「不行」一樣沒用。
+ */
+const STATUS_NEXT: Record<string, string> = {
+  /* 押卡的守衛只認 in_book，所以保管庫的卡一定要先走完出貨。
+     這也是刻意的設計（見下面那道閘的註解）：開池等於對外宣告
+     「我有這張實體卡」，而保管庫的卡實體在別人手上。 */
+  stashed: '這張卡還在保管庫，實體不在你手上 —— 開池等於對外宣告你有這張實體卡，'
+    + '所以要先到卡冊按「申請出貨」、實際收到卡之後才能放進池裡。',
+  listed: '先到市場把它下架，才能放進池裡。',
+  in_pool: '它已經押在另一個池裡了。那個池結束（或取消）之後會解押回卡冊。',
+  ship_requested: '出貨流程已經開始了，等收到卡再說。',
+  /* shipped 的卡實體確實在他手上，照理該能開池，但押卡的守衛只認 in_book，
+     而目前沒有任何一條路把 shipped 轉回 in_book。這是一個已知的限制，
+     不在這支的範圍 —— 但訊息要照實說，不要讓人以為是自己操作錯了。 */
+  shipped: '已出貨的卡目前還不能直接放進池裡（已知限制）。可以先上架到市場，'
+    + '或聯絡客服協助處理。',
+  recycled: '這張卡已經回收給賣家，不在你名下了。',
+  refunded: '這筆已經退款，卡不在你名下了。'
+}
+
 /** 錯誤訊息裡指名是哪一張卡。指不出來時說「這張卡」，不要印出 id */
 function cardName(card: unknown): string {
   const n = (card as { name?: unknown } | null)?.name
@@ -574,7 +602,8 @@ pools.post('/', requireAuth, async c => {
           throw new Rollback(409, {
             error: 'CARD_BUSY',
             message: `「${cardName(mine.card)}」目前是「${STATUS_LABEL[String(mine.status)] ?? String(mine.status)}」`
-              + ' —— 它已經押在別的池裡、掛在市場上、或在出貨流程中，不能再放進這個池。'
+              + '，不能放進這個池。'
+              + (STATUS_NEXT[String(mine.status)] ? ' ' + STATUS_NEXT[String(mine.status)] : '')
           })
         }
 

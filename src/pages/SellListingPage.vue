@@ -35,6 +35,32 @@ const cards = computed(() => all.value.filter(p => ids.value.includes(p.id) && (
 /** 每張卡各自的定價。預設帶市值當錨點，但一定讓人改得動 —— 市值只是參考 */
 const price = ref<Record<string, number | null>>({})
 
+/* ── 這一批卡其實分成兩種交付，而這一頁原本只講了其中一種 ──────────────
+   後端不讓賣家選交付方式，它是從卡的狀態推出來的（routes/public.ts）：
+     stashed（保管庫，實體在別人手上）→ vault，成交即過戶，賣家不用寄
+     in_book（實體在自己手上）        → ship，成交後賣家要自己寄，走託管
+   頁首那段說明原本一律寫「不需要寄送」—— 對 in_book 那一半是**錯的**，
+   而那一半的人一旦沒在 72 小時內寄出就會被沒收保證金並記違約。
+   所以這裡把兩種分開數，說明也跟著分開講。 */
+const vaultCards = computed(() => cards.value.filter(p => p.status === 'stashed'))
+const shipCards = computed(() => cards.value.filter(p => p.status !== 'stashed'))
+
+/* 保管庫那幾張還剩幾天。寄存倒數在庫內轉移時**刻意不歸零**（D-2），
+   所以賣家可能正在轉手一張明天就到期的卡 —— 買家那一側早就看得到這個數字
+   （市場頁的寄存倒數），賣家這一側卻從來沒被告知過。
+   取最小值：一次上架多張時，會先出事的是剩最少的那一張。 */
+/* 「其中」只有在真的是一部分的時候才成立。兩種卡都在才叫其中；
+   全部同一種時說「其中 4 張」會讓人以為還有另外幾張沒被講到，
+   然後去找那幾張在哪裡。 */
+const mixed = computed(() => vaultCards.value.length > 0 && shipCards.value.length > 0)
+
+const soonestDays = computed(() => {
+  const ds = vaultCards.value
+    .map(p => Math.ceil((Date.parse(p.stashExpiresAt) - Date.now()) / 86_400_000))
+    .filter(n => Number.isFinite(n))
+  return ds.length ? Math.min(...ds) : null
+})
+
 /* 卡冊改成分批載入之後不能只抓第一批：使用者是從卡冊裡「選好幾張」進來的，
    被選中的卡完全可能落在第 3 批。這裡沿著游標一路翻到「要的都找到了」為止，
    翻完就停 —— 只撈寄存中的，那是唯一能上架的狀態，量比整本卡冊小得多。 */
@@ -138,9 +164,46 @@ async function submit() {
 
     <p class="lead">
       上架後這幾張卡會出現在<strong>市場</strong>，任何人都能直接買下。
-      卡片還在保管庫，所以買家下單即成交、點數直接入帳，不需要寄送。
       賣出前這些卡不能出貨也不能回收。
     </p>
+
+    <!-- ---- 保管庫的卡：資訊，不是同意閘 ----
+         使用者原話是想加一個「我願意承擔新買家風險」的勾選視窗。
+         查過責任落點之後沒有做成閘：原池賣家逾期不出貨時，退款給的是
+         卡當下的主人、被扣錢與記違約的是原池賣家，轉手的這位賣家帳上
+         不會被扣任何東西。要一個沒有過錯的人簽字，換不到東西 ——
+         而且勾選框的效果是「證明他知情」，不會讓新買家的權利變少。
+         所以留下真正有內容的那一半：講清楚實體不在他手上、倒數剩幾天、
+         以及「等收到再賣比較單純」這句建議。 -->
+    <section v-if="vaultCards.length" class="note vaultNote">
+      <p class="noteT">
+        {{ mixed ? '其中' : '這' }} <b class="mono">{{ vaultCards.length }}</b> 張還在保管庫，實體卡不在你手上
+      </p>
+      <ul class="noteL">
+        <!-- 前兩條原本是分開的，但講的是同一件事的兩面（你不用寄／因為義務在別人身上），
+             拆成兩點只是把卡片清單再往下推一截。手機上這一段前面已經有頁首與標題，
+             使用者要做的事（定價）在更下面。 -->
+        <li>買家下單即成交、點數直接入帳，<strong>你不用寄</strong> —— 實體仍由原本的賣家保管，出貨義務也在他身上，不會因為轉手變成你的。</li>
+        <li v-if="soonestDays !== null">
+          寄存倒數<strong v-if="soonestDays > 0">最少剩 {{ soonestDays }} 天</strong><strong
+            v-else>已經到期</strong>，而且<strong>不會因為轉手而重新計算</strong> ——
+          買家承接的是剩下的那幾天。
+        </li>
+        <li class="tip">想單純一點的話，先申請出貨、實體收到之後再上架 —— 那時候是你自己寄，買賣兩邊都只跟你打交道。</li>
+      </ul>
+    </section>
+
+    <!-- 實體已經在自己手上那一半。原本頁首那句「不需要寄送」對他們是錯的，
+         而漏寄的代價是沒收保證金 + 記違約，比看漏一句話重得多。 -->
+    <section v-if="shipCards.length" class="note shipNote">
+      <p class="noteT">
+        {{ mixed ? '其中' : '這' }} <b class="mono">{{ shipCards.length }}</b> 張的實體在你手上，成交後<strong>要你自己寄</strong>
+      </p>
+      <ul class="noteL">
+        <li>這幾張走託管訂單：點數先凍結在平台，買家確認收貨或驗收期滿才撥給你。</li>
+        <li>成交後要在期限內寄出並填單號。<strong>逾期未寄會退款給買家、沒收保證金並記一次違約。</strong></li>
+      </ul>
+    </section>
 
     <p v-if="loading" class="muted">載入中…</p>
     <!-- 讀不到卡要說「讀不到」。這一層要排在「還沒選卡」前面：斷網時
@@ -243,6 +306,35 @@ async function submit() {
 h1 { font-size: 20px; margin: 0; }
 .lead { font-size: 13.5px; line-height: 1.8; color: var(--muted); margin: 0 0 16px; }
 .lead strong { color: var(--ink); }
+
+/* ---- 兩種交付各一塊說明 ----
+   用左側色帶而不是整塊底色：這兩塊會同時出現（一次上架混著兩種卡是常態），
+   兩塊實心色會把整個頁首變成廣告看板，而下面的定價欄才是使用者要動的東西。
+   色帶靠 border-inline-start 而不是 ::before，RTL 下不用另外處理。 */
+.note {
+  margin: 0 0 14px; padding: 10px 12px;
+  border-inline-start: 3px solid var(--line);
+  border-radius: 0 10px 10px 0;
+  background: var(--surface-2);
+}
+/* 保管庫那塊是「你要知道的事」，需寄送那塊是「你有義務」——
+   後者用警示色，因為漏看的代價是沒收保證金 */
+.vaultNote { border-inline-start-color: var(--accent); }
+.shipNote { border-inline-start-color: var(--warn); }
+.noteT {
+  margin: 0 0 6px; font-size: 13px; font-weight: 700; color: var(--ink);
+  line-height: 1.5;
+}
+.noteL {
+  margin: 0; padding-inline-start: 18px;
+  display: flex; flex-direction: column; gap: 5px;
+  font-size: 12.5px; line-height: 1.65; color: var(--muted);
+  /* 手機兩欄寬下長句要收得住，卡名與數字都可能很長 */
+  overflow-wrap: anywhere;
+}
+.noteL strong { color: var(--ink); }
+/* 建議跟事實要分得開：上面幾條是「就是這樣」，這一條是「你可以選」 */
+.noteL .tip { color: var(--faint); }
 
 .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .row { display: flex; gap: 12px; padding: 12px; align-items: flex-start; }
