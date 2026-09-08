@@ -151,6 +151,8 @@ interface Job {
      那是這一頁自己寫的賣家視角文案，餵給元件等於讓文案再翻譯一次文案。
      錢的去向要從狀態機的原始值推，跟這一頁顯示什麼無關。 */
   status: SettlementStatus | OrderStatus
+  /** 賣家回報過退件的時間。只有市場訂單有，抽卡池那條路沒有這個概念 */
+  returnedAt?: number
   /** F-5：票金已入帳但卡還沒寄。只看 status 會把它講成「結束了」 */
   owesCard: boolean
 }
@@ -292,7 +294,10 @@ function marketJob(o: Order): Job {
     ship: shipViewOf(shipToOf(o), o.status === 'escrowed'),
     deposit: o.deposit,
     status: o.status,
-    owesCard: false
+    owesCard: false,
+    /* 「包裹被退回了」。抽卡池那條路沒有這個概念（那邊沒有託管訂單），
+       所以只有市場訂單帶得出值，poolJob 一律 undefined。 */
+    returnedAt: o.returnedAt
   }
 }
 
@@ -411,6 +416,29 @@ const sheet = ref<Job[] | null>(null)
 const carrier = ref<Carrier>('post')
 const tracking = ref('')
 const busy = ref(false)
+
+/* ---- 回報退件 ----
+   錯誤按訂單 id 分開存：一頁上可能有很多筆，共用一個 err 的話
+   一筆失敗會讓每一列都紅起來。retBusy 同理，共用一個布林會讓所有按鈕
+   一起變「回報中」。（同樣的坑 OrderIssue 那支也踩過。） */
+const retBusy = ref<string | null>(null)
+const retErr = ref<Record<string, string>>({})
+
+async function reportReturn(j: Job) {
+  if (retBusy.value) return
+  retBusy.value = j.id
+  retErr.value = { ...retErr.value, [j.id]: '' }
+  try {
+    await api.reportReturned(j.id)
+    /* 重新拉整頁而不是就地改一個欄位：這一頁的 Job 是從兩份來源算出來的
+       衍生值，就地改會讓畫面跟資料短暫不一致，而重拉本來就很便宜。 */
+    await load()
+  } catch (e) {
+    retErr.value = { ...retErr.value, [j.id]: e instanceof Error ? e.message : '回報失敗，請稍後再試' }
+  } finally {
+    retBusy.value = null
+  }
+}
 const shipErr = ref('')
 const shipMsg = ref('')
 
@@ -705,6 +733,38 @@ useKeyboardInset()
            要開箱影片；這一顆只開一張客服工單，不動錢。**不分狀態**都給 ——
            賣家最需要問的往往是已經逾期、或買家一直不確認的那幾筆。
            `.acts` 是 label 化的上半塊之外，所以放在這裡按下去不會順手把整列選起來。 -->
+      <!-- ---- 包裹被退回了 ----
+           這一顆原本只做在訂單頁，但賣家的主要入口是這一頁 ——
+           「有人買了你的卡，該出貨了」那則通知指的就是這裡。只做在訂單頁的話，
+           照通知走的賣家永遠不會遇到它。
+
+           只給市場訂單、而且要已經出貨：抽卡池那條路沒有託管訂單，
+           escrowed 還沒寄出就沒有東西可以被退回，cancelled 更是連包裹都沒有。
+
+           文案刻意寫成「對他有利」而不是「他該做的」—— 他不按也照樣拿得到錢，
+           所以要講的是這一筆紀錄能替他做什麼：買家日後說沒收到時，
+           那是他寄過、對方沒領的唯一證據。 -->
+      <div
+        v-if="j.src === 'market' && j.status !== 'escrowed' && j.status !== 'cancelled'"
+        class="retBox"
+      >
+        <p v-if="j.returnedAt" class="retDone" role="status">
+          已回報退件（{{ new Date(j.returnedAt).toLocaleDateString('zh-TW') }}）· 買家已收到通知
+        </p>
+        <template v-else>
+          <button
+            type="button" class="btn sm retBtn"
+            :disabled="retBusy === j.id"
+            @click="reportReturn(j)"
+          >{{ retBusy === j.id ? '回報中…' : '包裹被退回了' }}</button>
+          <p class="retHint">
+            按了會通知買家、並在這筆訂單留下紀錄。<strong>款項與時限都不受影響</strong> ——
+            但買家日後說沒收到時，這是你寄過、對方沒領的證據。
+          </p>
+        </template>
+        <p v-if="retErr[j.id]" class="retErr" role="alert">{{ retErr[j.id] }}</p>
+      </div>
+
       <OrderIssue
         :src="j.src" :ref-id="j.id" :card-name="j.card.name"
         side="seller" :status-text="j.statusT"
@@ -940,6 +1000,31 @@ h1 { font-size: 22px; margin: 0 0 6px; }
 .sendWhy { font-size: 11px; line-height: 1.75; margin: 8px 0 0; overflow-wrap: anywhere; }
 
 .acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+/* ---- 回報退件 ----
+   放在 .acts 之後、OrderIssue 之前：它是「這一筆出了狀況」的處理，
+   排在正常動作後面、客服工單前面，剛好是使用者遇到問題時的閱讀順序。 */
+.retBox {
+  display: grid; gap: 6px; justify-items: start;
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  /* 格線子元素：長錯誤訊息不該把整列撐寬 */
+  min-width: 0;
+}
+.retBtn { min-height: 44px; }
+.retHint {
+  margin: 0; min-width: 0;
+  font-size: 11.5px; line-height: 1.6; color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.retHint strong { color: var(--ink); }
+/* 已回報是事實不是警告，用中性色。染紅會讓賣家以為自己被記了一筆 */
+.retDone {
+  margin: 0; min-width: 0;
+  font-size: 12px; line-height: 1.5; color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.retErr { margin: 0; font-size: 12px; color: var(--danger); overflow-wrap: anywhere; }
 /* 動作鈕也要 44px：這一頁按錯的代價是包裹寄錯或漏寄 */
 .acts .btn.sm, .selRow .btn.sm, .errLine .btn.sm, .alertBox .btn.sm {
   padding: 10px 16px; font-size: 13px; min-height: 44px;

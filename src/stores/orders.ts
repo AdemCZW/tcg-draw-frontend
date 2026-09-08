@@ -20,6 +20,11 @@ import { ORDER_ROUTES } from '@/shared/contract'
 
 /* API 模式：伺服器擁有訂單狀態。每個動作 = 打端點 → 重新載入。
    時限的推進在伺服器（讀取時重算 + 排程），前端只顯示。 */
+/* 訂單在這裡**不做欄位轉換**：後端已經是前端的形狀（camelCase、毫秒時間戳，
+   見 server/src/orders-service.ts 的 toOrder），所以新增的 returnedAt 與
+   sellerContact 也是照原樣進來的，沒有第二份映射要跟著改。
+   sellerContact 只有買家視角才有值 —— 權限判斷在伺服器的 SQL 做完了
+   （routes/orders.ts 的 canSeeSeller），前端不再判斷一次「該不該顯示」。 */
 type OrdersRes = { orders: Order[]; wallet: { points: number; locked: number }; serverTime: number }
 async function pull(): Promise<OrdersRes> {
   /* 回應裡的 wallet 由 http() 統一套用（見 lib/http.ts 的 applyWallet），
@@ -230,8 +235,12 @@ export const useOrdersStore = defineStore('orders', {
      * 只填了一部分、完全沒填。第三種在正式環境是常態（會員資料全部欄位都不
      * 強制），而它正是最容易被做壞的那個畫面：沒有這個種子，開發時只會看到
      * 有地址的版本，賣家對著一片空白的那一版永遠沒有人看過。
+     *
+     * extra 讓 demo 造得出「已寄出」那一版。賣家的「包裹被退回了」只在出貨後
+     * 出現，而這支種子只造得出 escrowed —— 沒有它，那顆按鈕在展示模式下
+     * 永遠不會出現，等於沒有人看過。
      */
-    seedSellerOrder(card: CardItem, price: number, ship?: ShipTo) {
+    seedSellerOrder(card: CardItem, price: number, ship?: ShipTo, extra: Partial<Order> = {}) {
       const t = Date.now() + this.offset
       /* sellerId 用登入者真實的 id，不再寫 'me'。
          這一行本身就是那個角色判斷 bug 之所以躲了這麼久的原因：種子造出來的
@@ -245,7 +254,8 @@ export const useOrdersStore = defineStore('orders', {
         buyerId: 'u-9A44', buyerName: 'VD-9A44',
         sellerId: me?.id ?? 'me', sellerName: me?.name ?? '我',
         status: 'escrowed', createdAt: t - 6 * 3_600_000,
-        ...(ship ? { ship } : {})
+        ...(ship ? { ship } : {}),
+        ...extra
       }
       this.orders.unshift(o)
       this.persist()
@@ -265,7 +275,8 @@ export const useOrdersStore = defineStore('orders', {
     seedBuyerOrder(
       card: CardItem, price: number,
       status: 'escrowed' | 'shipped' | 'delivered' | 'disputed' | 'completed' = 'shipped',
-      seller: { id: string; name: string } = { id: 's1', name: '保庫堂' }
+      seller: { id: string; name: string } = { id: 's1', name: '保庫堂' },
+      extra: Partial<Order> = {}
     ) {
       const t = Date.now() + this.offset
       const H = 3_600_000
@@ -295,7 +306,12 @@ export const useOrdersStore = defineStore('orders', {
         buyerId: me?.id ?? 'me', buyerName: me?.name ?? '我',
         sellerId: seller.id, sellerName: seller.name,
         status, createdAt: t,
-        ...stamps[status]
+        /* 買家視角**一定**看得到賣家的聯絡方式：上架前必填（後端的
+           NEED_CONTACT），所以正式環境沒有「賣家沒填」那一版。種子跟著給值，
+           不然展示模式看到的會是一個現實中不存在的空狀態。 */
+        sellerContact: { kind: 'line', value: 'vaultdraw_s1' },
+        ...stamps[status],
+        ...extra
       } as Order)
       this.persist()
     },

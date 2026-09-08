@@ -6,7 +6,7 @@
 // ------------------------------------------------------------------
 import type {
   Pool, DrawResult, UserPrize, LedgerEntry, WinnerEvent,
-  Seller, Listing, CardItem, PoolStatus, Tier, Grader, Order
+  Seller, Listing, CardItem, PoolStatus, Tier, Grader, Order, SellerContact
 } from '@/types/models'
 import { deliveryOf } from '@/shared/domain'
 import * as mock from '@/mocks/data'
@@ -387,6 +387,27 @@ function mockShipmentFor(prizeId: string): BuyerShipment | null {
 /* 這裡原本有一支 applyWallet()，由下面每一支端點自己記得呼叫。
    它已經搬到 lib/http.ts 的傳輸層 —— 只要後端回應帶 wallet 就會套用，
    不再有「這支忘了呼叫」這種漏（見那支的說明）。 */
+
+/* ---------- 賣家的對外聯絡方式 ---------- */
+
+/** MOCK 用的賣家聯絡方式。放模組層而不是頁面裡 —— 填完換頁再回來要還在，
+    不然展示模式驗到的只有「剛按完的那一秒」，看不到「已經填過」的那一版 */
+let mockContact: SellerContact | null = null
+
+const CONTACT_KINDS: readonly string[] = ['phone', 'line', 'other']
+/**
+ * sellers 那一列 → SellerContact。
+ *
+ * 空字串一律當成「沒填」：後端擋上架的判斷就是 trim 後非空，兩邊必須同一條。
+ * kind 認不得就退回 'other' 而不是丟掉整筆 —— 之後後端多一種聯絡方式時，
+ * 舊版前端會把值照樣顯示出來（顯示得保守一點），而不是讓買家看到一片空白。
+ */
+function toSellerContact(s: Any | null | undefined): SellerContact | null {
+  const value = String(s?.contact_value ?? '').trim()
+  if (!value) return null
+  const kind = String(s?.contact_kind ?? '')
+  return { kind: (CONTACT_KINDS.includes(kind) ? kind : 'other') as SellerContact['kind'], value }
+}
 
 export const api = {
   async listPools(): Promise<Pool[]> {
@@ -886,13 +907,67 @@ export const api = {
       `/v1/shipments${qs({ cursor: opts.cursor, limit: opts.limit })}`, { signal: opts.signal })
   },
 
-  /** 我的賣家狀態。null = 還沒申請過 */
+  /**
+   * 我的賣家狀態。null = 還沒申請過。
+   *
+   * contact 是**收斂過**的對外聯絡方式：後端回的是 sellers 那一列的原始欄位
+   * （contact_kind / contact_value 兩個 snake_case 名字），頁面不該認得資料庫的
+   * 欄位名，也不該各自判斷「空字串算不算有填」—— 那條判斷必須跟後端擋上架的
+   * NEED_CONTACT 同一條（trim 後非空），分岔的話畫面會說填好了、上架照樣被擋。
+   */
   async sellerStatus(): Promise<{
-    seller: { id: string; name: string; tier: string; origin: string } | null
+    seller: { id: string; name: string; tier: string; origin: string; contact: SellerContact | null } | null
     verification: { status: string; note: string | null } | null
   }> {
-    if (MOCK) { await delay(120); return { seller: null, verification: null } }
-    return http('/v1/seller/me')
+    if (MOCK) {
+      await delay(120)
+      /* MOCK 從「不是賣家」改成「是賣家」：賣家設定那一頁在展示模式下
+         唯一能驗到的畫面本來只有「你還不是賣家」，而這一輪要看的是
+         填聯絡方式的那個表單。mockContact 記在模組層，填完回頭看得到。 */
+      return {
+        seller: { id: 'me', name: '我', tier: 'verified', origin: 'personal', contact: mockContact },
+        verification: null
+      }
+    }
+    const r = await http<{ seller: Any | null; verification: { status: string; note: string | null } | null }>('/v1/seller/me')
+    const s = r.seller
+    return {
+      seller: s
+        ? {
+            id: String(s.id), name: String(s.name ?? ''),
+            tier: String(s.tier ?? ''), origin: String(s.origin ?? ''),
+            contact: toSellerContact(s)
+          }
+        : null,
+      verification: r.verification ?? null
+    }
+  },
+
+  /**
+   * 填／改對外聯絡方式。
+   *
+   * 這一欄跟會員資料裡的電話是**兩回事**：那一欄是物流用的個資，從來不對外；
+   * 這一欄賣家自己填、而且知道它會被有訂單關係的買家看到。兩者刻意分開存，
+   * 就是為了不讓「拿去寄件」的號碼被順手拿去公開（後端也是這樣分的，
+   * 見 server/src/routes/sellers.ts）。
+   *
+   * 路徑是**單數** /v1/seller —— 複數的 /v1/sellers 被公開的賣家列表與賣家頁
+   * 佔用了（見 server/src/index.ts 的掛載說明）。
+   *
+   * 400 / 404 的 message 是中文、可以直接顯示，所以這裡不吞例外也不改寫訊息。
+   */
+  async updateSellerContact(input: SellerContact): Promise<{ contact: SellerContact }> {
+    const value = input.value.trim()
+    if (MOCK) {
+      await delay(240)
+      if (value.length < 3) throw new ApiError('BAD_REQUEST', '聯絡方式太短', 400)
+      if (value.length > 64) throw new ApiError('BAD_REQUEST', '聯絡方式最多 64 個字', 400)
+      mockContact = { kind: input.kind, value }
+      return { contact: mockContact }
+    }
+    const r = await http<{ ok: true; contactKind: SellerContact['kind']; contactValue: string }>(
+      '/v1/seller/me/contact', { method: 'PUT', json: { kind: input.kind, value } })
+    return { contact: { kind: r.contactKind, value: r.contactValue } }
   },
 
   /** 申請成為賣家。通過審核前 tier = pending，開池會被擋 */
@@ -995,6 +1070,40 @@ export const api = {
   async shipOrder(id: string, opts: { carrier?: Carrier; tracking?: string } = {}): Promise<void> {
     const ok = await useOrdersStore().ship(id, opts)
     if (!ok) throw new Error('這張訂單目前不是等待出貨的狀態')
+  },
+
+  /**
+   * 賣家回報「包裹被退回」。
+   *
+   * **不改變訂單狀態，也不影響任何時限** —— 結案規則刻意不動（產品決定：
+   * 交付與否交給買賣雙方自己談，點數照常釋放）。它只寫一個時間戳，
+   * 換到的是兩件現在完全沒有的東西：買家知道發生了什麼事，
+   * 以及訂單上留下「這一筆還沒真的交付」的紀錄。
+   *
+   * already = true 代表先前已經回報過。那不是錯誤（這一支是冪等的），
+   * 呼叫端照樣把它當成功處理，只是話講得不一樣。
+   *
+   * 回來的那張訂單刻意**不直接塞進清單**，改成走 sweep() 重拉一次：
+   * 訂單 store 只留一條寫入路徑，多一條就多一種「兩邊不一致」的可能。
+   */
+  async reportReturned(id: string): Promise<{ already: boolean }> {
+    const os = useOrdersStore()
+    if (MOCK) {
+      await delay(240)
+      const o = os.orders.find(x => x.id === id)
+      /* 三條判斷跟後端同一組（見 server/src/routes/orders.ts 的 /:id/returned）：
+         找不到、還沒出貨、已經回報過。mock 沒有伺服器把關，這裡不擋的話
+         展示模式會走出一條正式環境走不到的路。 */
+      if (!o) throw new ApiError('WRONG_STATE', '找不到這張訂單', 404)
+      if (o.status === 'escrowed') throw new ApiError('WRONG_STATE', '這張訂單還沒出貨', 409)
+      if (o.returnedAt) return { already: true }
+      os.patch(id, { returnedAt: os.now() })
+      return { already: false }
+    }
+    const r = await http<{ order: Order; already: boolean }>(
+      `/v1/orders/${encodeURIComponent(id)}/returned`, { method: 'POST' })
+    await os.sweep()
+    return { already: r.already }
   },
 
   /** 目前錢包（API 模式用來初始化；mock 模式回 store 現值） */

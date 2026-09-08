@@ -129,6 +129,15 @@ const blockWhy = computed(() => {
 const ready = computed(() => cards.value.length > 0 && priceMissing.value.length === 0)
 
 const err = ref('')
+/**
+ * 沒填對外聯絡方式（NEED_CONTACT）。
+ *
+ * 跟市場頁的 NEED_ADDRESS 是同一種失敗：使用者知道要做什麼，但不知道在哪裡做，
+ * 而這一頁到賣家設定沒有任何路。所以另外立一個旗標，樣板據它多給一條連結。
+ * 判準用 ApiError.code 不比對訊息字串 —— 文案改了判斷就會失效
+ * （照 MarketListingPage 的 needAddress 那一段）。
+ */
+const needContact = ref(false)
 /** 部分成功也要講清楚是哪幾張成功了，不要只說「失敗」讓人不知道現在的狀態 */
 const done = ref<{ ok: string[]; failed: string[] } | null>(null)
 
@@ -136,6 +145,8 @@ async function submit() {
   if (!ready.value || busy.value) return
   busy.value = true
   err.value = ''
+  needContact.value = false
+  done.value = null
   const ok: string[] = []
   const failed: string[] = []
   for (const p of cards.value) {
@@ -146,12 +157,24 @@ async function submit() {
       })
       ok.push(p.card.name)
     } catch (e) {
+      /* NEED_CONTACT 的門檻在**賣家身上**，不在卡上 —— 繼續跑只會把同一句話
+         重複 N 次（每一次還要等一趟往返），而且會把一個「你少填一欄」
+         畫成「二十張卡全部失敗」。停下來，把訊息升到頁面層級並附上出口。 */
+      if (e instanceof ApiError && e.code === 'NEED_CONTACT') {
+        needContact.value = true
+        err.value = e.message
+        break
+      }
       failed.push(`${p.card.name}（${e instanceof ApiError ? e.message : '失敗'}）`)
     }
   }
   busy.value = false
-  done.value = { ok, failed }
-  if (!failed.length) setTimeout(() => router.replace({ name: 'cards' }), 1600)
+  /* 一張都還沒送出去就被擋下來時不要畫結果區：那會多出一塊空的「已上架／未成功」，
+     而使用者要看的是上面那句話跟那條連結。 */
+  if (ok.length || failed.length) done.value = { ok, failed }
+  if (ok.length && !failed.length && !needContact.value) {
+    setTimeout(() => router.replace({ name: 'cards' }), 1600)
+  }
 }
 </script>
 
@@ -274,7 +297,16 @@ async function submit() {
         </div>
       </div>
 
-      <p v-if="err" class="msg bad">{{ err }}</p>
+      <!-- 沒填聯絡方式是唯一一種「錯誤訊息本身就該附帶出口」的失敗：
+           後端的訊息已經說清楚為什麼要填，缺的只是「在哪裡填」。
+           連結獨立成一顆按鈕，不寫在句子中間 —— 行內連結的可點高度只有
+           一行字，手機上按不到（同訂單頁的 .askBtn）。 -->
+      <div v-if="err" class="msg bad" role="alert">
+        <p>{{ err }}</p>
+        <RouterLink v-if="needContact" class="errGo" :to="{ name: 'seller-settings' }">
+          去賣家設定填聯絡方式
+        </RouterLink>
+      </div>
       <div v-if="done" class="msg" :class="done.failed.length ? 'bad' : 'ok'" role="status">
         <p v-if="done.ok.length">已上架：{{ done.ok.join('、') }}</p>
         <p v-if="done.failed.length">未成功：{{ done.failed.join('、') }}</p>
@@ -383,4 +415,12 @@ h1 { font-size: 20px; margin: 0; }
 .msg p { margin: 0; }
 .msg.ok { background: #14532d55; color: #86efac; }
 .msg.bad { background: #7f1d1d55; color: #fca5a5; }
+/* 出口鍵。color: inherit 讓它待在錯誤區塊自己的配色裡（同 MarketListingPage
+   的 .errGo），只靠底線與 44px 的高度說明它可以按 */
+.errGo {
+  display: inline-flex; align-items: center; min-height: 44px;
+  margin-top: 2px; font-weight: 700; color: inherit;
+  text-decoration: underline; text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
 </style>

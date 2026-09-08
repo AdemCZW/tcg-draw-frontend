@@ -5,7 +5,7 @@
 /* 交易領域的型別搬到 src/shared/ —— 那裡的東西後端會直接吃。
    這裡 re-export 讓既有的 import 不用動。 */
 export type {
-  Grader, CardItem, Delivery, Listing, OrderStatus, ClosedBy, Order
+  Grader, CardItem, Delivery, Listing, OrderStatus, ClosedBy, Order, SellerContact
 } from '@/shared/domain'
 /* re-export 不會把名字帶進本檔的作用域，底下還有型別直接引用 CardItem，
    所以要再 import 一次 */

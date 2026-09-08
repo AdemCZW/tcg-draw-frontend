@@ -121,6 +121,16 @@ export const router = createRouter({
       meta: { requiresAuth: true, depth: 1, title: '出貨與結算' }
     },
     {
+      /* 賣家設定。跟開池、出貨同一層 —— 它們是同一個身分的事。
+         獨立一頁而不是塞進會員資料：那一頁的電話是寄件用的個資，
+         這一頁的聯絡方式相反，是會被買家看到的對外資訊。混在一起
+         使用者會分不出哪一格是私的，而分錯的方向是把私人號碼公開出去。
+         後端擋上架的 NEED_CONTACT 訊息叫人來「賣家設定」，這裡就是那個落點。 */
+      path: '/seller/settings', name: 'seller-settings',
+      component: () => import('@/pages/SellerSettingsPage.vue'),
+      meta: { requiresAuth: true, depth: 1, title: '賣家設定' }
+    },
+    {
       /* 開卡演出的試看頁。刻意不掛進任何導覽 ——
          給開發與驗收用的，知道網址的人才進得來。 */
       path: '/fx', name: 'fx-lab',

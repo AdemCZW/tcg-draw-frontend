@@ -38,7 +38,7 @@ import {
   remainText, STATUS_TEXT, SHIP_DEADLINE, DELIVER_DEADLINE, INSPECT_WINDOW,
   type Carrier, type Deadline
 } from '@/shared/escrow'
-import type { Order, Seller } from '@/types/models'
+import type { Order, Seller, SellerContact } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 import CopyLine from '@/components/CopyLine.vue'
 import SellerChip from '@/components/SellerChip.vue'
@@ -366,6 +366,22 @@ function seedBuyer(status: 'escrowed' | 'shipped' | 'delivered' | 'disputed' | '
   )
 }
 
+/** demo：已完成卻被退回的買家單。結案規則沒變，所以這一格是真的會出現的 */
+function seedBuyerReturned() {
+  store.seedBuyerOrder(
+    DEMO_CARD, 41000, 'completed', { id: 's1', name: '保庫堂' },
+    { returnedAt: store.now() - 2 * HOUR }
+  )
+}
+/** demo：已寄出的賣家單。「包裹被退回了」在出貨後才出現，種子預設造不出來 */
+function seedSellerShipped() {
+  store.seedSellerOrder(
+    DEMO_CARD, 41000,
+    { name: '王大明', phone: '0912345678', zip: '106', city: '台北市大安區', line1: '和平東路二段 76 巷 12 號 5 樓' },
+    { status: 'shipped', shippedAt: store.now() - 30 * HOUR }
+  )
+}
+
 const err = ref('')
 /* 送出中。這兩個動作都是不可逆的（出貨會啟動買家的驗收時鐘、申訴會把訂單
    推進爭議狀態），手機上連點兩下就會送出兩次 —— 全域的連點守衛是保險絲，
@@ -527,6 +543,55 @@ async function doShip(o: Order) {
   } catch (e) { err.value = e instanceof Error ? e.message : '出貨失敗' }
   finally { busy.value = false }
 }
+/* ==================================================================
+   包裹被退回
+   ==================================================================
+   買家沒去超商取貨、包裹退回賣家手上 —— 系統看到的跟「買家收到了卻裝死」
+   一模一樣，都是「買家沒動作」。產品上的決定是**不動結案規則**：
+   交付與否由雙方自己談，點數照常釋放（買家沒去領確實是買家的責任）。
+
+   所以這一塊的目的不是改變任何金流，是把「發生了什麼事」講出來：
+   買家至少要知道包裹沒送到、而且知道去找誰；賣家則多一筆平台紀錄，
+   證明貨是他寄的、是對方沒領。 */
+
+/** 買家那側：種類決定呈現。手機撥得出去，LINE ID 只能複製 */
+const CONTACT_LABEL: Record<SellerContact['kind'], string> = {
+  phone: '手機', line: 'LINE ID', other: '聯絡方式'
+}
+/**
+ * tel: 只給手機那一種 —— LINE ID 撥不出去，給了只會撥到一個不存在的號碼。
+ *
+ * 撥號網址裡只留數字與 +（賣家常填成 09xx-xxx-xxx 或帶空白），其餘字元
+ * 有些撥號程式會整串當成無效。這個值不會進頁面網址、不會進 console，
+ * 它是賣家自願提供給這位買家的資訊，離開這張卡就不該再出現。
+ */
+const telHref = (c: SellerContact) =>
+  c.kind === 'phone' ? `tel:${c.value.replace(/[^\d+]/g, '')}` : ''
+
+/* 回報退件：哪一筆正在送、以及這一筆的結果。用 id 不用布林 ——
+   一頁上有好幾張訂單卡，布林會讓每一顆按鈕同時變成「處理中」。 */
+const returnBusy = ref<string | null>(null)
+const returnErr = ref<Record<string, string>>({})
+
+async function reportReturned(o: Order) {
+  if (returnBusy.value) return
+  returnBusy.value = o.id
+  returnErr.value = { ...returnErr.value, [o.id]: '' }
+  try {
+    await api.reportReturned(o.id)
+    /* 成功不另外報喜：訂單卡上會直接長出「已回報退回」那一塊，
+       那比一句會自己消失的提示更持久，也是賣家事後回來要找的東西。 */
+  } catch (e) {
+    returnErr.value = { ...returnErr.value, [o.id]: e instanceof Error ? e.message : '回報失敗，請稍後再試' }
+  } finally {
+    returnBusy.value = null
+  }
+}
+
+/** 回報時間。只講到分鐘 —— 這是給雙方對話用的時間點，不是稽核紀錄 */
+const returnedAtText = (t: number) =>
+  new Date(t).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+
 async function doDispute(o: Order) {
   if (!canDispute() || busy.value) return
   err.value = ''
@@ -609,8 +674,43 @@ async function doDispute(o: Order) {
           </p>
           <p class="amt mono">{{ r.o.price.toLocaleString() }} 點<span v-if="r.o.deposit"> · 保證金 {{ r.o.deposit.toLocaleString() }}</span></p>
         </div>
-        <span class="st" :class="r.o.status">{{ STATUS_TEXT[r.o.status] }}</span>
+        <!-- 兩個角標可以同時在：結案規則沒有因為退件改變，所以一筆訂單
+             完全可能同時是「已完成」（錢放了）跟「待重寄」（貨還沒到）。
+             它們講的是兩件不衝突的事，畫面就要兩個都說得出來 —— 只留一個
+             的話，不管留哪個都在騙人。 -->
+        <div class="stCol">
+          <span class="st" :class="r.o.status">{{ STATUS_TEXT[r.o.status] }}</span>
+          <span v-if="r.o.returnedAt" class="st ret">待重寄</span>
+        </div>
       </div>
+
+      <!-- 包裹被退回。兩種角色都看得到，但講的話不一樣：
+           買家要知道「東西沒到你手上、去找賣家安排重寄、運費多半是你出」，
+           賣家要知道「紀錄留下了，買家已經收到通知」。
+           擺在最上面：它推翻的是這張卡上其他每一句話的前提（貨在路上／已送達）。 -->
+      <section v-if="r.o.returnedAt" class="retBox" role="note">
+        <p class="retT">包裹被退回賣家了</p>
+        <template v-if="r.role === 'buyer'">
+          <p class="retB">
+            這件包裹沒有在保管期限內被領取，已經退回賣家手上，<b>卡還沒到你手上</b>。
+            平台不經手實體卡，重寄要你直接跟賣家談 —— <b>重寄的運費通常由買家負擔</b>。
+          </p>
+          <p class="retB">
+            賣家在 <b class="mono">{{ returnedAtText(r.o.returnedAt) }}</b> 回報。
+            這件事<b>不會改變這筆訂單的時限與結案</b>：該放款的照放、該結案的照結，
+            所以就算下面寫著「已完成」，重寄這件事還是要你們自己談定。
+          </p>
+        </template>
+        <template v-else>
+          <p class="retB">
+            你在 <b class="mono">{{ returnedAtText(r.o.returnedAt) }}</b> 回報了這一筆，買家已經收到通知。
+            紀錄留在這張訂單上 —— 買家事後說「沒收到」時，這就是你寄過、而對方沒領的證據。
+          </p>
+          <p class="retB">
+            要不要重寄、運費怎麼算，由你們自己談。你的款項不受影響，時限與結案規則也沒有變。
+          </p>
+        </template>
+      </section>
 
       <!-- 買家那半。順序照買家心裡的順序：誰要寄給我 → 走到哪 → 我該做什麼 → 我的錢在哪。
            擺在訂單編號之前，因為進度才是他點進來的理由，編號是要聯絡時才用得到的東西 -->
@@ -688,6 +788,31 @@ async function doDispute(o: Order) {
         />
         <p class="idWhy">跟對方聯絡時報這個編號，才知道在講哪一筆。</p>
       </div>
+
+      <!-- 買家：聯絡賣家。
+           有值就顯示，**不看訂單狀態** —— 權限判斷在伺服器的 SQL 做完了
+           （只有這筆訂單的買家拿得到值），而結案之後才是最需要它的時候：
+           包裹被退回、卡況有疑問都發生在「訂單已經結束」之後，那時候
+           站上如果沒有一條聯絡管道，買家連開口的地方都沒有（站上沒有私訊）。
+           擺在訂單編號下面：那兩樣東西是聯絡時要一起用的。 -->
+      <section v-if="r.o.sellerContact" class="ct">
+        <h3 class="ctH">聯絡賣家</h3>
+        <CopyLine
+          :label="CONTACT_LABEL[r.o.sellerContact.kind]"
+          :value="r.o.sellerContact.value"
+          :mono="r.o.sellerContact.kind === 'phone'"
+          :testid="`copy-contact-${r.o.id}`"
+        />
+        <!-- 手機才給撥號鍵。LINE ID 撥不出去，給一顆按了會失敗的鍵
+             比不給更糟 —— 那一種只能複製後自己去搜尋。 -->
+        <a v-if="r.o.sellerContact.kind === 'phone'" class="ctCall" :href="telHref(r.o.sellerContact)">
+          撥給賣家
+        </a>
+        <p class="ctWhy">
+          這是賣家自己填的對外聯絡方式。平台不代為聯絡，也不經手實體卡 ——
+          寄送、重寄與運費請直接跟他談，報上面的訂單編號最快。
+        </p>
+      </section>
 
       <!-- 時限：整套機制的重點，放最顯眼 -->
       <div v-if="r.dl" class="dl" :class="r.dl.tone">
@@ -789,6 +914,32 @@ async function doDispute(o: Order) {
         </template>
       </div>
 
+      <!-- 賣家：包裹被退回了。
+           出貨之後才給（還沒寄就沒有東西會被退回），已經回報過就換成上面那塊紀錄。
+
+           文案刻意寫成「對你有利」而不是「你應該回報」：他不按也照樣拿得到錢，
+           一句義務句換不到任何行為。真正有價值的是那筆紀錄 ——
+           買家事後申訴「東西沒收到」時，那是他手上唯一能證明貨寄了、
+           是對方沒領的東西；什麼都沒按的賣家在爭議裡是空手的。
+           cancelled 排除掉：那是逾期未出貨自動取消的，根本沒有包裹。 -->
+      <div
+        v-if="r.role === 'seller' && !r.o.returnedAt
+          && r.o.status !== 'escrowed' && r.o.status !== 'cancelled'"
+        class="retAsk"
+      >
+        <p class="retAskB">
+          買家沒去取貨、包裹退回你手上了嗎？回報一下，平台會<b>留下紀錄並通知買家</b>。
+          買家之後說「沒收到」的時候，這筆紀錄就是你寄過、而他沒領的證據。
+          <b>你的款項不受影響</b>，訂單的時限與結案規則也不會因為這個動作改變。
+        </p>
+        <button
+          type="button" class="btn sm" :disabled="returnBusy === r.o.id"
+          :data-testid="`report-returned-${r.o.id}`"
+          @click="reportReturned(r.o)"
+        >{{ returnBusy === r.o.id ? '回報中…' : '包裹被退回了' }}</button>
+        <p v-if="returnErr[r.o.id]" class="retErr" role="alert">{{ returnErr[r.o.id] }}</p>
+      </div>
+
       <!-- 「我要問一件事」。它跟上面那顆「我要申訴」是兩件事：申訴會凍結點數、
            要開箱影片、之後不能再確認收貨；這一顆不動錢，只開一張客服工單。
            所以它自成一列、長得也不一樣（虛線外框），而且**不分狀態**都給 ——
@@ -826,6 +977,11 @@ async function doDispute(o: Order) {
         <button type="button" class="btn sm ghost" @click="seedBuyer('completed')">+ 買家單・已完成</button>
         <button type="button" class="btn sm ghost" @click="seedBuyer('disputed')">+ 買家單・爭議中</button>
         <button type="button" class="btn sm ghost" @click="seedBuyer('shipped', true)">+ 買家單・超長名稱</button>
+        <!-- 退件的兩張。買家那張刻意造在 completed 上：那正是最難講清楚的一格
+             （錢已經放了、貨卻沒到），不造出來就沒有人看過兩個角標同時在的樣子。
+             賣家那張要 shipped，回報鍵在出貨後才出現。 -->
+        <button type="button" class="btn sm ghost" @click="seedBuyerReturned()">+ 買家單・已完成但退回</button>
+        <button type="button" class="btn sm ghost" @click="seedSellerShipped()">+ 賣家單・已寄出</button>
         <button type="button" class="btn sm ghost" @click="store.reset()">全部清除</button>
       </div>
     </section>
@@ -1031,6 +1187,56 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 .st.delivered, .st.escrowed, .st.shipped { color: var(--ink); }
 .st.disputed { background: var(--danger-wash); color: var(--danger); }
 .st.completed { background: var(--ok-wash); color: var(--ok); }
+/* 狀態欄可以疊兩個角標（已完成 ＋ 待重寄）。justify-items: end 讓它們
+   在右緣對齊，不會因為字數不同而參差 */
+.stCol { display: grid; gap: 4px; justify-items: end; }
+.st.ret { background: var(--warn-wash); color: var(--warn-ink); }
+
+/* ---- 包裹被退回 ----
+   用警示色而不是危險色：沒有人做錯事，但這件事推翻了這張卡上其他每一句話
+   的前提（貨在路上／已送達），所以它要比一般說明重。 */
+/* 不叫 .ret：那個名字已經被上面那顆「待重寄」角標（.st.ret）用掉了，
+   同名的話這一段的 padding 與底色會一起打到那顆角標上 */
+.retBox {
+  margin-top: 12px; padding: 12px;
+  background: var(--warn-wash); border-radius: var(--radius);
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+.retT { margin: 0 0 6px; font-size: 13px; font-weight: 700; color: var(--warn-ink); }
+.retB {
+  margin: 0 0 6px; font-size: 12px; line-height: 1.8; color: var(--muted);
+  /* 時間與長字串要收得住 —— 這一塊在 393px 上跟卡圖同一欄寬 */
+  overflow-wrap: anywhere;
+}
+.retB:last-child { margin-bottom: 0; }
+.retB b { color: var(--ink); font-weight: 600; }
+
+/* 賣家那顆回報鍵。虛線外框跟「複製全部」同一種語彙：可選的動作，不是主要流程 */
+.retAsk {
+  margin-top: 12px; padding: 11px 12px;
+  border: 1px dashed var(--line); border-radius: var(--radius);
+}
+.retAskB { margin: 0 0 10px; font-size: 12px; line-height: 1.8; color: var(--muted); overflow-wrap: anywhere; }
+.retAskB b { color: var(--ink); font-weight: 600; }
+.retErr { margin: 8px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--danger-ink); overflow-wrap: anywhere; }
+
+/* ---- 買家：聯絡賣家 ----
+   跟賣家那塊寄件依據（.send，左緣 accent）分開用 info 色，跟 .mine 同一族 ——
+   這一塊是買家的東西 */
+.ct {
+  margin-top: 12px; padding: 4px 12px 12px;
+  background: var(--surface-2); border-radius: var(--radius);
+  box-shadow: inset 2px 0 0 var(--info-ink);
+}
+.ctH { font-size: 13px; margin: 10px 0 0; color: var(--ink); }
+.ctCall {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 44px; padding: 11px 18px; margin-top: 6px;
+  border-radius: var(--pill); background: var(--accent-wash);
+  color: var(--accent); font-size: 13px; font-weight: 600; text-decoration: none;
+}
+.ctCall:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ctWhy { margin: 10px 0 0; font-size: 11.5px; line-height: 1.7; color: var(--muted); }
 
 .dl { border-radius: var(--radius); padding: 10px 12px; margin-top: 12px; background: var(--surface-2); }
 .dl.warn { box-shadow: inset 2px 0 0 var(--warn); }
