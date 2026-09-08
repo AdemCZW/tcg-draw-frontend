@@ -40,6 +40,7 @@ function toPool(p: Any): Pool {
   return {
     id: String(p.id), sellerId: String(p.sellerId),
     origin: (p.origin as Pool['origin']) ?? 'personal',
+    sellerTier: p.sellerTier as Pool['sellerTier'],
     title: String(p.title), cover: (p.cover as string) ?? '',
     mode: p.mode as Pool['mode'],
     shiteiTier: p.shiteiTier as Tier | undefined,

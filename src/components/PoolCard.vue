@@ -91,7 +91,7 @@ function onLeave() {
     <span class="scrim" aria-hidden="true"></span>
 
     <div class="mode-tag"><PoolModeBadge :mode="pool.mode" /></div>
-    <div class="origin-tag"><PoolOriginBadge :origin="pool.origin" /></div>
+    <div class="origin-tag"><PoolOriginBadge :origin="pool.origin" :tier="pool.sellerTier" /></div>
     <span v-if="tag" class="doneTag" :class="{ soon }">{{ tag }}</span>
 
     <div class="body">

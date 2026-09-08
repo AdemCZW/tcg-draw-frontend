@@ -44,7 +44,14 @@ export type Tier = 'A' | 'B' | 'C' | 'D' | 'LAST' | 'BUST'
  *  merchant  已驗證商家（統編／實體店）。款項托管到出貨 + 鑑賞期
  *  personal  個人賣家。托管期最長、單池總額有上限、需要保證金
  */
+/**
+ * 賣家自己申報的身分。**不是信任等級，也沒有經過驗證。**
+ * 申請端點只是把使用者勾的值存起來（routes/sellers.ts 的 zod enum），
+ * 而整個規則層（結算、鑑賞期、出貨時限、違約次數）一次都沒有讀過它。
+ * 要顯示信任程度請用 SellerTier。
+ */
 export type PoolOrigin = 'official' | 'merchant' | 'personal'
+
 
 export type PoolMode = 'classic' | 'shitei' | 'muteki'
 
@@ -76,9 +83,16 @@ export interface PoolPrize {
 
 /**
  * 賣家審核等級。平台不開放完全匿名上架 —— 這是多賣家市集最主要的詐騙防線。
- * - pending  已註冊未過審，只能建立草稿，不能開賣
- * - verified 已驗證身分（實名 + 金流帳戶），可開賣，單池上限較低
- * - trusted  長期履約良好，解除單池上限、可申請提前撥款
+ * 這是這張表上**唯一真的信任訊號**（origin 是自己申報的，見上面）。
+ * 但要照實記下目前實作到哪裡：
+ * - pending  審核中。**唯一有強制力的一級** —— routes/pools.ts 會擋住開池。
+ * - verified 客服審過身分文件。
+ * - trusted  客服標記為長期履約良好。
+ *
+ * ⚠️ verified 與 trusted 在後端的行為**完全相同**：兩者都只是客服在後台
+ * 標記的狀態，沒有任何一行程式碼因為它們而改變規則。這一段原本寫著
+ * 「單池上限較低」「解除單池上限、可申請提前撥款」—— 三項都沒有實作。
+ * 顯示給使用者看的文案不可以再依據它們宣稱保障差異。
  */
 export type SellerTier = 'pending' | 'verified' | 'trusted'
 
@@ -131,6 +145,8 @@ export interface Pool {
   id: string
   sellerId: string
   origin: PoolOrigin
+  /** 賣家的審核狀態。舊資料可能沒有，所以是選填 */
+  sellerTier?: SellerTier
   title: string
   cover: string
   mode: PoolMode

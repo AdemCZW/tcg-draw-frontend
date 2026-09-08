@@ -6,10 +6,14 @@ withDefaults(defineProps<{ seller: Seller; size?: 'sm' | 'md'; link?: boolean }>
   link: true
 })
 
+/* 用詞跟 PoolOriginBadge 對齊 —— 同一個欄位（sellers.tier）在兩個元件
+   長出兩套詞彙的話，使用者會以為那是兩件事。
+   「金牌賣家」改成「資深賣家」：金牌暗示品質評比，但這一級實際上只表示
+   客服看過他一段時間的紀錄，保障規則跟其他賣家完全相同。 */
 const tierMeta: Record<Seller['tier'], { label: string }> = {
   pending: { label: '待審核' },
-  verified: { label: '已驗證' },
-  trusted: { label: '金牌賣家' }
+  verified: { label: '已審核' },
+  trusted: { label: '資深賣家' }
 }
 </script>
 

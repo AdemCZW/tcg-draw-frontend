@@ -155,7 +155,7 @@ const sky3d = ref(!new URLSearchParams(location.search).has('nogl'))
      其餘的條件（來源、價位、賞值、玩法）講的都是「這一池是什麼」，
             跟賣到哪裡無關，所以一律吃 live。
 */
-type Cat = 'all' | 'upcoming' | 'official' | 'merchant' | 'personal'
+type Cat = 'all' | 'upcoming' | 'merchant' | 'personal'
   | 'hot' | 'cheap' | 'big' | 'special' | 'soldout' | 'revealed'
 const cat = ref<Cat>('all')
 
@@ -167,8 +167,12 @@ const MATCH: Record<Cat, (p: Pool) => boolean> = {
   /* 即將開賣自己一格。它不是「已結束」的一種，也不該只能靠「全部」翻到 ——
      願意等幾分鐘的買家（還有剛開完池的賣家）要有地方直接找到它。 */
   upcoming: isUpcoming,
-  // 來源分類：買家最常問的其實是「這池是誰開的」
-  official: p => live(p) && p.origin === 'official',
+  /* 來源分類：買家最常問的其實是「這池是誰開的」。
+     「官方池」那一格拿掉了 —— routes/sellers.ts 的申請端點只收
+     'merchant' | 'personal'，official 只有 seed 寫得進去，所以那一格
+     對真人開的池**永遠篩不出東西**。永遠空的分類等於一顆會騙人的按鈕。
+     （剩下兩格保留，但它們只是「賣家自己申報的身分」，不代表任何保障
+      差異 —— 保障對三種賣家完全相同，見 PoolOriginBadge 的說明。） */
   merchant: p => live(p) && p.origin === 'merchant',
   personal: p => live(p) && p.origin === 'personal',
   // 快完抽：剩不到三成。這是最有張力的狀態，排第一個
@@ -195,9 +199,8 @@ const MATCH: Record<Cat, (p: Pool) => boolean> = {
 const CATS: { k: Cat; label: string }[] = [
   { k: 'all', label: '全部' },
   { k: 'upcoming', label: '即將開賣' },
-  { k: 'official', label: '官方池' },
-  { k: 'merchant', label: '商家池' },
-  { k: 'personal', label: '個人池' },
+  { k: 'merchant', label: '商家開的' },
+  { k: 'personal', label: '個人開的' },
   { k: 'hot', label: '快完抽' },
   { k: 'big', label: '高額賞' },
   { k: 'cheap', label: '銅板價' },
@@ -452,10 +455,10 @@ const marketCount = computed(() =>
       <!-- 目錄的標頭整塊拿掉了。三個元素各自都是重複的：
              標題「全部抽選池」—— 下面就是一排分類膠囊加滿版格線，
                這是這一頁最後一區，不講也知道
-             「只看官方池」捷徑 —— 正下方的分類膠囊就有「官方池」那一顆，
-               同一個篩選條件在相隔 14px 的地方做了兩顆按鈕
-             保障文案 —— 同一句話在每一個官方池的來源徽章上都有
-               （PoolOriginBadge），寫在這裡等於對還沒看到任何官方池的人
+             「只看官方池」捷徑 —— 當時正下方的分類膠囊就有同一顆
+               （那一格後來也拿掉了：official 真人開不出來，永遠篩不到東西）
+             保障文案 —— 同一句話在每一池的賣家徽章上都有
+               （PoolOriginBadge），寫在這裡等於對還沒看到任何池的人
                先講一次，而真正需要它的時機是他正在看某一池的時候
            標題只留給讀屏：視覺上不需要，但文件結構需要一個標記
            「這一段是什麼」，不然鍵盤與讀屏使用者在這一頁會少一個地標。 -->

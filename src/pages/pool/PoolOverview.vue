@@ -47,7 +47,7 @@ const pct = computed(() => Math.round((props.pool.remainingTickets / props.pool.
              卡是這一頁的主角，規則細節在賣家頁與交易保護頁都查得到。 -->
         <div class="artTags">
           <PoolModeBadge :mode="pool.mode" />
-          <PoolOriginBadge :origin="pool.origin" />
+          <PoolOriginBadge :origin="pool.origin" :tier="pool.sellerTier" />
         </div>
         <Tilt3D :max="16" class="cover" :style="{ viewTransitionName: `pool-cover-${pool.id}` }">
           <CardArt :image="pool.cover" :alt="topPrize?.card.name ?? pool.title" :tier="topPrize?.tier" :art-id="topPrize?.card.artId" />

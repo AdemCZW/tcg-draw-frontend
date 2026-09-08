@@ -101,16 +101,17 @@ export const listings: Listing[] = [
 
 export const sellers: Seller[] = [
   {
-    /* 平台自營。官方池的賣家就是平台自己 —— 沒有托管，因為沒有第三方要防。 */
-    id: 's0', handle: 'vaultdraw', name: 'VaultDraw 官方', tier: 'trusted', avatarHue: 14,
+    /* 示範資料裡的「有一段出貨紀錄的賣家」。
+       注意：托管對所有賣家一視同仁，沒有誰是免托管的（見 EscrowNotice）。 */
+    id: 's0', handle: 'vaultdraw', name: 'VaultDraw 示範店', tier: 'trusted', avatarHue: 14,
     joinedAt: '2025-01-01', bio: '平台自營池。全數由 VaultDraw 進貨、鑑定、直接出貨，糾紛由平台全責處理。',
     stats: {
       poolsRun: 310, cardsShipped: 12480, avgShipDays: 1.2, disputeRate: 0.05,
       advertisedTopRate: 3.0, actualTopRate: 3.0, drawsSettled: 24600
     },
     pastPrizes: [
-      { cardName: '噴火龍 ex UR', artId: 'SV4a-349', tier: 'A', poolTitle: '官方旗艦場 #58', wonAt: '2026-08-10', winner: 'VD-A2**' },
-      { cardName: '太樂巴戈斯 ex UR', artId: 'SV8a-237', tier: 'LAST', poolTitle: '官方旗艦場 #55', wonAt: '2026-07-26', winner: 'VD-77**' }
+      { cardName: '噴火龍 ex UR', artId: 'SV4a-349', tier: 'A', poolTitle: '旗艦場 #58', wonAt: '2026-08-10', winner: 'VD-A2**' },
+      { cardName: '太樂巴戈斯 ex UR', artId: 'SV8a-237', tier: 'LAST', poolTitle: '旗艦場 #55', wonAt: '2026-07-26', winner: 'VD-77**' }
     ]
   },
   {
@@ -206,13 +207,19 @@ const escrowOf = (sold: number, price: number, released = 0): Escrow => ({
 
 export const pools: Pool[] = [
   {
-    /* 官方旗艦池：平台自營、直接出貨，沒有托管期。
-       獎項規格刻意做得比商家池好一階 —— 官方池的角色是「基準線」，
+    /* 旗艦池：示範資料裡票價最高、獎項最好的那一池。
+       （原本寫「平台自營、直接出貨、沒有托管期」—— 那是假的，
+        托管對所有賣家一視同仁。）
+       獎項規格刻意做得好一階，當示範資料裡的「基準線」，
        讓買家知道這個平台的池應該長什麼樣。 */
     sellerId: 's0',
-    origin: 'official',
+    /* 原本標成平台自營。真人開不出那一級 —— routes/sellers.ts 的申請端點
+       只收商家與個人兩個值 —— 示範資料留著它等於在展示一個線上永遠
+       不會出現的狀態，而且它連帶掛著一句「不需要托管」的假保障。 */
+    origin: 'merchant',
+    sellerTier: 'trusted',
     id: 'p12',
-    title: '官方旗艦場 #59 · 閃色寶藏 精選',
+    title: '旗艦場 #59 · 閃色寶藏 精選',
     cover: ph(14),
     mode: 'classic',
     ticketPrice: 1280,
@@ -234,11 +241,15 @@ export const pools: Pool[] = [
     ]
   },
   {
-    /* 官方的銅板池：低門檻讓新使用者第一次抽有個安全的地方 */
+    /* 銅板池：低門檻，讓新使用者第一次抽有個便宜的地方 */
     sellerId: 's0',
-    origin: 'official',
+    /* 原本標成平台自營。真人開不出那一級 —— routes/sellers.ts 的申請端點
+       只收商家與個人兩個值 —— 示範資料留著它等於在展示一個線上永遠
+       不會出現的狀態，而且它連帶掛著一句「不需要托管」的假保障。 */
+    origin: 'merchant',
+    sellerTier: 'trusted',
     id: 'p13',
-    title: '官方入門場 · 一百點開一張',
+    title: '入門場 · 一百點開一張',
     cover: ph(200),
     mode: 'classic',
     ticketPrice: 100,
@@ -261,6 +272,7 @@ export const pools: Pool[] = [
   {
     sellerId: 's1',
     origin: 'merchant',
+    sellerTier: 'trusted',
     id: 'p1',
     title: '朱紫 SAR 精選 第 1 彈',
     cover: ph(28),
@@ -290,6 +302,7 @@ export const pools: Pool[] = [
   {
     sellerId: 's2',
     origin: 'personal',
+    sellerTier: 'verified',
     id: 'p2',
     title: '經典促販卡 大亂鬥',
     cover: ph(260),
@@ -315,6 +328,7 @@ export const pools: Pool[] = [
   {
     sellerId: 's3',
     origin: 'merchant',
+    sellerTier: 'verified',
     id: 'p3',
     title: '莉莉艾 無敵賞（已完抽）',
     cover: ph(340),
@@ -340,6 +354,7 @@ export const pools: Pool[] = [
   {
     sellerId: 's2',
     origin: 'personal',
+    sellerTier: 'verified',
     id: 'p4',
     title: '皮卡丘 指定賞挑戰',
     cover: ph(48),
@@ -371,6 +386,7 @@ export const pools: Pool[] = [
   {
     sellerId: 's1',
     origin: 'merchant',
+    sellerTier: 'trusted',
     id: 'p5',
     title: '莉莉艾 二選一對決',
     cover: ph(340),
@@ -399,6 +415,7 @@ export const pools: Pool[] = [
        每支籤都保底給卡，最低的普卡值 16 元，仍佔票價的 46%。 */
     sellerId: 's2',
     origin: 'personal',
+    sellerTier: 'verified',
     id: 'p8',
     title: '銅板入門賞 · 銅板價開一張',
     cover: ph(110),
@@ -477,6 +494,7 @@ export const pools: Pool[] = [
     /* 關都卡舖的已完抽池：賣家頁要有「過去的池」才看得出經營時間。 */
     sellerId: 's3',
     origin: 'merchant',
+    sellerTier: 'verified',
     id: 'p11',
     title: '關都精選 夏季場（已完抽）',
     cover: ph(140),
@@ -504,6 +522,7 @@ export const pools: Pool[] = [
        獎品總值 7,980 ÷ 票收 9,000 = 88.7%。 */
     sellerId: 's2',
     origin: 'personal',
+    sellerTier: 'verified',
     id: 'p14',
     title: '促販卡 大亂鬥 第 7 回',
     cover: ph(260),
@@ -531,6 +550,7 @@ export const pools: Pool[] = [
        獎品總值 75,120 ÷ 票收 87,500 = 85.9%。 */
     sellerId: 's3',
     origin: 'merchant',
+    sellerTier: 'verified',
     id: 'p15',
     title: '關都精選 · 伊布家族 250 抽',
     cover: ph(140),

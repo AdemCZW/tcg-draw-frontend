@@ -78,6 +78,10 @@ function toPublic(p: Row, prizes: Row[], taken: number[], publicTaken: number) {
   const revealed = p.status === 'revealed'
   return {
     id: p.id, sellerId: p.seller_id, sellerName: p.seller_name, origin: p.origin,
+    /* 賣家的審核狀態。origin（官方／商家／個人）是申請時**自己勾的**，
+       後端從來沒有驗過它，規則層也一次都沒讀過它 —— 拿它當信任訊號是錯的。
+       tier 才是客服實際審過的結果，所以要一起帶出去，讓前端有真東西可以顯示。 */
+    sellerTier: p.seller_tier,
     mode: p.mode, title: p.title,
     coverFileId: p.cover_file_id, cover: '',
     ticketPrice: Number(p.ticket_price), totalTickets: Number(p.total_tickets),
@@ -129,7 +133,8 @@ function toPublic(p: Row, prizes: Row[], taken: number[], publicTaken: number) {
 
 async function loadPublic(id: string) {
   const [p] = await sql`
-    select p.*, s.origin, s.name as seller_name from pools p join sellers s on s.id = p.seller_id where p.id = ${id}
+    select p.*, s.origin, s.tier as seller_tier, s.name as seller_name
+      from pools p join sellers s on s.id = p.seller_id where p.id = ${id}
   `
   if (!p) return null
   /* 各賞別的剩餘數同樣排除賣家自抽 —— 「A 賞還剩 1 張」是玩家決定要不要跟進

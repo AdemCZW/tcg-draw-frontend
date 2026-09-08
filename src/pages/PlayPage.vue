@@ -188,7 +188,7 @@ const pct = computed(() => {
       <aside v-if="activePool" :key="switchKey" class="panel">
         <div class="tags">
           <PoolModeBadge :mode="activePool.mode" />
-          <PoolOriginBadge :origin="activePool.origin" />
+          <PoolOriginBadge :origin="activePool.origin" :tier="activePool.sellerTier" />
         </div>
 
         <h2>{{ activePool.title }}</h2>
