@@ -91,6 +91,12 @@ export type ClosedBy =
   | 'buyer-confirm' | 'auto-release' | 'ship-timeout'
   | 'delivery-timeout' | 'dispute-buyer' | 'dispute-seller'
 
+/** 賣家自己填的對外聯絡方式。跟 users.phone（物流用的個資）刻意分開 */
+export interface SellerContact {
+  kind: 'phone' | 'line' | 'other'
+  value: string
+}
+
 export interface Order {
   id: string
   listingId: string
@@ -114,6 +120,14 @@ export interface Order {
   disputeReason?: string
   hasUnboxingVideo?: boolean
   closedBy?: ClosedBy
+  /**
+   * 賣家回報「包裹被退回」的時間戳。
+   * **不改變訂單狀態、不影響任何時限** —— 結案規則刻意不動。
+   * 有值代表這一筆的實體還沒真的交到買家手上，雙方要自己安排重寄。
+   */
+  returnedAt?: number
+  /** 賣家的對外聯絡方式。**只有買家視角看得到**，而且不限訂單狀態 */
+  sellerContact?: SellerContact
 }
 
 /**

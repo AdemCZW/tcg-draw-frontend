@@ -883,6 +883,28 @@ pub.post('/listings', requireAuth, async c => {
   }
   const { prizeId, price } = parsed.data
   const r = await sql.begin(async tx => {
+    /* ── 上架前必須先留下聯絡方式 ────────────────────────────────────
+       買家沒去取貨、包裹退回賣家手上時，產品上的決定是交給雙方自己談。
+       但那條路現在只有一半：賣家看得到買家的姓名電話地址（出貨必要），
+       買家看得到的只有賣家的名字與統計 —— 沒有電話、沒有 LINE、
+       站上也沒有私訊。「自己去談」在買家那一側根本開不了口。
+
+       擋在**上架**這一步，跟買家那道 NEED_ADDRESS 擋在建單同一個道理：
+       等到出事才要人補，另一方已經在等了。上架是賣家最後一個
+       「還沒有人受影響」的時刻。
+
+       只擋需要人聯絡的情況？不 —— 兩種交付都擋。庫內轉移雖然賣家不用寄，
+       但買家之後申請出貨、原賣家不出貨時，一樣要找得到人。 */
+    const [sc] = await tx`select contact_value from sellers where id = ${me}`
+    if (!sc || !String(sc.contact_value ?? '').trim()) {
+      return {
+        error: 'NEED_CONTACT',
+        message: '上架前請先在賣家設定填一個買家聯絡得到你的方式（手機或 LINE ID）。'
+          + '包裹被退回、買家有疑問時，他需要找得到你。',
+        status: 409
+      }
+    }
+
     const [pz] = await tx`select * from prizes where id = ${prizeId} and user_id = ${me} for update`
     if (!pz) return { error: 'NOT_FOUND', message: '找不到這張卡', status: 404 }
     /* 保管中 → 庫內轉移（實體還在開池賣家那，成交只是改登記）；

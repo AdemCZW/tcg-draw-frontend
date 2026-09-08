@@ -49,14 +49,28 @@ orders.get('/', async c => {
        撈回來再過濾 —— 過濾寫在應用層的話，任何一個忘了濾的新欄位都會
        把個資送出去。 */
     const canShip = sql`o.seller_id = ${me} and o.status in ('escrowed','shipped','delivered','disputed')`
+    /* 賣家的聯絡方式給**買家**看，方向跟上面那五欄相反。
+       條件只有「我是這筆的買家」，**不限狀態** —— 這一欄最需要的時機
+       正好是訂單已經結案之後：包裹被退回、買家要找賣家安排重寄。
+       結案就收回去的話，那條路剛好在需要它的時候斷掉。
+
+       這不是個資外洩：sellers.contact_value 是賣家為了對外聯絡自己填的，
+       跟 users.phone（物流用的個資、從不對外）刻意分成兩欄存。 */
+    const canSeeSeller = sql`o.buyer_id = ${me}`
     const rows = await tx`
       select o.*,
              case when ${canShip} then b.real_name     end as ship_name,
              case when ${canShip} then b.phone         end as ship_phone,
              case when ${canShip} then b.address_zip   end as ship_zip,
              case when ${canShip} then b.address_city  end as ship_city,
-             case when ${canShip} then b.address_line1 end as ship_line1
-        from orders o join users b on b.id = o.buyer_id
+             case when ${canShip} then b.address_line1 end as ship_line1,
+             case when ${canSeeSeller} then s.contact_kind  end as seller_contact_kind,
+             case when ${canSeeSeller} then s.contact_value end as seller_contact_value
+        from orders o
+        join users b on b.id = o.buyer_id
+        /* left join：賣家在 sellers 表裡不一定有列（舊資料、或賣家身分
+           被移除過）。inner join 會讓那幾筆訂單整個從清單上消失。 */
+        left join sellers s on s.id = o.seller_id
        where o.buyer_id = ${me} or o.seller_id = ${me}
        order by o.created_at desc
     `
@@ -529,6 +543,63 @@ orders.post('/:id/dispute', async c => {
      它不會 reject，所以不需要 catch。 */
   await openDisputeTicket(r.order.id)
   return c.json({ ...r, wallet: await walletOf(me) })
+})
+
+/**
+ * POST /orders/:id/returned —— 賣家回報「包裹被退回來了」。
+ *
+ * ── 為什麼需要這一支 ────────────────────────────────────────────────
+ * 買家沒去超商取貨，包裹退回賣家手上。系統看到的跟「買家收到了卻裝死」
+ * 一模一樣，都是「買家沒動作」，於是照樣視同送達、照樣自動放款。
+ * 結果是賣家同時拿到卡跟錢，而買家連自己發生了什麼事都不知道。
+ *
+ * ── 這一支**不改變任何結案規則** ────────────────────────────────────
+ * 產品上的決定是：交付與否交給買賣雙方自己談，平台不介入，
+ * 點數照常釋放（買家沒去領確實是買家的責任，賣家已經提出給付）。
+ * 所以這裡刻意**不動 status、不動任何時限**，只寫一個時間戳。
+ *
+ * 它換到的是兩件現在完全沒有的東西：
+ *   1. 買家知道發生了什麼事（下面那則通知，帶著賣家的聯絡方式）
+ *   2. 訂單上留下「這一筆還沒真的交付」的紀錄，義務看得見
+ *
+ * ── 為什麼誠實的賣家會想按 ──────────────────────────────────────────
+ * 他不按也照樣拿得到錢，所以這顆按鈕必須是「對他有利」而不是「他該做的」。
+ * 它對他的價值是：留下一筆平台紀錄，證明貨是他寄的、是買家沒領。
+ * 買家事後申訴時那是他唯一的證據；什麼都沒按的賣家在爭議裡是空手的。
+ */
+orders.post('/:id/returned', async c => {
+  const me = c.get('userId')
+  const r = await sql.begin(async tx => {
+    const [row] = await tx`select * from orders where id = ${c.req.param('id')} for update`
+    if (!row) return fail('WRONG_STATE', '找不到這張訂單', 404)
+    const o = toOrder(row as Record<string, unknown>)
+    /* 只有賣家能按 —— 包裹退到誰手上，只有他知道。
+       回 404 不是 403：讓別人用試的問出「這張訂單存在」沒有意義。 */
+    if (o.sellerId !== me) return fail('WRONG_STATE', '找不到這張訂單', 404)
+    /* 還沒出貨就沒有東西可以被退回。這一條擋的是誤按，不是攻擊 ——
+       真的按下去也只是寫一個時間戳，不會動到錢。 */
+    if (o.status === 'escrowed') return fail('WRONG_STATE', '這張訂單還沒出貨')
+    /* 重複回報不是錯誤，直接回現況。掃描與使用者可能同時到，
+       而這一支本來就是冪等的（只寫一個時間戳）。 */
+    if (o.returnedAt) return { order: o, already: true }
+
+    const now = Date.now()
+    await tx`update orders set returned_at = ${now} where id = ${o.id}`
+
+    /* 通知買家。內文**不帶賣家的聯絡方式** —— 通知會進鈴鐺、進推播，
+       那是會被轉發、被截圖的地方。聯絡方式放在訂單頁上，
+       要看的人自己點進去，而那一頁本來就只有他看得到。 */
+    await notify({
+      userId: o.buyerId, kind: 'order',
+      title: '你的包裹被退回賣家了',
+      body: `「${o.card.name}」沒有在期限內被領取，已經退回賣家手上。`
+        + '請到訂單頁跟賣家聯絡安排重寄 —— 重寄的運費通常由買家負擔。',
+      link: '/me/orders', refId: 'returned:' + o.id
+    }, tx)
+    return { order: { ...o, returnedAt: now }, already: false }
+  })
+  if ('error' in r) return c.json(r, r.status as 403 | 404 | 409)
+  return c.json(r)
 })
 
 /**

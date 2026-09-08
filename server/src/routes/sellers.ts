@@ -31,7 +31,11 @@ sellers.get('/me', async c => {
     /* default_count（逾期未出貨的次數）要給賣家自己看得到 ——
        它會直接決定「還能不能開新池」，看不到的話賣家只會在建池時
        撞到一個沒有預警的 403 */
-    select id, handle, name, origin, tier, bio, joined_at, default_count
+    select id, handle, name, origin, tier, bio, joined_at, default_count,
+           /* 賣家自己的聯絡方式。要回給他自己看 —— 上架前必填（見
+              routes/public.ts 的 NEED_CONTACT），沒有這兩欄前端就無法
+              在被擋下來之前先提醒他，只能等 409 才知道。 */
+           contact_kind, contact_value
       from sellers where id = ${c.get('userId')}
   `
   if (!s) return c.json({ seller: null })
@@ -40,6 +44,53 @@ sellers.get('/me', async c => {
     where seller_id = ${s.id} order by created_at desc limit 1
   `
   return c.json({ seller: s, verification: v ?? null })
+})
+
+/**
+ * 賣家的對外聯絡方式。
+ *
+ * ── 為什麼這是「對外資訊」不是個資欄位 ──────────────────────────────
+ * 這一欄**會被揭露給有訂單關係的買家**，而且是賣家自己主動填的、
+ * 知道它會被看到。它跟 users.phone 不一樣 —— 那一欄是物流聯絡用的個資，
+ * 從來不對外。兩者刻意分開存，就是為了不讓「拿去寄件」的號碼被
+ * 順手拿去公開。賣家想填同一支是他的選擇，但那要是他自己打進來的。
+ *
+ * 為什麼是上架前必填：買家沒去取貨、包裹退回賣家手上時，產品上的決定是
+ * 交給雙方自己談。但買家那一側現在完全沒有聯絡管道（站上也沒有私訊），
+ * 「自己去談」在他那邊開不了口。這一欄就是那條路的前提。
+ */
+const CONTACT_KIND = ['phone', 'line', 'other'] as const
+const Contact = z.object({
+  kind: z.enum(CONTACT_KIND),
+  /* 上限 64 對齊 migration 041 的說明。不驗格式 —— LINE ID 的規則沒有
+     公開的權威定義，而把合法的 ID 擋下來比放進一個怪字串更糟：
+     真正會發現填錯的是聯絡不上的買家，那時候賣家自己會來改。
+     手機那一種給一個寬鬆的提示性檢查就好。 */
+  value: z.string().trim().min(3, '聯絡方式太短').max(64, '聯絡方式最多 64 個字')
+})
+
+/**
+ * PUT /sellers/me/contact —— 填或改對外聯絡方式。
+ *
+ * 獨立一支而不是塞進 /apply：/apply 是「成為賣家」的一次性動作，
+ * 而聯絡方式是會改的（換號碼、改用 LINE）。塞在一起的話賣家為了改一個
+ * 電話要重送整份申請，而那支的重送路徑是「補件」，語意完全不同。
+ */
+sellers.put('/me/contact', async c => {
+  const me = c.get('userId')
+  const parsed = Contact.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) {
+    return c.json({ error: 'BAD_REQUEST', message: parsed.error.issues[0]?.message ?? '參數不合法' }, 400)
+  }
+  const { kind, value } = parsed.data
+  const done = await sql`
+    update sellers set contact_kind = ${kind}, contact_value = ${value}
+     where id = ${me} returning id
+  `
+  if (!done.length) {
+    return c.json({ error: 'NOT_SELLER', message: '你還不是賣家，請先送出賣家申請' }, 404)
+  }
+  return c.json({ ok: true, contactKind: kind, contactValue: value })
 })
 
 const Apply = z.object({

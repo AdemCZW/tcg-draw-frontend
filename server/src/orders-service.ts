@@ -36,6 +36,21 @@ export function toOrder(r: Row): Order {
     disputeReason: (r.dispute_reason as string) ?? undefined,
     hasUnboxingVideo: (r.has_unboxing_video as boolean) ?? undefined,
     closedBy: (r.closed_by as Order['closedBy']) ?? undefined,
+    /* 賣家回報「包裹被退回」的時間。**不改變訂單狀態，也不影響任何時限** ——
+       結案規則刻意不動（產品決定：交付與否交給雙方自己談）。
+       它的用途只有兩個：讓買家知道發生了什麼事，以及在訂單上留下
+       「這一筆還沒真的交付」的紀錄。 */
+    returnedAt: r.returned_at == null ? undefined : Number(r.returned_at),
+    /* 賣家的對外聯絡方式，只有買家視角才有值（見 routes/orders.ts 的
+       canSeeSeller）。跟 ship 一樣，權限判斷在 SQL 那一層做完了。 */
+    ...(r.seller_contact_value
+      ? {
+          sellerContact: {
+            kind: (r.seller_contact_kind as 'phone' | 'line' | 'other') ?? 'other',
+            value: r.seller_contact_value as string
+          }
+        }
+      : {}),
     /* 收件資訊：只有賣家視角、訂單還開著時才會有值（見 routes/orders.ts
        的 canShip）。這裡不做任何權限判斷 —— 判斷在 SQL 那一層做完了，
        在這裡再判一次等於讓同一條規則有兩個來源。
