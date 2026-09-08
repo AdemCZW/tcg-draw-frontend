@@ -21,7 +21,7 @@ import { api, MOCK } from '@/lib/api'
 /* 直接用傳輸層而不是 api.ts 的方法：這一輪這條線只擁有這一頁，
    api.ts 不歸它動（見 docs/open-issues.md D-2 的分工）。之後要把這支
    收編進 api.ts 的話，位置在 getListing 旁邊。 */
-import { http } from '@/lib/http'
+import { ApiError, http } from '@/lib/http'
 import { deliveryOf } from '@/shared/domain'
 import type { Listing, Seller } from '@/types/models'
 import { useWalletStore } from '@/stores/wallet'
@@ -126,6 +126,10 @@ onMounted(async () => {
 const confirming = ref(false)
 const busy = ref(false)
 const error = ref('')
+/* 「這次的失敗是因為沒填收件地址」。跟 error 分開一個旗標，是因為錯誤訊息
+   是要顯示的文字，而這個是要決定畫面上多不多一條出口的**判斷**，
+   兩者混在一起就會變成比對字串（文案一改就失效）。 */
+const needAddress = ref(false)
 /** 成交後停在哪一種結果。兩條通道的下一步不同，所以要分得出來 */
 const done = ref<'vault' | 'ship' | null>(null)
 
@@ -196,6 +200,7 @@ async function buy() {
   if (!l || busy.value) return
   busy.value = true
   error.value = ''
+  needAddress.value = false
   try {
     const bought = await api.buyListing(l.id)
 
@@ -226,6 +231,12 @@ async function buy() {
     await revealResult()
   } catch (e) {
     error.value = e instanceof Error ? e.message : '購買失敗'
+    /* 沒填收件地址（NEED_ADDRESS）不是一般的失敗 —— 它有一個明確、
+       使用者做得到的下一步。只丟一句錯誤訊息的話，他得自己想到那個欄位
+       在「個人資料」裡，而這一頁到那一頁沒有任何路。所以另外立一個旗標，
+       樣板據它多給一條連結。
+       用 ApiError.code 判斷而不是比對訊息字串：文案改了判斷就會失效。 */
+    needAddress.value = e instanceof ApiError && e.code === 'NEED_ADDRESS'
     // 被別人先買走了：把畫面改成已售出，不要讓他一直按同一顆會失敗的鍵
     if (String(error.value).includes('sold')) listing.value = { ...l, status: 'sold' }
     confirming.value = false
@@ -446,7 +457,14 @@ async function delist() {
         </p>
       </div>
 
-      <p v-if="error" class="err" role="alert">{{ error }}</p>
+      <p v-if="error" class="err" role="alert">
+        {{ error }}
+        <!-- 缺地址是唯一一種「錯誤訊息本身就該附帶出口」的失敗：
+             使用者知道要做什麼，但不知道在哪裡做。 -->
+        <RouterLink v-if="needAddress" :to="{ name: 'profile' }" class="errGo">
+          去填收件地址
+        </RouterLink>
+      </p>
 
       <!-- 成交／下架之後，這條列不消失，就地換成結果列。
            原本 `!done` 把整條移除，畫面上唯一的變化就是「按鈕不見了」——
@@ -705,6 +723,13 @@ async function delist() {
   margin: 14px 0 0; padding: 11px 14px; border-radius: var(--radius);
   background: var(--danger-wash); color: var(--danger-ink);
   font-size: 13px; font-weight: 600;
+}
+/* 錯誤訊息裡的出口。另起一行而不是接在句子後面：兩欄格線下接在後面會
+   被擠成孤字，而且它是要按的東西，需要自己的觸控區。 */
+.errGo {
+  display: inline-flex; align-items: center; min-height: 44px;
+  margin-top: 2px; font-weight: 700; color: inherit;
+  text-decoration: underline; text-underline-offset: 3px;
 }
 
 .bar {

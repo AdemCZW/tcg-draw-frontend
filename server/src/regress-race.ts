@@ -107,6 +107,13 @@ async function login(handle: string, name: string) {
     body: JSON.stringify({ handle, name })
   })
   if (r.status !== 200) throw new Error(`login ${handle}: ${r.status} ${r.text}`)
+  /* routes/orders.ts 的 POST /orders 在建單前有一道 NEED_ADDRESS 閘：需寄送的
+     成交，買家沒填收件地址就不建單（不然賣家的 72 小時時鐘會為一個他拿不到
+     地址的義務開始跑）。這支測的不是收件資料，所以在登入這一步順手補齊 ——
+     少了它，每一筆需寄送的購買都會停在 409，而失敗的原因跟本檔要驗的東西無關。 */
+  await sql`update users set real_name = ${name}, phone = '0900000000',
+              address_zip = '100', address_city = '測試市', address_line1 = '測試路 1 號'
+            where handle = ${handle}`
   return r.body.token as string
 }
 

@@ -16,7 +16,7 @@ import { notify } from '../notify.js'
 import { lockSpender, walletOf } from '../money.js'
 import { PLATFORM_ID, depositFor, save, settle, sweep, toOrder } from '../orders-service.js'
 import { DAY, actionsFor, validateTracking } from '../shared/escrow.js'
-import { STASH_DAYS } from '../pools-service.js'
+import { STASH_DAYS, addressReady } from '../pools-service.js'
 import { openDisputeTicket } from '../tickets.js'
 import type { Order } from '../shared/domain.js'
 
@@ -174,6 +174,32 @@ orders.post('/', async c => {
     const seller = l.seller_id as string
     const isShip = l.delivery !== 'vault'
 
+    /* ── 需寄送的訂單：買家沒填收件地址就不建單 ──────────────────────
+       擋在**建單這一步**，而不是成交之後再提醒買家去補，理由是懲罰會落
+       在誰身上：建單的同一刻賣家的 72 小時出貨時鐘就開始跑（下面那則
+       'order' 通知就是時限的起點），而賣家頁（routes/sellers.ts 的
+       /settlements）只會顯示「買家還沒填收件資料」—— 他有義務、有罰則，
+       卻拿不到寄件地址。逾期是平台自己製造的、對方無法履行的違約。
+       事後提醒買家補件也救不了：買家可能三天都沒上線。
+       所以建單前是唯一一個「不會讓無辜的賣家被罰」的位置。
+       （pools-service.ts 的 sweepStashExpiry 對自動出貨也是同一個選擇：
+        沒地址就不建出貨單。）
+
+       判斷用共用的 addressReady 片段，不要在這裡重寫一份條件 ——
+       兩份條件遲早會分岔成「市場放你過、自動出貨卻撈不到你」。
+
+       位置在**扣款與鎖定之前**：lockSpender 之後才擋的話，這筆交易已經
+       握著雙方的帳戶列，白白讓別人的購買排隊等一個注定要 rollback 的交易。 */
+    if (isShip) {
+      const [ok] = await tx`select ${addressReady} as ready from users u where u.id = ${me}`
+      if (!ok?.ready) {
+        return fail(
+          'NEED_ADDRESS',
+          '這張卡需要寄送，但你還沒填收件地址。請先到「個人資料」填好收件人、電話與地址再回來購買。'
+        )
+      }
+    }
+
     /* ── 保證金也要先問賣家有沒有這筆錢 ──────────────────────────────
        需寄送的訂單會把 depositFor() 算出來的保證金寫進 orders.deposit，
        而 money.ts 的 walletOf 把賣家進行中訂單的 deposit 算進 locked。
@@ -284,6 +310,19 @@ orders.post('/', async c => {
         body: `「${(l.card as { name?: string }).name ?? '卡片'}」以 ${price.toLocaleString('zh-TW')} 點成交，點數已入帳。`,
         link: '/me/wallet', refId: listingId
       }, tx)
+      /* 買家也要收到一則。在這之前買下庫內掛單是全站唯一一個「動了錢卻
+         連鈴鐺都不響」的動作 —— 沒有訂單、沒有出貨、頁面跳走之後就沒有
+         任何痕跡，買家事後只能自己去卡冊裡數卡片。
+         refId 同樣用 listingId：唯一索引是 (user_id, kind, ref_id)，
+         買家跟賣家是不同的 user_id，共用同一個 refId 不會互相蓋掉，
+         而重送同一筆購買（冪等鍵重放）也只會留下一則。 */
+      await notify({
+        userId: me, kind: 'listing-sold',
+        title: '買到了，卡片已經在你的卡冊裡',
+        body: `「${(l.card as { name?: string }).name ?? '卡片'}」以 ${price.toLocaleString('zh-TW')} 點成交。`
+          + '這是庫內轉移，實體卡仍由平台保管，之後可以隨時申請出貨或再上架。',
+        link: '/me/cards', refId: listingId
+      }, tx)
       /* 回傳過戶到手的那張卡的 id：買家會被導去卡冊，卡冊要靠它把
          「剛買到的是這張」標出來。少了它，買家在一整面卡裡認不出多了哪一張。 */
       return { order: null, stashId: String(l.prize_id) }
@@ -308,6 +347,25 @@ orders.post('/', async c => {
       userId: l.seller_id as string, kind: 'order',
       title: '有人買了你的卡，該出貨了',
       body: `「${(l.card as { name?: string }).name ?? '卡片'}」以 ${price.toLocaleString('zh-TW')} 點成交，請在 72 小時內寄出並填單號。`,
+      /* 指向 /seller/shipping（「出貨與結算」）而不是 /me/orders：收件資訊
+         與出貨按鈕都只在那一頁，/me/orders 是買家視角的訂單列表。照通知
+         點進去卻看不到要寄去哪，賣家就會以為系統壞了而乾脆不動 ——
+         而時鐘還在跑。（routes/prizes.ts 的「有買家申請出貨了」早就是這個連結。）
+         同一檔案上面那則「你的卡賣出了」維持 /me/wallet：庫內轉移沒有出貨
+         義務，那則講的是入帳不是出貨。 */
+      link: '/seller/shipping', refId: id
+    }, tx)
+    /* 買家端的第一則憑據。訂單是託管的 —— 錢已經離開買家的可動用額度、
+       但要等他確認收到才會給賣家，這件事沒有人告訴他就等於憑空消失。
+       順便講清楚他接下來要做什麼（收到卡要回來確認），不然託管會一直卡著。
+       refId 用訂單 id，跟賣家那則同一格（user_id 不同，不會互蓋）。
+       body 不放地址：那是個資，通知內文會進鈴鐺、進推播，不該帶。 */
+    await notify({
+      userId: me, kind: 'order',
+      title: '訂單成立，等賣家寄出',
+      body: `「${(l.card as { name?: string }).name ?? '卡片'}」以 ${price.toLocaleString('zh-TW')} 點成交，`
+        + '點數已進入平台託管。賣家會在 72 小時內寄出並填上單號，'
+        + '收到卡片後請回訂單頁按「確認收到」，款項才會撥給賣家。',
       link: '/me/orders', refId: id
     }, tx)
     return { order: toOrder(row as Record<string, unknown>) }

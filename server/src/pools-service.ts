@@ -588,8 +588,12 @@ const SHIP_MAX_PER_SHIPMENT = 50
  * zip 選填），寫成 SQL 片段是為了讓「撈可以自動出貨的」與「撈缺地址的」
  * 是同一條規則的正反面 —— 兩邊各寫一次的話，某天改了其中一邊，就會有一批
  * 卡兩邊都撈不到，永遠卡在到期狀態而且沒有人收到任何通知。
+ *
+ * 導出給 routes/orders.ts 用：需寄送的市場成交在建單前要擋掉沒地址的買家，
+ * 那道閘問的是同一個問題（「這個人現在寄得出去嗎」）。同一個問題有兩份答案
+ * 的話，會出現「市場放你過、自動出貨卻撈不到你」這種兩邊都自認正確的狀態。
  */
-const addressReady = sqlRoot`
+export const addressReady = sqlRoot`
   btrim(coalesce(u.real_name, ''))     <> ''
   and length(btrim(coalesce(u.phone, ''))) >= 8
   and btrim(coalesce(u.address_line1, '')) <> ''
