@@ -1698,8 +1698,8 @@ export const trainerCardApi = {
    跟工單、客服、訓練家卡那幾段同一個理由獨立成一個物件：這個檔案同時有
    多支 agent 在動，附加一整塊比插進既有物件安全。
 
-   **這裡刻意只包 GET /v1/monitor（唯讀那一支）。** 後端另有
-   POST /v1/monitor/run，跑完會照常發通知給每一位管理員 —— 管理員手動
+   **這裡刻意只包 GET /v1/admin/monitor（唯讀那一支）。** 後端另有
+   POST /v1/admin/monitor/run，跑完會照常發通知給每一位管理員 —— 管理員手動
    看一眼現況不該灌爆所有人的鈴鐺，所以那支不在前端的 API 面上出現：
    沒有函式，按鈕就不會有人「順手」接上去。
 ================================================================== */
@@ -1764,7 +1764,7 @@ export const monitorApi = {
     const r = await http<{
       at?: unknown; checked?: unknown[]
       findings?: Any[]; errors?: Any[]
-    }>('/v1/monitor')
+    }>('/v1/admin/monitor')
     return {
       at: Number(r.at) || Date.now(),
       checked: (r.checked ?? []).map(String),
