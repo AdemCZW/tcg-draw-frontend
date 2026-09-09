@@ -457,12 +457,28 @@ const shown = computed(() => listings.value.filter(l => l.status === 'live'))
    功能要避免的那種「看起來很合理的錯數字」。 */
 const hints = ref<{ label: string; n: number; clear: () => void }[]>([])
 let hintGen = 0
+/**
+ * 診斷還在飛。
+ *
+ * 沒有這個旗標時，hints 是空陣列有兩種完全不同的意思：「還沒問完」與
+ * 「問完了，一條都放寬不了」。畫面把兩者都畫成後者，於是使用者在請求
+ * 回來之前就先被告知「單獨拿掉任何一個都還是 0 件」——那是還沒查證的結論。
+ * 更糟的是全部請求都失敗（catch 吞掉）時 hints 永遠是空的，那句假結論
+ * 就永久留在畫面上，而我們其實什麼都不知道。
+ */
+const diagnosing = ref(false)
+/** 這一輪診斷是不是整組都問不到。true 時不講任何放寬建議的結論 */
+const diagFailed = ref(false)
 
 async function diagnose() {
   const my = ++hintGen
   const cs = conds.value
   // 只有一個條件時不必問：擋掉結果的就是它，畫面直接講出來
   if (cs.length < 2) { hints.value = []; return }
+  /* 有幾個條件問不到就記幾個。全部失敗時不能說「都放寬不了」——
+     那時候我們是「沒問到」，不是「問到了答案是沒有」。 */
+  let failed = 0
+  diagnosing.value = true
   const out: { label: string; n: number; clear: () => void }[] = []
   for (const c of cs) {
     const p: Record<string, unknown> = { ...params.value }
@@ -473,14 +489,22 @@ async function diagnose() {
       // 條件全部拿掉時後端不回 total（那就是整個市場），用精選區那個數字補
       const n = r.total ?? total.value
       if (n > 0) out.push({ label: c.label, n, clear: c.clear })
-    } catch { /* 診斷問不到不該蓋掉「查無結果」本身，那才是使用者要看的 */ }
+    } catch { failed++ /* 診斷問不到不該蓋掉「查無結果」本身，那才是使用者要看的 */ }
   }
-  if (my === hintGen) hints.value = out.sort((a, b) => b.n - a.n)
+  if (my === hintGen) {
+    hints.value = out.sort((a, b) => b.n - a.n)
+    diagnosing.value = false
+    /* 一條都沒問到就當作沒跑過：hintGen 不動（條件沒變），只是把畫面留在
+       「沒有更多可以說的」那一側，不去斷言任何事。 */
+    diagFailed.value = failed === cs.length
+  }
 }
 
 watch([() => list.ready.value, shown, queryKey], () => {
   hintGen++            // 條件一變，上一輪的診斷就過期了
   hints.value = []
+  diagnosing.value = false
+  diagFailed.value = false
   if (list.ready.value && !list.loading.value && shown.value.length === 0 && conds.value.length) {
     void diagnose()
   }
@@ -814,9 +838,13 @@ watch([() => list.ready.value, shown, queryKey], () => {
           試試短一點的關鍵字（例如只打「伊布」），或直接輸入卡號、系列代碼。
         </template>
       </p>
+      <!-- 三種話分得清清楚楚：正在查、查到了、查完真的一條都沒有。
+           原本只有「查到了」與「一條都沒有」兩種，於是請求還在飛的那一秒
+           就先斷言了結論；而診斷全部失敗時那句結論會永遠留著。 -->
       <template v-else>
-        <p v-if="hints.length" class="muted noneWhy">是這幾個條件加起來把結果篩空的。只放寬其中一個就有：</p>
-        <p v-else-if="hints.length === 0" class="muted noneWhy">
+        <p v-if="diagnosing" class="muted noneWhy">正在確認是哪個條件擋掉的…</p>
+        <p v-else-if="hints.length" class="muted noneWhy">是這幾個條件加起來把結果篩空的。只放寬其中一個就有：</p>
+        <p v-else-if="!diagFailed" class="muted noneWhy">
           這幾個條件單獨拿掉任何一個都還是 0 件 —— 要看到東西得一次放寬不只一個。
         </p>
         <div v-if="hints.length" class="hints">
@@ -1154,7 +1182,9 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .sortNote { margin: -6px 0 12px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .dot.deal { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
-.dot.cert { background: #d8b25a; box-shadow: 0 0 8px #d8b25a; }
+/* 鑑定區的金色走權杖。寫死的 #d8b25a 只對得上深色主題，淺色下它是一塊
+   灰灰的土黃，跟站上其他金色（--gold / --gold-deep）對不起來。 */
+.dot.cert { background: var(--gold); box-shadow: 0 0 8px var(--gold); }
 .dot.all { background: var(--muted); }
 
 .rail {
@@ -1210,12 +1240,12 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
   gap: 11px; align-items: center;
   padding: 9px; cursor: pointer;
   border-radius: var(--radius);
-  border: 1px solid color-mix(in srgb, #d8b25a 32%, transparent);
-  background: linear-gradient(100deg, color-mix(in srgb, #d8b25a 10%, transparent), var(--surface) 60%);
+  border: 1px solid color-mix(in srgb, var(--gold) 32%, transparent);
+  background: linear-gradient(100deg, color-mix(in srgb, var(--gold) 10%, transparent), var(--surface) 60%);
   text-align: left; color: inherit; text-decoration: none;
   transition: transform .2s, border-color .2s;
 }
-@media (hover: hover) { .gradedCard:hover { transform: translateY(-3px); border-color: #d8b25a; } }
+@media (hover: hover) { .gradedCard:hover { transform: translateY(-3px); border-color: var(--gold); } }
 .gradedCard:active { transform: scale(.98); }
 .gradedArt { width: 100%; aspect-ratio: 5 / 7; border-radius: 6px; overflow: hidden; }
 .gradedArt :deep(img) { width: 100%; height: 100%; object-fit: cover; }
@@ -1229,7 +1259,9 @@ h1 { font-size: 24px; margin: 0; letter-spacing: -.02em; }
 .gTop .omark { flex: 0 0 auto; }
 .gTop .gName { min-width: 0; }
 .gName { font-size: 13.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gCert { font-size: 10px; color: #d8b25a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 這一行是**文字**，不是色塊：用 --gold-deep（淺色主題壓深過的那一支），
+   --gold 在白底上當 10px 的字讀不動。 */
+.gCert { font-size: 10px; color: var(--gold-deep); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gPrice { font-size: 15px; font-weight: 700; margin-top: 1px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }

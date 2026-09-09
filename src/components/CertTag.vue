@@ -22,8 +22,12 @@ defineProps<{
 </script>
 
 <template>
-  <span v-if="card.grader && card.grade != null" class="cert mono">
-    {{ card.grader }} {{ card.grade }}
+  <!-- 只要有 grader 就不是 RAW。等級是**選填**的（登記頁的 canSubmit 只要求
+       編號、後端 grade 也 nullable），所以「有機構、有編號、沒填等級」是一種
+       正常狀態；原本要求 grade 才算鑑定，這種卡會整張被畫成「RAW · 未鑑定」，
+       連編號都不顯示 —— 把鑑定卡講成生卡是實質錯誤，比少印一個等級嚴重得多。 -->
+  <span v-if="card.grader" class="cert mono">
+    {{ card.grader }}<template v-if="card.grade != null"> {{ card.grade }}</template>
     <!-- 編號拿得到才顯示。沒有編號不代表沒鑑定，只代表這個畫面看不到 -->
     <em v-if="card.certNo">#{{ card.certNo }}</em>
   </span>

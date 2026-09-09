@@ -9,7 +9,7 @@
  * 賞別對它不成立（見 types/models.ts 的說明）。卡也還在使用者自己手上
  * （保管人是自己），所以沒有寄存期限。
  *
- * 四種失敗要分開呈現，尤其是兩種 409：
+ * 三種失敗要分開呈現，尤其是兩種 409（第三種是其餘的泛用錯誤）：
  *   CERT_ALREADY_LISTED  編號登記在**別人**名下 —— 出口是「申請接管」，
  *                        比照開池表單：入口只在被擋住的那一刻存在
  *   ALREADY_IN_BOOK      已經在自己卡冊裡 —— 不是錯誤是提醒，
@@ -19,7 +19,7 @@
  *
  */
 import { computed, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import CardPicker from '@/components/CardPicker.vue'
 import CardFrontUpload from '@/components/CardFrontUpload.vue'
 import { cardbookApi } from '@/lib/api'
@@ -29,6 +29,12 @@ import type { Grader } from '@/types/models'
 import { track } from '@/lib/ga'
 
 const router = useRouter()
+const route = useRoute()
+
+/* 從「我的 → 訓練家卡」被導過來的（那一格在不符資格時落點就是這一頁，
+   見 MePage 的 trainerTo）。沒有這一句的話，使用者按的是「訓練家卡」、
+   到的是「登記卡片」，中間那段理由完全不見。 */
+const needTrainer = computed(() => route.query.need === 'trainer')
 
 /* ---- 挑卡 ----
    max=1：登記是「一張實體卡」的動作。要登記三張就走三次 ——
@@ -197,6 +203,9 @@ async function submit() {
     <p class="lead muted">
       把手上的實體卡登記進卡冊。登記後可以上架到市場，也可以當開池的獎品。
       卡片還是在你手上 —— 登記只是讓系統知道「這張卡的身分與持有人」。
+    </p>
+    <p v-if="needTrainer" class="whyHere" role="note">
+      訓練家卡要有一張自己的卡才做得出來。先在這裡登記一張，做卡那一頁就會開。
     </p>
 
     <!-- 第一步：挑卡。目錄挑身分；從卡冊挑到的是已經登記過的卡，
@@ -404,48 +413,14 @@ h2 { font-size: 15.5px; margin: 0 0 4px; }
 .takeoverP { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--ink); }
 .takeoverGo { justify-self: start; min-height: 44px; font-size: 13.5px; }
 
-/* 卡號對不上：警示配色（跟接管同一級 —— 兩個都是「先停下來看一眼」），
-   但它的主體是一張比對表而不是一顆按鈕。 */
-.mismatch {
-  min-width: 0; margin: 0 0 14px; padding: 14px;
-  border-radius: 14px;
-  background: var(--warn-wash); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
-  display: grid; gap: 10px;
+/* 「你為什麼會被帶到這一頁」。中性的說明底色（同 .yours），不是警示 ——
+   使用者沒做錯事，只是還缺一張卡。 */
+.whyHere {
+  min-width: 0; margin: 0 0 14px; padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--info-wash); border: 1px solid color-mix(in srgb, var(--info-ink) 30%, transparent);
+  font-size: 12.5px; line-height: 1.7; color: var(--ink);
 }
-.mmT { margin: 0; font-size: 14px; font-weight: 700; color: var(--warn-ink); }
-.mmP { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--ink); }
-/* 比對表：左欄是「這一格講的是什麼」，右欄是值。
-   手機寬度不夠時右欄會被擠爆，所以 minmax(0, 1fr) 讓值自己換行而不是溢位。 */
-.mmGrid {
-  min-width: 0; margin: 0; padding: 10px;
-  border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line-soft);
-  display: grid; gap: 6px;
-}
-.mmRow {
-  min-width: 0;
-  display: grid; grid-template-columns: minmax(0, 100px) minmax(0, 1fr);
-  gap: 10px; align-items: baseline;
-}
-.mmRow dt { min-width: 0; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
-.mmRow dd {
-  min-width: 0; margin: 0; font-size: 13px; font-weight: 600; color: var(--ink);
-  line-height: 1.6; overflow-wrap: anywhere;
-}
-.mmWhy { font-size: 11.5px; line-height: 1.7; margin: 0; min-width: 0; }
-/* 勾選框整塊可點，高度不低於 44px（觸控下限）。
-   checkbox 本身也放大到 20px —— 預設的 13px 在手機上按不準。 */
-.mmConfirm {
-  min-width: 0; min-height: 44px;
-  display: grid; grid-template-columns: 20px minmax(0, 1fr);
-  gap: 10px; align-items: center;
-  padding: 10px 12px; border-radius: 10px;
-  background: var(--surface); border: 1px solid var(--line);
-  font-size: 13px; line-height: 1.6; color: var(--ink);
-  cursor: pointer;
-}
-.mmConfirm input { width: 20px; height: 20px; accent-color: var(--warn); margin: 0; }
-.mmConfirm:focus-within { border-color: var(--gold); }
-.mmNote { margin: 0; font-size: 11.5px; line-height: 1.7; min-width: 0; }
 
 /* 已在自己卡冊：中性的提醒，不是警示 */
 .yours {

@@ -519,9 +519,14 @@ const marketCount = computed(() =>
           </template>
         </LobbySection>
         <div class="rail tight">
+          <!-- 每一張連到那一筆掛單本身，不是市場首頁。方塊上只有圖、折數與價格，
+               沒有卡名可以再搜一次 —— 落在首頁等於那張卡再也找不回來。
+               aria-label 把方塊上那三個視覺片段講成一句話：只看標籤的人
+               本來讀到的是「連結」兩個字（圖是 aria-hidden，數字沒有單位）。 -->
           <RouterLink
             v-for="l in marketPicks" :key="l.id"
-            :to="{ name: 'market' }" class="mini"
+            :to="{ name: 'market-listing', params: { id: l.id } }" class="mini"
+            :aria-label="`${l.card.name}，${l.price.toLocaleString()} 點`"
           >
             <CardArt class="miniArt" :image="''" :alt="l.card.name" :art-id="l.card.artId" />
             <span v-if="dealPct(l) !== null" class="miniPct">{{ dealPct(l) }}%</span>

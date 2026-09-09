@@ -105,5 +105,8 @@ watch([fileIds, ready], ([ids, isReady]) => {
 .choose { width: fit-content; min-height: 44px; display: inline-flex; align-items: center; padding: 0 14px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font-size: 13px; }
 .choose input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .bad { color: var(--danger); }
-.good { color: var(--success); }
+/* --success 這個權杖不存在（全站只有這裡寫過），整條宣告被瀏覽器丟掉，
+   於是「已上傳，可以登記」跟失敗那一行長得一模一樣。用 --ok-ink 不用 --ok：
+   這是直接鋪在頁面底色上的文字，淺色主題下 --ok 的對比不夠（見 tokens.css）。 */
+.good { color: var(--ok-ink); }
 </style>

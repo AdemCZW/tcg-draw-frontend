@@ -954,9 +954,12 @@ async function doDispute(o: Order) {
            要開箱影片、之後不能再確認收貨；這一顆不動錢，只開一張客服工單。
            所以它自成一列、長得也不一樣（虛線外框），而且**不分狀態**都給 ——
            已結案的訂單申訴不了，那正是最需要有地方可以問的時候。 -->
+      <!-- can-dispute 照 actionsFor 算，不自己判狀態：能不能申訴的唯一權威是
+           那支函式，面板文案跟按鈕列用同一個來源才不會分岔。 -->
       <OrderIssue
         src="market" :ref-id="r.o.id" :card-name="r.o.card.name"
         :side="r.role" :status-text="STATUS_TEXT[r.o.status]"
+        :can-dispute="actionsFor(r.o, r.role).includes('dispute')"
       />
 
     </article>
@@ -1144,7 +1147,10 @@ async function doDispute(o: Order) {
 </template>
 
 <style scoped>
-.warnLine { display: block; margin-top: 5px; font-size: 12.5px; line-height: 1.6; color: var(--warn, #fcd34d); }
+/* 字色用 --warn-ink，不是 --warn：--warn 是「示警色塊」的顏色，
+   淺色主題下拿它當字色對比只有 2.6（見 tokens.css 的說明）。
+   後援 hex 一併拿掉 —— 那個值只在深色下勉強成立，而 --warn-ink 兩套主題都有定義。 */
+.warnLine { display: block; margin-top: 5px; font-size: 12.5px; line-height: 1.6; color: var(--warn-ink); }
 select {
   /* 44px 不放在 @media (pointer: coarse) 裡：桌機的下拉一樣是這一頁最主要的
      互動之一，而且 padding 算出來只有 42px —— 差 2px 沒有任何好處 */

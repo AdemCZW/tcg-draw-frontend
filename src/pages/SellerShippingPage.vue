@@ -784,9 +784,16 @@ useKeyboardInset()
         <p v-if="retErr[j.id]" class="retErr" role="alert">{{ retErr[j.id] }}</p>
       </div>
 
+      <!-- can-dispute 一律 false：這一頁的視角永遠是賣家，而申訴是**買家**
+           的動作（shared/escrow.ts 的 actionsFor 只給買家 dispute）。
+           面板預設那句「要退款請改用訂單上的我要申訴」對這一頁的人
+           從來就不成立，關掉之後它會換成「有問題就從這裡講」。
+           抽卡池那一半更是連爭議這個狀態都沒有 —— SettlementStatus 裡沒有
+           disputed，refunded 的唯一來源是賣家自己逾期未寄。 -->
       <OrderIssue
         :src="j.src" :ref-id="j.id" :card-name="j.card.name"
         side="seller" :status-text="j.statusT"
+        :can-dispute="false"
       />
     </article>
 

@@ -224,7 +224,7 @@ async function submit() {
       </p>
       <ul class="noteL">
         <li>這幾張走託管訂單：點數先凍結在平台，買家確認收貨或驗收期滿才撥給你。</li>
-        <li>成交後要在期限內寄出並填單號。<strong>逾期未寄會退款給買家、沒收保證金並記一次違約。</strong></li>
+        <li>成交後要在 <strong>72 小時</strong>內寄出並填單號。<strong>逾期未寄會退款給買家、沒收保證金並記一次違約。</strong></li>
       </ul>
     </section>
 
@@ -386,7 +386,9 @@ h1 { font-size: 20px; margin: 0; }
 .priceRow input:focus { outline: none; border-color: var(--gold); }
 .priceRow .u { flex: none; }
 .hint { font-size: 11.5px; line-height: 1.6; color: var(--faint); margin: 0; }
-.hint .warn { color: #fcd34d; }
+/* 寫死的深色色碼在淺色主題上讀不到，而這行「低於買回價」是定價當下唯一的警告。
+   用 --warn-ink：它兩個主題都有定義，且是為了鋪在底色上的文字調的。 */
+.hint .warn { color: var(--warn-ink); }
 
 .bar {
   /* 手機上底部導覽是在的（這頁沒設 chrome: none），原本只避開安全區
@@ -413,8 +415,10 @@ h1 { font-size: 20px; margin: 0; }
 
 .msg { margin: 12px 0 0; padding: 11px 13px; border-radius: 10px; font-size: 13px; line-height: 1.7; }
 .msg p { margin: 0; }
-.msg.ok { background: #14532d55; color: #86efac; }
-.msg.bad { background: #7f1d1d55; color: #fca5a5; }
+/* 同上：這兩條原本寫死深色色碼，淺色主題下底是深綠／深紅、字是淺色，
+   整塊反白得跟頁面其他區塊不同語言。改走狀態權杖，兩個主題各自有值。 */
+.msg.ok { background: var(--ok-wash); color: var(--ok-ink); }
+.msg.bad { background: var(--danger-wash); color: var(--danger-ink); }
 /* 出口鍵。color: inherit 讓它待在錯誤區塊自己的配色裡（同 MarketListingPage
    的 .errGo），只靠底線與 44px 的高度說明它可以按 */
 .errGo {

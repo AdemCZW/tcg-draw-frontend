@@ -33,7 +33,18 @@ const STATUS_TEXT: Record<OfferStatus, string> = {
 const incoming = ref<TradeOffer[]>([])
 const outgoing = ref<TradeOffer[]>([])
 const loading = ref(false)
+/** 動作（接受／婉拒／收回）失敗的訊息。它講的是「剛剛那一下沒成功」 */
 const err = ref('')
+/**
+ * 清單本身載入失敗的訊息。跟 err 分開記。
+ *
+ * 合在一起的時候畫面會同時出現「連線失敗」跟「還沒有人對你的卡出價」——
+ * 錯誤態被畫成空狀態，而這兩句對使用者是完全相反的意思：一句是「問不到」，
+ * 一句是「問到了，答案是沒有」。剛收到出價通知的人看到後者只會以為出價被撤了。
+ * 分開之後空狀態只在真的載入成功且是 0 筆時才畫。
+ * 版型沿用錢包頁的載入失敗卡（訊息＋重試鈕），不另外發明一種錯誤態。
+ */
+const loadErr = ref('')
 const okMsg = ref('')
 /** 正在送出的那一筆，用來鎖住該列的按鈕（不是全頁鎖：其他筆還是可以看） */
 const busy = ref<string | null>(null)
@@ -110,12 +121,13 @@ const stashWhy = (o: TradeOffer) => {
 async function load() {
   loading.value = true
   err.value = ''
+  loadErr.value = ''
   try {
     const r = await offers.list()
     incoming.value = r.incoming
     outgoing.value = r.outgoing
   } catch (e) {
-    err.value = e instanceof ApiError ? e.message : '連線失敗'
+    loadErr.value = e instanceof ApiError ? e.message : '連線失敗'
   } finally {
     loading.value = false
   }
@@ -196,8 +208,18 @@ function switchTab(k: Tab) {
 
     <p v-if="okMsg" class="ok" role="status">{{ okMsg }}</p>
     <p v-if="err" class="err" role="alert">{{ err }}</p>
+    <!-- 手上還有舊資料時，載入失敗只降級成一行提示：把已經讀得到的邀約
+         換成一張錯誤卡，等於因為重新整理失敗就把人看得到的東西收走 -->
+    <p v-if="loadErr && list.length" class="err" role="alert">{{ loadErr }}</p>
 
-    <p v-if="loading && !list.length" class="blank muted">載入中…</p>
+    <!-- 讀不到就說讀不到，不畫成空清單。順序在空狀態之前，兩者互斥 -->
+    <div v-if="loadErr && !list.length" class="loadFail card" role="alert">
+      <p class="muted">{{ loadErr }}</p>
+      <button type="button" class="btn" :disabled="loading" @click="load">
+        {{ loading ? '重試中…' : '重試' }}
+      </button>
+    </div>
+    <p v-else-if="loading && !list.length" class="blank muted">載入中…</p>
     <p v-else-if="!list.length" class="blank muted">
       <template v-if="tab === 'incoming'">
         還沒有人對你的卡出價。把卡冊設成公開分享出去，別人才找得到你的卡。
@@ -287,9 +309,13 @@ function switchTab(k: Tab) {
 .head { margin-bottom: 12px; }
 .hrow { display: flex; align-items: baseline; gap: 12px; }
 h1 { font-size: 22px; margin: 0; flex: 1; min-width: 0; }
-/* 純文字鍵：它不該有跟分頁一樣的膠囊外框，不然又變成一個可切換的東西 */
+/* 純文字鍵：它不該有跟分頁一樣的膠囊外框，不然又變成一個可切換的東西。
+   沒有外框不等於可以小 —— 它不是 .btn，吃不到 base.css 那條 44px，
+   原本整顆只有 25px 高。用 min-height 撐開命中範圍，底線仍然貼著文字走
+   （inline-flex + align-items: center），所以看起來沒變、按起來變準。 */
 .rf {
   flex: none; padding: 4px 0;
+  display: inline-flex; align-items: center; min-height: 44px;
   font-size: 12.5px; color: var(--muted);
   background: none; border: 0;
   text-decoration: underline; text-underline-offset: 3px;
@@ -306,7 +332,10 @@ h1 { font-size: 22px; margin: 0; flex: 1; min-width: 0; }
 }
 .sg {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  min-width: 0; min-height: 34px; padding: 0 10px;
+  /* 44px 是專案硬規定的觸控目標下限。這兩格是真的要按的分頁，
+     而 .sg 不是 .btn，吃不到 base.css 那條規則 —— 訂單頁的同款分頁
+     （OrdersPage 的 .tabs .chip）也是這樣各自撐開的。 */
+  min-width: 0; min-height: 44px; padding: 0 10px;
   border: 0; border-radius: var(--pill);
   background: transparent; color: var(--muted);
   font-size: 13.5px; font-weight: 600;
@@ -327,6 +356,15 @@ h1 { font-size: 22px; margin: 0; flex: 1; min-width: 0; }
 }
 .ok { color: var(--ok); font-size: 13px; line-height: 1.6; margin: 0 0 10px; }
 .err { color: var(--danger); font-size: 13px; line-height: 1.6; margin: 0 0 10px; }
+
+/* 載入失敗：跟錢包頁同一套（訊息置中＋一顆重試鈕）。
+   min-width: 0 讓長訊息不撐破容器。 */
+.loadFail {
+  min-width: 0;
+  display: grid; justify-items: center; gap: 12px;
+  padding: 32px 16px; text-align: center;
+}
+.loadFail p { margin: 0; }
 
 .ofr {
   background: var(--surface); border-radius: var(--radius);

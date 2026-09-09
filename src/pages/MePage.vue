@@ -110,8 +110,13 @@ const adminRow = { name: 'admin', t: '平台後台', icon: 'shield' } as const
    三種做法裡選這一個：整格不顯示的話，他永遠不會知道站上有這個功能；
    顯示但按下去說「你不符合資格」是把人帶到死路。第三種是顯示、而且
    當場說得出下一步 —— 格子裡多一行「先登記一張卡」，按下去就是登記頁。 */
+/* 落到登記頁時帶 need=trainer：那一頁看到這個參數會自己說一句
+   「登記完就能做訓練家卡」。不帶的話，使用者是在毫無說明的情況下
+   從「訓練家卡」被丟到「登記卡片」，看起來像按錯或站台壞掉。 */
 const trainerTo = computed(() =>
-  trainerEligible.value === false ? { name: 'upload-card' } : { name: 'trainer-card' })
+  trainerEligible.value === false
+    ? { name: 'upload-card', query: { need: 'trainer' } }
+    : { name: 'trainer-card' })
 const trainerNote = computed(() =>
   trainerEligible.value === false ? '先登記一張卡' : '')
 
@@ -157,6 +162,7 @@ const paths: Record<string, string> = {
         <RouterLink
           :to="r.name === 'trainer-card' ? trainerTo : { name: r.name }"
           class="cell"
+          :class="{ tagged: r.name === 'trainer-card' && !!trainerNote }"
           :aria-label="r.name === 'trainer-card' && trainerNote ? `${r.t}：${trainerNote}` : undefined"
         >
           <span class="ic" aria-hidden="true">
@@ -165,15 +171,17 @@ const paths: Record<string, string> = {
             </svg>
           </span>
           <strong>{{ r.t }}</strong>
-          <!-- 還不能做卡的人：右上角一個提醒點，**不進版面流**。
-               原本是格子裡多一行「先登記一張卡」，但那一行會把這一格撐得比
-               同排其他格子高，整片格狀選單就歪了 —— 一格的狀態不該改變版面。
-               文字改由 aria-label（螢幕閱讀器）與 title（桌機停留）承載，
-               而按下去本來就是登記頁，下一步不會不見。 -->
+          <!-- 還不能做卡的人：把「先登記一張卡」**寫在格子上**。
+               原本只有一顆提醒點，說明藏在 aria-label 與 title 裡 ——
+               手機沒有 hover，那句話永遠不會出現，看得到的只是一顆
+               沒有意義的圓點。改成看得見的角標，但用 absolute 定位
+               不進版面流：一格的狀態不該把這一格撐得比同排其他格高。
+               格子另外吃一段 padding-bottom（.cell.tagged），文字才不會
+               壓到標題，而 min-height 沒變，整片選單的高度一格都不動。 -->
           <span
             v-if="r.name === 'trainer-card' && trainerNote"
-            class="dot" aria-hidden="true" :title="trainerNote"
-          ></span>
+            class="lockTag"
+          >{{ trainerNote }}</span>
           <!-- 進行中的筆數。只在有東西的時候出現：常駐一顆「0」等於教使用者
                忽略這個位置，之後真的有訂單時他也不會看見 -->
           <span v-if="r.name === 'orders' && orders.openCount" class="badge">{{ orders.openCount }}</span>
@@ -335,15 +343,18 @@ h1 {
   font-family: var(--font-mono); font-size: 11px; font-weight: 700; line-height: 1;
 }
 
-/* 「先登記一張卡」那一行。字級比標題小一階、用 muted，
-   看得出來是說明而不是第二個標題；格子本來就是置中的，跟著置中。 */
-/* 提醒點。跟 .badge 同一個角落、同一個顏色語言，差別是它不帶數字 ——
-   數字是「有幾件事」，這一點是「這一格現在還做不了，按下去會告訴你為什麼」。
-   position: absolute 是重點：它一進版面流就會把格子撐高，同排就歪了。 */
-.cell .dot {
-  position: absolute; top: 10px; right: 10px;
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--accent);
+/* 「先登記一張卡」那一行。字級比標題小一階、用 accent 的洗底，
+   看得出來是這一格的狀態而不是第二個標題。
+   position: absolute 是重點：它一進版面流就會把格子撐高，同排就歪了。
+   .tagged 的 padding-bottom 只是把置中的內容往上讓一點點，
+   min-height 仍是 96px —— 格子的外框尺寸完全沒變。 */
+.cell.tagged { padding-bottom: 26px; }
+.cell .lockTag {
+  position: absolute; left: 6px; right: 6px; bottom: 7px;
+  padding: 2px 4px; border-radius: var(--pill);
+  background: var(--accent-wash); color: var(--accent);
+  font-size: 10.5px; font-weight: 600; line-height: 1.4;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 /* 後台列跟一般功能區隔開：它是平台營運用的，不是使用者功能 */

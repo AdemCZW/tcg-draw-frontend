@@ -258,8 +258,10 @@ h2 { font-size: 15px; margin: 0 0 4px; }
 .blockHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .blockHead h2 { margin: 0; }
 .pill { font-size: 11.5px; font-weight: 700; padding: 3px 10px; border-radius: var(--pill); white-space: nowrap; }
-.pill.ok { background: var(--ok-wash); color: var(--ok); }
-.pill.todo { background: var(--warn-wash); color: var(--warn); }
+/* 字色用 --*-ink 不是 --ok / --warn：淺色主題的 wash 幾乎是白的，
+   狀態色疊上去對比只有 2.6，讀不到（同下面 .result 的理由）。 */
+.pill.ok { background: var(--ok-wash); color: var(--ok-ink); }
+.pill.todo { background: var(--warn-wash); color: var(--warn-ink); }
 
 label { display: grid; gap: 5px; font-size: 12.5px; color: var(--muted); }
 input {

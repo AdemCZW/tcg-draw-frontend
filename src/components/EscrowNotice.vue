@@ -18,7 +18,15 @@
  * 現在一種文案打天下，因為規則本來就只有一種。
  */
 import type { Pool } from '@/types/models'
+import { POOL_INSPECT_MS } from '@/shared/pool-settlement'
+
 defineProps<{ pool: Pool }>()
+
+/* 鑑賞期天數從常數推，不讀 pool.escrow.releaseAfterShipDays。
+   那個欄位是各池自己帶的資料，mock 裡就有 0 的池，畫面會印出
+   「再經過 0 天鑑賞期」——而規則其實是全站一份（POOL_INSPECT_MS），
+   結算流程從頭到尾沒有讀過那個欄位。同一個理由，PointsFlow.vue 也是這樣推的。 */
+const INSPECT_D = Math.round(POOL_INSPECT_MS / 86_400_000)
 </script>
 
 <template>
@@ -27,9 +35,17 @@ defineProps<{ pool: Pool }>()
       <div>
         <strong>款項由平台代管</strong>
         <p class="muted">
-          你付的點數不會立刻進賣家帳戶。賣家出貨、你確認收到，
-          再經過 {{ pool.escrow.releaseAfterShipDays }} 天鑑賞期後才撥款。
-          期間若未出貨或商品不符，可申請全額退回。
+          <!-- 「確認收貨」與「鑑賞期滿」是**擇一**，不是先確認再等 N 天 ——
+               按下確認就是立刻撥款，那正是這顆鍵的用途。寫成「確認之後再等」
+               會讓買家以為按了也沒差，乾脆不按。 -->
+          你付的點數不會立刻進賣家帳戶。賣家出貨後，你確認收到、
+          或 {{ INSPECT_D }} 天鑑賞期滿，才會撥款給賣家。
+          <!-- 只寫真的做得到的那一條。「商品不符可申請全額退回」在抽卡池
+               不存在：SettlementStatus 沒有 disputed，refunded 只由賣家逾期
+               未寄出這一條產生（見 shared/pool-settlement.ts）。承諾一個系統
+               做不到的救濟，比不承諾更傷 —— 使用者會等著它發生。 -->
+          賣家逾期沒有寄出的話，票金自動全額退回你的帳戶。
+          卡本身的狀況有問題，從那一筆結算上的「提出問題」開客服工單處理。
           <!-- 明白寫出「不分賣家」。舊版正是在這裡依賣家身分編出不同的
                保障，所以新版把「都一樣」講死，不留想像空間。 -->
           這一條<b>不分賣家身分</b>，所有池都一樣。

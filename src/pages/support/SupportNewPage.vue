@@ -49,7 +49,11 @@ const attemptSeq = ref(0)
 const todoRef = ref<HTMLElement | null>(null)
 
 /** 從哪裡被帶過來的。true 的時候版面要先講「你為什麼會在這裡」 */
-const fromBlocked = ref(false)
+/* 從哪裡被擋過來的。'pool' 是建池表單、'upload' 是登記卡片，兩邊的錯誤處
+   都會帶著編號跳到這一頁。分開記是因為解釋那句話要講對事：對登記過來的人
+   說「你剛才開池被擋下來」，他會以為自己按錯了東西。
+   空字串＝直接開單或網址被貼來貼去 —— 那時仍然要解釋編號的處境，只是不提來源。 */
+const fromKind = ref<'pool' | 'upload' | ''>('')
 
 const q = (k: string) => {
   const v = route.query[k]
@@ -67,11 +71,23 @@ onMounted(() => {
      預填是省他一次抄寫，不是替他決定。 */
   if (cert && form.kind === 'takeover') {
     form.subject = `接管 ${form.grader || 'PSA'} #${cert}`
-    fromBlocked.value = q('from') === 'pool'
+    const f = q('from')
+    fromKind.value = f === 'pool' || f === 'upload' ? f : ''
   }
 })
 
 const isTakeover = computed(() => form.kind === 'takeover')
+
+/* 解釋區的第一句。條件是「接管單而且有編號」，不是「from 是不是 pool」——
+   原本只認 pool，於是從登記頁（from=upload）過來的人拿到一張空白表單，
+   連自己為什麼在這裡都沒被講一次。 */
+const blockedWhy = computed(() => {
+  if (fromKind.value === 'pool') return '這個編號目前登記在別人名下，所以你剛才開池被擋下來。'
+  if (fromKind.value === 'upload') return '這個編號目前登記在別人名下，所以你剛才登記這張卡被擋下來。'
+  /* 不是從錯誤跳過來的（自己開單、或網址被轉貼）：這時候不能斷言他剛才做了什麼，
+     只講接管這件事的前提本身。 */
+  return '接管的前提是這個編號目前登記在別人名下 —— 那也是它現在不能拿來開池、也不能登記進你卡冊的原因。'
+})
 
 const kindHint = computed(() => OPENABLE_KINDS.find(o => o.k === form.kind)?.hint ?? '')
 
@@ -186,12 +202,13 @@ async function submit() {
 
     <h1 class="display snTitle">開新問題</h1>
 
-    <!-- 從建池的 409 跳過來的：先講清楚他為什麼會在這裡，並把那個編號亮出來。
-         不講的話，畫面會像是「按了申請接管，然後跳到一張空白表單」。 -->
-    <aside v-if="fromBlocked" class="snFrom" role="note">
+    <!-- 從 409 跳過來的（建池或登記都算）：先講清楚他為什麼會在這裡，
+         並把那個編號亮出來。不講的話，畫面會像是「按了申請接管，
+         然後跳到一張空白表單」。 -->
+    <aside v-if="isTakeover && form.certNo" class="snFrom" role="note">
       <strong class="snFromT">你要接管的是 {{ form.grader }} #{{ form.certNo }}</strong>
       <p class="snFromP">
-        這個編號目前登記在別人名下，所以你剛才開池被擋下來。
+        {{ blockedWhy }}
         接管通過之後，這張卡的擁有權會轉到你名下，你就可以拿它開池或上架。
         下面只剩一件事要做：說明你是怎麼拿到這張實體卡的。
       </p>

@@ -23,6 +23,7 @@ import { api, MOCK } from '@/lib/api'
    收編進 api.ts 的話，位置在 getListing 旁邊。 */
 import { ApiError, http } from '@/lib/http'
 import { deliveryOf } from '@/shared/domain'
+import { DAY, DELIVER_DEADLINE, INSPECT_WINDOW } from '@/shared/escrow'
 import type { Listing, Seller } from '@/types/models'
 import { useWalletStore } from '@/stores/wallet'
 import { useAuthStore } from '@/stores/auth'
@@ -52,6 +53,16 @@ const loading = ref(true)
 const missing = ref(false)
 
 const lane = computed(() => (listing.value ? deliveryOf(listing.value) : 'vault'))
+
+/* 放款規則的天數一律從 shared/escrow 的常數推，不在文案裡寫死。
+   寫死過一次的代價就是這一頁曾經對買家說「7 天後放款」——那是驗收期單獨一段的
+   長度，不是買家什麼都不按時真正要等的時間。真正的路徑有兩條：
+   買家自己確認收貨（立刻放款），或完全不動作 —— 那要先跑完 DELIVER_DEADLINE
+   的物流送達期（期滿視同送達），才進 INSPECT_WINDOW 的驗收期，合計 21 天。
+   措辭跟 PointsFlow.vue 對齊：同一條規則在站上只能有一種講法。 */
+const DELIVER_D = Math.round(DELIVER_DEADLINE / DAY)
+const INSPECT_D = Math.round(INSPECT_WINDOW / DAY)
+const MAX_HOLD_D = DELIVER_D + INSPECT_D
 /**
  * 掛價相對賣家標示參考價的折數。**沒有標示就回 null，不是 0。**
  *
@@ -378,7 +389,7 @@ async function delist() {
           <p class="cnote">
             {{ lane === 'vault'
               ? '卡在保管庫，成交立刻過戶到你名下，直接收進卡冊，不需要等寄送。'
-              : '點數先凍結，你確認收貨或 7 天後才放款給賣家。卡由賣家實體寄出，收到之前它還不會出現在你的卡冊裡。' }}
+              : `點數先凍結，你按下「我已收到」才放款給賣家；完全不動作的話，${DELIVER_D} 天視同送達、再過 ${INSPECT_D} 天驗收期滿才自動放款，最長 ${MAX_HOLD_D} 天。卡由賣家實體寄出，收到之前它還不會出現在你的卡冊裡。` }}
           </p>
         </div>
 
@@ -443,8 +454,9 @@ async function delist() {
       <div v-else-if="done === 'ship'" ref="resultEl" class="result ok" role="status">
         <strong>{{ listing.price.toLocaleString() }} 點已凍結</strong>
         <p>
-          這筆走託管：點數是凍結不是扣款，錢還是你的（所以頭部的餘額不會變少）。
-          賣家出貨、你確認收貨或 7 天驗收期滿之後才會放款給賣家。
+          這筆走託管：點數是凍結不是扣款，錢還是你的（少掉的是可動用點數，總額不變）。
+          賣家出貨後，你按下「我已收到」就放款；你什麼都不按的話，
+          {{ DELIVER_D }} 天視同送達、再過 {{ INSPECT_D }} 天驗收期滿才自動放款給賣家，最長 {{ MAX_HOLD_D }} 天。
           卡收到之前不會進卡冊，進度都在訂單頁上。
         </p>
       </div>
@@ -525,9 +537,13 @@ async function delist() {
           <RouterLink :to="{ name: 'topup' }" class="btn primary">去儲值</RouterLink>
         </template>
 
+        <!-- 這裡講的「餘額」跟上面「餘額不足」那條用的必須是同一個數字，
+             否則兩條列會對同一個錢包報出兩個值。買得起與買不起都用
+             wallet.available（可動用），wallet.shown 是含凍結的總額，
+             拿它來講「餘額」會讓託管中的點數看起來還能花。 -->
         <template v-else>
           <span class="sum">
-            餘額 <strong class="mono">{{ wallet.shown.toLocaleString() }}</strong> 點
+            可動用 <strong class="mono">{{ wallet.available.toLocaleString() }}</strong> 點
           </span>
           <button type="button" class="btn primary" @click="ask">
             買下 · {{ listing.price.toLocaleString() }} 點
@@ -548,8 +564,19 @@ async function delist() {
       >
         <p class="cq">
           用 <strong class="mono">{{ listing.price.toLocaleString() }}</strong> 點買下？
-          餘額將剩 <span class="mono">{{ (wallet.shown - listing.price).toLocaleString() }}</span> 點。
-          <span class="cqLane">{{ lane === 'vault' ? '成交立刻過戶進卡冊。' : '點數凍結，等收貨才放款。' }}</span>
+          <!-- 需寄送那條**不扣款**，所以不能說「餘額將剩 N」——那句話跟成交後
+               同一頁講的「點數是凍結不是扣款」直接互相打臉。會變少的是可動用
+               點數，總額到放款那一刻才動。庫內轉移才是真的當場扣。
+               兩條都用 wallet.available 起算，跟上面那條列同一個數字。 -->
+          <template v-if="lane === 'vault'">
+            可動用將剩 <span class="mono">{{ (wallet.available - listing.price).toLocaleString() }}</span> 點。
+            <span class="cqLane">成交立刻過戶進卡冊。</span>
+          </template>
+          <template v-else>
+            可動用會少 <span class="mono">{{ listing.price.toLocaleString() }}</span> 點（凍結，不是扣款），
+            剩 <span class="mono">{{ (wallet.available - listing.price).toLocaleString() }}</span> 點可以花。
+            <span class="cqLane">等你確認收貨才放款給賣家。</span>
+          </template>
           <!-- 快到期的話在**按下確定的那一刻**再講一次。上面那一塊在頁面流裡，
                使用者完全可能捲過去就忘了；這一行跟金額在同一句話裡，躲不掉。 -->
           <span v-if="stashUrgent" class="cqStash">{{ stashTitle }}，買下不會重新計算。</span>

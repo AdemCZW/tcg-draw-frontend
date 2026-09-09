@@ -35,6 +35,18 @@ const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 /* ---------- 後端 → 前端 的形狀轉換 ---------- */
 type Any = Record<string, unknown>
 const ts = (v: unknown) => (v == null ? '' : new Date(Number(v) || String(v)).toISOString().slice(0, 16).replace('T', ' '))
+/* 給「之後還要再算或再格式化」的時間用：留完整的 ISO 瞬間，不切成 UTC 的顯示字串。
+   ts() 切完的 'YYYY-MM-DD HH:MM' 有兩個問題：一是它是 UTC，直接印在畫面上，
+   台灣下午之後的時間會顯示成前一天；二是那個字串沒有時區標記，
+   拿去 Date.parse() 會被當成當地時間，於是同一個瞬間在計算與顯示之間差了 8 小時。
+   顯示端各自用當地時區格式化（例如 MyCardsPage 的 localDay）。 */
+const iso = (v: unknown) => {
+  if (v == null) return ''
+  const d = new Date(Number(v) || String(v))
+  /* 解析不了就回空字串。toISOString() 對 Invalid Date 是**丟例外**，
+     而這支跑在 toPrize() 裡 —— 一筆髒資料會讓整份卡冊載不出來。 */
+  return Number.isFinite(d.getTime()) ? d.toISOString() : ''
+}
 
 function toPool(p: Any): Pool {
   return {
@@ -72,7 +84,10 @@ function toPrize(r: Any): UserPrize {
     wonAt: ts(r.won_at),
     /* 舊資料（或還沒跑 014 的後端）沒有 acquired_at，退回 won_at ——
        第一手持有者的兩個時間本來就相同，退回去不會讓畫面說錯話 */
-    acquiredAt: ts(r.acquired_at ?? r.won_at), stashExpiresAt: ts(r.stash_expires_at),
+    acquiredAt: ts(r.acquired_at ?? r.won_at),
+    /* 寄存期限兩邊都要拿它算：卡冊印的是當地日期，上架頁的 soonestDays 對它做
+       Date.parse() 算剩幾天。所以這一欄留完整 ISO，不留 ts() 的 UTC 顯示字串。 */
+    stashExpiresAt: iso(r.stash_expires_at),
     /* 宣告買回價與結算狀態由 /v1/prizes 一起帶回來。舊制的卡兩個都是 null，
        前端要能分辨「這個池沒有宣告買回價」跟「買回價 0 點」—— 後者是假的數字。
        買回價跟 card.refPrice 沒有任何算式關係，前端算不出來也不該猜。 */

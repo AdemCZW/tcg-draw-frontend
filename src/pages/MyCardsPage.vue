@@ -327,11 +327,13 @@ function popKind(g: CardRow): 'actions' | 'shipment' | null {
   if (hasShipInfo(g)) return 'shipment'
   return null
 }
-/* 帶時區的 ISO 字串，直接切前 10 碼會在 UTC+8 的深夜差一天。
+/* 帶時區的 ISO 字串轉成**當地**日期，直接切前 10 碼會在 UTC+8 的深夜差一天。
    解析不了就原樣回傳 —— 卡冊上少一個好看的日期，比顯示 Invalid Date 好。
-   讀的是 acquiredAt 不是 wonAt：買來的卡「取得」的是成交那天，
-   不是賣家當初抽到它的那天。 */
-function wonDay(iso: string) {
+   取得日（讀的是 acquiredAt 不是 wonAt：買來的卡「取得」的是成交那天，
+   不是賣家當初抽到它的那天）與寄存期限都走這一支：期限原本直接印
+   api.ts 轉出來的 UTC 字串，台灣下午之後到期的卡會被顯示成前一天，
+   而且後面還掛著時分，看起來像沒清乾淨。 */
+function localDay(iso: string) {
   const t = Date.parse(iso)
   if (!Number.isFinite(t)) return iso
   const d = new Date(t)
@@ -809,10 +811,15 @@ onBeforeUnmount(() => {
    v-for 裡面了，拿不到 p，只有 id 的話還要再回頭去清單裡找一次。 */
 const confirmPrize = ref<UserPrize | null>(null)
 const justRecycled = ref<{ id: string; points: number } | null>(null)
+/** 這一次回收失敗的原因。留在回收面板裡，不用系統對話框 */
+const recycleErr = ref('')
 
 function askRecycle(p: UserPrize) {
   track('click_recycle')
   confirmPrize.value = p
+  /* 上一張卡的失敗訊息不能跟著這一張走：面板是同一個 DOM，
+     不清的話換一張卡打開會看到一句跟它無關的錯誤 */
+  recycleErr.value = ''
   /* 覆蓋層是 aria-modal，焦點要進去，不然按 Tab 會走到它背後那些讀不到的東西 */
   void nextTick(() => document.getElementById('recycleSheet')?.focus())
 }
@@ -821,6 +828,7 @@ function askRecycle(p: UserPrize) {
    使用者的位置沒有變，焦點也不該變 */
 function closeConfirm() {
   confirmPrize.value = null
+  recycleErr.value = ''
   if (popTrigger?.isConnected) {
     const t = popTrigger
     void nextTick(() => t.focus())
@@ -835,6 +843,7 @@ const quoteOf = (p: UserPrize) => recycleQuote(p.buyback)
 async function doRecycle(p: UserPrize) {
   const q = quoteOf(p)
   if (!q.eligible) return
+  recycleErr.value = ''
   try {
     /* mock 直接入點；API 模式由後端從賣家的保留額付款並回最新錢包。
        這裡有可能失敗而且是正常的：報價不是保證成交 —— 賣家的保留額
@@ -853,7 +862,10 @@ async function doRecycle(p: UserPrize) {
     void refreshSummary()
     track('recycle_success')
   } catch (e) {
-    alert(e instanceof Error ? e.message : '賣家沒有接受這筆回收，請稍後再試')
+    /* 不用 window.alert：系統對話框會蓋在這張覆蓋層上面，按掉之後訊息就沒了，
+       而使用者接下來要做的判斷（要不要再按一次、還是先去看看卡的狀態）
+       正需要那句話留在畫面上。改成面板裡的一列，跟出貨面板的 shipErr 同一套。 */
+    recycleErr.value = e instanceof ApiError ? e.message : '賣家沒有接受這筆回收，請稍後再試'
   }
 }
 
@@ -1114,7 +1126,14 @@ async function copyLink() {
 
     <p class="muted note">寄存中的卡可合併出貨（省運費），寄存期限 90 天。</p>
 
-    <div v-if="list.ready.value && !total" class="empty card">
+    <!-- 「卡冊還是空的」是一句斷言，所以三個條件缺一不可：
+         · !list.error.value —— ready 在 finally 裡不分成敗都會變 true，
+           斷網時「載不到」會被畫成「你沒有卡」，使用者以為卡不見了。
+         · !rows.length —— total 來自 summary，而 refreshSummary() 把錯誤吞掉；
+           清單成功、只有總覽失敗時 total 是 0，這張空狀態會疊在一整面卡牆上。
+         · !total —— 分頁沒有卡的情況由下面那句負責，兩句話不一樣。
+         （同一條原則寫在 support/SupportListPage.vue 的檔頭。） -->
+    <div v-if="list.ready.value && !list.error.value && !total && !rows.length" class="empty card">
       <p>卡冊還是空的。</p>
       <RouterLink :to="{ name: 'home' }" class="btn primary">去抽第一張</RouterLink>
       <!-- 手上已經有實體卡的人不必先抽 —— 登記進來就能上架、能進池 -->
@@ -1439,8 +1458,9 @@ async function copyLink() {
                  跟接下來要做什麼無關。寄存期限只有寄存中才有意義 ——
                  卡已經在出貨的路上了，寄存期限講的是一件不會再發生的事。 -->
             <CertTag :card="g.head.card" />
-            <span v-if="popKind(g) === 'actions'" class="mono muted exp">
-              寄存至 {{ g.head.stashExpiresAt }}
+            <!-- 期限拿不到就整行不畫：印一句「寄存至」後面接空白，比不講還糟 -->
+            <span v-if="popKind(g) === 'actions' && g.head.stashExpiresAt" class="mono muted exp">
+              寄存至 {{ localDay(g.head.stashExpiresAt) }}
             </span>
 
             <!-- ---- 出貨單的說明 ----
@@ -1507,7 +1527,7 @@ async function copyLink() {
           >＋</button>
         </div>
 
-        <p v-else class="meta mono">取得 {{ wonDay(g.head.acquiredAt) }}</p>
+        <p v-else class="meta mono">取得 {{ localDay(g.head.acquiredAt) }}</p>
       </div>
     </div>
 
@@ -1672,6 +1692,12 @@ async function copyLink() {
             卡片還回去之後<strong>無法取回</strong>。
             點數只能用於站內抽選，<strong>不可提領現金、不可轉讓他人</strong>。
           </p>
+          <!-- 失敗訊息留在面板裡（同出貨面板的 shipErr）：這件事**正常會失敗**
+               （賣家保留額不足、或這張卡同時被申請出貨），而使用者接下來要決定
+               再按一次還是先去看卡的狀態 —— 那句話得留在他看得到的地方。
+               role="alert" 讓螢幕閱讀器當場念出來：焦點還在「提出回收」上，
+               不念的話他只知道按了沒反應。 -->
+          <p v-if="recycleErr" class="warn err" role="alert">{{ recycleErr }}</p>
           <div class="acts">
             <button type="button" class="btn primary sm" @click="doRecycle(confirmPrize)">提出回收</button>
             <button type="button" class="btn sm" @click="closeConfirm">取消</button>
@@ -1880,6 +1906,11 @@ async function copyLink() {
   width: 34px; height: 34px; display: grid; place-items: center;
   border: 0; background: var(--surface-2); color: var(--muted); border-radius: 50%;
 }
+/* 視覺上維持 34px 的小圓鈕，熱區用偽元素撐到 44px（touch.css 的門檻）。
+   這裡不能像 .sw 那樣「放大盒子＋負外距」：它是絕對定位的，盒子一放大
+   看得見的圓就跟著往外挪，right/top 得重算，而偽元素只往外長熱區，
+   圓的位置一個像素都不會動。 */
+.sheetClose::before { content: ''; position: absolute; inset: -5px; border-radius: 50%; }
 .sheetClose svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 /* 標題要讓出右上角那顆關閉鍵的位置（它是絕對定位的） */
 .chosenSheet h2 { padding-right: 42px; }
@@ -2014,13 +2045,6 @@ async function copyLink() {
   background: var(--field, var(--surface-2)); color: var(--ink);
 }
 .fields input:focus { outline: none; border-color: var(--gold); }
-
-.sellRow { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-.sellRow input {
-  flex: 1; min-width: 0;  /* flex 子元素預設也是 min-width: auto，見 .fields 的說明 */ padding: 9px 11px; font: inherit; font-size: 16px;
-  border: 1px solid var(--line); border-radius: 10px;
-  background: var(--field, var(--surface-2)); color: var(--ink);
-}
 
 /* 送出後的回饋。固定在底部導覽上方，捲動時不會跑掉 */
 .toast {
@@ -2254,10 +2278,6 @@ async function copyLink() {
 .shareErr { margin: 10px 0 0; font-size: 12px; color: var(--danger); }
 .overview .confirm { margin-top: 12px; }
 
-
-
-@media (max-width: 720px) {
-}
 
 .page { padding-top: 36px; padding-bottom: 72px; }
 /* 讓位不在這裡補。選取列改用 BottomActionBar 之後，讓位是它 Teleport 到
@@ -2551,6 +2571,10 @@ strong { font-size: 14px; }
    只給回收確認，不外溢到其他覆蓋層 —— 這一頁的 .acts .btn.sm 是共用的，
    在這裡放寬會連選取列那幾顆一起變（那條列的高度是量過的）。 */
 #recycleSheet .acts .btn { min-height: 44px; }
+/* 回收失敗那一列。跟出貨面板的 .sheetFoot .warn.err 同一套配色，
+   用 --danger-ink 不用 --danger：這是鋪在面板底色上的文字（見 tokens.css）。
+   底下就是「提出回收」，訊息貼著按鈕出現，不必抬頭找。 */
+#recycleSheet .warn.err { margin: 10px 0 0; font-size: 12.5px; color: var(--danger-ink); }
 .sheet .quote { font-size: 13px; margin: 12px 0; }
 .sheet .quote + .warn { margin-bottom: 2px; }
 .warn strong { color: var(--danger); font-weight: 600; }
@@ -2559,7 +2583,6 @@ strong { font-size: 14px; }
 
 @media (max-width: 720px) {
   .page { padding-top: 22px; padding-bottom: 40px; }
-  .sellBar { margin: -4px 0 14px; }
   .sellHint { font-size: 11.5px; }
   h1 { font-size: 19px; }
   .note { font-size: 12px; margin: 0 0 16px; }
