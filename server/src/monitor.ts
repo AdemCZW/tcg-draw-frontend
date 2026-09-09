@@ -383,7 +383,11 @@ export async function alertFindings(report: MonitorReport): Promise<number> {
         title: `系統檢測（${SEV_TEXT[f.severity] ?? f.severity}）：${f.check}`,
         body: `${f.message}${f.count > 1 ? `（共 ${f.count} 筆）` : ''}`
           + (f.sample.length ? `\n樣本：${f.sample.join('、')}` : ''),
-        link: '/admin/overview',
+        /* 指到後台的系統檢測頁（src/pages/console/ConsoleMonitor.vue，
+           路由名 console-monitor）。原本指總覽 —— 而總覽一個字都沒提檢測，
+           點進去看不到東西的警報等於沒發，管理員只會學會忽略它，
+           被忽略的正是 negative-balance 那種 critical。 */
+        link: '/admin/monitor',
         refId: `monitor:${f.check}:${day}`
       })
       sent++

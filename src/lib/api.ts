@@ -1691,3 +1691,94 @@ export const trainerCardApi = {
     }
   }
 }
+
+/* ==================================================================
+   系統自我檢測（/admin/monitor）
+
+   跟工單、客服、訓練家卡那幾段同一個理由獨立成一個物件：這個檔案同時有
+   多支 agent 在動，附加一整塊比插進既有物件安全。
+
+   **這裡刻意只包 GET /v1/monitor（唯讀那一支）。** 後端另有
+   POST /v1/monitor/run，跑完會照常發通知給每一位管理員 —— 管理員手動
+   看一眼現況不該灌爆所有人的鈴鐺，所以那支不在前端的 API 面上出現：
+   沒有函式，按鈕就不會有人「順手」接上去。
+================================================================== */
+
+export type MonitorSeverity = 'critical' | 'high' | 'medium' | 'low'
+
+export interface MonitorFinding {
+  /** 檢查代號，例如 'listing-prize-desync'。跟通知標題裡的字串是同一個 */
+  check: string
+  severity: MonitorSeverity
+  count: number
+  /** 完整說明：這代表什麼、會造成什麼、先查哪裡。**顯示時不要裁切** */
+  message: string
+  /** 樣本 id，查起來有起點 */
+  sample: string[]
+}
+
+export interface MonitorReport {
+  at: number
+  /** 跑了哪些檢查 —— 全綠時它證明「有檢查過」而不是「沒檢查」 */
+  checked: string[]
+  findings: MonitorFinding[]
+  /** 檢查本身掛掉的。檢測失明比單一問題更危險，畫面上要比 findings 更醒目 */
+  errors: { check: string; error: string }[]
+}
+
+const MONITOR_SEV: MonitorSeverity[] = ['critical', 'high', 'medium', 'low']
+const toSeverity = (v: unknown): MonitorSeverity =>
+  MONITOR_SEV.includes(v as MonitorSeverity) ? v as MonitorSeverity : 'low'
+
+export const monitorApi = {
+  /**
+   * 跑一輪檢測並拿回結果。**唯讀，不發通知。**
+   *
+   * 後端每次呼叫都是真的跑一輪（不是讀快取），所以回傳的 at 就是「這份
+   * 報告是什麼時候跑的」—— 畫面要把它顯示出來，不然管理員分不出
+   * 「現在沒問題」與「看到的是半天前的畫面」。
+   */
+  async report(): Promise<MonitorReport> {
+    if (MOCK) {
+      await delay(320)
+      /* 展示模式沒有後端。刻意做出「有一筆 high、也有一支檢查自己掛掉」——
+         全綠的假資料看不出這一頁為什麼要存在。 */
+      return {
+        at: Date.now(),
+        checked: [
+          'ledger-drift', 'negative-balance', 'settlement-prize-desync',
+          'listing-prize-desync', 'stuck-in-pool', 'settlement-sweep-stalled',
+          'escrow-sweep-stalled', 'pool-stuck-committed', 'cert-unprotected'
+        ],
+        findings: [{
+          check: 'listing-prize-desync', severity: 'high', count: 2,
+          message: '有效掛單指著一張不在上架狀態的卡，或一張標著上架的卡既沒有有效掛單、'
+            + '也沒有還開著的託管訂單。前者可以成交一張不該賣的卡；'
+            + '後者的卡被鎖在 listed 出不來（託管中的卡是正常的，已經排除）。'
+            + '看樣本那幾筆是掛單先死還是卡先變 —— 後者多半是 releasePrize 沒跑到。',
+          sample: ['ls-demo-9f2c41', 'pz-demo-77ab03']
+        }],
+        errors: [{ check: 'zombie-shipment', error: 'demo: statement timeout' }]
+      }
+    }
+    const r = await http<{
+      at?: unknown; checked?: unknown[]
+      findings?: Any[]; errors?: Any[]
+    }>('/v1/monitor')
+    return {
+      at: Number(r.at) || Date.now(),
+      checked: (r.checked ?? []).map(String),
+      findings: (r.findings ?? []).map(f => ({
+        check: String(f.check ?? ''),
+        severity: toSeverity(f.severity),
+        count: Number(f.count) || 0,
+        message: String(f.message ?? ''),
+        sample: ((f.sample as unknown[]) ?? []).map(String)
+      })),
+      errors: (r.errors ?? []).map(e => ({
+        check: String(e.check ?? ''),
+        error: String(e.error ?? '')
+      }))
+    }
+  }
+}

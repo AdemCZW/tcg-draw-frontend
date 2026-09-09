@@ -325,6 +325,14 @@ export const router = createRouter({
           meta: { title: '聯絡訊息' }
         },
         {
+          /* 系統自我檢測的結果。**這是 monitor.ts 那些通知的落點** ——
+             alertFindings 的 link 直接指到這裡，改路徑要兩邊一起改，
+             不然管理員又會點到一個看不到檢測結果的頁面。 */
+          path: 'monitor', name: 'console-monitor',
+          component: () => import('@/pages/console/ConsoleMonitor.vue'),
+          meta: { title: '系統檢測' }
+        },
+        {
           path: 'audit', name: 'console-audit',
           component: () => import('@/pages/console/ConsoleAudit.vue'),
           meta: { title: '稽核紀錄' }

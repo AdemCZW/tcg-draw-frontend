@@ -72,7 +72,12 @@ const NAV: Nav[] = [
      它有自己的待辦數字，而且那個數字必須在側欄上：這個功能付出的代價
      就是「客服多一個地方要看」，而看不看得到不該靠記得。 */
   { name: 'console-contact', label: '聯絡訊息', icon: 'M3 6h18v12H3zM3 7l9 6 9-6', badge: () => contactPending.value },
-  { name: 'console-audit', label: '稽核紀錄', icon: 'M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5' }
+  { name: 'console-audit', label: '稽核紀錄', icon: 'M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5' },
+  /* 系統檢測排在最後：它不是「有人在等我」那一群，是系統自己說話的地方。
+     刻意不給待辦數字 —— 那個數字要先跑一輪檢測才知道，而檢測是一組
+     聚合查詢，不該為了側欄上的一個數字在每次開後台時都跑一遍。
+     真的有事的時候通知會直接連過來，不必靠側欄提醒。 */
+  { name: 'console-monitor', label: '系統檢測', icon: 'M3 12h3l2-5 3 10 2.5-7 1.5 4h6M12 3v2M12 19v2' }
 ]
 
 /* 詳情頁的路由名跟它所屬的區不同名，要對回去側欄才會保持高亮：
