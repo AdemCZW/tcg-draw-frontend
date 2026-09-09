@@ -4,9 +4,11 @@
  *
  * 除了獎項表，這裡多了兩塊本來算得出來卻從來沒呈現的資訊：
  *
- * 1. **即時機率**。定量池的中獎率不是設定值，是組成的衍生結果，
- *    而且會隨銷售改變 —— 剩 40 籤而最後賞還沒出，就是 1/40。
+ * 1. **開賣時的機率**。定量池的中獎率不是設定值，是組成的衍生結果。
  *    這是買家最想知道的事，也是公平會處理原則裡「機會中獎商品的機率」所指的東西。
+ *    2026-09 從「即時」改成「開賣時」，並把「剩 N」改成「放了 N 張」——
+ *    完整理由見 lib/pool-odds.ts 的檔頭（簡述：即時各賞剩餘全市場零家在做，
+ *    而凍結的剩餘會變成假的，講組成才是永遠為真的那一種說法）。
  * 2. **保底回饋率**。Σ(賣家宣告的買回價 × 數量) ÷ 票收。
  *    分子是賣家有義務付出去的錢，不是他標示的市值 —— 那個數字沒有外部依據，
  *    賣家填高就一起說謊（docs/HANDOFF.md 4.1）。同業幾乎沒有人公開任何一種。
@@ -54,21 +56,30 @@ const live = computed(() => isDrawable(props.pool) && props.pool.remainingTicket
   <div class="pz">
     <h2 class="sr-only">獎項與剩餘</h2>
 
+    <!-- ---- 這一池放了什麼 ----
+         講的是**組成**不是剩餘。「這一池放了 1 張最後賞」是一句開賣後
+         永遠為真的話；「還剩 1 張」不是，它每賣掉一籤就可能變假。
+         同業（Clove、日本トレカセンター、TCG JAPAN）的做法是把「剩 N」
+         凍結在開賣值再加一句免責，那等於顯示一個自己知道會變錯的數字 ——
+         比不顯示更糟。整池剩幾籤仍然即時，那一項不動：它是分母，
+         而且日本的玩家會主動找「剩得少」的池去獵最後賞，它是引擎不是煞車。 -->
     <section v-if="live" class="card odds">
       <header>
-        <h3>現在抽中的機率</h3>
+        <h3>這一池放了什麼</h3>
         <span class="muted">剩 <strong class="mono">{{ pool.remainingTickets }}</strong> 籤</span>
       </header>
       <ul>
-        <li v-for="o in odds" :key="o.tier" :class="{ gone: o.remaining === 0 }">
+        <li v-for="o in odds" :key="o.tier">
           <TierBadge :tier="asTier(o.tier)" />
-          <span class="mono n">剩 {{ o.remaining }}</span>
+          <span class="mono n">{{ o.total }} 張</span>
           <span class="mono p">{{ oddsText(o) }}</span>
         </li>
       </ul>
       <p class="muted fine">
-        這是<strong>定量池</strong>：獎品數量固定，抽走一張就少一張，
-        所以機率會隨著銷售改變 —— 不是一個固定的中獎率。
+        右邊是<strong>開賣時</strong>的機率，由上面的張數與總籤數算出來的。
+        這是<strong>定量池</strong>：抽走一張就真的少一張，所以實際機率會隨著銷售改變，
+        我們不會即時更新這個數字。<strong>開獎後你可以自己重算整個籤序</strong>，
+        驗證每一籤開出什麼 —— 那件事不需要相信我們。
       </p>
     </section>
 
@@ -116,7 +127,6 @@ const live = computed(() => isDrawable(props.pool) && props.pool.remainingTicket
 .odds header span { margin-left: auto; font-size: 12.5px; }
 .odds ul { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 7px; }
 .odds li { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
-.odds li.gone { opacity: .45; }
 .odds .n { flex: none; color: var(--muted); font-size: 12.5px; }
 .odds .p { margin-left: auto; font-variant-numeric: tabular-nums; }
 

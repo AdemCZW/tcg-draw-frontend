@@ -1,43 +1,63 @@
 /**
- * 池的即時機率與保底回饋率。
+ * 池的開賣時機率與保底回饋率。
  *
- * 定量池的「中獎率」不是一個設定值，是組成的衍生結果 ——
- * 而且**會隨著銷售改變**：100 籤裡有 1 張最後賞，開賣時是 1/100；
- * 賣掉 60 籤而它還沒出，就變成 1/40；已經被抽走就是 0。
+ * 定量池的「中獎率」不是一個設定值，是組成的衍生結果。
+ * 它確實會隨銷售改變（100 籤裡 1 張最後賞是 1/100；賣掉 60 籤而它還沒出
+ * 就變成 1/40），但**畫面上呈現的是開賣當下那一組，不是即時的**。
  *
- * 這件事本來就算得出來（伺服器回傳的池快照裡每個獎項都有 remaining），
- * 只是從來沒有呈現給買家看。而它是買家最想知道的資訊，
- * 也是公平會處理原則裡「機會中獎商品的機率」那條所指的東西。
+ * ── 為什麼從「即時」改成「開賣時」（2026-09）──────────────────────────
+ * 這一支原本回的是即時剩餘與即時機率。查證五家同業之後改掉：
+ * **即時顯示各賞別還剩幾張，市場上零家在做**（Clove、日本トレカセンター、
+ * TCG JAPAN 都只公開初始封入數，機率明確標註是發售時點的理論值）。
+ * 常態是「揭露分母、不揭露分子」—— 整池剩幾籤即時公開，各賞的數字凍結。
+ *
+ * 但這裡刻意**不照抄**同業把「剩 N」凍住的做法。凍住的剩餘數會隨著銷售
+ * 變成假的，而顯示一個自己知道會變錯的數字，比不顯示更糟
+ * （日本已有律所在談這類表示與景品表示法的關係）。
+ * 改成講**組成**：「這一池放了 N 張」是一句開賣後永遠為真的話，
+ * 而從組成算出來的開賣時機率同樣永遠為真。
+ *
+ * 事後的透明度不靠這裡，靠 commit-reveal：開獎後任何人可以自己重算整個
+ * 籤序（見 shared/fairness.ts）。那比「我們公布履歷」強一級 ——
+ * 不需要相信我們有沒有改。
  */
 import type { Pool } from '@/types/models'
 import { floorRatio, floorVerdict, type FloorVerdict } from '@/shared/economics'
 
 export interface TierOdds {
   tier: string
-  /** 這個賞別還剩幾張 */
-  remaining: number
-  /** 抽一次抽中這個賞別的機率（0–1） */
+  /**
+   * 這個賞別**放了幾張**（開賣時的封入數），不是還剩幾張。
+   * 這是一句開賣後永遠為真的話，凍結的「剩餘」不是。
+   */
+  total: number
+  /** 開賣時抽一次抽中這個賞別的機率（0–1） */
   chance: number
-  /** 大約幾抽會中一次。剩 0 時為 null */
+  /** 開賣時大約幾抽會中一次。封入 0 張時為 null（理論上不會發生） */
   oneIn: number | null
 }
 
-/** 依賞別彙總目前的機率。同一個賞別可能有多個獎項（不同卡），要合併 */
+/**
+ * 依賞別彙總**開賣時**的機率。同一個賞別可能有多個獎項（不同卡），要合併。
+ *
+ * 分子用 `p.total`（封入數）、分母用 `pool.totalTickets`（總籤數），
+ * 兩個都是開賣就固定的值 —— 所以這個函式的輸出在整個池的生命週期裡不變。
+ * 用 remaining / remainingTickets 算出來的即時值刻意不再對外呈現，理由見檔頭。
+ */
 export function tierOdds(pool: Pool): TierOdds[] {
-  const left = pool.remainingTickets
+  const seats = pool.totalTickets
   const byTier = new Map<string, number>()
   for (const p of pool.prizes) {
-    byTier.set(p.tier, (byTier.get(p.tier) ?? 0) + p.remaining)
+    byTier.set(p.tier, (byTier.get(p.tier) ?? 0) + p.total)
   }
   const ORDER = ['LAST', 'A', 'B', 'C', 'D', 'BUST']
   return [...byTier.entries()]
     .sort((a, b) => ORDER.indexOf(a[0]) - ORDER.indexOf(b[0]))
-    .map(([tier, remaining]) => ({
+    .map(([tier, total]) => ({
       tier,
-      remaining,
-      chance: left > 0 ? remaining / left : 0,
-      // 剩 0 張就是抽不到，不要顯示成「1/∞」那種看起來像很難但還有機會的東西
-      oneIn: remaining > 0 && left > 0 ? left / remaining : null
+      total,
+      chance: seats > 0 ? total / seats : 0,
+      oneIn: total > 0 && seats > 0 ? seats / total : null
     }))
 }
 
@@ -68,5 +88,20 @@ export function poolFloor(
 }
 
 /** 機率的人話。1/40 比 2.5% 好懂，但兩個都給 */
-export const oddsText = (o: TierOdds) =>
-  o.oneIn === null ? '已抽完' : `1 / ${Math.round(o.oneIn)}　(${(o.chance * 100).toFixed(1)}%)`
+/**
+ * 機率的人話。1/40 比 2.5% 好懂，但兩個都給。
+ *
+ * ── 「1 / 1」這個顯示是錯的，要擋掉 ──────────────────────────────────
+ * 80 籤裡放了 77 張 D 賞，oneIn ＝ 80/77 ＝ 1.04，四捨五入變 1，
+ * 於是畫面上寫「1 / 1（96.3%）」—— 那讀起來是**每抽必中**，但實際上
+ * 每 27 抽會有一抽不是 D 賞。分數形式只在稀有的東西上讀得準；
+ * 常見的東西用百分比就好，硬湊一個分數反而在說謊。
+ *
+ * 門檻設在 2：oneIn 不到 2 就只給百分比。不再有「已抽完」這個狀態 ——
+ * 講的是封入數，那個數字不會歸零。
+ */
+export const oddsText = (o: TierOdds) => {
+  if (o.oneIn === null) return '—'
+  const pct = `${(o.chance * 100).toFixed(1)}%`
+  return o.oneIn < 2 ? pct : `1 / ${Math.round(o.oneIn)}　(${pct})`
+}
