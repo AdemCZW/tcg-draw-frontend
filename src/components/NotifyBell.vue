@@ -12,7 +12,7 @@
  * 手機刻意在左邊留一條背景不蓋：那條縫是在說「你還在剛才那一頁上，這只是疊上來的」，
  * 全螢幕蓋掉會被誤讀成換頁，使用者就會去找返回鍵而不是關閉鍵。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { notifications, type Notification, type NotifyKind } from '@/lib/social'
 import { ApiError } from '@/lib/http'
@@ -133,6 +133,53 @@ async function toggle() {
   try { await notifications.markRead() } catch { /* 靜默：這不是使用者主動要求的動作 */ }
 }
 
+/* ---- 讀得完 ----
+   內文被 -webkit-line-clamp 裁成兩行，而設計上的理由是「通知是索引不是內文，
+   要看細節就點進去」。那對大部分通知成立，但有一種不成立：
+   **內容本身就是全部的那種**。系統檢測的警報就是 —— 它的內文帶著問題描述
+   跟樣本編號，而它的連結指向後台總覽，那一頁根本沒有顯示檢測結果。
+   於是那則高嚴重度警報的全文**哪裡都讀不到**。
+
+   修法不是把裁切拿掉（一則長通知會把其他九則擠出畫面），是讓讀不完的那幾則
+   可以就地展開。 */
+const expanded = ref(new Set<number>())
+/* 哪幾則真的被裁到。**用量的，不是猜字數** —— 同樣長度的內文在窄螢幕會裁、
+   寬螢幕不會，字數判斷在兩邊都會錯。 */
+const clamped = ref(new Set<number>())
+const bodyEls = new Map<number, HTMLElement>()
+
+/* 樣板的 ref 回呼。元素卸載時 Vue 會傳 null，那時要從 Map 拿掉，
+   不然捲很久之後這個 Map 會留著一堆已經不存在的節點。 */
+function bindBody(id: number, el: unknown) {
+  if (el instanceof HTMLElement) bodyEls.set(id, el)
+  else bodyEls.delete(id)
+}
+
+function measure() {
+  const next = new Set<number>()
+  for (const [id, el] of bodyEls) {
+    /* 已經展開的不重量：展開後沒有裁切，量出來會是「沒被裁」，
+       那顆「收合」就會消失，使用者被卡在展開狀態。 */
+    if (expanded.value.has(id)) { next.add(id); continue }
+    // +1 容忍次像素：不同縮放比例下 scrollHeight 會比 clientHeight 大零點幾
+    if (el.scrollHeight > el.clientHeight + 1) next.add(id)
+  }
+  clamped.value = next
+}
+
+function toggleBody(id: number) {
+  const s = new Set(expanded.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  expanded.value = s
+}
+
+/* 清單換了內容要重量。用 nextTick 是因為要等 DOM 真的畫完才量得到高度。 */
+watch(rows, () => { void nextTick(measure) }, { deep: false })
+/* 面板關著的時候元素在 DOM 裡但高度是 0，量出來全部「沒被裁」。
+   所以打開時要再量一次。 */
+watch(open, v => { if (v) void nextTick(measure) })
+
 function go(n: Notification) {
   if (!n.link) return
   /* 點進去代表真的看過了：把這一則單獨標掉，未讀樣式當場消失。
@@ -240,9 +287,12 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
         </div>
 
         <div v-else class="list">
+          <!-- 包一層是為了讓「全文」那顆按鈕當這一列的兄弟而不是子孫：
+               有連結的那幾列本身是 <button>，按鈕不能巢狀（HTML 不合法，
+               而且點內層會連外層一起觸發，等於展開的同時把人導走）。 -->
+          <div v-for="n in rows" :key="n.id" class="itemWrap">
           <component
             :is="n.link ? 'button' : 'div'"
-            v-for="n in rows" :key="n.id"
             class="item"
             :class="[`tone-${meta(n.kind).tone}`, { fresh: wasUnread.has(n.id), tap: !!n.link }]"
             :type="n.link ? 'button' : undefined"
@@ -262,7 +312,10 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
                 <span class="when">{{ relTime(n.created_at) }}</span>
               </span>
               <span class="t">{{ n.title }}</span>
-              <span v-if="n.body" class="b">{{ n.body }}</span>
+              <span
+                v-if="n.body" class="b" :class="{ full: expanded.has(n.id) }"
+                :ref="el => bindBody(n.id, el)"
+              >{{ n.body }}</span>
             </span>
             <!-- 有 link 才有箭頭：能不能點進去要在按下去之前就看得出來 -->
             <svg v-if="n.link" class="chev" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -270,6 +323,15 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
             </svg>
             <span v-if="wasUnread.has(n.id)" class="sr">未讀</span>
           </component>
+          <!-- 只有真的被裁到才長出來。永遠顯示的話，短通知底下會多一顆
+               按了什麼都不會變的按鈕。 -->
+          <button
+            v-if="clamped.has(n.id)"
+            type="button" class="more"
+            :aria-expanded="expanded.has(n.id)"
+            @click="toggleBody(n.id)"
+          >{{ expanded.has(n.id) ? '收合' : '看全文' }}</button>
+          </div>
         </div>
       </section>
     </Transition>
@@ -483,7 +545,10 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
 /* 分隔線縮排到文字欄起點，而且是每則之間才有（不是每則自己一條下邊框）。
    齊頭的滿版線會把每一則框成一格一格，縮排之後圖示那欄是連續的留白，
    一整排看起來是一份清單而不是一疊卡片 */
-.item + .item::before {
+/* 分隔線改由 .itemWrap 相鄰時畫：每一列外面多包了一層之後，
+   .item + .item 這個相鄰選擇器就再也不會成立了（它們不是兄弟了）。 */
+.itemWrap { position: relative; }
+.itemWrap + .itemWrap .item::before {
   content: ''; position: absolute; left: 62px; right: 16px; top: 0;
   height: 1px; background: var(--line-soft);
 }
@@ -562,8 +627,34 @@ const freshCount = computed(() => rows.value.reduce((a, n) => a + (wasUnread.val
   min-width: 0;
   font-size: 12.5px; line-height: 1.65; color: var(--muted);
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  /* 標準屬性一起寫，別只留 -webkit- 前綴的那一份 */
+  line-clamp: 2;
   overflow: hidden;
+  /* 系統檢測那類通知的內文帶著換行（「\n樣本：...」）。預設的 normal 會把
+     換行併成一個空格，樣本編號就黏在句子後面變成一長串。 */
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
+/* 展開：把裁切整個關掉。改 line-clamp 的數字沒有用 —— 內文長度不固定，
+   給幾行都會有裁到的情況。 */
+.b.full {
+  display: block;
+  -webkit-line-clamp: unset; line-clamp: unset;
+  overflow: visible;
+}
+
+/* 「看全文」。縮排到跟內文同一條左緣（34px 圖示 + 12px 間距 + 16px 內距），
+   它講的是上面那段內文，不是這一列。 */
+.more {
+  margin: -6px 0 10px 62px;
+  min-height: 44px; padding: 0 4px;
+  border: 0; background: none;
+  color: var(--muted); font: inherit; font-size: 12px; font-weight: 600;
+  text-decoration: underline; text-underline-offset: 3px;
+  cursor: pointer;
+}
+.more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+@media (hover: hover) { .more:hover { color: var(--ink); } }
 
 /* 箭頭很淡：它只回答「這則點得進去嗎」，不是要人去按它 */
 .chev {

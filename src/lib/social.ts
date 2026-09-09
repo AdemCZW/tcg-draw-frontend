@@ -101,6 +101,13 @@ const mockNotifications: Notification[] = [
   { id: 6, kind: 'trade-result', title: '你的出價被接受了', body: '「謎擬Ｑ SAR」以 26,000 點成交，卡片已入卡冊。', link: '/me/offers', ref_id: 'to-5', read_at: null, created_at: now - 95 * 60_000 },
   { id: 3, kind: 'listing-sold', title: '你的卡賣出了', body: '「月亮伊布 ex SAR」以 4,200 點成交，點數已入帳。', link: '/me/wallet', ref_id: 'l-1', read_at: null, created_at: now - 5 * 3600_000 },
   { id: 2, kind: 'shipment', title: '你的卡已經寄出', body: '物流單號 SMOKE12345678', link: '/me/cards', ref_id: 'sh-1', read_at: new Date(now - 26 * 3600_000).toISOString(), created_at: now - 28 * 3600_000 },
+  /* 系統檢測的警報。**這一則是刻意造得很長的**：它是這份假資料裡唯一會撞到
+     「內文兩行放不下」的一則，而那正是通知清單最容易出事的形狀 ——
+     這類通知的內文就是全部的內容（連結指向後台總覽，那一頁不會重講一次），
+     兩行讀不完就等於哪裡都讀不到。沒有它，「看全文」那顆按鈕在展示模式下
+     永遠不會出現，也就沒有人會發現它壞掉。
+     內文裡的換行是真的 —— 後端的 alertFindings 就是這樣拼樣本編號的。 */
+  { id: 8, kind: 'system', title: '系統檢測（高）：listing-prize-desync', body: '有效掛單指著一張不在上架狀態的卡，或一張標著上架的卡既沒有有效掛單、也沒有還開著的託管訂單。前者可以成交一張不該賣的卡；後者的卡被鎖在 listed 出不來（託管中的卡是正常的，已經排除）。看樣本那幾筆是掛單先死還是卡先變 —— 後者多半是 releasePrize 沒跑到。（共 3 筆）\n樣本：l-8f2a1c、p-4d90ee、l-77b310', link: '/admin/overview', ref_id: 'monitor:listing-prize-desync:demo', read_at: null, created_at: now - 2 * 3600_000 },
   { id: 1, kind: 'system', title: '測試點數已入帳', body: '平台已撥入 1,000,000 點測試點數。', link: '/me/wallet', ref_id: 'u-1', read_at: new Date(now - 70 * 3600_000).toISOString(), created_at: now - 72 * 3600_000 }
 ]
 let mockShare: ShareSettings = { public: false, slug: null }
