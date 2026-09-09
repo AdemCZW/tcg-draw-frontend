@@ -17,6 +17,7 @@
  */
 import { computed, ref, watch } from 'vue'
 import { MOCK } from '@/lib/config'
+import UploadFailNote from '@/components/UploadFailNote.vue'
 import { acceptOf, maxMbOf, useUploads, type UploadEntry } from '@/lib/uploads'
 
 const props = withDefaults(defineProps<{ max?: number }>(), { max: 5 })
@@ -141,9 +142,12 @@ watch(
         <span class="spErrN">{{ shortName(e) }}</span>
         <span class="spErrM">{{ e.error }}</span>
         <span class="spErrA">
+          <!-- retriable 現在也會因為「同一張連續失敗太多次」而變 false ——
+               那時候唯一的出路是移除或回報，不該再擺一顆按了也一樣的重試 -->
           <button v-if="e.retriable" type="button" class="spBtn" @click="retry(e.uid)">重試</button>
           <button type="button" class="spBtn ghost" @click="remove(e.uid)">移除</button>
         </span>
+        <UploadFailNote class="spErrD" :hint="e.hint" :diag="e.diag" />
       </li>
     </ul>
 
@@ -238,6 +242,7 @@ watch(
 .spErrN { font-size: 12px; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
 .spErrM { font-size: 11.5px; line-height: 1.65; color: var(--danger); overflow-wrap: anywhere; }
 .spErrA { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.spErrD { margin-top: 4px; }
 .spBtn {
   min-height: 44px; padding: 0 16px;
   border-radius: var(--pill); border: 1px solid var(--line);

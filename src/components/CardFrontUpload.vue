@@ -9,6 +9,7 @@
  */
 import { computed, ref, watch } from 'vue'
 import ImageCropper from '@/components/ImageCropper.vue'
+import UploadFailNote from '@/components/UploadFailNote.vue'
 import { acceptOf, maxMbOf, useUploads } from '@/lib/uploads'
 
 const emit = defineEmits<{
@@ -30,6 +31,10 @@ function pick(event: Event) {
   dropNote.value = add(input.files)
   input.value = ''
 }
+
+/* 失敗那一張本身。只有一張，所以 entry 跟 fail 其實是同一列，
+   分開命名是為了讓模板讀得出「這一段只在失敗時存在」 */
+const fail = computed(() => failed.value[0] ?? null)
 
 const status = computed(() => {
   // 停在裁切框也算 pending，但「上傳中」對它是假的 —— 球在使用者腳下
@@ -61,6 +66,9 @@ watch([fileIds, ready], ([ids, isReady]) => {
       <span>選擇正面圖片</span>
     </label>
     <p class="status" :class="{ bad: failed.length, good: ready }" role="status">{{ status }}</p>
+    <!-- 失敗時多給兩件事：下一步怎麼辦、以及一段可以貼進工單的診斷碼。
+         只寫「請重試」的話，遇到站台端的問題使用者會一直按然後放棄 -->
+    <UploadFailNote v-if="fail" :hint="fail.hint" :diag="fail.diag" />
     <p v-if="dropNote" class="status bad" role="alert">{{ dropNote }}</p>
 
     <!-- 裁切框。:key 讓換張時整個重建，不重建的話 canvas 還留著上一張的狀態 -->

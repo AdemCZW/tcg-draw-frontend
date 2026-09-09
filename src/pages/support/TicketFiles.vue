@@ -22,6 +22,7 @@ import { MOCK } from '@/lib/config'
 import { acceptOf, maxMbOf, useUploads, type UploadEntry } from '@/lib/uploads'
 import { fmtBytes } from '@/lib/image-edit'
 import ImageCropper from '@/components/ImageCropper.vue'
+import UploadFailNote from '@/components/UploadFailNote.vue'
 /* 'ticket-doc' 的規則已收進 src/lib/uploads.ts（migration 026 放行的用途），
    原本的執行期補登（./ticket-uploads.ts）已移除。
    上限 5 個附件跟後端 routes/tickets.ts 的驗證一致。 */
@@ -181,9 +182,12 @@ watch(
         <span class="tfErrN">{{ e.name }}</span>
         <span class="tfErrM">{{ e.error }}</span>
         <span class="tfErrA">
+          <!-- 同一個檔連續失敗太多次之後 retriable 會變 false ——
+               那時候再擺一顆重試只是把人留在原地 -->
           <button v-if="e.retriable" type="button" class="tfBtn" @click="retry(e.uid)">重試</button>
           <button type="button" class="tfBtn ghost" @click="remove(e.uid)">移除</button>
         </span>
+        <UploadFailNote class="tfErrD" :hint="e.hint" :diag="e.diag" />
       </li>
     </ul>
 
@@ -305,6 +309,7 @@ watch(
 .tfErrN { font-size: 12px; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
 .tfErrM { font-size: 11.5px; line-height: 1.65; color: var(--danger-ink); overflow-wrap: anywhere; }
 .tfErrA { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.tfErrD { margin-top: 4px; }
 .tfBtn {
   min-height: 44px; padding: 0 16px;
   border-radius: var(--pill); border: 1px solid var(--line);

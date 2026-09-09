@@ -73,6 +73,23 @@ export const maxMbOf = (p: UploadPurpose) => Math.floor(UPLOAD_RULES[p].maxBytes
    editing＝正停在裁切框等使用者。兩種都還沒開始上傳，但都不能讓人送出。 */
 export type UploadStatus = 'preparing' | 'editing' | 'queued' | 'uploading' | 'done' | 'error'
 
+/**
+ * 失敗的分類。**只在能確定的時候才給確定的分類** ——
+ * 分不出來就是 'unknown'，那一格的文案會老實說「可能是這幾種原因」。
+ * 編一個聽起來很篤定的診斷，比不診斷更糟：使用者會照著錯的方向白忙。
+ */
+export type UploadFailKind =
+  | 'offline'      // navigator.onLine 是 false。唯一能百分之百確定的一種
+  | 'blocked'      // 一個位元組都還沒送出就瞬間失敗 —— 強烈暗示連線根本沒建立（預檢／CORS 被擋）
+  | 'interrupted'  // 已經傳出去一部分才斷 —— 那是真的網路中斷
+  | 'timeout'
+  | 'rejected'     // 對方有回應，只是回了非 2xx（簽章對不上、規則不符）
+  | 'auth'
+  | 'server'       // 後端明講「這個功能現在不能用」
+  | 'file'         // 檔案本身不合格，換檔才有用
+  | 'unknown'
+  | ''
+
 export interface UploadEntry {
   uid: string
   name: string
@@ -94,6 +111,21 @@ export interface UploadEntry {
   originalBytes: number
   /** 這一張走過裁切壓縮。沒走過的（PDF、本來就夠小的截圖）不要謊報 */
   edited: boolean
+  /** 失敗的分類。畫面靠它決定要不要繼續擺一顆重試 */
+  kind: UploadFailKind
+  /**
+   * 下一步。error 講「發生了什麼」，hint 講「你現在該做什麼」——
+   * 只寫「請重試」的訊息在 CORS 被擋的情況下會讓人按一百次然後放棄。
+   */
+  hint: string
+  /**
+   * 一行可複製的診斷碼，使用者回報時貼給我們。
+   * **裡面不放簽章網址、token、檔名、檔案內容** —— 簽章網址本身就是一把鑰匙，
+   * 貼進工單等於把寫入權限公開。只放我們查得動、又對不回個人的欄位。
+   */
+  diag: string
+  /** 這個檔連續失敗過幾次。用來停止無限鼓勵重試 */
+  attempts: number
 }
 
 interface PresignRes { fileId: string; uploadUrl: string; key: string }
@@ -109,19 +141,162 @@ const fakeFileId = () => {
   return 'f-' + Array.from(b, n => n.toString(16).padStart(2, '0')).join('')
 }
 
+/** 同一個檔連續失敗到這個次數，就不要再擺一顆重試當作唯一的出路 */
+const MAX_ATTEMPTS = 3
+
 /**
- * 把各種失敗翻成一句使用者看得懂、而且**講得出下一步**的話。
- * 「上傳失敗」這種訊息等於沒說 —— 太大要換張、格式不對要轉檔、
- * 網路斷掉要重試，三種的行動完全不同。
+ * 「還沒送出任何位元組就失敗」要多快才算瞬間失敗。
+ * 預檢被擋是瀏覽器本地就判定的，通常幾十毫秒內回來；真的連不上（DNS、逾時重送）
+ * 至少要幾百毫秒。這個門檻只用來區分 blocked 與 unknown，
+ * **踩不到門檻不會被講成「網路沒問題」**，只會退回「原因無法確定」。
  */
-function reasonOf(e: unknown): string {
-  if (e instanceof ApiError) {
-    if (e.code === 'NOT_CONFIGURED') return '伺服器尚未開啟檔案上傳功能，請稍後再試或聯絡客服'
-    if (e.code === 'NETWORK_ERROR') return '連不上伺服器，請檢查網路後重試'
-    if (e.status === 401) return '登入已失效，請重新登入後再上傳'
-    return e.message
+const BLOCKED_MS = 1200
+
+/** 失敗當下能拿到的所有訊號。之後的分類與診斷碼都只從這裡長出來，不另外猜 */
+interface FailSignals {
+  phase: 'presign' | 'transfer'
+  status: number
+  /** xhr.upload.onprogress 有沒有真的送出過位元組 */
+  progressed: boolean
+  sentPct: number
+  elapsedMs: number
+  online: boolean
+  code: string
+}
+
+/**
+ * 直傳階段的失敗。**帶著訊號一起往外丟** ——
+ * 原本這裡丟的是一個只有字串的 Error，結果是：使用者看到「請重試」而重試沒有用，
+ * 我們手上則完全沒有東西可以查。訊號留在例外裡，start() 才有辦法分類。
+ */
+class TransferError extends Error {
+  constructor(public kind: UploadFailKind, message: string, public signals: FailSignals) {
+    super(message)
+    this.name = 'TransferError'
   }
-  return e instanceof Error ? e.message : '上傳失敗，請重試'
+}
+
+/**
+ * 每一種失敗的兩句話：發生了什麼、你現在該做什麼。
+ * 第二句是這整組文案存在的理由 —— 使用者要能自己判斷
+ * 「這是我能解決的，還是要找平台的」。
+ */
+const FAIL_TEXT: Record<Exclude<UploadFailKind, ''>, { message: string; hint: string }> = {
+  offline: {
+    message: '裝置現在沒有網路，檔案沒有送出去',
+    hint: '連上 Wi-Fi 或行動網路後按重試。這一張還留著，不用重新選檔。'
+  },
+  blocked: {
+    /* 這一種是這次正式站事故的主嫌：連線在送出第一個位元組之前就結束了。
+       我們**不宣稱**一定是 CORS —— 那要看瀏覽器主控台才確定得了 ——
+       但可以確定的是「重試不會變好」，所以文案不能再叫人一直按。 */
+    message: '連線還沒建立起來就中斷了，檔案一個位元組都沒送出去',
+    hint: '這比較像站台的上傳設定有問題，不是你的網路，一直重試通常不會變好。可以先換一次網路（例如關掉 Wi-Fi 改用行動網路）確認；還是一樣的話請複製下面的診斷碼開一張客服工單，我們才查得到原因。'
+  },
+  interrupted: {
+    message: '傳到一半連線就斷了，檔案沒有傳完',
+    hint: '這通常是網路不穩。移到訊號好一點的地方再按重試，這一張會從頭重傳。'
+  },
+  timeout: {
+    message: '上傳等太久，已經放棄這一次',
+    hint: '網路太慢或中途停住了。換個網路環境再試一次；或改用檔案小一點的照片。'
+  },
+  rejected: {
+    message: '儲存空間拒絕了這個檔案',
+    hint: '重試通常沒有用。請複製下面的診斷碼開一張客服工單，這是站台端要修的。'
+  },
+  auth: {
+    message: '登入已失效，這一次沒有送出去',
+    hint: '請重新登入，回到這一頁再上傳一次。'
+  },
+  server: {
+    message: '伺服器目前沒有開啟檔案上傳',
+    hint: '這不是你能處理的。稍後再試一次；急的話請複製下面的診斷碼開客服工單。'
+  },
+  file: {
+    message: '這個檔案不符合規則',
+    hint: '要換的是檔案不是運氣，請重新選一張。'
+  },
+  unknown: {
+    message: '上傳中斷了，原因無法確定',
+    hint: '可能是網路中途斷線，也可能是站台的上傳設定有問題，從這裡分不出來。先重試一次；連續失敗的話請複製下面的診斷碼開客服工單。'
+  }
+}
+
+/**
+ * 一行可複製的診斷碼。
+ *
+ * **刻意不含**：uploadUrl（那是一把有寫入權限的鑰匙）、token、fileId、
+ * 檔名（使用者的檔名常常帶真名或訂單資訊）、任何檔案內容。
+ * 只留下我們拿去對後端日誌會用到、而且對不回個人的欄位。
+ */
+function diagOf(kind: UploadFailKind, s: FailSignals, mime: string, bytes: number, edited: boolean, attempts: number) {
+  return [
+    'VD-UP',
+    `k=${kind || 'na'}`,
+    `ph=${s.phase}`,
+    `st=${s.status}`,
+    s.code ? `c=${s.code}` : '',
+    `prog=${s.progressed ? 'y' : 'n'}`,
+    `pct=${s.sentPct}`,
+    `ms=${s.elapsedMs}`,
+    `net=${s.online ? 'on' : 'off'}`,
+    `mime=${mime || 'na'}`,
+    `kb=${Math.round(bytes / 1024)}`,
+    `edit=${edited ? 'y' : 'n'}`,
+    `try=${attempts}`,
+    `ts=${new Date().toISOString()}`
+  ].filter(Boolean).join(' ')
+}
+
+/**
+ * 把各種失敗翻成「分類 + 兩句話」。
+ * 「上傳失敗」這種訊息等於沒說 —— 太大要換張、格式不對要轉檔、
+ * 斷網要重試、被擋要回報，四種的行動完全不同。
+ */
+function describe(e: unknown): { kind: UploadFailKind; message: string; hint: string; signals: FailSignals } {
+  const online = navigator.onLine !== false
+  const base: FailSignals = { phase: 'presign', status: 0, progressed: false, sentPct: 0, elapsedMs: 0, online, code: '' }
+
+  if (e instanceof TransferError) {
+    const t = FAIL_TEXT[e.kind === '' ? 'unknown' : e.kind]
+    /* rejected 帶著 status 才有意義（403 是簽章對不上、404 是網址過期），
+       所以那一種用 xhr 當下的訊息，不是罐頭句 */
+    return { kind: e.kind, message: e.message || t.message, hint: t.hint, signals: e.signals }
+  }
+
+  if (e instanceof ApiError) {
+    const signals = { ...base, status: e.status, code: e.code }
+    if (e.code === 'NOT_CONFIGURED') return { kind: 'server', ...FAIL_TEXT.server, signals }
+    if (e.code === 'NETWORK_ERROR') {
+      /* presign 走的是 fetch，沒有進度事件可以看 —— 只有離線這一種確定得了，
+         其餘一律 unknown，不要拿 transfer 那套推論硬套在這一段上 */
+      const kind: UploadFailKind = online ? 'unknown' : 'offline'
+      return { kind, ...FAIL_TEXT[kind], signals }
+    }
+    if (e.status === 401) return { kind: 'auth', ...FAIL_TEXT.auth, signals }
+    return { kind: 'rejected', message: e.message, hint: FAIL_TEXT.rejected.hint, signals }
+  }
+
+  return {
+    kind: 'unknown',
+    message: e instanceof Error && e.message ? e.message : FAIL_TEXT.unknown.message,
+    hint: FAIL_TEXT.unknown.hint,
+    signals: base
+  }
+}
+
+/**
+ * 這一種失敗值不值得再按一次重試。
+ * 判準有兩層：分類本身（格式不對按幾次都一樣），以及次數 ——
+ * 連續失敗 MAX_ATTEMPTS 次之後，畫面不該再把重試當作唯一的出路。
+ */
+function retriableFor(kind: UploadFailKind, attempts: number): boolean {
+  if (kind === 'file' || kind === 'server' || kind === 'auth' || kind === 'rejected') return false
+  /* blocked 幾乎確定重試沒有用，但留一次機會：偶發的預檢失敗（後端冷啟動時
+     OPTIONS 逾時）確實存在，第一次就把出路收掉會冤枉那種情況 */
+  if (kind === 'blocked') return attempts < 2
+  return attempts < MAX_ATTEMPTS
 }
 
 /** 直傳。回報進度，並把 xhr 交出去讓呼叫端能中止（使用者移除那一張時要停掉） */
@@ -135,25 +310,73 @@ function putDirect(
     const xhr = new XMLHttpRequest()
     register(xhr)
     xhr.open('PUT', url)
-    /* content-type 一定要跟 presign 當時簽的 mime 一模一樣。
-       R2 的簽章把 ContentType 算進去了，少送或送錯會被退 403，
-       而那個 403 看起來像「沒權限」，其實是標頭對不上。
+    /* ⚠️ 這一段原本寫著「content-type 一定要跟 presign 當時簽的一模一樣，
+       少送或送錯會被退 403」。**那是錯的**，實測簽名網址的
+       X-Amz-SignedHeaders 只有 `content-length;host` —— presigner 把
+       ContentType 整個丟掉了，既沒進簽章也沒進 query。所以 content-type
+       送什麼都不影響簽章成不成立。
 
-       **大小同理**：簽章現在也把 ContentLength 算進去（見 server/src/r2.ts
-       的 presignPut —— 沒有它，後端宣告的 8MB 上限在儲存層毫無強制力）。
+       那還是要送，但理由不同：R2 會把它記成物件的 Content-Type，
+       之後 /raw 導過去時瀏覽器要靠它決定怎麼渲染。送錯不會 403，
+       會變成「圖片被當成檔案下載」。
+
+       **content-length 才是真的被簽進去的那一個**（見 server/src/r2.ts 的
+       presignPut —— 沒有它，後端宣告的 8MB 上限在儲存層毫無強制力）。
        所以送出去的必須就是 presign 當下那個 file，不能中途換一個或改內容；
        換了就是 403。裁切／壓縮都發生在 presign **之前**（start() 讀的是
        blobs 裡當下那一份），這條路徑是對得上的。 */
     xhr.setRequestHeader('content-type', file.type)
+
+    /* 失敗當下要判斷「連線到底有沒有建立起來」，靠的就是這三個變數。
+       xhr.onerror 本身什麼都不帶（規格就是這樣，為了不洩漏跨來源的資訊），
+       所以訊號必須在事情還順利的時候先記下來，事後補不回來。 */
+    const startedAt = Date.now()
+    let progressed = false
+    let sentPct = 0
+
     xhr.upload.onprogress = e => {
-      if (e.lengthComputable) onProgress(Math.min(99, Math.round((e.loaded / e.total) * 100)))
+      // loaded > 0 才算真的送出去了；有些瀏覽器會先發一個 loaded = 0 的事件
+      if (e.loaded > 0) progressed = true
+      if (e.lengthComputable) {
+        sentPct = Math.min(99, Math.round((e.loaded / e.total) * 100))
+        onProgress(sentPct)
+      }
     }
+
+    const signals = (): FailSignals => ({
+      phase: 'transfer',
+      status: xhr.status,
+      progressed,
+      sentPct,
+      elapsedMs: Date.now() - startedAt,
+      online: navigator.onLine !== false,
+      code: ''
+    })
+
     xhr.onload = () =>
       xhr.status >= 200 && xhr.status < 300
         ? resolve()
-        : reject(new Error(`儲存空間拒絕了這個檔案（${xhr.status}），請重試`))
-    xhr.onerror = () => reject(new Error('傳輸中斷，檔案沒有傳完，請重試'))
-    xhr.ontimeout = () => reject(new Error('上傳逾時，請確認網路後重試'))
+        : reject(new TransferError('rejected', `儲存空間拒絕了這個檔案（HTTP ${xhr.status}）`, signals()))
+
+    /**
+     * onerror 涵蓋好幾種完全不同的原因（預檢被擋、離線、DNS 失敗、連線中斷），
+     * 而它們該做的事完全相反：斷網要重試，被擋要回報。這裡用三個訊號分開：
+     *   1. navigator.onLine —— 唯一能百分之百確定的一種
+     *   2. 有沒有送出過位元組 —— 完全沒有就失敗，強烈暗示連線根本沒建立起來
+     *   3. 失敗得多快 —— 瞬間失敗比較像本地就被判掉，不像連到一半斷掉
+     * 三個訊號湊不出結論就是 unknown，**不要編一個聽起來很篤定的診斷**。
+     */
+    xhr.onerror = () => {
+      const s = signals()
+      const kind: UploadFailKind =
+        !s.online ? 'offline'
+        : s.progressed ? 'interrupted'
+        : s.elapsedMs < BLOCKED_MS ? 'blocked'
+        : 'unknown'
+      reject(new TransferError(kind, FAIL_TEXT[kind].message, s))
+    }
+
+    xhr.ontimeout = () => reject(new TransferError('timeout', FAIL_TEXT.timeout.message, signals()))
     xhr.onabort = () => reject(new DOMException('aborted', 'AbortError'))
     xhr.send(file)
   })
@@ -256,6 +479,8 @@ export function useUploads(purpose: UploadPurpose, options: UseUploadsOptions = 
     if (bad) {
       e.status = 'error'
       e.error = bad
+      e.kind = 'file'
+      e.hint = FAIL_TEXT.file.hint
       e.retriable = false
       afterEdit()
       return
@@ -330,6 +555,11 @@ export function useUploads(purpose: UploadPurpose, options: UseUploadsOptions = 
     e.status = 'uploading'
     e.progress = 0
     e.error = ''
+    e.hint = ''
+    e.kind = ''
+    /* 次數只加不減：重試成功不代表前面那幾次沒發生過，而「這個檔在這台裝置上
+       連續失敗幾次」正是決定要不要繼續給重試的依據 */
+    e.attempts++
 
     try {
       if (MOCK) {
@@ -366,8 +596,17 @@ export function useUploads(purpose: UploadPurpose, options: UseUploadsOptions = 
       if (err instanceof DOMException && err.name === 'AbortError') return
       const cur = at(id)
       if (!cur) return
+      const d = describe(err)
       cur.status = 'error'
-      cur.error = reasonOf(err)
+      cur.kind = d.kind
+      cur.error = d.message
+      cur.retriable = retriableFor(d.kind, cur.attempts)
+      /* 連續失敗到上限：出路不再是重試，而是回報。這句話要蓋掉原本那一種的
+         hint，否則畫面會一邊說「已經試了三次」一邊繼續叫人重試。 */
+      cur.hint = cur.retriable
+        ? d.hint
+        : `這個檔已經連續失敗 ${cur.attempts} 次，再按重試不太可能有不同結果。請複製下面的診斷碼開一張客服工單，或換一張圖片試試。`
+      cur.diag = diagOf(d.kind, d.signals, file.type, file.size, cur.edited, cur.attempts)
     }
   }
 
@@ -399,7 +638,12 @@ export function useUploads(purpose: UploadPurpose, options: UseUploadsOptions = 
         retriable: !bad,
         broken: false,
         originalBytes: f.size,
-        edited: false
+        edited: false,
+        kind: bad ? 'file' : '',
+        hint: bad ? FAIL_TEXT.file.hint : '',
+        // 選檔就被擋掉的不給診斷碼：訊息本身已經說得夠清楚，多一段碼只是噪音
+        diag: '',
+        attempts: 0
       })
       // 先判斷要不要進裁切（要讀檔頭），不是直接開傳
       if (!bad) void prepare(id)
@@ -422,6 +666,10 @@ export function useUploads(purpose: UploadPurpose, options: UseUploadsOptions = 
   function retry(id: string) {
     const e = at(id)
     if (!e || e.status === 'uploading') return
+    /* 已經判定不值得重試的（含連續失敗到上限）就真的不要再送。
+       畫面上那顆按鈕會先消失，但鍵盤操作與舊畫面還是可能打進來，
+       出路的收斂要在這裡成立，不能只靠 v-if。 */
+    if (!e.retriable) return
     const file = blobs.get(id)
     // 格式／大小不對重試幾次都一樣，那種要換檔不是重試
     if (!file || precheck(file)) return
