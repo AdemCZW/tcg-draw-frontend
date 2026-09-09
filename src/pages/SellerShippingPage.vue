@@ -604,6 +604,16 @@ useKeyboardInset()
     </div>
 
     <p v-if="loading" class="empty muted">載入中…</p>
+    <!-- 讀不到要說「讀不到」，而且**一定要排在空狀態前面**。
+         loadErr 原本只在頁首多印一行，清單這邊照樣掉進「目前沒有要寄的東西」——
+         而這一頁是賣家判斷「我現在欠不欠誰一張卡」的唯一地方，
+         身上還壓著 72 小時的出貨時鐘（逾期退款＋沒收保證金＋記違約）。
+         斷網時告訴他「沒有要寄的東西」，代價是他真的就不寄了。
+         訂單頁對同一個坑已經有正確寫法（loadErr 擋在空狀態前面），這裡跟上。 -->
+    <div v-else-if="loadErr" class="loadFail" role="alert">
+      <p class="muted">{{ loadErr }}</p>
+      <button type="button" class="btn" @click="load">重試</button>
+    </div>
     <p v-else-if="!list.length" class="empty muted">
       <template v-if="tab === 'ship'">
         <template v-if="!jobs.length">
@@ -715,10 +725,19 @@ useKeyboardInset()
             —— 平台不經手實體卡，也不會替你追蹤包裹。
           </p>
         </template>
-        <p v-else class="sendWhy muted">
-          買家還沒填收件資料，先別寄。請用站內私訊或訂單編號跟他要地址；
-          在他填好之前寄出去的包裹平台無法協助追查。
-        </p>
+        <!-- 「站內私訊」不存在 —— 這個站沒有這個功能（見 SellerSettingsPage
+             檔頭與訂單頁 .askBox 那一段）。原本這句話會把賣家送去找一個
+             找不到的東西，而這一格正是他必須動作、否則會逾期被罰的那一格。
+             改成跟訂單頁同一套：講清楚為什麼給不了，再給一個真的出口。 -->
+        <template v-else>
+          <p class="sendWhy muted">
+            買家還沒填收件資料，先別寄。平台這邊沒有他的地址，所以給不了你 ——
+            在他填好之前寄出去的包裹平台無法協助追查。
+          </p>
+          <RouterLink :to="{ name: 'support-new' }" class="btn sm askGo">
+            開一張客服工單請客服聯絡他
+          </RouterLink>
+        </template>
       </section>
 
       <!-- 逐筆出貨：選一筆再按底部列也做得到，但「我現在就要處理這一筆」
@@ -915,6 +934,15 @@ h1 { font-size: 22px; margin: 0 0 6px; }
 .selHint { font-size: 11.5px; line-height: 1.6; min-width: 0; }
 .empty { padding: 26px 4px; font-size: 13.5px; line-height: 1.9; }
 
+/* 讀取失敗的區塊。形狀跟訂單頁的 .loadFail 一樣 —— 同一種狀態在兩頁
+   長得一樣，使用者才不用學兩次「這是什麼意思」。 */
+.loadFail {
+  min-width: 0;
+  display: grid; justify-items: center; gap: 12px;
+  padding: 36px 16px; text-align: center;
+}
+.loadFail p { margin: 0; }
+
 .row {
   display: block;
   background: var(--surface); border-radius: var(--radius-lg);
@@ -998,6 +1026,9 @@ h1 { font-size: 22px; margin: 0 0 6px; }
   background: var(--warn-wash); color: var(--warn-ink);
 }
 .sendWhy { font-size: 11px; line-height: 1.75; margin: 8px 0 0; overflow-wrap: anywhere; }
+/* 出口做成獨立按鈕而不是句子裡的連結：這是賣家在這一格唯一做得到的事，
+   而句中連結在手機上又小又難按（訂單頁的 .askGo 是同一個理由）。 */
+.askGo { margin-top: 8px; min-height: 44px; display: inline-flex; align-items: center; }
 
 .acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 

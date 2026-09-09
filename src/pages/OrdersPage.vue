@@ -489,7 +489,17 @@ function openShip(o: Order) {
   openSheet('ship', o.id)
 }
 function openConfirm(o: Order) { openSheet('confirm', o.id) }
-function openDispute(o: Order) { openSheet('dispute', o.id) }
+/* 申訴的三個欄位一樣要清，而且理由比出貨那組更重：
+   申訴會凍結點數、送出之後這張訂單就不能再確認收貨 —— 這是這一頁
+   最不可逆的動作。不清的話，對 A 單填了事由與開箱影片、按取消，
+   再開 B 單時欄位是滿的、送出鍵是亮的，一按就用 A 單的影片
+   對 B 單提出申訴。doDispute 只在**成功之後**清，取消那條路沒人清。 */
+function openDispute(o: Order) {
+  reason.value = ''
+  hasVideo.value = false
+  videoUrl.value = ''
+  openSheet('dispute', o.id)
+}
 
 /**
  * 放款成功之後留在畫面上的一句話。

@@ -74,11 +74,28 @@ export const usePoolStore = defineStore('pools', {
       this.applyPoolState(await api.poolState(poolId))
     },
 
+    /**
+     * 抽選。**只有 api.draw 的成敗算成這個函式的成敗。**
+     *
+     * syncPool 原本是 await 在這裡的，於是它一失敗就會讓整個 draw() 拋例外 ——
+     * 而那時候後端**已經扣了款、已經發了卡**，drawId 也已經進了 sessionStorage。
+     * 呼叫端的 catch 接著印「抽選失敗，點數已退回」並在前端把點數加回去，
+     * 使用者看到的是一次失敗的抽選、一個假的餘額，然後他會再抽一次 ——
+     * 而真正抽到的那一次沒有人帶他去看結果。
+     *
+     * 後端冷啟動（這個專案多處註解把 ~20 秒當常態）或換個網路就足以觸發。
+     *
+     * 所以 syncPool 改成不擋路：它更新的是「這個池還剩幾籤」這種顯示用的
+     * 衍生狀態，沒同步到最多是進度條慢一拍，下一次讀清單就會對上。
+     * 拿那個去否定一次已經成立的抽選，代價完全不成比例。
+     */
     async draw(poolId: string, seats: number[]): Promise<DrawResult> {
       const result = await api.draw(poolId, seats)
       this.lastResult = result
       stashResult(result)
-      await this.syncPool(poolId)
+      /* 不 await、也不讓它的失敗冒出去。void 是刻意的：這裡要的是
+         「順便更新一下」，不是「更新成功才算抽到」。 */
+      void this.syncPool(poolId).catch(() => { /* 顯示用的狀態，慢一拍不影響正確性 */ })
       return result
     },
 

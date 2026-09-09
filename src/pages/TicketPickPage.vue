@@ -116,9 +116,21 @@ async function confirm() {
     leavingForResult = true
     // replace 而不是 push：抽選是不可逆的，返回鍵若能回到選籤牆會讓人以為能重抽
     router.replace({ name: 'draw-result', params: { drawId: result.drawId } })
-  } catch {
-    error.value = '抽選失敗，點數已退回'
+  } catch (e) {
+    /* 把伺服器講的話帶出來，不要一律說「抽選失敗」。
+       最常發生的失敗是「你選的籤位在你按下去之前被別人買走」——
+       原本那句話沒有講出那件事，而使用者選的籤還亮著，他再按一次
+       照樣失敗，卻不知道要換籤。錯誤訊息講不出下一步就是死路。
+
+       「點數已退回」也不該無條件講：它描述的是前端這一行的補償動作，
+       不是伺服器那邊的事實。真正的餘額以下一次讀取為準，
+       所以這裡只講「這一次沒有扣到」，不去承諾伺服器做了什麼。 */
+    const msg = e instanceof Error && e.message ? e.message : '抽選沒有成功'
+    error.value = `${msg}（這一次沒有扣到點數）`
     wallet.topup(cost.value)
+    /* 籤位被搶走時，把選取清掉 —— 留著等於邀請他再按一次同樣會失敗的鍵。
+       用訊息比對是不得已：後端這條路目前沒有回可判別的錯誤碼。 */
+    if (/籤|座位|seat|taken|已被/i.test(msg)) picked.value = []
   } finally {
     busy.value = false
   }
@@ -189,13 +201,41 @@ async function confirm() {
       </div>
     </div>
   </div>
+  <!-- ---- 三層順序照 PoolShell ----
+       這一頁原本只有 pool / 沒有 pool 兩種畫面，於是重新整理或從外部連結
+       進來時會先閃一次「找不到這個池」，而斷網或後端冷啟動（~20 秒是常態）
+       時它會**永遠停在那句話** —— 錯誤被畫成「這東西不存在」，
+       使用者不會想到重試，只會以為池被下架了。
+       PoolShell 已經為同一句話寫過「這是會被截圖傳出去的假話」並修掉，
+       這裡跟上。 -->
+  <div v-else-if="pools.loading" class="container page">
+    <div class="skel"><i class="a"></i><i class="b"></i><i class="c"></i></div>
+  </div>
+
+  <div v-else-if="pools.error" class="container page loadFail" role="alert">
+    <p class="muted">{{ pools.error }}</p>
+    <button type="button" class="btn" @click="pools.load()">重新載入</button>
+  </div>
+
   <div v-else class="container page">
-    <p class="muted">找不到這個池。<RouterLink :to="{ name: 'home' }">回抽選列表</RouterLink></p>
+    <p class="muted">找不到這個池，可能已下架。<RouterLink :to="{ name: 'home' }">回抽選列表</RouterLink></p>
   </div>
 </template>
 
 <style scoped>
 .page { padding-top: 22px; padding-bottom: 72px; }
+
+/* 載入與失敗兩種畫面沿用 PoolShell 的形狀：同一種狀態在兩頁長得一樣，
+   使用者才不用學兩次。錯誤訊息可能含長字串，要能斷行。 */
+.skel { display: grid; gap: 12px; max-width: 520px; }
+.skel i { display: block; height: 18px; border-radius: 6px; background: var(--surface-2); }
+.skel .a { width: 60%; height: 26px; } .skel .b { width: 40%; } .skel .c { width: 100%; height: 200px; }
+.loadFail {
+  min-width: 0;
+  display: grid; justify-items: center; gap: 12px;
+  padding: 60px 0; text-align: center;
+}
+.loadFail p { margin: 0; overflow-wrap: anywhere; }
 h1 { margin: 0 0 6px; }
 .sub { font-size: 14px; line-height: 1.7; color: var(--muted); margin: 0 0 12px; }
 
