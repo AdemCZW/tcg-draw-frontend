@@ -30,7 +30,22 @@ const props = withDefaults(defineProps<{
   tint?: [number, number, number]
   /** 整體亮度倍率。內容頁要把背景壓下去，不然卡片和文字讀不出來 */
   gain?: number
-}>(), { energy: 0.2, burst: false, coreY: 0.3, tint: undefined, gain: 1 })
+  /**
+   * 動態的快慢倍率，跟亮度無關。
+   *
+   * ── 為什麼需要它 ────────────────────────────────────────────────
+   * shader 裡雲氣的旋轉速度原本是乘在 uEnergy 上的
+   * （`swirl = ... * (0.25 + 0.75 * uEnergy) * uTime * 0.045`），
+   * 所以「把背景壓暗」跟「把背景放慢」是同一個旋鈕。
+   * 內容頁為了讓卡片與文字讀得出來一定要壓暗，於是連帶把它壓成
+   * 看起來像一張靜態圖 —— 而那不是我們要的取捨：**要的是動，不是亮。**
+   *
+   * 這一個把兩者分開。實作上不改 shader，改的是「餵給 shader 的時鐘」：
+   * 累加 `dt × speed` 而不是把絕對時間乘上去。差別在改速度的那一刻 ——
+   * 乘絕對時間會讓畫面瞬間跳掉，累加則是平滑的。
+   */
+  speed?: number
+}>(), { energy: 0.2, burst: false, coreY: 0.3, tint: undefined, gain: 1, speed: 1 })
 
 const emit = defineEmits<{ (e: 'fail'): void; (e: 'fps', v: number): void }>()
 
@@ -40,6 +55,17 @@ let raf = 0
 let program: WebGLProgram | null = null
 let startTime = 0
 let burstAt = -999
+/* 餵給 shader 的時鐘。跟真實時間分開，因為它會被 speed 與「使用者要求減少動態」
+   縮放 —— burst 的計時仍然用真實時間，那是一次性事件，不該被慢動作拉長。 */
+let clock = 0
+let lastNow = 0
+/* 使用者在系統層要求減少動態時，時鐘停住：畫面還在（那是背景，拿掉會空一塊），
+   但不再流動。這支之前完全沒有處理 prefers-reduced-motion —— 專案裡每一段
+   CSS 動畫都包了 @media (prefers-reduced-motion: no-preference)，只有 GPU
+   這條漏掉，而它恰好是全站動得最久的一個。 */
+let calm = false
+let calmMq: MediaQueryList | null = null
+const onCalm = (e: MediaQueryListEvent | MediaQueryList) => { calm = e.matches }
 
 /* 目標能量與實際能量分開：幕次是瞬間切換的，但畫面要滑過去 */
 let energyNow = 0
@@ -243,12 +269,17 @@ function frame(now: number) {
   resize()
 
   const t = (now - startTime) / 1000
+  /* dt 夾在 100ms 以內：分頁切回來時 now 會一次跳好幾秒，
+     不夾的話雲氣會瞬間扭一大段，像畫面閃了一下。 */
+  const dt = lastNow ? Math.min((now - lastNow) / 1000, 0.1) : 0
+  lastNow = now
+  clock += dt * (calm ? 0 : Math.max(0, props.speed))
   // 能量滑向目標，幕次切換才不會是硬跳
   energyNow += (props.energy - energyNow) * 0.02
 
   gl.useProgram(program)
   gl.uniform2f(uRes, gl.drawingBufferWidth, gl.drawingBufferHeight)
-  gl.uniform1f(uTime, t)
+  gl.uniform1f(uTime, clock)
   gl.uniform1f(uEnergy, energyNow)
   gl.uniform1f(uBurst, burstAt < 0 ? -1 : t - burstAt)
   gl.uniform1f(uQuality, quality)
@@ -276,6 +307,11 @@ function frame(now: number) {
 onMounted(() => {
   const c = canvas.value
   if (!c) return
+  /* 掛在最前面：就算下面拿不到 WebGL2 而提早 return，也不會留下一個
+     沒有被移除的監聽器。 */
+  calmMq = window.matchMedia('(prefers-reduced-motion: reduce)')
+  calm = calmMq.matches
+  calmMq.addEventListener('change', onCalm)
   dpr = Math.min(window.devicePixelRatio || 1, 2)
 
   const g = c.getContext('webgl2', {
@@ -338,6 +374,10 @@ watch(() => props.burst, on => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
   document.removeEventListener('visibilitychange', onVis)
+  calmMq?.removeEventListener('change', onCalm)
+  calmMq = null
+  /* 下一次掛載要從頭開始算 dt，不然會拿到「上次卸載到這次掛載」那一大段 */
+  lastNow = 0
   if (gl && program) gl.deleteProgram(program)
   gl = null
 })

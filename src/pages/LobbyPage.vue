@@ -309,6 +309,10 @@ const marketCount = computed(() =>
 <template>
   <div class="lobby" :style="{ '--hue': hue }">
     <div class="field" aria-hidden="true">
+      <!-- speed 跟 gain 是分開的兩個旋鈕。亮度壓在 0.55 是為了讓卡片與文字
+           讀得出來，那個不能動；但雲氣的旋轉速度原本綁在 energy 上
+           （見 ShaderSky 的 speed 說明），於是「壓暗」連帶把它壓成
+           看起來像一張靜態圖 —— 要的是動不是亮，所以速度另外拉上來。 -->
       <ShaderSky
         v-if="sky3d"
         class="skyGl"
@@ -316,6 +320,7 @@ const marketCount = computed(() =>
         :tint="tint"
         :gain="0.55"
         :core-y="0.22"
+        :speed="2.2"
         @fail="sky3d = false"
       />
       <!-- shader 失敗才用 CSS 光暈；兩層同時開會互相洗掉對比 -->
