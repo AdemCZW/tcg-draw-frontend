@@ -31,7 +31,29 @@ function s3() {
     client = new S3Client({
       region: 'auto',
       endpoint: endpointOverride ?? `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      ...(endpointOverride ? { forcePathStyle: true } : {}),
+      /* forcePathStyle **一律 true**，不是只有自架端點才要。
+         AWS SDK v3 預設是 virtual-hosted-style：就算 endpoint 寫成
+         `https://<帳號>.r2.cloudflarestorage.com`，簽出來的網址主機也會被
+         改寫成 `https://<bucket>.<帳號>.r2.cloudflarestorage.com`（實測
+         @aws-sdk/client-s3 3.1112.0 確實如此，R2 也有 wildcard DNS 收得到）。
+
+         那個多出來的 bucket 前綴會讓瀏覽器端整條路死掉，而且**沒有 HTTP 狀態碼**：
+         前端 CSP 的 connect-src / img-src 白名單放的是
+         `https://<帳號>.r2.cloudflarestorage.com`（GitHub Variable
+         VITE_R2_UPLOAD_ORIGIN，見 vite.config.ts 的 cspPlugin），
+         而 CSP 的主機比對是**完全相等**、不含子網域。於是直傳 PUT 被 CSP 擋掉，
+         XHR 觸發的是 onerror（status 0）——畫面上是「傳輸中斷，檔案沒有傳完」，
+         看起來像網路壞掉，其實一個位元組都沒送出去。/v1/files/:id/raw 302 到
+         簽名網址時同理，圖會靜靜破掉。
+
+         為什麼測試抓不到：迴歸測試要嘛走 R2_ENDPOINT 指到本機假 S3（本來就
+         path-style），要嘛從 Node 直接 PUT（沒有 CSP、沒有瀏覽器）——
+         這個壞法只在真瀏覽器 + 真 R2 的組合下存在。
+
+         path-style 是 R2 自己文件上的主要形式（<帳號>.r2.cloudflarestorage.com/<bucket>/<key>），
+         把它釘死之後，簽名網址的主機就跟 CSP 白名單、跟所有文件裡寫的
+         `<帳號>.r2.cloudflarestorage.com` 對得起來。 */
+      forcePathStyle: true,
       credentials: { accessKeyId: env.R2_ACCESS_KEY_ID!, secretAccessKey: env.R2_SECRET_ACCESS_KEY! }
     })
   }
