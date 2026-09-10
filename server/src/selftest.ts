@@ -7,7 +7,7 @@
  *
  * 需要資料庫的部分（交易邊界、併發、帳本）不在這裡 —— 那要真的連 Postgres。
  */
-import { applyDeadlines, actionsFor, depositFor, looksLikeTracking, DAY, HOUR } from './shared/escrow.js'
+import { applyDeadlines, actionsFor, depositFor, rawListingCap, looksLikeTracking, DAY, HOUR } from './shared/escrow.js'
 import { cardNumbersAgree } from './card-cert.js'
 import type { Order } from './shared/domain.js'
 
@@ -62,6 +62,13 @@ check('shipped 時賣家沒有可做的動作',
 check('新賣家保證金 10%', depositFor(1000, 0) === 100)
 check('老賣家保證金 2%', depositFor(1000, 100) === 20)
 check('保證金有絕對上限', depositFor(10_000_000, 0) === 5000)
+/* 裸卡沒有「同一張卡不能登記兩次」那道防線（唯一索引的述詞是
+   where cert_no is not null），保證金是它唯一的保障，所以費率往上跳一級。 */
+check('裸卡的老賣家不會掉到 2%', depositFor(1000, 100, false) === 50)
+check('裸卡的新手仍是 10%', depositFor(1000, 0, false) === 100)
+check('鑑定卡是預設，不傳等於 graded', depositFor(1000, 100) === depositFor(1000, 100, true))
+check('裸卡上限隨成交紀錄放寬', rawListingCap(0) === 3000 && rawListingCap(10) === 30_000)
+check('老賣家的裸卡不設上限', rawListingCap(50) === null)
 check('壞單號擋下', !looksLikeTracking('BAD'))
 check('正常單號放行', looksLikeTracking('ABC12345678'))
 

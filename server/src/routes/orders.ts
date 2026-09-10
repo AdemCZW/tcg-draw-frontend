@@ -230,7 +230,13 @@ orders.post('/', async c => {
         `
       : []
     const completedCount = Number(done[0]?.count ?? 0)
-    const deposit = isShip ? depositFor(price, completedCount) : 0
+    /* 保證金的費率要跟上架那一刻算的一致，所以這裡也要看有沒有鑑定編號。
+       listings.cert_no 是上架時正規化寫進去的（見 routes/public.ts），
+       用它就不必再回頭查 prizes —— 而且那正是唯一索引比對的同一個值。
+       兩邊算出不同的數字比不檢查更難懂：上架時擋你押 10%、成交時只收 2%，
+       那道門檻等於白設。 */
+    const graded = !!String((l.cert_no as string | null) ?? '').trim()
+    const deposit = isShip ? depositFor(price, completedCount, graded) : 0
 
     /* 先鎖住帳戶再算餘額。少了這一行，同一個人同時買兩張不同的卡
        會鎖到兩列不同的 listings、互不阻擋，兩邊各自讀到同一個 available

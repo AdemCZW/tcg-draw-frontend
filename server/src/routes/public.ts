@@ -11,7 +11,7 @@ import { MAX_LIMIT, PageQuery, decodeCursor, encodeCursor, slicePage } from '../
 import { POINTS_INPUT_MAX, pointsInputMaxText } from '../limits.js'
 import { publicCard } from '../card-public.js'
 import { walletOf } from '../money.js'
-import { depositFor } from '../shared/escrow.js'
+import { depositFor, rawListingCap } from '../shared/escrow.js'
 
 export const pub = new Hono()
 
@@ -930,11 +930,46 @@ pub.post('/listings', requireAuth, async c => {
 
        用 depositFor 與 orders.ts 同一個公式、用 walletOf 同一個口徑，
        不另外發明一套算法 —— 兩邊算出不同的數字比不檢查更難懂。 */
+    /* 有沒有鑑定編號決定兩件事：保證金的費率，以及有沒有金額上限。
+       判準用**卡冊那一列**而不是呼叫端送的東西 —— 身分只有一個來源
+       （跟開池時拿 card 快照的理由相同）。
+       退回 card jsonb 是必要的：021 之前的舊列 prizes.cert_no 可能是 null，
+       只看那一欄會把一批有編號的舊卡誤判成裸卡。這跟下面寫 listings.cert_no
+       用的是同一條規則，兩處必須一致，否則會出現「按裸卡收押金、
+       卻寫進一個有編號的掛單」這種自相矛盾的列。 */
+    const pzCard = pz.card as { certNo?: string | null }
+    const graded = !!(
+      String(pz.cert_no ?? '').trim()
+      || (typeof pzCard.certNo === 'string' && pzCard.certNo.trim())
+    )
+
+    /* ── 裸卡的單筆上限 ────────────────────────────────────────────
+       裸卡沒有「同一張卡不能登記兩次」那道防線（見 shared/escrow.ts 的
+       rawListingCap）。補救只有出貨那一關的退款＋沒收保證金，而保證金
+       有 5,000 的絕對上限 —— 金額一大就補不回買家被凍住的時間。
+       所以對還沒有成交紀錄的人設一個會隨紀錄放寬的上限。
+       鑑定卡不設限：編號已經擋掉重複登記了。 */
+    if (!graded) {
+      const [d0] = await tx<{ count: string }[]>`
+        select count(*)::text as count from orders where seller_id = ${me} and status = 'completed'
+      `
+      const cap = rawListingCap(Number(d0?.count ?? 0))
+      if (cap !== null && price > cap) {
+        return {
+          error: 'RAW_PRICE_CAP',
+          message: `沒有鑑定編號的卡，目前單筆最高只能掛 ${cap.toLocaleString('zh-TW')} 點。`
+            + '這個上限會隨著你的成交紀錄放寬。'
+            + '想現在就掛更高，可以先送鑑定，有編號的卡沒有這個限制。',
+          status: 409
+        }
+      }
+    }
+
     if (delivery === 'ship') {
       const [done] = await tx<{ count: string }[]>`
         select count(*)::text as count from orders where seller_id = ${me} and status = 'completed'
       `
-      const deposit = depositFor(price, Number(done?.count ?? 0))
+      const deposit = depositFor(price, Number(done?.count ?? 0), graded)
       const w = await walletOf(me, tx)
       if (deposit > 0 && w.available < deposit) {
         return {
@@ -949,7 +984,7 @@ pub.post('/listings', requireAuth, async c => {
 
     const [u] = await tx`select name, handle from users where id = ${me}`
     const id = 'l-' + randomBytes(5).toString('hex')
-    const card = pz.card as { certNo?: string | null }
+    const card = pzCard
     /* cert_no 寫**正規化過**的值，而且優先用 prizes 那一欄。
        理由是唯一索引比對的是欄位原值：卡冊那側存的是 nullif(btrim(...))
        之後的 '12345678'，這裡若原樣搬 card jsonb 裡的 ' 12345678'，

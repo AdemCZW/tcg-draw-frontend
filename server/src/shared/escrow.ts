@@ -37,9 +37,58 @@ export const EVIDENCE_WINDOW = 48 * HOUR
  * 頭部交易就做不成了。
  */
 export const DEPOSIT_CAP = 5_000
-export function depositFor(price: number, sellerCompletedOrders: number): number {
-  const rate = sellerCompletedOrders < 10 ? 0.10 : sellerCompletedOrders < 50 ? 0.05 : 0.02
-  return Math.min(Math.round(price * rate), DEPOSIT_CAP)
+
+/**
+ * 保證金的費率。
+ *
+ * ── 為什麼裸卡要比較高 ──────────────────────────────────────────────
+ * 「同一張實體卡被登記成兩列、賣給兩個人」這件事，鑑定卡有結構性的防線：
+ * prizes 上有 unique(grader, cert_no)，重複的編號在資料庫層就進不來。
+ * **裸卡沒有編號，那條防線的述詞是 `where cert_no is not null`，
+ * 完全蓋不到它們**（migration 023 的註解把這件事寫得很清楚）。
+ *
+ * 所以裸卡多一種鑑定卡沒有的風險，而唯一擋得住的是出貨那一關 ——
+ * 賣了兩次的人寄不出第二張，逾期取消、退款、沒收保證金。
+ * 換句話說**保證金正是裸卡這條路的主要保障**，那它就該反映那個風險。
+ *
+ * 做法是「往上跳一級」而不是另外發明一組數字：成交紀錄仍然是主要的判準
+ * （做久的人本來就比較不會跑），裸卡只是把同一條階梯整個上移一格，
+ * 而且不會低於 5%。
+ */
+function depositRate(sellerCompletedOrders: number, graded: boolean): number {
+  if (graded) {
+    return sellerCompletedOrders < 10 ? 0.10 : sellerCompletedOrders < 50 ? 0.05 : 0.02
+  }
+  return sellerCompletedOrders < 50 ? 0.10 : 0.05
+}
+
+/**
+ * @param graded 這張卡有沒有鑑定編號。**預設 true 是刻意的**：
+ *   舊的呼叫端不傳就維持原本的費率，不會在沒人注意的時候把所有人的
+ *   押金調高。要收裸卡那一段的人必須明確地把 false 傳進來。
+ */
+export function depositFor(
+  price: number, sellerCompletedOrders: number, graded = true
+): number {
+  return Math.min(Math.round(price * depositRate(sellerCompletedOrders, graded)), DEPOSIT_CAP)
+}
+
+/**
+ * 裸卡的單筆掛單上限。回 null＝沒有上限。
+ *
+ * 鑑定卡不設限：編號擋住了重複登記，剩下的風險跟金額沒有特別的關係。
+ * 裸卡設限的理由不是「裸卡比較不值錢」（老卡沒送鑑定的多得是），
+ * 是**單次事故的損失要壓得住** —— 賣了兩次的補救是退款加沒收保證金，
+ * 而保證金有 5,000 的絕對上限，金額一大就補不回買家被凍住的時間與信任。
+ *
+ * 隨成交紀錄放寬，跟保證金同一個精神：這是對「還不認識的人」設的限，
+ * 不是對裸卡本身的評價。
+ */
+export function rawListingCap(sellerCompletedOrders: number): number | null {
+  if (sellerCompletedOrders >= 50) return null
+  if (sellerCompletedOrders >= 10) return 30_000
+  if (sellerCompletedOrders >= 1) return 10_000
+  return 3_000
 }
 
 /** 還在跑的訂單（點數仍被凍結） */
