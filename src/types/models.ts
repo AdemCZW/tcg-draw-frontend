@@ -222,6 +222,26 @@ export interface UserPrize {
   /** 這張卡進到「我的」卡冊的時間。抽到時等於 wonAt，買來的是成交那一刻。
       卡冊的排序與累積曲線都看這個，不看 wonAt（見 server migrations/014） */
   acquiredAt: string
+  /**
+   * ── 來歷 ──────────────────────────────────────────────────────────
+   * 這張卡怎麼到持有人手上的。這幾欄的價值不在功能，在**可查證**：
+   * 抽來的卡指得出是哪一池哪一籤，而那一池的籤序開獎後任何人都能自己
+   * 重算（見 shared/fairness.ts）。同業的卡冊是使用者自己打字填的，
+   * 沒有人查證 —— 那是試算表；這幾欄讓它變成帳本。
+   *
+   * 全部選填：舊資料與舊後端沒有這些欄位，缺的時候畫面少講一句，不會壞。
+   */
+  /** 'draw' 抽來的｜'upload' 自己登記的｜'seed' 示範資料 */
+  origin?: 'draw' | 'upload' | 'seed' | null
+  /** 從哪一個池抽出來的。null＝不是抽來的 */
+  poolId?: string | null
+  /** 那個池的名字。顯示用，null 時退回 poolId */
+  poolTitle?: string | null
+  /** 抽中的是第幾籤。跟 poolId 一起才指得出唯一一次抽選 */
+  seat?: number | null
+  /** 鑑定機構與編號。有編號才驗證得了，也才擋得住重複登記 */
+  grader?: string | null
+  certNo?: string | null
   stashExpiresAt: string
   /**
    * 這張卡的**宣告買回價**（點）。賣家在建池時一格一格填、寫進 commit 鎖死。

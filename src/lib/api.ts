@@ -98,7 +98,17 @@ function toPrize(r: Any): UserPrize {
        舊後端沒有這兩欄，所以是選填 —— 那時畫面退回逐張顯示，不會壞。 */
     groupKey: r.group_key == null ? undefined : String(r.group_key),
     groupTotal: r.group_total == null ? undefined : Number(r.group_total),
-    groupSellable: r.group_sellable == null ? undefined : Number(r.group_sellable)
+    groupSellable: r.group_sellable == null ? undefined : Number(r.group_sellable),
+    /* 來歷。全部照原樣帶過來，不在這裡做任何推導 ——
+       「這張卡是抽來的還是登記的」由 origin 一個欄位說了算，
+       用 pool_id 有沒有值去反推會在舊資料上判錯（021 之前的列 origin 是
+       回填的，但 pool_id 一直都有）。 */
+    origin: (r.origin as UserPrize['origin']) ?? null,
+    poolId: r.pool_id == null ? null : String(r.pool_id),
+    poolTitle: r.pool_title == null ? null : String(r.pool_title),
+    seat: r.seat == null ? null : Number(r.seat),
+    grader: r.grader == null ? null : String(r.grader),
+    certNo: r.cert_no == null ? null : String(r.cert_no)
   }
 }
 

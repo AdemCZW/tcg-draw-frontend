@@ -8,6 +8,7 @@ import Tilt3D from '@/components/Tilt3D.vue'
 import TierBadge from '@/components/TierBadge.vue'
 import CertTag from '@/components/CertTag.vue'
 import ShipmentNote, { hasShipmentNote, invalidateShipments } from '@/components/ShipmentNote.vue'
+import CardProvenance from '@/components/CardProvenance.vue'
 import ValueCurve from '@/components/ValueCurve.vue'
 import ListSentinel from '@/components/ListSentinel.vue'
 import BottomActionBar from '@/components/BottomActionBar.vue'
@@ -455,11 +456,20 @@ const hasShipInfo = (g: CardRow) =>
  * 待出貨與已出貨的卡放**出貨單的說明**。兩種內容不會同時出現 ——
  * 卡的狀態是互斥的 —— 所以共用同一個 .pop 是對的，不必另開一塊。
  */
-function popKind(g: CardRow): 'actions' | 'shipment' | null {
+/**
+ * 這一格的面板要放什麼。
+ *
+ * 'info' 是後來加的第三種，而且它讓**每一張卡都有面板**——
+ * 在那之前只有寄存中（可以出貨／回收）與待出貨（有出貨單）點得開，
+ * 其餘的卡點下去什麼都不會發生。而「這張卡是從哪來的」對每一張卡都成立，
+ * 也是這個站唯一同業複製不了的一塊（見 CardProvenance 的檔頭）——
+ * 把它藏在只有兩種狀態點得開的面板裡，等於做了不給人看。
+ */
+function popKind(g: CardRow): 'actions' | 'shipment' | 'info' | null {
   if (selecting.value) return null
   if (g.head.status === 'stashed') return 'actions'
   if (hasShipInfo(g)) return 'shipment'
-  return null
+  return 'info'
 }
 /* 帶時區的 ISO 字串轉成**當地**日期，直接切前 10 碼會在 UTC+8 的深夜差一天。
    解析不了就原樣回傳 —— 卡冊上少一個好看的日期，比顯示 Invalid Date 好。
@@ -1702,6 +1712,7 @@ async function copyLink() {
                讓任何一格跳動。 -->
           <button
             v-if="popKind(g) === 'actions'
+              || popKind(g) === 'info'
               || (popKind(g) === 'shipment' && hasShipmentNote(g.head.id))"
             type="button" class="noteHit"
             data-pop="trigger"
@@ -1709,7 +1720,9 @@ async function copyLink() {
             :aria-controls="`cardpop-${g.head.id}`"
             :aria-label="popKind(g) === 'actions'
               ? `${g.head.card.name} 的操作`
-              : `${g.head.card.name} 的出貨說明`"
+              : popKind(g) === 'info'
+                ? `${g.head.card.name} 的來歷`
+                : `${g.head.card.name} 的出貨說明`"
             @click="toggleCard(g.head.id, $event)"
           ></button>
 
@@ -1768,6 +1781,16 @@ async function copyLink() {
               v-if="popKind(g) === 'shipment'"
               :prize-id="g.head.id" variant="detail"
             />
+
+            <!-- ---- 來歷 ----
+                 **每一種面板都放**，不只 info。它回答的問題跟其他兩種不衝突：
+                 出貨與回收講的是「接下來能做什麼」，來歷講的是「這張卡是什麼、
+                 從哪來」，一張寄存中的卡兩件事都成立。
+                 一疊同款卡（total > 1）不畫 —— 它們的來源本來就不一樣
+                 （不同池、不同籤），混成一段會變成一句對誰都不準的話。
+                 面板是 max-height: 100% + overflow-y: auto，多這幾行
+                 不會撐高任何一格。 -->
+            <CardProvenance v-if="g.total === 1" :prize="g.head" />
 
             <div v-if="popKind(g) === 'actions'" class="acts">
               <button type="button" class="btn primary sm" @click="openShip(g.head)">申請出貨</button>

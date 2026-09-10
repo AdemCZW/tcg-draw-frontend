@@ -796,13 +796,13 @@ export function mockDraw(poolId: string, seats: number[]): DrawResult {
    「這個池沒有宣告買回價」，而 mock 模式就看不到回收這條動線了。
    up6 刻意留成 null：那條分支在 mock 裡也要看得到。 */
 export const userPrizes: UserPrize[] = [
-  { id: 'up1', card: cards[1], tier: 'B', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03', buyback: 16800 },
-  { id: 'up2', card: cards[4], tier: 'D', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03', buyback: 7680 },
-  { id: 'up3', card: cards[5], tier: 'C', status: 'shipped', wonAt: '2026-07-20T14:02:00+08:00', acquiredAt: '2026-07-20T14:02:00+08:00', stashExpiresAt: '—', buyback: 5880 },
-  { id: 'up4', card: cards[16], tier: 'A', status: 'stashed', wonAt: '2026-08-09T18:40:00+08:00', acquiredAt: '2026-08-09T18:40:00+08:00', stashExpiresAt: '2026-11-07', buyback: 900 },
-  { id: 'up5', card: cards[19], tier: 'D', status: 'ship_requested', wonAt: '2026-08-10T11:05:00+08:00', acquiredAt: '2026-08-10T11:05:00+08:00', stashExpiresAt: '2026-11-08', buyback: 456 },
+  { id: 'up1', card: cards[1], tier: 'B', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03', origin: 'draw', poolId: 'p1', poolTitle: '朱紫 SAR 精選 第 1 彈', seat: 37, buyback: 16800 },
+  { id: 'up2', card: cards[4], tier: 'D', status: 'stashed', wonAt: '2026-08-05T20:11:00+08:00', acquiredAt: '2026-08-05T20:11:00+08:00', stashExpiresAt: '2026-11-03', origin: 'draw', poolId: 'p2', poolTitle: '關都精選 · 伊布家族 250 抽', seat: 118, buyback: 7680 },
+  { id: 'up3', card: cards[5], tier: 'C', status: 'shipped', wonAt: '2026-07-20T14:02:00+08:00', acquiredAt: '2026-07-20T14:02:00+08:00', stashExpiresAt: '—', origin: 'draw', poolId: 'p3', poolTitle: '滿分場 #30 · 全 PSA 10', seat: 9, buyback: 5880 },
+  { id: 'up4', card: cards[16], tier: 'A', status: 'stashed', wonAt: '2026-08-09T18:40:00+08:00', acquiredAt: '2026-08-09T18:40:00+08:00', stashExpiresAt: '2026-11-07', origin: 'draw', poolId: 'p4', poolTitle: '銅板場 #72 · 快開快抽', seat: 64, buyback: 900 },
+  { id: 'up5', card: cards[19], tier: 'D', status: 'ship_requested', wonAt: '2026-08-10T11:05:00+08:00', acquiredAt: '2026-08-10T11:05:00+08:00', stashExpiresAt: '2026-11-08', origin: 'draw', poolId: 'p5', poolTitle: '入門場 · 一百點開一張', seat: 12, buyback: 456 },
   // 舊制的池抽到的卡：沒有宣告過買回價，所以回收不了。這條分支要看得到
-  { id: 'up6', card: cards[21], tier: 'C', status: 'stashed', wonAt: '2026-08-11T09:30:00+08:00', acquiredAt: '2026-08-11T09:30:00+08:00', stashExpiresAt: '2026-11-09', buyback: null },
+  { id: 'up6', card: cards[21], tier: 'C', status: 'stashed', wonAt: '2026-08-11T09:30:00+08:00', acquiredAt: '2026-08-11T09:30:00+08:00', stashExpiresAt: '2026-11-09', origin: 'draw', poolId: 'p6', poolTitle: '促販卡 大亂鬥 第 7 回', seat: 23, buyback: null },
   /* 自己登記進卡冊的一張鑑定卡（in_book）。
      tier 是 null（沒進過池就沒有賞別）、沒有寄存期限（卡在自己手上）、
      沒有買回價（買回價是某個池的賣家宣告的，這張卡沒進過池）。

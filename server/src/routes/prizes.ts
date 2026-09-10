@@ -368,6 +368,7 @@ prizes.get('/', async c => {
   const rows = await sql<Row[]>`
     with b as (${book})
     select p.*, b.group_key, b.group_total, b.group_sellable, b.group_ref,
+           pl.title as pool_title,
            /* 買回價只有在**這一筆結算還付得出來**的時候才回（F-7）。
               結算一旦 released / refunded / recycled，那筆保留額已經不在了，
               回收端點會回 409。原本這裡照樣回買回價，卡冊就長出一個
@@ -379,6 +380,11 @@ prizes.get('/', async c => {
            st.ship_due_at as settle_ship_due_at, st.shipped_at as settle_shipped_at
       from b
       join prizes p on p.id = b.id
+      /* 池名是來歷唯一不在 prizes 裡的欄位（p.* 已經帶出 origin / pool_id /
+         seat / draw_id / grader / cert_no / won_at / acquired_at）。
+         left join 不是 inner：登記進卡冊的卡沒有 pool_id，inner 會讓那一批
+         整個從卡冊消失。 */
+      left join pools pl on pl.id = p.pool_id
       left join pool_seats ps on ps.pool_id = p.pool_id and ps.seat = p.seat
       left join pool_prizes pp on pp.id = ps.prize_id
       left join pool_settlements st on st.prize_id = p.id
