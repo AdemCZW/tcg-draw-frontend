@@ -811,7 +811,27 @@ export const userPrizes: UserPrize[] = [
      （見 CardPicker.vue 的判準），而在它之前這份 mock 全是 stashed 與
      shipped —— 少了這一列，「從我的卡冊挑」在展示模式下會是空的，
      而那正是這次要修的那個症狀本身。 */
-  { id: 'up7', card: cards[12], tier: null, status: 'in_book', wonAt: '2026-08-14T10:00:00+08:00', acquiredAt: '2026-08-14T10:00:00+08:00', stashExpiresAt: '—', buyback: null }
+  { id: 'up7', card: cards[12], tier: null, status: 'in_book', wonAt: '2026-08-14T10:00:00+08:00', acquiredAt: '2026-08-14T10:00:00+08:00', stashExpiresAt: '—', buyback: null },
+  /* ---- 重複的卡（同一款好幾張）----
+     **這幾列是展示模式下「同款集中」「只看重複的」「每款留一張，其餘全選」
+     唯一看得到的資料。** 在它們之前這份 mock 每一款都只有一張，於是那三個
+     功能在本機開發時永遠是空的／不出現 —— 而它們最容易錯的地方（跨批的張數、
+     一疊裡有幾張還能上架）正好只在有重複卡時才走得到。
+
+     三組刻意各自不同：
+       月亮伊布 ×2  最單純的一疊，兩張都能上架
+       雷伊布   ×3  其中一張已經在市場上 → 卡圖上的「可上架 2」與
+                    「每款留一張」只該動得了另外兩張，兩個數字要對得起來
+       伊布     ×2  in_book（自己登記的），證明可上架的不只有寄存中的卡
+     全部挑沒有鑑定編號的卡：有編號的卡按規則永遠各自一格（cardMergeKey），
+     拿它們當重複卡的示範，畫面上會是兩格 ×1，剛好示範不到。 */
+  { id: 'up8', card: cards[8], tier: 'C', status: 'stashed', wonAt: '2026-08-15T21:12:00+08:00', acquiredAt: '2026-08-15T21:12:00+08:00', stashExpiresAt: '2026-11-13', buyback: 3240 },
+  { id: 'up9', card: cards[8], tier: 'C', status: 'stashed', wonAt: '2026-08-15T21:12:00+08:00', acquiredAt: '2026-08-15T21:12:00+08:00', stashExpiresAt: '2026-11-13', buyback: 3240 },
+  { id: 'up10', card: cards[21], tier: 'D', status: 'stashed', wonAt: '2026-08-16T09:40:00+08:00', acquiredAt: '2026-08-16T09:40:00+08:00', stashExpiresAt: '2026-11-14', buyback: 312 },
+  { id: 'up11', card: cards[21], tier: 'D', status: 'stashed', wonAt: '2026-08-16T09:40:00+08:00', acquiredAt: '2026-08-16T09:40:00+08:00', stashExpiresAt: '2026-11-14', buyback: 312 },
+  { id: 'up12', card: cards[21], tier: 'D', status: 'listed', wonAt: '2026-08-16T09:40:00+08:00', acquiredAt: '2026-08-16T09:40:00+08:00', stashExpiresAt: '2026-11-14', buyback: 312 },
+  { id: 'up13', card: cards[11], tier: null, status: 'in_book', wonAt: '2026-08-17T13:05:00+08:00', acquiredAt: '2026-08-17T13:05:00+08:00', stashExpiresAt: '—', buyback: null },
+  { id: 'up14', card: cards[11], tier: null, status: 'in_book', wonAt: '2026-08-17T13:05:00+08:00', acquiredAt: '2026-08-17T13:05:00+08:00', stashExpiresAt: '—', buyback: null }
 ]
 
 export const ledger: LedgerEntry[] = [

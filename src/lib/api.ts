@@ -345,6 +345,44 @@ function normalizeSearch(s: string): string {
 }
 
 /**
+ * 一張卡片符不符合關鍵字。**卡冊搜尋專用**，比對的三欄跟後端
+ * `GET /v1/prizes?q=` 的 search_text 一致：卡名、鑑定編號、套牌代號。
+ *
+ * 這一支不是只給 mock 用的（所以 export）：卡冊那一頁還要拿它回答
+ * 「後端到底有沒有理解我送出去的 q」。前後端不是同時上線的
+ * （前端在 Pages、後端在 Railway），舊後端會把不認得的 ?q= 直接忽略、
+ * 照樣回一整本卡冊 —— 那時候畫面上寫著「符合『噴火龍』的卡」而底下是
+ * 整本卡冊，是**錯的答案**，比「搜不到」糟得多。要偵測得出來才擋得掉。
+ *
+ * ⚠️ 偵測歸偵測，**過濾仍然只能由後端做**：清單是游標分頁的，
+ * 前端濾只濾得到已載入的那一批（理由跟 listMarket 的搜尋同一條）。
+ */
+export function prizeMatchesQuery(card: CardItem, q: string): boolean {
+  const n = normalizeSearch(q)
+  if (!n) return true
+  return normalizeSearch(`${card.name}|${card.certNo ?? ''}|${card.setCode}`).includes(n)
+}
+
+/**
+ * 同一件事的**寬鬆版**，只給上面說的那個偵測用。
+ *
+ * 為什麼不能直接拿 prizeMatchesQuery 去偵測：那一支比對的是契約上寫死的三欄，
+ * 而後端的 search_text 之後很可能會多收一兩欄（卡號、TCGdex 編號都是合理的
+ * 下一步）。真後端多回了一張「卡號對得上、卡名對不上」的卡時，
+ * 嚴格版會判定成「後端忽略了 q」並跳出一句錯的警告 —— 那比沒有偵測更糟。
+ *
+ * 所以偵測用的門檻刻意放寬：只有回來的卡**每一個可搜尋欄位都沾不上邊**時
+ * 才算數。那種情況只有一個解釋，就是後端根本沒有理解 q。
+ */
+export function prizeMatchesQueryLoose(card: CardItem, q: string): boolean {
+  const n = normalizeSearch(q)
+  if (!n) return true
+  return normalizeSearch(
+    `${card.name}|${card.certNo ?? ''}|${card.setCode}|${card.cardNo}|${card.artId ?? ''}`
+  ).includes(n)
+}
+
+/**
  * mock 的游標分頁。游標直接用「上一批最後一筆的 id」，因為 mock 的陣列
  * 順序就是排序本身；真後端不能這樣做（見 server/src/pagination.ts）。
  */
@@ -551,13 +589,25 @@ export const api = {
    * 而畫面上只有 3 張載進來了，其餘 7 個 id 只有後端拿得出來。
    */
   async myPrizes(
-    opts: PageOpts & { status?: UserPrize['status']; sort?: PrizeSort; group?: string } = {}
+    opts: PageOpts & {
+      status?: UserPrize['status']; sort?: PrizeSort; group?: string
+      /**
+       * 關鍵字。不分大小寫、contains，同時比對卡名、鑑定編號、套牌代號，
+       * 可以跟 status / sort / group 並用。
+       * 為什麼一定要後端做：見 prizeMatchesQuery 與 listMarket 的說明。
+       */
+      q?: string
+    } = {}
   ): Promise<Page<UserPrize>> {
     /* mock 也要真的分頁，不能整包回。mock 是本機開發與展示唯一的資料來源，
        它不分頁的話捲動載入這條路在開發時永遠走不到，等到接上後端才發現壞掉。 */
     if (MOCK) {
       await delay(150)
       let all = opts.status ? mock.userPrizes.filter(p => p.status === opts.status) : mock.userPrizes
+      /* 關鍵字跟 status 同一層先濾掉，後面的 groupTotal / groupSellable 才會是
+         「符合這個關鍵字的這一款有幾張」—— 跟畫面上那面卡牆講的是同一件事。
+         擺在計數之後的話，搜尋結果裡的一格會寫著 ×10 而清單只給得出 1 張。 */
+      if (opts.q) all = all.filter(p => prizeMatchesQuery(p.card, opts.q!))
       /* mock 也要照同一套規則分組與排序，否則本機開發時「同款集中」永遠是空的，
          而這個功能最容易錯的地方（跨批的張數）在 mock 下根本走不到。
          鍵用 cardMergeKey —— 它跟後端 GROUP_KEY 產生的是同一個字串。 */
@@ -590,7 +640,7 @@ export const api = {
       return mockPage(all, p => p.id, opts)
     }
     const r = await http<{ items: Any[]; nextCursor: string | null }>(
-      `/v1/prizes${qs({ ...opts, status: opts.status, sort: opts.sort, group: opts.group })}`,
+      `/v1/prizes${qs({ ...opts, status: opts.status, sort: opts.sort, group: opts.group, q: opts.q })}`,
       { signal: opts.signal })
     return { items: r.items.map(toPrize), nextCursor: r.nextCursor }
   },

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, type Page, type PrizeSort, type PrizeSummary } from '@/lib/api'
+import { api, prizeMatchesQueryLoose, type Page, type PrizeSort, type PrizeSummary } from '@/lib/api'
 import type { Tier, UserPrize } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 import Tilt3D from '@/components/Tilt3D.vue'
@@ -40,6 +40,49 @@ const route = useRoute()
 const justGot = computed(() => new Set(
   String(route.query.new ?? '').split(',').map(v => v.trim()).filter(Boolean)))
 
+/* ---- 搜尋 ----
+
+   卡冊只會變長不會變短，而「我那張 PSA 10 的噴火龍在哪」是使用者在這一頁
+   最常問的問題之一。捲動與排序都答不了它：卡在第 8 批的時候，那兩件事
+   跟沒有一樣。
+
+   ⚠️ 搜尋**一定要打後端**（api.myPrizes 會把 q 帶下去），跟狀態過濾、排序、
+   分組同一條理由，而且更嚴重：清單是游標分頁的，前端只濾得到已載入的那 24 張。
+   搜「噴火龍」看到 1 張、其實卡冊裡有 5 張，另外 4 張在還沒捲到的批次裡 ——
+   那不是不方便，是**錯的答案**，而且畫面上看不出來。
+
+   比對的三欄（卡名、鑑定編號、套牌代號）跟後端一致，理由各自不同：
+   卡名是人記得住的東西、鑑定編號是「到底是我哪一張卡」唯一可查證的答案、
+   套牌代號讓「我 sv8a 那批」這種問法問得出來。 */
+/** 輸入框最大字數。後端上界更寬，這裡收得更緊：卡名沒有這麼長 */
+const Q_MAX = 40
+/** 去抖動間隔。連續打字時只有停下來之後才送出一次請求 */
+const Q_DEBOUNCE_MS = 300
+/** 使用者正在打的字（每一鍵都會變） */
+const draft = ref('')
+/** 真正送去查詢的關鍵字（去抖動之後才會變）。分成兩個 ref 就是去抖動的全部意義 */
+const q = ref('')
+/** 打完了但還沒送出去的那段空窗。這一段也要顯示忙碌狀態，否則使用者以為沒反應 */
+const qPending = ref(false)
+let qTimer: ReturnType<typeof setTimeout> | null = null
+
+function commitQ(value: string) {
+  if (qTimer) { clearTimeout(qTimer); qTimer = null }
+  qPending.value = false
+  q.value = value.trim()
+}
+watch(draft, v => {
+  if (qTimer) clearTimeout(qTimer)
+  // 打到跟目前查詢一樣的字（刪掉又打回來）不必再排一次
+  if (v.trim() === q.value) { qTimer = null; qPending.value = false; return }
+  qPending.value = true
+  qTimer = setTimeout(() => commitQ(v), Q_DEBOUNCE_MS)
+})
+/** Enter 直接送出，不等剩下的去抖動 —— 使用者已經表示打完了 */
+const submitQ = () => commitQ(draft.value)
+function clearQ() { draft.value = ''; commitQ('') }
+onBeforeUnmount(() => { if (qTimer) clearTimeout(qTimer) })
+
 /* ---- 卡片清單 ----
    卡冊是整個站成長最快的列表：每抽一次就多一張，只會變長不會變短。
    所以列表分批載入，捲到接近底部才抓下一批（見 composables/useInfiniteList.ts）。
@@ -51,7 +94,9 @@ const list = useInfiniteList<UserPrize>((cursor, signal) =>
   api.myPrizes({
     cursor, signal,
     status: tab.value === 'all' ? undefined : tab.value,
-    sort: sort.value
+    sort: sort.value,
+    // 空字串不送：qs() 會把它濾掉，但這裡寫明白一點 —— 沒有關鍵字就是沒有篩選
+    q: q.value || undefined
   }))
 const sentinelRef = list.sentinel
 const prizes = list.items
@@ -198,6 +243,36 @@ const sortOptions: SegOption<PrizeSort>[] = SORT_TABS.map(t => ({ value: t.k, la
      dupGroups !== undefined：舊後端不回這個欄位，那時候排序是無效的 */
 const showSorts = computed(() => total.value > 6 && summary.value?.dupGroups !== undefined)
 
+/* 搜尋框什麼時候出現。門檻跟排序同一個（total > 6）：一頁裝得下的卡冊
+   用眼睛找比打字快，而固定出現的控制項會把卡牆往下推 —— 這一頁最貴的是
+   垂直空間。已經有關鍵字時一定要留著，不然清除鍵會跟著消失。
+   不像排序那樣要求 dupGroups：舊後端沒有搜尋這件事由 qIgnored 當場說出來，
+   而它比「悄悄不給搜尋框」誠實 —— 使用者至少知道是伺服器還沒跟上。 */
+const showSearch = computed(() => total.value > 6 || !!q.value || !!draft.value)
+/* 忙碌 = 「打完了還沒送出」＋「送出了還沒回來」。兩段都要算進去：
+   只看請求的話，去抖動的那 300ms 會像是打了字卻什麼都沒發生。 */
+const qBusy = computed(() => qPending.value || (!!q.value && list.loading.value))
+
+/**
+ * 後端把 q 忽略掉了。
+ *
+ * 前後端不是同時上線的（前端在 Pages、後端在 Railway），中間那段時間
+ * 舊後端會把不認得的 ?q= 直接忽略、照樣回一整本卡冊。那時候畫面上寫著
+ * 「符合『噴火龍』的卡」而底下是整本卡冊 —— 那是**錯的答案**，
+ * 比「搜不到」糟得多，所以要偵測得出來並且照實講。
+ *
+ * 偵測用的是「回來的卡裡有沒有**每一個可搜尋欄位都沾不上邊**的」，
+ * 刻意用寬鬆版（api.ts 的 prizeMatchesQueryLoose）：後端之後多收一兩個
+ * 搜尋欄位是很合理的事，用嚴格版會把那種情況誤判成「後端忽略了 q」，
+ * 跳出一句錯的警告 —— 那比沒有偵測更糟。
+ *
+ * ⚠️ 偵測歸偵測，**這裡絕不拿它去過濾**：前端過濾只濾得到已載入的那一批，
+ * 那正是這整段要避免的錯誤。
+ */
+const qIgnored = computed(() =>
+  !!q.value && list.ready.value && !list.error.value
+  && prizes.value.some(p => !prizeMatchesQueryLoose(p.card, q.value)))
+
 const serverGroups = computed(() => shown.value[0]?.groupKey !== undefined)
 const grouped = computed(() => sort.value !== 'acquired' && serverGroups.value)
 
@@ -257,6 +332,62 @@ const rows = computed<CardRow[]>(() => {
   return out
 })
 
+/* ---- 只看重複的 ----
+   「同款集中」把重複的卡排在一起了，但使用者真正要做的事是
+   **「哪幾張我該賣掉」**：排在一起之後仍然要一格一格看，因為單張的卡
+   佔掉的位置一樣多，十幾格裡混著三格重複的，眼睛還是要逐格判斷。
+
+   為什麼這一個過濾可以留在前端（跟搜尋、狀態、排序都不同）：
+   判斷的依據是 groupTotal，那是**後端用 window function 算的整本卡冊張數**，
+   不是「這一批載進來幾張」。所以「這一格是不是重複卡」這件事，
+   對每一格都已經是正確答案了，只是把答案為否的那幾格不畫出來 ——
+   沒有任何一張卡會因為分頁而被誤判。
+   （要是改成前端自己數 members.length，那就是在前端分組，
+     跨批的同款卡會被算成 ×1 而整組消失 —— 見上面 rows 的說明。）
+
+   ⚠️ 但它只有在**分組成立**時才成立（一格＝一疊）。取得時間排序刻意不分組，
+   那時候每一格都是 total 1，開著這個開關會整片空掉。所以打開它就順手切到
+   「同款集中」，切回取得時間就自動關掉 —— 兩個狀態不會互相矛盾。 */
+const dupOnly = ref(false)
+function toggleDupOnly() {
+  dupOnly.value = !dupOnly.value
+  if (dupOnly.value && sort.value === 'acquired') sort.value = 'dupes'
+}
+// 排序切回「取得時間」＝不分組，這個開關在那裡沒有意義，跟著關掉
+watch(sort, v => { if (v === 'acquired') dupOnly.value = false })
+/** 開關要不要出現：沒有重複卡時它是一顆按了畫面會空掉的按鈕 */
+const showDupToggle = computed(() => showSorts.value && dupGroups.value > 0)
+
+/** 真正畫出來的那幾格。過濾條件見 dupOnly 上面那一段 */
+const visibleRows = computed(() =>
+  dupOnly.value ? rows.value.filter(r => r.total > 1) : rows.value)
+
+/**
+ * 空的時候要講哪一句話。null＝不是空的、還在載、或出錯了（三種都不該講）。
+ *
+ * 為什麼要分成三句：**每一句的下一步都不一樣**。
+ *   'q'   找不到符合關鍵字的 → 下一步是換個關鍵字或清除
+ *   'dup' 這裡沒有重複的卡   → 下一步是關掉「只看重複的」
+ *   'tab' 這個分頁沒有卡     → 下一步是去別的分頁或去抽卡
+ * 全部併成一句「沒有卡片」的話，使用者會照著那句話去做**錯的事**：
+ * 明明只是關鍵字打錯，卻被指去抽卡。
+ * （整本卡冊是空的那一種由上面另一塊空狀態負責，條件是 !total。）
+ *
+ * 三個條件都不能少，理由跟那一塊一樣：ready 不分成敗都會變 true，
+ * 少了 !error 的話「載不到」會被畫成「你沒有卡」。
+ */
+const noneKind = computed<'q' | 'dup' | 'tab' | null>(() => {
+  if (!list.ready.value || list.error.value || !total.value || visibleRows.value.length) return null
+  /* 「只看重複的」是在整批結果上挑 total > 1 的那幾格，所以「一格都沒有」
+     這個結論**要等清單真的載完才成立** —— 中間某一批剛好全是單張卡是很常見的，
+     那時候底下的哨兵還在抓下一批，先斷言「沒有重複的卡」就是說謊。
+     另外兩種是後端過濾的：空的第一批就是空的答案，不必等。 */
+  if (dupOnly.value && !list.done.value) return null
+  if (q.value) return 'q'
+  if (dupOnly.value) return 'dup'
+  return 'tab'
+})
+
 const listRef = ref<HTMLElement | null>(null)
 function backToTop() {
   const top = listRef.value?.getBoundingClientRect().top ?? 0
@@ -266,7 +397,10 @@ function backToTop() {
    過期回應由 composable 的世代編號擋掉（快速連按不會錯位）。
    同時把清單頂端捲回視野：內容整批換掉了，停在原本的捲動位置會落在
    一個比舊清單短得多的新清單的中間，看起來像「載不出來」。 */
-watch([tab, sort], () => {
+/* q 也在這一組裡：換關鍵字＝換一組查詢，游標一定要歸零。
+   沿用舊游標的話，新關鍵字的第一批會從上一組結果的中間接下去 ——
+   那是把兩次查詢的結果縫在一起，畫面上完全看不出來。 */
+watch([tab, sort, q], () => {
   openCard.value = null
   confirmPrize.value = null
   list.reset()
@@ -627,6 +761,7 @@ const canSell = (p: UserPrize) => p.status === 'stashed' || p.status === 'in_boo
 function startSell() {
   selecting.value = true
   sellPicked.value = []
+  keepMsg.value = ''
   openCard.value = null
   confirmPrize.value = null
   /* 選取列跟出貨的提示訊息都貼在畫面底部同一個位置。
@@ -637,6 +772,7 @@ function startSell() {
 function endSell() {
   selecting.value = false
   sellPicked.value = []
+  keepMsg.value = ''
 }
 
 function toggleSell(p: UserPrize) {
@@ -676,7 +812,11 @@ async function fetchGroup(key: string): Promise<UserPrize[]> {
   do {
     const page: Page<UserPrize> = await api.myPrizes({
       group: key, limit: 100, cursor,
-      status: tab.value === 'all' ? undefined : tab.value
+      status: tab.value === 'all' ? undefined : tab.value,
+      /* 關鍵字也要帶上：畫面上那個「可上架 N」是**在這個關鍵字底下**算出來的，
+         這裡不帶 q 的話撈回來的是整組（可能更多張），選取數就會超過畫面上
+         承諾的那個數字。兩邊要問後端同一個問題。 */
+      q: q.value || undefined
     })
     out.push(...page.items)
     cursor = page.nextCursor
@@ -725,6 +865,61 @@ async function setGroupPick(row: CardRow, n: number) {
 function toggleRow(row: CardRow) {
   if (!row.sellable) return
   void setGroupPick(row, pickedInGroup(row.key) >= row.sellable ? 0 : row.sellable)
+}
+
+/* ---- 「每款留一張，其餘全選」----
+   「只看重複的」把該處理的卡收在一起了，但選取仍然要一款一款按
+   （每一款都要按 − 一下把張數調成 total−1）。而使用者的目標幾乎都是同一句話：
+   **每款自己留一張，其餘賣掉**。那句話值得一顆按鈕。
+
+   三件事刻意做成這樣：
+   1. **它只改變選取，不送出任何東西。** 誤觸的代價必須是「再按一次取消」，
+      不能是「卡被上架了」—— 實際上架仍然要按底下那條列的「一鍵上架」，
+      那一步一個字都沒有被省掉。
+   2. **按鈕上就寫著會選幾張。** 「全選」這種字眼在一本 60 張的卡冊裡
+      是一個看不到後果的動作。
+   3. **範圍講清楚是「目前看得到的幾款」。** 每一款的張數是後端算的（準的），
+      但「有哪幾款」只有已經載進來的那幾格 —— 沒捲到的款式不會被選到，
+      這件事要寫在畫面上，不能讓人以為按一下就處理完整本卡冊。 */
+const keepBusy = ref(false)
+/* 結果訊息**不走 flash()**：那個提示是 position: fixed 貼在畫面底部的，
+   而選取模式下同一個位置正是那條「已選 N 張／一鍵上架」的列 —— 兩者會疊在
+   一起，誰也讀不清楚（startSell 清掉 toast 就是為了同一件事）。
+   這句話本來就該長在按鈕旁邊：它是那一下的回執。 */
+const keepMsg = ref('')
+/** 按下去會發生什麼：涵蓋幾款、選到幾張。只算「留一張之後還有得選」的那幾款 */
+const keepOnePlan = computed(() => {
+  let groups = 0
+  let cards = 0
+  for (const r of visibleRows.value) {
+    if (r.total > 1 && r.sellable > 1) { groups++; cards += r.sellable - 1 }
+  }
+  return { groups, cards }
+})
+
+async function keepOnePerGroup() {
+  if (keepBusy.value || groupBusy.value || !keepOnePlan.value.cards) return
+  keepBusy.value = true
+  keepMsg.value = ''
+  /* 逐款依序做，不並行：setGroupPick 缺卡時要跟後端要整組，而 groupBusy
+     一次只允許一個請求在飛（並行的話後幾款會被 groupBusy 直接放掉，
+     結果是「按了卻只選到前兩款」—— 安靜地少選正是這一段最該避免的事）。 */
+  const rowsNow = visibleRows.value.filter(r => r.total > 1 && r.sellable > 1)
+  let failed = 0
+  try {
+    for (const r of rowsNow) {
+      await setGroupPick(r, r.sellable - 1)
+      // setGroupPick 失敗時會自己提示並原地返回，這裡用結果反查有沒有真的選到
+      if (pickedInGroup(r.key) !== r.sellable - 1) failed++
+    }
+  } finally {
+    keepBusy.value = false
+  }
+  /* 講三件事：選了幾張、依據是什麼、**還沒有上架**。
+     最後那一句是這顆按鈕的安全帶：它改的只是選取。 */
+  keepMsg.value = failed
+    ? `已選 ${sellPick.value.length} 張，其中 ${failed} 款的其餘幾張載入失敗，請再按一次。`
+    : `已選 ${sellPick.value.length} 張（${rowsNow.length} 款各留 1 張）。還沒有上架 —— 確認後按下面的「一鍵上架」。`
 }
 
 const sellPickValue = computed(() =>
@@ -1211,7 +1406,63 @@ async function copyLink() {
 
          不做成下拉／選單：使用者明講不要。軌道的每一個選項都一直看得見，
          目前值也一直看得見，這是選單做不到的。 -->
-    <div v-if="tabs.length > 1 || showSorts" class="viewBar">
+    <div v-if="tabs.length > 1 || showSorts || showSearch" class="viewBar">
+      <!-- ---- 找 ----
+           搜尋框放在這塊面板的**第一列**，不是浮在頁面上自成一條欄位。
+           理由是它跟底下兩列回答的是同一個層級的問題：「我現在要看的是哪一批」。
+           三者都不改任何資料（動作那一組刻意在面板外面、浮在頁面底色上）——
+           把它擺到面板外，就等於又要使用者分辨第三種東西。
+
+           擺第一列而不是最後：條件的作用順序是「先縮小集合，再決定順序」，
+           而搜尋是這三個裡最會把集合縮小的那一個。 -->
+      <div v-if="showSearch" class="viewRow">
+        <span class="viewLabel" aria-hidden="true">找</span>
+        <form class="search" role="search" @submit.prevent="submitQ">
+          <svg class="mag" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" />
+          </svg>
+          <input
+            v-model="draft"
+            class="qbox"
+            type="search"
+            :maxlength="Q_MAX"
+            enterkeyhint="search"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            placeholder="卡名、鑑定編號或系列代碼"
+            aria-label="搜尋我的卡冊"
+          />
+          <!-- 忙碌指示跟清除鍵佔同一格（都是 44px，互換時輸入框寬度不會跳）：
+               兩個同時出現會把輸入框擠窄，而「還在查」跟「清掉」也不是同時
+               想做的事。真的想清掉的人還有下面那一行的「清除關鍵字」。 -->
+          <span v-if="qBusy && draft" class="ring" aria-hidden="true"></span>
+          <button
+            v-else-if="draft" type="button" class="clear"
+            aria-label="清除搜尋" @click="clearQ"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </form>
+      </div>
+
+      <!-- 現在看到的是篩選過的結果 —— 這句話非講不可：卡冊的張數在總覽卡上，
+           底下那面卡牆突然變成 3 格時，沒有這一行就分不出「我搜到 3 張」
+           跟「我的卡只剩 3 張」。清除鍵在這裡再放一顆（整條 44px 好按），
+           因為輸入框裡那顆在查詢中會暫時換成忙碌指示。 -->
+      <p v-if="q && !qIgnored" class="qNote">
+        <span class="qNoteText">只顯示符合「<b>{{ q }}</b>」的卡</span>
+        <button type="button" class="qClear" @click="clearQ">清除關鍵字</button>
+      </p>
+
+      <!-- 後端忽略了 q。這是**錯誤態不是空狀態**：下面那面卡牆是有東西的，
+           只是它不是使用者要的答案。不講的話畫面會說「符合『xxx』的卡」
+           而底下躺著整本卡冊（見 qIgnored 的說明）。 -->
+      <p v-if="qIgnored" class="qWarn" role="alert">
+        這個伺服器還不支援卡冊搜尋，下面是<strong>整本卡冊</strong>，不是「{{ q }}」的結果。
+        <button type="button" class="qClear" @click="clearQ">清除關鍵字</button>
+      </p>
+
       <div v-if="tabs.length > 1" class="viewRow">
         <span class="viewLabel" aria-hidden="true">顯示</span>
         <!-- 每個分頁後面的數字（option.count）是使用者決定「該點哪一個」的依據，
@@ -1241,6 +1492,26 @@ async function copyLink() {
         />
       </div>
 
+      <!-- ---- 「只看重複的」----
+           「同款集中」把重複的卡排在一起了，但一疊卡跟一張卡佔的位置一樣多 ——
+           十幾格裡混著三格重複的，眼睛還是要一格一格判斷。這個開關直接把
+           單張的那幾格收起來，剩下的就是「可以考慮賣掉」的那幾款。
+
+           形狀跟軌道不同（一顆獨立的膠囊、不是分格的軌道），因為語意不同：
+           上面兩列是單選（只能是其中一個），這一個是開關（開或關）。
+           選中的樣子跟軌道裡的目前值同一套（凹面板裡浮起來的中性晶片），
+           強調色仍然只留給動作那一排。 -->
+      <div v-if="showDupToggle" class="viewRow">
+        <span class="viewLabel" aria-hidden="true">重複</span>
+        <button
+          type="button" class="dupChip" :class="{ on: dupOnly }"
+          :aria-pressed="dupOnly"
+          @click="toggleDupOnly"
+        >
+          只看重複的<span class="dupN mono">{{ dupGroups }} 款</span>
+        </button>
+      </div>
+
       <!-- ---- 「你有重複的卡」----
            原本這是控制區最上面一條藍色橫幅，裡面還有一顆會去按排序的連結鈕。
            在只有兩組的版面裡它是第三種東西，而且那顆連結鈕是這一片區域裡
@@ -1255,7 +1526,7 @@ async function copyLink() {
 
            數字來自 /summary（整本卡冊）而不是已載入的那 24 張。
            已經切到「同款集中」時不出現：那時候畫面自己就在講這件事。 -->
-      <p v-if="showSorts && dupGroups && sort !== 'dupes'" class="dupHint">
+      <p v-if="showSorts && dupGroups && sort !== 'dupes' && !dupOnly" class="dupHint">
         你有 <b class="mono">{{ dupGroups }}</b> 款重複的卡（共 {{ dupCards }} 張），
         切「同款集中」可以把它們排在一起。
       </p>
@@ -1268,13 +1539,38 @@ async function copyLink() {
       點卡片挑要賣的，可以複選。<strong>寄存中</strong>與<strong>在卡冊</strong>的卡能上架。
     </p>
 
+    <!-- ---- 「每款留一張，其餘全選」----
+         使用者真正要做的事是「哪幾張我該賣掉」，而答案幾乎都是同一句：
+         每款自己留一張、其餘賣掉。以前那要一款一款按 −。
+
+         ⚠️ 這顆按鈕**只改變選取**。上架仍然要按底下那條列的「一鍵上架」，
+         一步都沒有省 —— 誤觸的代價必須是「再按一次取消」，不是卡被賣了。
+         所以它長得像次要按鈕（不上強調色）、按鈕上直接寫著會選幾張，
+         而且底下那行明講範圍是「目前看得到的幾款」（沒捲到的款式選不到，
+         張數是後端算的、款數只有已載入的那幾格）。 -->
+    <div v-if="selecting && keepOnePlan.cards" class="bulkRow">
+      <button
+        type="button" class="btn sm bulkBtn"
+        :disabled="keepBusy || !!groupBusy"
+        @click="keepOnePerGroup"
+      >
+        每款留一張，其餘全選（{{ keepOnePlan.cards }} 張）
+      </button>
+      <p class="bulkWhy">
+        作用在目前看得到的 <b class="mono">{{ keepOnePlan.groups }}</b> 款重複卡，
+        只改變選取 —— 要上架仍需按下面的「一鍵上架」。
+      </p>
+      <!-- 回執長在按鈕旁邊而不是走底部的 toast：那個位置正是選取列自己 -->
+      <p v-if="keepMsg" class="bulkMsg" role="status">{{ keepMsg }}</p>
+    </div>
+
     <!-- 一格＝一張卡（取得時間排序）或一疊同款卡（同款集中／參考價排序）。
          v-for 跑的是 rows 不是 shown：分組是把**相鄰**的同鍵卡併起來，
          而「相鄰」是後端 order by 保證的，前端不重排也不掃全表 ——
          掃全表就是在前端分組，第 3 批才載進來的同款卡會另外自成一格。 -->
     <div ref="listRef" class="grid">
       <div
-        v-for="g in rows" :key="g.key" class="item card"
+        v-for="g in visibleRows" :key="g.key" class="item card"
         :class="{
           dim: g.head.status === 'recycled',
           sel: pickedInGroup(g.key) > 0,
@@ -1531,9 +1827,25 @@ async function copyLink() {
       </div>
     </div>
 
-    <!-- 這個分頁一張卡也沒有。整本卡冊是空的時候由上面那塊空狀態負責，
-         這裡講的是「這個分頁沒有」，兩句話不一樣 -->
-    <p v-if="list.ready.value && total && !rows.length && !list.error.value" class="empty muted noneTab">
+    <!-- 這裡一張卡也沒有。整本卡冊是空的時候由上面那塊空狀態負責，
+         剩下三種情況的**下一步各不相同**，所以是三句話不是一句
+         （挑哪一句、為什麼要分，見 noneKind）。 -->
+    <div v-if="noneKind === 'q'" class="noneBox">
+      <p class="noneTitle">找不到符合「{{ q }}」的卡</p>
+      <p class="muted noneWhy">
+        卡冊裡有卡，只是沒有一張對得上這組字。
+        試試短一點的關鍵字（例如只打「噴火龍」），或改用鑑定編號、系列代碼（像 sv8a）。
+      </p>
+      <button type="button" class="btn sm" @click="clearQ">清除關鍵字，看全部</button>
+    </div>
+
+    <div v-else-if="noneKind === 'dup'" class="noneBox">
+      <p class="noneTitle">{{ q ? '符合這組字的卡裡沒有重複的' : '這裡沒有重複的卡' }}</p>
+      <p class="muted noneWhy">同一款有兩張以上才會出現在這個檢視裡。</p>
+      <button type="button" class="btn sm" @click="toggleDupOnly">看全部的卡</button>
+    </div>
+
+    <p v-else-if="noneKind === 'tab'" class="empty muted noneTab">
       這個分頁目前沒有卡片。
     </p>
 
@@ -1545,7 +1857,7 @@ async function copyLink() {
       :done="list.done.value"
       :error="list.error.value"
       :manual="list.manual.value"
-      :empty="!rows.length"
+      :empty="!visibleRows.length"
       done-text="已經是全部的卡片了"
       @retry="list.retry()"
       @more="list.load()"
@@ -2207,6 +2519,145 @@ async function copyLink() {
 }
 /* 只有那兩個數字用 ink —— 這一句的重點就是「7」，句子本身是襯詞 */
 .dupHint b { color: var(--ink); font-weight: 700; }
+
+/* ---- 搜尋框 ----
+   長在 .viewRow 裡（跟「顯示／排序」同一塊凹面板），所以它自己不再畫一層
+   凹底色：面板已經是凹的，框裡再凹一層會變成兩層深淺相疊。這裡只用一圈
+   細邊 + surface 底色，讓它在面板裡「浮」起來 —— 跟軌道上的目前值同一套
+   語言（凹的是面板，浮的是可以動的東西）。
+
+   flex: 1 1 auto + min-width: 0 兩個都要：前者讓它吃掉「找」右邊的整列，
+   後者是 input 有預設固有寬度（size=20），少了它整列會被撐破。 */
+.search {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 4px 0 12px;
+  min-height: 44px;                /* 觸控目標下限 */
+  border-radius: var(--pill);
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  transition: border-color .15s;
+}
+.search:focus-within { border-color: var(--line); }
+/* base.css 只給 .btn 寫了 :focus-visible，這裡自己補（跟 SegTrack 同一條理由） */
+.search:has(.qbox:focus-visible) { border-color: var(--accent); }
+.mag { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; }
+.qbox {
+  flex: 1 1 auto; min-width: 0;
+  border: 0; background: transparent; outline: none;
+  color: var(--ink);
+  /* 16px 是 iOS 不自動放大頁面的門檻。小於它的話點進輸入框整頁會被縮放，
+     退出時又不會縮回去 —— 這一頁的兩欄格線會整個跑掉 */
+  font-size: 16px;
+  padding: 10px 0;
+  font-family: inherit;
+}
+.qbox::placeholder { color: var(--faint); }
+/* type=search 在 WebKit 會長出自己的清除鍵，跟下面那顆重複而且不受樣式控制 */
+.qbox::-webkit-search-cancel-button,
+.qbox::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+.clear {
+  flex: none;
+  width: 44px; height: 44px;       /* 觸控下限，視覺上靠 svg 縮小 */
+  display: grid; place-items: center;
+  border: 0; background: transparent; cursor: pointer;
+  border-radius: 50%; color: var(--muted);
+}
+.clear svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+@media (hover: hover) { .clear:hover { color: var(--ink); } }
+.clear:active { transform: scale(.92); }
+/* 忙碌指示佔跟清除鍵一樣的 44px，兩者互換時輸入框寬度不會跳一下 */
+.search .ring { flex: none; width: 44px; height: 44px; border-radius: 50%; position: relative; }
+.search .ring::after {
+  content: '';
+  position: absolute; inset: 15px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .search .ring::after { animation: qspin .7s linear infinite; }
+}
+@keyframes qspin { to { transform: rotate(360deg); } }
+
+/* 「現在看的是篩選過的結果」。跟 .dupHint 同一種身分（面板裡的一句話），
+   所以同樣不畫底色外框；差別是它右邊掛一顆真的按得下去的清除鍵。 */
+.qNote {
+  margin: 0; padding: 0 2px; min-width: 0;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px;
+  color: var(--faint); font-size: 12px; line-height: 1.6;
+}
+.qNoteText { min-width: 0; overflow-wrap: anywhere; }
+.qNote b { color: var(--ink); font-weight: 700; }
+.qClear {
+  flex: none; min-height: 44px; padding: 0 10px;
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--accent); font-size: 12px; font-family: inherit; font-weight: 600;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+@media (hover: hover) { .qClear:hover { color: var(--accent-soft); } }
+/* 後端還不支援搜尋 —— 錯誤態，用 warn 的權杖畫，不要畫成一句淡淡的提示：
+   下面那面卡牆給的是**別的問題的答案**，那件事必須看得出來 */
+.qWarn {
+  margin: 2px 0 0; padding: 8px 10px; min-width: 0;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px;
+  border-radius: 10px;
+  background: var(--warn-wash); color: var(--warn-ink);
+  font-size: 12px; line-height: 1.6; overflow-wrap: anywhere;
+}
+.qWarn strong { font-weight: 700; }
+.qWarn .qClear { color: inherit; }
+
+/* ---- 「只看重複的」----
+   一顆開關型的膠囊。關的時候跟軌道的底一樣是凹的（--field），
+   開的時候浮起來（--surface ＋ 一圈 --line），跟 SegTrack 的 .segCell.on
+   完全同一套 —— 面板裡「目前生效的東西」只有這一種長相。
+   強調色不用：這一片區域裡只有動作那一排碰得到強調色。 */
+.dupChip {
+  flex: 0 1 auto; min-width: 0; min-height: 44px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  border: 0; border-radius: var(--pill);
+  background: var(--field); color: var(--muted);
+  font-size: 12.5px; font-weight: 500; font-family: inherit; cursor: pointer;
+  white-space: nowrap; overflow: hidden;
+  transition: background .15s, color .15s;
+}
+.dupChip.on {
+  background: var(--surface); color: var(--ink); font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.dupN { font-size: 11px; opacity: .6; font-weight: 400; }
+.dupChip.on .dupN { opacity: .75; }
+@media (hover: hover) { .dupChip:not(.on):hover { background: var(--surface-2); color: var(--ink); } }
+.dupChip:focus { outline: none; }
+.dupChip:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ---- 「每款留一張，其餘全選」----
+   在卡牆外面（選取提示底下），不在格線裡：格線的列高不能因為多了東西
+   而長短不一，這一頁為此修過很多次。 */
+.bulkRow {
+  display: grid; gap: 6px; justify-items: start; min-width: 0;
+  margin: -8px 0 14px;
+}
+/* 不是 primary：它不送出任何東西。強調色留給真的會改資料的那一顆
+   （底下那條列的「一鍵上架」） */
+.bulkBtn { min-height: 44px; padding: 9px 16px; font-size: 13px; max-width: 100%; overflow-wrap: anywhere; }
+.bulkWhy { margin: 0; min-width: 0; font-size: 11.5px; line-height: 1.6; color: var(--faint); }
+.bulkWhy b { color: var(--muted); font-weight: 700; }
+.bulkMsg { margin: 0; min-width: 0; font-size: 12px; line-height: 1.6; color: var(--ink); overflow-wrap: anywhere; }
+
+/* ---- 「找不到」與「沒有重複的卡」----
+   跟「這個分頁沒有卡片」不同：這兩句話各自有一個明確的下一步，
+   所以是一小塊帶按鈕的區塊，不是一行灰字。仍然不套 .card 的外框 ——
+   它不是一張卡片，是清單暫時空著時說的一句話。 */
+.noneBox {
+  display: grid; gap: 8px; justify-items: center; min-width: 0;
+  padding: 28px 12px; text-align: center;
+}
+.noneTitle { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+.noneWhy { margin: 0; font-size: 12.5px; line-height: 1.7; max-width: 28em; overflow-wrap: anywhere; }
+.noneBox .btn { min-height: 44px; padding: 10px 18px; font-size: 13px; }
 
 @media (max-width: 720px) {
   .overview { padding: 14px; gap: 11px; }
