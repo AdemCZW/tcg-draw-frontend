@@ -993,6 +993,9 @@ watch(() => sellPicked.value.length, n => { if (!n) chosenOpen.value = false })
    一按就全關的話，使用者只是想退出確認、卻連原本展開的那張卡也一起被收掉。 */
 function onChosenKey(e: KeyboardEvent) {
   if (e.key !== 'Escape') return
+  /* 詳細資訊排最前面：它是最後開的、疊在最上層，Esc 一定先關它。
+     順序錯的話會發生「按 Esc 關掉底下的東西、上面那層還開著」。 */
+  if (detailPrize.value) { closeDetail(); return }
   if (shipOpen.value) { shipOpen.value = false; return }
   if (confirmPrize.value) { closeConfirm(); return }
   if (chosenOpen.value) { closeChosen(); return }
@@ -1028,6 +1031,19 @@ function askRecycle(p: UserPrize) {
   /* 覆蓋層是 aria-modal，焦點要進去，不然按 Tab 會走到它背後那些讀不到的東西 */
   void nextTick(() => document.getElementById('recycleSheet')?.focus())
 }
+
+/* ---- 詳細資訊 ----
+   獨立成覆蓋層而不是畫在卡片面板裡：那個面板的高度上限是卡圖的高度
+   （為了不撐高格線），裡面已經有卡名、鑑定編號、寄存期限與動作鍵。
+   來歷是一段時間軸，塞進去就是把五種資訊擠在一張卡那麼大的框裡。
+   跟回收確認共用同一組 .sheetWrap / .sheet —— 同一頁的覆蓋層長得一樣，
+   使用者不用學第二次怎麼關掉它。 */
+const detailPrize = ref<UserPrize | null>(null)
+function openDetail(p: UserPrize) {
+  detailPrize.value = p
+  void nextTick(() => document.getElementById('detailSheet')?.focus())
+}
+function closeDetail() { detailPrize.value = null }
 
 /* 關掉確認之後焦點回到卡片上的觸發鈕：面板還開著（覆蓋層只是疊在它上面），
    使用者的位置沒有變，焦點也不該變 */
@@ -1782,15 +1798,20 @@ async function copyLink() {
               :prize-id="g.head.id" variant="detail"
             />
 
-            <!-- ---- 來歷 ----
-                 **每一種面板都放**，不只 info。它回答的問題跟其他兩種不衝突：
-                 出貨與回收講的是「接下來能做什麼」，來歷講的是「這張卡是什麼、
-                 從哪來」，一張寄存中的卡兩件事都成立。
-                 一疊同款卡（total > 1）不畫 —— 它們的來源本來就不一樣
-                 （不同池、不同籤），混成一段會變成一句對誰都不準的話。
-                 面板是 max-height: 100% + overflow-y: auto，多這幾行
-                 不會撐高任何一格。 -->
-            <CardProvenance v-if="g.total === 1" :prize="g.head" />
+            <!-- ---- 詳細資訊 ----
+                 來歷原本直接畫在這個面板裡，但這個面板的高度上限是**卡圖的高度**
+                 （max-height: 100%，為的是不撐高格線），裡面本來就有卡名、
+                 鑑定編號、寄存期限與兩顆動作鍵 —— 再塞一段時間軸就是把
+                 五種資訊擠在一張卡那麼大的框裡。
+                 改成一顆按鈕開獨立的覆蓋層：面板留給「接下來能做什麼」，
+                 詳細資訊留給「這張卡是什麼、從哪來」。
+                 一疊同款卡不給 —— 它們的來源本來就不一樣（不同池、不同籤），
+                 一個詳情視窗講不了十張卡。 -->
+            <button
+              v-if="g.total === 1"
+              type="button" class="btn sm detailBtn"
+              @click.stop="openDetail(g.head)"
+            >詳細資訊</button>
 
             <div v-if="popKind(g) === 'actions'" class="acts">
               <button type="button" class="btn primary sm" @click="openShip(g.head)">申請出貨</button>
@@ -1997,6 +2018,54 @@ async function copyLink() {
          一樣要 Teleport 到 body：祖先只要有 transform，position: fixed 的
          定位基準就會變成那個祖先而不是視窗（docs/HANDOFF.md 2.2）。
          關法三種：點遮罩、取消鍵、Esc。 -->
+    <!-- ---- 詳細資訊的覆蓋層 ----
+         Teleport 到 body 的理由跟回收那一個一樣：祖先只要有 transform，
+         position: fixed 的定位基準就會變成那個祖先而不是視窗
+         （docs/HANDOFF.md 2.2）。這一頁的 Tilt3D 與換頁轉場都有 transform。
+         關法三種：點遮罩、關閉鍵、Esc（Esc 走既有的全域監聽）。 -->
+    <Teleport to="body">
+      <div v-if="detailPrize" class="sheetWrap" @click.self="closeDetail">
+        <div
+          id="detailSheet" class="sheet card detailSheet"
+          role="dialog" aria-modal="true"
+          :aria-label="`${detailPrize.card.name} 的詳細資訊`" tabindex="-1"
+        >
+          <button type="button" class="sheetClose" aria-label="關閉" @click="closeDetail">×</button>
+          <h2 class="dTitle">{{ detailPrize.card.name }}</h2>
+
+          <!-- 卡的身分。CertTag 自己會判斷有沒有機構與等級，
+               沒鑑定的卡它會照實顯示 RAW，不在這裡再判一次。 -->
+          <div class="dTags">
+            <TierBadge v-if="detailPrize.tier" :tier="detailPrize.tier" />
+            <CertTag :card="detailPrize.card" />
+          </div>
+
+          <dl class="dRows">
+            <div v-if="detailPrize.card.setCode">
+              <dt>系列</dt>
+              <dd class="mono">{{ detailPrize.card.setCode }}</dd>
+            </div>
+            <div v-if="detailPrize.card.cardNo">
+              <dt>卡號</dt>
+              <dd class="mono">{{ detailPrize.card.cardNo }}</dd>
+            </div>
+            <div>
+              <dt>取得</dt>
+              <dd class="mono">{{ localDay(detailPrize.acquiredAt) }}</dd>
+            </div>
+            <!-- 參考價的標籤一定要寫死「賣家標示」——不寫的話它讀起來像
+                 平台認證過的行情，而它只是賣家或登記人自己填的數字。 -->
+            <div>
+              <dt>賣家標示參考價</dt>
+              <dd class="mono">{{ refPriceText(detailPrize.card.refPrice) }}</dd>
+            </div>
+          </dl>
+
+          <CardProvenance :prize="detailPrize" />
+        </div>
+      </div>
+    </Teleport>
+
     <Teleport to="body">
       <div v-if="confirmPrize" class="sheetWrap" @click.self="closeConfirm">
         <div id="recycleSheet" class="sheet card" role="dialog" aria-modal="true" aria-label="確認按買回價換回" tabindex="-1">
@@ -2236,6 +2305,38 @@ async function copyLink() {
    .sheetWrap（fixed inset:0），跑到整個視窗的右上角去 —— 實測就是這樣。
    只加在這一張上，不動出貨面板（那張沒有關閉鍵，多一個定位脈絡沒有意義）。 */
 .chosenSheet { position: relative; }
+
+/* ---- 詳細資訊 ----
+   跟回收確認共用 .sheetWrap / .sheet，這裡只補內容的排版。 */
+/* position: relative 不可以少：.sheetClose 是 absolute，而 .sheet 本身
+   沒有定位，所以少了這一行它會跳出去貼在 .sheetWrap（fixed 全螢幕）的
+   右上角 —— 關閉鍵會出現在畫面最上方、壓在頁首上。
+   .chosenSheet 早就為了同一件事加過這一行。 */
+.detailSheet { position: relative; display: grid; gap: 10px; justify-items: start; }
+.dTitle {
+  margin: 0; padding-right: 40px;  /* 讓出右上角的關閉鍵 */
+  font-size: 16px; line-height: 1.35; overflow-wrap: anywhere;
+}
+.dTags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+/* 兩欄的資料列。標籤固定寬、值靠左 —— 值不對齊的話一堆數字讀起來像散的 */
+.dRows {
+  margin: 0; width: 100%; min-width: 0;
+  display: grid; gap: 6px;
+  padding: 10px 0; border-block: 1px solid var(--line-soft);
+}
+.dRows > div {
+  display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px;
+  align-items: baseline;
+}
+.dRows dt { font-size: 11.5px; color: var(--faint); }
+.dRows dd {
+  margin: 0; min-width: 0;
+  font-size: 12.5px; color: var(--ink); overflow-wrap: anywhere;
+}
+
+/* 面板裡那顆開詳細資訊的鍵。通欄跟兩顆動作鍵一致，但用次要樣式 ——
+   它不是這張卡的主要動作，出貨與回收才是。 */
+.detailBtn { width: 100%; min-height: 44px; }
 .sheetClose {
   position: absolute; right: 10px; top: 10px;
   width: 34px; height: 34px; display: grid; place-items: center;
