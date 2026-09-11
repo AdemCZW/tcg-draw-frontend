@@ -43,7 +43,7 @@ export interface UserDetail {
 export interface Shipment {
   id: string; userId: string; userHandle: string; userName: string | null
   address: { name?: string; phone?: string; zip?: string; city?: string; line1?: string }
-  status: 'requested' | 'packed' | 'shipped' | 'delivered'
+  status: 'requested' | 'packed' | 'shipped' | 'delivered' | 'cancelled'
   tracking: string | null; createdAt: number; shippedAt: number | null
   prizes: { id: string; name?: string; tier: string }[]
 }
@@ -73,11 +73,13 @@ export interface AuditAction {
 /* ---------- 狀態文案 ----------
    後端存英文碼，畫面一律顯示中文。對照表放這裡，不放各頁的模板裡。 */
 export const SHIP_LABEL: Record<string, string> = {
-  requested: '待處理', packed: '已包裝', shipped: '已寄出', delivered: '已送達'
+  requested: '待處理', packed: '已包裝', shipped: '已寄出', delivered: '已送達',
+  cancelled: '已取消'
 }
-/** 出貨的下一步。null = 已到終點，沒有可推進的動作。 */
+/** 出貨的下一步。null = 已到終點，沒有可推進的動作。
+ *  cancelled：單上的卡全部退款了，系統自動取消，沒有東西可寄。 */
 export const SHIP_NEXT: Record<string, 'packed' | 'shipped' | 'delivered' | null> = {
-  requested: 'packed', packed: 'shipped', shipped: 'delivered', delivered: null
+  requested: 'packed', packed: 'shipped', shipped: 'delivered', delivered: null, cancelled: null
 }
 export const TIER_LABEL: Record<string, string> = {
   pending: '待審核', verified: '已驗證', trusted: '信任'

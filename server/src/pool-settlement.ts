@@ -376,6 +376,38 @@ export async function refund(tx: Tx, s: SettlementRow, now: number) {
   }
 
   await tx`update prizes set status = 'refunded' where id = ${s.prizeId}`
+  /* 這張卡如果已經在出貨單上，要從單上拿掉（monitor 的 zombie-shipment）。
+     原本只改卡不改單：買家申請了出貨、賣家逾期、錢退了，出貨佇列裡那張單
+     卻還是「待處理」—— 後台照著佇列按不會復活卡（admin.ts 有狀態守衛），
+     但客服會一直看到一件不存在的待辦。
+
+     拿掉之後的三種結局，同一句 UPDATE 一次決定：
+       單上沒有卡了           → cancelled
+       剩下的卡全都已經寄出   → shipped（markShipped 的「整單寄出」條件
+                                 原本被這張永遠不會寄出的卡擋住）
+       還有卡沒寄             → 維持 requested
+     只動 requested：packed 以後是人已經在處理的單，不能在他手上把卡抽走。
+     這一列在 sweepSettlements 的上鎖階段已經鎖好了（理由同上面的 users）。 */
+  await tx`
+    update shipments sh
+       set prize_ids = array_remove(sh.prize_ids, ${s.prizeId}::text),
+           status = case
+             when cardinality(array_remove(sh.prize_ids, ${s.prizeId}::text)) = 0 then 'cancelled'
+             when not exists (
+               select 1 from prizes p
+                where p.id = any(array_remove(sh.prize_ids, ${s.prizeId}::text)) and p.status <> 'shipped'
+             ) then 'shipped'
+             else sh.status
+           end,
+           shipped_at = case
+             when cardinality(array_remove(sh.prize_ids, ${s.prizeId}::text)) > 0 and not exists (
+               select 1 from prizes p
+                where p.id = any(array_remove(sh.prize_ids, ${s.prizeId}::text)) and p.status <> 'shipped'
+             ) then coalesce(sh.shipped_at, ${now})
+             else sh.shipped_at
+           end
+     where sh.status = 'requested' and ${s.prizeId}::text = any(sh.prize_ids)
+  `
   await tx`update sellers set default_count = default_count + 1 where id = ${s.sellerId}`
 
   /* 內文寫**實際退回的總額**，不是票金。轉手過的卡兩者不一樣，
@@ -649,6 +681,16 @@ export async function sweepSettlements(tx: Tx, userId?: string): Promise<number>
   const sellerIds = [...new Set(due.map(c => c.seller_id as string))].sort()
   await tx`select id from users where id = any(${sellerIds}) order by id for update`
   await tx`select id from sellers where id = any(${sellerIds}) order by id for update`
+  /* 第四張表：出貨單。refund() 會把退款的卡從單上拿掉，而**一張單可以
+     混多個賣家的卡**（F-9）—— 兩支掃描各退一張、兩張在同一張單上，
+     邊走邊鎖就又是那個環。所以一樣在這裡整批鎖、照 id 排序。
+     擺在最後：全站是 prizes → … → shipments，後台出貨與賣家出貨都是
+     先卡後單，這裡沒有多出反方向的邊。 */
+  await tx`
+    select id from shipments
+     where status = 'requested' and prize_ids && ${prizeIds}::text[]
+     order by id for update
+  `
 
   let changed = 0
   for (const cand of due) {

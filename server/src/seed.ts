@@ -689,6 +689,12 @@ async function retireStalePools() {
      池還沒建好的時候查不到可掛的池，這正是上面那個迴圈不能順手做掉的原因。 */
   for (const [id, c, , sellerId, , delivery] of listings) {
     if (delivery !== 'vault') continue
+    /* 掛單已經不是 live（被買走或下架了）就不要補卡。
+       原本這裡一律寫成 'listed'：掛單早就結束，卡卻剛被標成上架中，
+       於是那張卡上架不行、下架不行（delist 只收 live 掛單）、開池也不行，
+       monitor 的 listing-prize-desync 抓到的 pz-l-seed-3 / 5 就是這樣來的。 */
+    const [lst] = await sql<{ status: string }[]>`select status from listings where id = ${id}`
+    if (lst?.status !== 'live') continue
     const [pool] = await sql<{ id: string }[]>`
       select id from pools where seller_id = ${sellerId} order by id limit 1
     `

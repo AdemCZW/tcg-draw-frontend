@@ -357,6 +357,11 @@ admin.post('/shipments/:id/status', async c => {
     const [sh] = await tx`select * from shipments where id = ${id} for update`
     if (!sh) return { error: 'NOT_FOUND', message: '找不到這筆出貨單', status: 404 }
 
+    /* cancelled 不在順序表裡，indexOf 是 -1 —— 不先擋的話任何狀態都「比它後面」，
+       一張已取消的空單會被推成已包裝、已寄出。 */
+    if (sh.status === 'cancelled') {
+      return { error: 'WRONG_STATE', message: '這張出貨單已經取消（上面的卡都退款了）', status: 409 }
+    }
     const order = ['requested', 'packed', 'shipped', 'delivered']
     if (order.indexOf(status) <= order.indexOf(sh.status as string)) {
       return { error: 'WRONG_STATE', message: `目前是「${sh.status}」，不能改回或重複設定`, status: 409 }

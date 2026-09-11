@@ -288,7 +288,7 @@ export type PrizeSort = 'acquired' | 'dupes' | 'value'
 export interface BuyerShipment {
   id: string
   /** 平台側的履行進度。賣家標出貨時後端會一起把它改成 shipped */
-  status: 'requested' | 'packed' | 'shipped' | 'delivered'
+  status: 'requested' | 'packed' | 'shipped' | 'delivered' | 'cancelled'
   /**
    * 這張單是誰建的。**卡冊那一格要講的就是這個**：
    * `auto-stash-expiry` = 寄存期滿系統自動申請的，他沒有按過任何按鈕。

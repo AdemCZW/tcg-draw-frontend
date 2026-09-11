@@ -145,6 +145,13 @@ const ADDRESS = { realName: '自動出貨測試', phone: '0912345678', addressZi
 
 const platform = await login('platform', 'VaultDraw 官方')
 const buyer = await login('autoship-buyer', '有地址的買家')
+/* 第 3 組的素材要走「上架」，而上架現在先檢查賣家聯絡方式（public.ts 的
+   NEED_CONTACT，migration 041）。這一支測的不是那道閘，直接把素材備齊。 */
+await sql`
+  insert into sellers (id, handle, name, origin, tier, contact_kind, contact_value)
+  values (${buyer.userId}, 'autoship-buyer', '有地址的買家', 'personal', 'verified', 'line', 'autoship-test')
+  on conflict (id) do update set contact_kind = 'line', contact_value = 'autoship-test'
+`
 const noaddr = await login('autoship-noaddr', '沒填地址的買家')
 const seller = await login('seller', '種子賣家')
 for (const u of [buyer.userId, noaddr.userId]) {
@@ -256,7 +263,9 @@ head('3 listed / in_pool / ship_requested / shipped / recycled 都不動')
   const [pzListed, pzReq, pzShipped, pzRecycled] = await draw(buyer.token, 4)
 
   // listed：上架（庫內轉移）
-  const lr = await post(buyer.token, '/v1/listings', { prizeId: pzListed, price: 4000 })
+  /* 2000 而不是 4000：抽出來的是裸卡，沒有成交紀錄的賣家單筆上限 3,000
+     （shared/escrow.ts 的 rawListingCap）。這一組要的只是「一張 listed 的卡」。 */
+  const lr = await post(buyer.token, '/v1/listings', { prizeId: pzListed, price: 2000 })
   ck('素材：上架成功', lr.ok, `${lr.status} ${await lr.clone().text()}`)
 
   // ship_requested：買家自己申請出貨
@@ -357,6 +366,7 @@ head('5 賣家不寄：走既有的違約流程')
 
   /* 把時鐘往回撥 —— 用的是既有的 /v1/dev/rewind-settlement，它只動時間戳。
      撥完之後仍然由正常的 sweepSettlements() 去判斷該發生什麼。 */
+  const shBefore = await shipmentsFor(pz!)
   await rewind(pz!, 5 * DAY)
   /* 觸發結算掃描的方式也照既有的：賣家讀自己的出貨頁就會補算。
      刻意不打任何新端點 —— 那正是「接上去、不另造」要證明的事。 */
@@ -371,6 +381,16 @@ head('5 賣家不寄：走既有的違約流程')
   note(refunded
     ? '走的是 refund()：票金還在保留額裡，原路退給買家並記一次違約'
     : '走的是 markShipDefault()（F-5）：票金已結算所以不退款，只記違約')
+  if (refunded) {
+    /* monitor 的 zombie-shipment：退款後出貨單不能還停在「待處理」 */
+    const ids = shBefore.map(x => x.id as string)
+    const shs = await sql<Any[]>`select id, status, prize_ids from shipments where id = any(${ids}::text[])`
+    ck('素材：退款前這張卡在出貨單上', ids.length > 0, `${ids.length} 張`)
+    ck('退款後原本那張出貨單不再是「待處理」，而且卡已經從單上拿掉',
+      shs.length === ids.length && shs.every(x =>
+        x.status !== 'requested' && !(x.prize_ids as string[]).includes(pz!)),
+      JSON.stringify(shs.map(x => [x.status, x.prize_ids])))
+  }
   ck('賣家的違約次數 +1（用的是既有的 sellers.default_count，不是新欄位）',
     Number(sellerAfter?.default_count) === Number(sellerBefore?.default_count) + 1,
     `${sellerBefore?.default_count} → ${sellerAfter?.default_count}`)
