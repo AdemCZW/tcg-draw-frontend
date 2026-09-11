@@ -54,8 +54,10 @@ orders.get('/', async c => {
        正好是訂單已經結案之後：包裹被退回、買家要找賣家安排重寄。
        結案就收回去的話，那條路剛好在需要它的時候斷掉。
 
-       這不是個資外洩：sellers.contact_value 是賣家為了對外聯絡自己填的，
-       跟 users.phone（物流用的個資、從不對外）刻意分成兩欄存。 */
+       這不是個資外洩：users.contact_value 是賣家為了對外聯絡自己填的，
+       跟 users.phone（物流用的個資、從不對外）刻意分成兩欄存。
+       讀 users 不讀 sellers（migration 043）：市場上的賣方常常是轉賣的一般玩家，
+       他沒有 sellers 那一列，讀 sellers 的話買家永遠看不到他的聯絡方式。 */
     const canSeeSeller = sql`o.buyer_id = ${me}`
     const rows = await tx`
       select o.*,
@@ -64,13 +66,13 @@ orders.get('/', async c => {
              case when ${canShip} then b.address_zip   end as ship_zip,
              case when ${canShip} then b.address_city  end as ship_city,
              case when ${canShip} then b.address_line1 end as ship_line1,
-             case when ${canSeeSeller} then s.contact_kind  end as seller_contact_kind,
-             case when ${canSeeSeller} then s.contact_value end as seller_contact_value
+             case when ${canSeeSeller} then su.contact_kind  end as seller_contact_kind,
+             case when ${canSeeSeller} then su.contact_value end as seller_contact_value
         from orders o
         join users b on b.id = o.buyer_id
-        /* left join：賣家在 sellers 表裡不一定有列（舊資料、或賣家身分
-           被移除過）。inner join 會讓那幾筆訂單整個從清單上消失。 */
-        left join sellers s on s.id = o.seller_id
+        /* left join：保守起見。orders.seller_id 理論上一定對得到 users，
+           但 inner join 一旦對不到，那幾筆訂單會整個從清單上消失。 */
+        left join users su on su.id = o.seller_id
        where o.buyer_id = ${me} or o.seller_id = ${me}
        order by o.created_at desc
     `

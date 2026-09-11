@@ -145,13 +145,17 @@ const ADDRESS = { realName: '自動出貨測試', phone: '0912345678', addressZi
 
 const platform = await login('platform', 'VaultDraw 官方')
 const buyer = await login('autoship-buyer', '有地址的買家')
-/* 第 3 組的素材要走「上架」，而上架現在先檢查賣家聯絡方式（public.ts 的
-   NEED_CONTACT，migration 041）。這一支測的不是那道閘，直接把素材備齊。 */
-await sql`
-  insert into sellers (id, handle, name, origin, tier, contact_kind, contact_value)
-  values (${buyer.userId}, 'autoship-buyer', '有地址的買家', 'personal', 'verified', 'line', 'autoship-test')
-  on conflict (id) do update set contact_kind = 'line', contact_value = 'autoship-test'
-`
+/* 第 3 組的素材要走「上架」，而上架先檢查聯絡方式（public.ts 的 NEED_CONTACT）。
+   這個買家**不是賣家**，所以走一般玩家的那支 /v1/auth/contact（migration 043）——
+   順便證明一般玩家填完就上架得了，不需要先申請賣家。 */
+{
+  const r = await fetch(`${base}/v1/auth/contact`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${buyer.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'line', value: 'autoship-test' })
+  })
+  if (!r.ok) throw new Error(`contact: ${r.status} ${await r.text()}`)
+}
 const noaddr = await login('autoship-noaddr', '沒填地址的買家')
 const seller = await login('seller', '種子賣家')
 for (const u of [buyer.userId, noaddr.userId]) {

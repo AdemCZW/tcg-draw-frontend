@@ -20,6 +20,8 @@ import type { UserPrize } from '@/types/models'
 import CardArt from '@/components/CardArt.vue'
 import TierBadge from '@/components/TierBadge.vue'
 import { refPriceText } from '@/lib/refprice'
+import { CONTACT_KINDS, contactBlockWhy } from '@/lib/contact'
+import type { SellerContact } from '@/types/models'
 
 const route = useRoute()
 const router = useRouter()
@@ -97,7 +99,40 @@ async function load() {
     loading.value = false
   }
 }
-onMounted(load)
+/* ── 買家聯絡得到你的方式 ────────────────────────────────────────────
+   上架前必填（後端 NEED_CONTACT）。原本只有「賣家設定」填得了，而那一頁
+   要先有賣家身分 —— 一般玩家轉賣抽到的卡會被擋下來，而且沒有任何地方可以填。
+   所以直接在這一頁填：沒填過就把表單攤開，按「確認上架」時先存它再上架。
+   填過的只顯示一行，想改再展開。 */
+const contact = ref<SellerContact | null>(null)
+const contactLoaded = ref(false)
+const cKind = ref<SellerContact['kind']>('line')
+const cValue = ref('')
+const cHint = computed(() => CONTACT_KINDS.find(x => x.k === cKind.value)?.hint ?? '')
+const cPh = computed(() => CONTACT_KINDS.find(x => x.k === cKind.value)?.ph ?? '')
+const cLabel = computed(() => CONTACT_KINDS.find(x => x.k === contact.value?.kind)?.label ?? '')
+/** 表單攤開時才有門檻；已經有存好的聯絡方式就不擋 */
+const contactWhy = computed(() => (contact.value ? '' : contactBlockWhy(cValue.value)))
+
+async function loadContact() {
+  try {
+    contact.value = await api.myContact()
+  } catch {
+    /* 讀不到就當沒填、把表單攤開。填過的人多填一次只是覆寫成同一個值；
+       反過來把「讀不到」當成「有填」，上架會被後端擋下來而頁面沒有表單可填。 */
+    contact.value = null
+  } finally {
+    contactLoaded.value = true
+  }
+}
+function editContact() {
+  if (!contact.value) return
+  cKind.value = contact.value.kind
+  cValue.value = contact.value.value
+  contact.value = null
+}
+
+onMounted(() => { void load(); void loadContact() })
 
 const total = computed(() =>
   cards.value.reduce((a, p) => a + (price.value[p.id] || 0), 0))
@@ -121,23 +156,15 @@ const LIST_CAP = 4
 const blockWhy = computed(() => {
   if (busy.value || !cards.value.length) return ''
   const miss = priceMissing.value
-  if (!miss.length) return ''
+  if (!miss.length) return contactLoaded.value ? contactWhy.value : ''
   const shown = miss.slice(0, LIST_CAP).join('、')
   const rest = miss.length > LIST_CAP ? `等 ${miss.length} 張` : ''
   return `還差 ${miss.length} 張的售價（要大於 0）：${shown}${rest}。`
 })
-const ready = computed(() => cards.value.length > 0 && priceMissing.value.length === 0)
+const ready = computed(() =>
+  cards.value.length > 0 && priceMissing.value.length === 0 && contactLoaded.value && !contactWhy.value)
 
 const err = ref('')
-/**
- * 沒填對外聯絡方式（NEED_CONTACT）。
- *
- * 跟市場頁的 NEED_ADDRESS 是同一種失敗：使用者知道要做什麼，但不知道在哪裡做，
- * 而這一頁到賣家設定沒有任何路。所以另外立一個旗標，樣板據它多給一條連結。
- * 判準用 ApiError.code 不比對訊息字串 —— 文案改了判斷就會失效
- * （照 MarketListingPage 的 needAddress 那一段）。
- */
-const needContact = ref(false)
 /** 部分成功也要講清楚是哪幾張成功了，不要只說「失敗」讓人不知道現在的狀態 */
 const done = ref<{ ok: string[]; failed: string[] } | null>(null)
 
@@ -145,8 +172,18 @@ async function submit() {
   if (!ready.value || busy.value) return
   busy.value = true
   err.value = ''
-  needContact.value = false
   done.value = null
+  /* 聯絡方式先存。存不進去就一張都不上架 —— 否則每一張都會撞同一個 NEED_CONTACT */
+  if (!contact.value) {
+    try {
+      contact.value = (await api.updateContact({ kind: cKind.value, value: cValue.value })).contact
+    } catch (e) {
+      err.value = e instanceof ApiError ? e.message : '聯絡方式存不進去，請稍後再試'
+      busy.value = false
+      return
+    }
+  }
+  let needContact = false
   const ok: string[] = []
   const failed: string[] = []
   for (const p of cards.value) {
@@ -157,11 +194,12 @@ async function submit() {
       })
       ok.push(p.card.name)
     } catch (e) {
-      /* NEED_CONTACT 的門檻在**賣家身上**，不在卡上 —— 繼續跑只會把同一句話
-         重複 N 次（每一次還要等一趟往返），而且會把一個「你少填一欄」
-         畫成「二十張卡全部失敗」。停下來，把訊息升到頁面層級並附上出口。 */
+      /* NEED_CONTACT 的門檻在**人身上**，不在卡上 —— 繼續跑只會把同一句話
+         重複 N 次，而且會把一個「你少填一欄」畫成「二十張卡全部失敗」。
+         停下來，把表單攤開讓他在這一頁補（例如別的分頁剛把聯絡方式清掉）。 */
       if (e instanceof ApiError && e.code === 'NEED_CONTACT') {
-        needContact.value = true
+        needContact = true
+        contact.value = null
         err.value = e.message
         break
       }
@@ -172,7 +210,7 @@ async function submit() {
   /* 一張都還沒送出去就被擋下來時不要畫結果區：那會多出一塊空的「已上架／未成功」，
      而使用者要看的是上面那句話跟那條連結。 */
   if (ok.length || failed.length) done.value = { ok, failed }
-  if (ok.length && !failed.length && !needContact.value) {
+  if (ok.length && !failed.length && !needContact) {
     setTimeout(() => router.replace({ name: 'cards' }), 1600)
   }
 }
@@ -278,6 +316,40 @@ async function submit() {
         </li>
       </ul>
 
+      <!-- 買家聯絡得到你的方式。擺在卡片清單之後、送出列之前：
+           它是「確認上架」的最後一個前提，放在頁首會被兩塊交付說明淹掉。 -->
+      <section v-if="contactLoaded" class="contact card" aria-labelledby="contactH">
+        <template v-if="contact">
+          <p id="contactH" class="cLine">
+            買家聯絡得到你的方式：<b>{{ cLabel }}・{{ contact.value }}</b>
+          </p>
+          <button type="button" class="btn sm cEdit" @click="editContact">修改</button>
+        </template>
+        <template v-else>
+          <p id="contactH" class="cT">留一個買家聯絡得到你的方式</p>
+          <p class="cB">
+            <b>跟你成交的買家看得到這一欄。</b>包裹被退回、買家有疑問時，他要找得到你。
+            這跟會員資料裡寄件用的電話是兩回事，那一支不會公開。
+          </p>
+          <fieldset class="kinds">
+            <legend class="lg">種類</legend>
+            <label v-for="k in CONTACT_KINDS" :key="k.k" class="kind" :class="{ on: cKind === k.k }">
+              <input v-model="cKind" type="radio" :value="k.k" name="listContactKind">
+              <span>{{ k.label }}</span>
+            </label>
+          </fieldset>
+          <label class="field">
+            <span class="lg">內容</span>
+            <input
+              v-model="cValue" type="text" :placeholder="cPh"
+              :inputmode="cKind === 'phone' ? 'tel' : 'text'"
+              autocomplete="off" maxlength="64" data-testid="list-contact"
+            >
+          </label>
+          <p class="hint">{{ cHint }}</p>
+        </template>
+      </section>
+
       <div class="bar card">
         <!-- 理由跟按鈕同一格、就在它正上方：這條列是 sticky，按鈕永遠看得到，
              把理由放在別的地方等於又要使用者去找。role="status" 讓讀屏在
@@ -297,15 +369,10 @@ async function submit() {
         </div>
       </div>
 
-      <!-- 沒填聯絡方式是唯一一種「錯誤訊息本身就該附帶出口」的失敗：
-           後端的訊息已經說清楚為什麼要填，缺的只是「在哪裡填」。
-           連結獨立成一顆按鈕，不寫在句子中間 —— 行內連結的可點高度只有
-           一行字，手機上按不到（同訂單頁的 .askBtn）。 -->
+      <!-- 沒填聯絡方式不再附「去賣家設定」的連結：那一頁要先有賣家身分，
+           一般玩家點進去只會看到「你還不是賣家」。表單就在上面。 -->
       <div v-if="err" class="msg bad" role="alert">
         <p>{{ err }}</p>
-        <RouterLink v-if="needContact" class="errGo" :to="{ name: 'seller-settings' }">
-          去賣家設定填聯絡方式
-        </RouterLink>
       </div>
       <div v-if="done" class="msg" :class="done.failed.length ? 'bad' : 'ok'" role="status">
         <p v-if="done.ok.length">已上架：{{ done.ok.join('、') }}</p>
@@ -419,12 +486,40 @@ h1 { font-size: 20px; margin: 0; }
    整塊反白得跟頁面其他區塊不同語言。改走狀態權杖，兩個主題各自有值。 */
 .msg.ok { background: var(--ok-wash); color: var(--ok-ink); }
 .msg.bad { background: var(--danger-wash); color: var(--danger-ink); }
-/* 出口鍵。color: inherit 讓它待在錯誤區塊自己的配色裡（同 MarketListingPage
-   的 .errGo），只靠底線與 44px 的高度說明它可以按 */
-.errGo {
-  display: inline-flex; align-items: center; min-height: 44px;
-  margin-top: 2px; font-weight: 700; color: inherit;
-  text-decoration: underline; text-underline-offset: 3px;
-  overflow-wrap: anywhere;
+/* ---- 聯絡方式 ----
+   種類按鈕與輸入框照抄 SellerSettingsPage，兩頁寫的是同一個欄位，長得一樣才認得出來 */
+.contact { margin-top: 14px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.cLine { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.cLine b { color: var(--ink); font-weight: 600; }
+.cEdit { justify-self: start; min-height: 44px; }
+.cT { margin: 0; font-size: 14px; font-weight: 700; color: var(--ink); }
+.cB { margin: 0; font-size: 12.5px; line-height: 1.75; color: var(--muted); overflow-wrap: anywhere; }
+.cB b { color: var(--ink); font-weight: 600; }
+.lg { font-size: 12px; color: var(--muted); }
+.kinds {
+  border: 0; margin: 0; padding: 0; display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
 }
+.kinds .lg { grid-column: 1 / -1; }
+.kind {
+  position: relative;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 44px; min-width: 0; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: var(--pill);
+  background: var(--surface-2); color: var(--muted);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  overflow-wrap: anywhere; text-align: center;
+}
+.kind.on { border-color: var(--accent); background: var(--accent-wash); color: var(--accent); }
+.kind input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.kind:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.field { display: grid; gap: 5px; min-width: 0; }
+.field input {
+  min-height: 44px; min-width: 0;
+  padding: 10px 12px; font: inherit; font-size: 16px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--field, var(--surface-2)); color: var(--ink);
+}
+.field input:focus { outline: none; border-color: var(--accent); }
+.contact .hint { margin: -4px 0 0; overflow-wrap: anywhere; }
 </style>

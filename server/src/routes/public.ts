@@ -895,11 +895,14 @@ pub.post('/listings', requireAuth, async c => {
 
        只擋需要人聯絡的情況？不 —— 兩種交付都擋。庫內轉移雖然賣家不用寄，
        但買家之後申請出貨、原賣家不出貨時，一樣要找得到人。 */
-    const [sc] = await tx`select contact_value from sellers where id = ${me}`
+    /* 讀 users 不讀 sellers（migration 043）：一般玩家轉賣抽到的卡也走這裡，
+       他沒有 sellers 那一列。原本讀 sellers 的版本讓一般玩家永遠被擋，
+       而且沒有任何地方可以填。上架頁現在可以直接填（/v1/auth/contact）。 */
+    const [sc] = await tx`select contact_value from users where id = ${me}`
     if (!sc || !String(sc.contact_value ?? '').trim()) {
       return {
         error: 'NEED_CONTACT',
-        message: '上架前請先在賣家設定填一個買家聯絡得到你的方式（手機或 LINE ID）。'
+        message: '上架前請先留一個買家聯絡得到你的方式（手機或 LINE ID）。'
           + '包裹被退回、買家有疑問時，他需要找得到你。',
         status: 409
       }

@@ -25,13 +25,8 @@ import { computed, onMounted, ref } from 'vue'
 import { api } from '@/lib/api'
 import { ApiError } from '@/lib/http'
 import type { SellerContact } from '@/types/models'
-
-/** 三種種類各自要講不同的話：提示、輸入模式、以及買家那側能不能直接撥 */
-const KINDS: { k: SellerContact['kind']; label: string; hint: string; ph: string }[] = [
-  { k: 'phone', label: '手機', hint: '買家可以直接撥給你。', ph: '09xx-xxx-xxx' },
-  { k: 'line', label: 'LINE ID', hint: '買家只能複製後自己搜尋加你 —— 記得先把「允許被加入好友」打開。', ph: '你的 LINE ID' },
-  { k: 'other', label: '其他', hint: '例如 IG 帳號、電子郵件。買家只能複製，平台不會替你轉接。', ph: 'IG 帳號、email…' }
-]
+/* 種類清單跟上架頁共用：一般玩家在上架頁填的是同一個欄位（server migration 043） */
+import { CONTACT_KINDS as KINDS } from '@/lib/contact'
 
 const loading = ref(true)
 const loadErr = ref('')

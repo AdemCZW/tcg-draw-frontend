@@ -1045,6 +1045,34 @@ export const api = {
     return { contact: { kind: r.contactKind, value: r.contactValue } }
   },
 
+  /**
+   * 我的對外聯絡方式（不限賣家）。上架頁用它決定要不要先請人填。
+   * 來源是 users（server migration 043）—— 一般玩家轉賣也要留。
+   */
+  async myContact(): Promise<SellerContact | null> {
+    if (MOCK) {
+      await delay(80)
+      return mockContact
+    }
+    const r = await http<{ contactKind: string | null; contactValue: string | null }>('/v1/auth/contact')
+    return toSellerContact({ contact_kind: r.contactKind, contact_value: r.contactValue })
+  },
+
+  /** 填／改對外聯絡方式（不限賣家）。訊息是中文，直接顯示 */
+  async updateContact(input: SellerContact): Promise<{ contact: SellerContact }> {
+    const value = input.value.trim()
+    if (MOCK) {
+      await delay(240)
+      if (value.length < 3) throw new ApiError('BAD_REQUEST', '聯絡方式太短', 400)
+      if (value.length > 64) throw new ApiError('BAD_REQUEST', '聯絡方式最多 64 個字', 400)
+      mockContact = { kind: input.kind, value }
+      return { contact: mockContact }
+    }
+    const r = await http<{ ok: true; contactKind: SellerContact['kind']; contactValue: string }>(
+      '/v1/auth/contact', { method: 'PUT', json: { kind: input.kind, value } })
+    return { contact: { kind: r.contactKind, value: r.contactValue } }
+  },
+
   /** 申請成為賣家。通過審核前 tier = pending，開池會被擋 */
   async applySeller(input: { name: string; origin: 'merchant' | 'personal'; bio?: string }) {
     if (MOCK) { await delay(300); return { seller: { id: 'me', tier: 'pending' }, already: false } }

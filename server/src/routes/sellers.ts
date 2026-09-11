@@ -21,6 +21,7 @@ import { markShipped, sweepSettlements, toSettlement } from '../pool-settlement.
 import { sweep as sweepOrders, toOrder } from '../orders-service.js'
 import { validateTracking } from '../shared/escrow.js'
 import { openSellerDocTicket } from '../tickets.js'
+import { Contact } from '../contact.js'
 
 export const sellers = new Hono()
 sellers.use('*', requireAuth)
@@ -31,12 +32,13 @@ sellers.get('/me', async c => {
     /* default_count（逾期未出貨的次數）要給賣家自己看得到 ——
        它會直接決定「還能不能開新池」，看不到的話賣家只會在建池時
        撞到一個沒有預警的 403 */
-    select id, handle, name, origin, tier, bio, joined_at, default_count,
-           /* 賣家自己的聯絡方式。要回給他自己看 —— 上架前必填（見
-              routes/public.ts 的 NEED_CONTACT），沒有這兩欄前端就無法
-              在被擋下來之前先提醒他，只能等 409 才知道。 */
-           contact_kind, contact_value
-      from sellers where id = ${c.get('userId')}
+    select s.id, s.handle, s.name, s.origin, s.tier, s.bio, s.joined_at, s.default_count,
+           /* 聯絡方式。要回給他自己看 —— 上架前必填（見 routes/public.ts 的
+              NEED_CONTACT），沒有這兩欄前端就無法在被擋下來之前先提醒他。
+              讀 users 不讀 sellers：043 之後權威來源在 users（一般玩家也會填）。 */
+           u.contact_kind, u.contact_value
+      from sellers s join users u on u.id = s.id
+     where s.id = ${c.get('userId')}
   `
   if (!s) return c.json({ seller: null })
   const [v] = await sql`
@@ -59,15 +61,7 @@ sellers.get('/me', async c => {
  * 交給雙方自己談。但買家那一側現在完全沒有聯絡管道（站上也沒有私訊），
  * 「自己去談」在他那邊開不了口。這一欄就是那條路的前提。
  */
-const CONTACT_KIND = ['phone', 'line', 'other'] as const
-const Contact = z.object({
-  kind: z.enum(CONTACT_KIND),
-  /* 上限 64 對齊 migration 041 的說明。不驗格式 —— LINE ID 的規則沒有
-     公開的權威定義，而把合法的 ID 擋下來比放進一個怪字串更糟：
-     真正會發現填錯的是聯絡不上的買家，那時候賣家自己會來改。
-     手機那一種給一個寬鬆的提示性檢查就好。 */
-  value: z.string().trim().min(3, '聯絡方式太短').max(64, '聯絡方式最多 64 個字')
-})
+/* 輸入規則在 ../contact.ts，跟一般玩家那支 /v1/auth/contact 共用。 */
 
 /**
  * PUT /sellers/me/contact —— 填或改對外聯絡方式。
@@ -83,11 +77,17 @@ sellers.put('/me/contact', async c => {
     return c.json({ error: 'BAD_REQUEST', message: parsed.error.issues[0]?.message ?? '參數不合法' }, 400)
   }
   const { kind, value } = parsed.data
-  const done = await sql`
-    update sellers set contact_kind = ${kind}, contact_value = ${value}
-     where id = ${me} returning id
-  `
-  if (!done.length) {
+  const r = await sql.begin(async tx => {
+    const done = await tx`
+      update sellers set contact_kind = ${kind}, contact_value = ${value}
+       where id = ${me} returning id
+    `
+    if (!done.length) return false
+    /* 權威來源是 users（migration 043）。sellers 那兩欄只為滾動部署期間的舊版保留。 */
+    await tx`update users set contact_kind = ${kind}, contact_value = ${value} where id = ${me}`
+    return true
+  })
+  if (!r) {
     return c.json({ error: 'NOT_SELLER', message: '你還不是賣家，請先送出賣家申請' }, 404)
   }
   return c.json({ ok: true, contactKind: kind, contactValue: value })

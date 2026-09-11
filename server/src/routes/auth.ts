@@ -9,6 +9,7 @@ import { promisify } from 'node:util'
 import { sql } from '../db.js'
 import { bumpSessionVersion, issueToken, requireAuth } from '../auth.js'
 import { bumpFail, checkLimit, clearFails, clientIp } from '../rate-limit.js'
+import { Contact } from '../contact.js'
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number) => Promise<Buffer>
 
@@ -262,6 +263,34 @@ auth.put('/profile', requireAuth, async c => {
     where id = ${me}
   `
   return c.json({ ok: true })
+})
+
+/**
+ * 對外聯絡方式 —— 任何會上架的人都要有，不限賣家（migration 043）。
+ *
+ * 不併進 /profile：那一頁的電話是寄件用的個資，這一欄相反，會給買家看。
+ * 放在同一個表單裡，使用者分不出哪一格是公開的。
+ */
+auth.get('/contact', requireAuth, async c => {
+  const [u] = await sql`select contact_kind, contact_value from users where id = ${c.get('userId')}`
+  if (!u) return c.json({ error: 'UNAUTHORIZED', message: '帳號不存在' }, 401)
+  return c.json({ contactKind: u.contact_kind ?? null, contactValue: u.contact_value ?? null })
+})
+
+auth.put('/contact', requireAuth, async c => {
+  const me = c.get('userId')
+  const parsed = Contact.safeParse(await c.req.json().catch(() => null))
+  if (!parsed.success) {
+    return c.json({ error: 'BAD_REQUEST', message: parsed.error.issues[0]?.message ?? '參數不合法' }, 400)
+  }
+  const { kind, value } = parsed.data
+  await sql.begin(async tx => {
+    await tx`update users set contact_kind = ${kind}, contact_value = ${value} where id = ${me}`
+    /* 舊欄位一起寫，理由見 migration 043（滾動部署期間舊版還會讀它）。
+       不是賣家的話這句影響 0 列，不是錯誤。 */
+    await tx`update sellers set contact_kind = ${kind}, contact_value = ${value} where id = ${me}`
+  })
+  return c.json({ ok: true, contactKind: kind, contactValue: value })
 })
 
 auth.get('/me', requireAuth, async c => {
