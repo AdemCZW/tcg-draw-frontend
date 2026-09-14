@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AppBottomNav from '@/components/AppBottomNav.vue'
@@ -13,6 +13,13 @@ const route = useRoute()
  */
 const chrome = computed(() => route.meta.chrome ?? 'full')
 const showChrome = computed(() => chrome.value !== 'none')
+
+/* 回彈只在抽卡演出相關的頁面關掉（見 base.css 的 lock-overscroll）。
+   掛在 html 上而不是頁面根元素：overscroll-behavior 只對捲動容器有效，
+   整頁捲動的容器是 html/body，頁面自己的 div 關了沒有作用。 */
+watchEffect(() => {
+  document.documentElement.classList.toggle('lock-overscroll', !!route.meta.lockOverscroll)
+})
 
 </script>
 

@@ -22,6 +22,8 @@ declare module 'vue-router' {
     depth?: number
     /** 分頁標題，afterEach 會套上 */
     title?: string
+    /** 關掉捲到盡頭的回彈與下拉重新整理（抽卡演出不能被重載打斷）。見 base.css */
+    lockOverscroll?: boolean
   }
 }
 
@@ -95,12 +97,12 @@ export const router = createRouter({
     {
       path: '/pools/:id/pick', name: 'pool-pick',
       component: () => import('@/pages/TicketPickPage.vue'),
-      meta: { requiresAuth: true, depth: 3, chrome: 'none', title: '選籤' }
+      meta: { requiresAuth: true, depth: 3, chrome: 'none', title: '選籤', lockOverscroll: true }
     },
     {
       path: '/draw/:drawId', name: 'draw-result',
       component: () => import('@/pages/DrawResultPage.vue'),
-      meta: { requiresAuth: true, depth: 4, chrome: 'none', title: '開卡結果' }
+      meta: { requiresAuth: true, depth: 4, chrome: 'none', title: '開卡結果', lockOverscroll: true }
     },
     {
       path: '/sellers/:id', name: 'seller',

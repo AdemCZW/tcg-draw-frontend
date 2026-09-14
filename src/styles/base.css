@@ -21,7 +21,10 @@ body {
     radial-gradient(circle at 50% 50%, transparent 17px, color-mix(in srgb, var(--line-soft) 45%, transparent) 17.6px, color-mix(in srgb, var(--line-soft) 45%, transparent) 18.3px, transparent 19px),
     radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--line-soft) 55%, transparent) 0 2.6px, transparent 3.2px);
   background-size: 128px 128px, 128px 128px;
-  background-attachment: fixed;
+  /* 刻意不用 background-attachment: fixed。花紋固定、內容在上面捲的話，
+     瀏覽器沒辦法把捲動交給合成層平移，每一幀都要重畫整個視窗 ——
+     跟 cardbase 比捲動手感時量到的第一個差距（Android／桌機最明顯，
+     iOS 本來就忽略 fixed）。花紋極淡、週期 128px，跟著捲幾乎看不出差別。 */
 }
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
@@ -84,11 +87,20 @@ a, button, [role="button"], [role="tab"], [role="switch"], .ticket, .chip, .pool
   -webkit-touch-callout: default;
 }
 
-/* 下拉重新整理關掉。
-   抽卡演出進行中不小心往下拉會整頁重載 —— 演出白跑、
-   而且開卡結果頁靠 sessionStorage 還原，重載雖然救得回來，
-   但那一刻的體驗已經斷了。橫向的則是避免觸發瀏覽器的返回手勢。 */
+/* 捲到頂／底的回彈。
+   原本整站 overscroll-behavior: none —— 為了抽卡演出時不被下拉重新整理打斷。
+   代價是 iOS 上每一頁捲到盡頭都是硬停，沒有系統的回彈，手感「頓頓的」，
+   跟 cardbase 比的時候差最多的就是這個。
+
+   所以縱向只在需要的頁面關：選籤與開卡結果（route meta 的 lockOverscroll，
+   App.vue 把它掛成 html 上的 class）。開卡結果頁靠 sessionStorage 還原，
+   重載救得回來，但演出那一刻會斷掉。
+   橫向整站維持關閉，避免觸發瀏覽器的返回手勢。 */
 html, body {
+  overscroll-behavior-x: none;
+}
+html.lock-overscroll,
+html.lock-overscroll body {
   overscroll-behavior: none;
 }
 input, select { font-family: inherit; }
