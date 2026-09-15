@@ -9,6 +9,11 @@
  *      再把那個八位數編號自己抄一遍。類型、鑑定機構、編號、主旨全部帶著進來，
  *      他要做的只剩「說明你怎麼拿到這張卡」。
  *
+ *   3. 買家從訂單上的「檢舉這個賣家」過來（report=seller）—— 帶著訂單編號與賣家編號。
+ *      沒有另開一種 kind：tickets.kind 有資料庫 check 約束，而檢舉在客服端的處理
+ *      就是人工看、人工結案，跟 other 走的是同一條路。差別只在「查得到是哪一筆」，
+ *      那兩個編號附在內文最後面就夠了（同 OrderIssue 的做法與理由）。
+ *
  * order-dispute 與 seller-doc 不在可選清單裡（labels.ts 有寫理由），
  * 但頁面上要**講出來**它們去哪了 —— 找不到「訂單爭議」的人會以為平台沒有這個管道。
  */
@@ -60,6 +65,11 @@ const q = (k: string) => {
   return typeof v === 'string' ? v : ''
 }
 
+/* 檢舉賣家帶進來的參照。只收識別碼長相的字串：網址是誰都能改的，
+   不認得的東西寧可丟掉，也不要原樣塞進主旨與內文給客服看。 */
+const ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+const report = reactive({ on: false, order: '', seller: '' })
+
 onMounted(() => {
   const k = q('kind') as OpenKind
   if (OPENABLE_KINDS.some(o => o.k === k)) form.kind = k
@@ -67,6 +77,18 @@ onMounted(() => {
   const grader = q('grader').trim()
   if (cert) form.certNo = cert
   if (grader) form.grader = grader.toUpperCase()
+  if (q('report') === 'seller') {
+    const order = q('order').trim()
+    const seller = q('seller').trim()
+    report.order = ID_RE.test(order) ? order : ''
+    report.seller = ID_RE.test(seller) ? seller : ''
+    /* 兩個編號都沒有的話，這張單跟一般的「其他」沒有差別，就不假裝它是檢舉 */
+    if (report.order || report.seller) {
+      report.on = true
+      form.kind = 'other'
+      form.subject = report.order ? `檢舉賣家（訂單 ${report.order}）` : '檢舉賣家'
+    }
+  }
   /* 主旨預填成「接管 PSA #12345678」。使用者可以改 ——
      預填是省他一次抄寫，不是替他決定。 */
   if (cert && form.kind === 'takeover') {
@@ -109,7 +131,7 @@ const problems = computed<{ anchor: string; msg: string }[]>(() => {
   if (!subject) out.push({ anchor: 'tk-subject', msg: '主旨還沒填' })
   else if (subject.length > SUBJECT_MAX) out.push({ anchor: 'tk-subject', msg: `主旨最多 ${SUBJECT_MAX} 字` })
   if (!body) out.push({ anchor: 'tk-body', msg: '說明還沒填' })
-  else if (body.length > BODY_MAX) out.push({ anchor: 'tk-body', msg: `說明最多 ${BODY_MAX} 字` })
+  else if (body.length > bodyMax.value) out.push({ anchor: 'tk-body', msg: `說明最多 ${bodyMax.value} 字` })
   if (isTakeover.value) {
     /* 接管單一定要有編號與鑑定機構：沒有這兩個，客服端連「這張卡現在登記在誰名下」
        都查不到，那張單一開就是死的。後端也會擋（契約第三節）。 */
@@ -162,6 +184,26 @@ function pickKind(k: OpenKind) {
   }
 }
 
+/* 參照附在內文最後，不塞進使用者正在打的那一格：預填進 textarea 的話
+   很容易被整段刪掉，客服就只拿到一張查不到是哪一筆的檢舉。
+   換成別的類型就不附 —— 那時候他要問的已經不是這個賣家了。 */
+function withReportRefs(body: string): string {
+  if (!report.on || form.kind !== 'other') return body
+  const lines = ['', '——', '檢舉賣家']
+  if (report.order) lines.push(`訂單編號：${report.order}`)
+  if (report.seller) lines.push(`賣家編號：${report.seller}`)
+  return body + '\n' + lines.join('\n')
+}
+
+/* 附上去的參照也算在後端 2000 字裡。不先扣掉的話，寫滿的人按送出會被
+   後端以「說明最多 2000 個字」打回來 —— 而他畫面上的計數明明沒超過。 */
+/* 整句在 script 裡拼好，理由同 autoNote：模板裡分段拼會在句號後面多出一格空白 */
+const reportWhy = computed(() =>
+  (report.order ? `訂單編號 ${report.order} 會自動附在這張單上。` : '賣家編號會自動附在這張單上。')
+  + '請寫下發生了什麼，例如對方要求站外匯款、收款後失聯；有對話截圖請一起附上。')
+
+const bodyMax = computed(() => BODY_MAX - withReportRefs('').length)
+
 async function submit() {
   attempted.value = true
   attemptSeq.value++
@@ -174,7 +216,7 @@ async function submit() {
     const t = await store.create({
       kind: form.kind,
       subject: form.subject.trim(),
-      body: form.body.trim(),
+      body: withReportRefs(form.body.trim()),
       fileIds: fileIds.value,
       certNo: isTakeover.value ? form.certNo.trim() : undefined,
       grader: isTakeover.value ? form.grader.trim().toUpperCase() : undefined
@@ -211,6 +253,16 @@ async function submit() {
         {{ blockedWhy }}
         接管通過之後，這張卡的擁有權會轉到你名下，你就可以拿它開池或上架。
         下面只剩一件事要做：說明你是怎麼拿到這張實體卡的。
+      </p>
+    </aside>
+
+    <!-- 從訂單的「檢舉這個賣家」過來：講清楚這張單會帶著哪一筆，
+         以及該寫什麼。聯絡方式不在網址裡帶過來，這裡也不顯示 ——
+         客服拿訂單編號查得到。 -->
+    <aside v-if="report.on && form.kind === 'other'" class="snFrom" role="note" data-testid="report-from">
+      <strong class="snFromT">檢舉賣家</strong>
+      <p class="snFromP">
+        {{ reportWhy }}
       </p>
     </aside>
 
@@ -291,15 +343,15 @@ async function submit() {
             id="tk-body" v-model="form.body" class="snInput snArea"
             :class="{ bad: !!missText('tk-body') }"
             :aria-invalid="!!missText('tk-body') || undefined"
-            :maxlength="BODY_MAX" rows="7"
+            :maxlength="bodyMax" rows="7"
             :placeholder="isTakeover
               ? '你在哪裡買的、跟誰買的、什麼時候拿到的。有交易紀錄的話一起附上，處理會快很多。'
               : '把發生的事、你已經試過什麼、以及你希望怎麼處理寫清楚。'"
           ></textarea>
         </label>
         <p v-if="missText('tk-body')" class="snMiss">{{ missText('tk-body') }}</p>
-        <p class="snCount mono" :class="{ near: form.body.length > BODY_MAX - 100 }">
-          {{ form.body.length }} / {{ BODY_MAX }}
+        <p class="snCount mono" :class="{ near: form.body.length > bodyMax - 100 }">
+          {{ form.body.length }} / {{ bodyMax }}
         </p>
       </section>
 

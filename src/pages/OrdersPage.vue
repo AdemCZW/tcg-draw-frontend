@@ -47,6 +47,7 @@ import SellerChip from '@/components/SellerChip.vue'
    而分岔的那一份會對使用者講錯誰拿得到錢。 */
 import PointsFlow from '@/components/PointsFlow.vue'
 import OrderIssue from '@/components/OrderIssue.vue'
+import ScamNotice from '@/components/ScamNotice.vue'
 import { api } from '@/lib/api'
 import { MOCK } from '@/lib/config'
 import { useMediaQuery } from '@/composables/useMediaQuery'
@@ -822,6 +823,9 @@ async function doDispute(o: Order) {
           這是賣家自己填的對外聯絡方式。平台不代為聯絡，也不經手實體卡 ——
           寄送、重寄與運費請直接跟他談，報上面的訂單編號最快。
         </p>
+        <!-- 防詐提醒緊貼在聯絡方式底下：買家複製 LINE ID 準備去站外談的那一刻，
+             這是他最後一眼看到的站內畫面（理由見 ScamNotice 檔頭） -->
+        <ScamNotice :order-id="r.o.id" :seller-id="r.o.sellerId" />
       </section>
 
       <!-- 時限：整套機制的重點，放最顯眼 -->
