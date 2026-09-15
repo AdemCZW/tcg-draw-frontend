@@ -10,6 +10,7 @@
 import { applyDeadlines, actionsFor, depositFor, rawListingCap, looksLikeTracking, DAY, HOUR } from './shared/escrow.js'
 import { cardNumbersAgree } from './card-cert.js'
 import type { Order } from './shared/domain.js'
+import { collectorLevelFor, collectorLevelName, collectorProgress, COLLECTOR_LEVELS } from './shared/collector.js'
 
 const base: Order = {
   id: 'o1', listingId: 'l1', card: {} as Order['card'], price: 1000, deposit: 100,
@@ -244,6 +245,36 @@ check('任一邊沒有值就不擋（沒有東西可以比）',
 /* 一邊完全湊不出英數字（例如 PSA 回了一串符號）：沒有東西可以拆成
    「編號／總數」，退回整串比對；比不出結論就放行，不硬擋。 */
 check('一邊湊不出英數字時退回整串比對', !cardNumbersAgree('--', '331') && cardNumbersAgree('--', '#'))
+
+console.log('\nshared/collector 等級換算：')
+check('0 分 → 等級 0', collectorLevelFor(0) === 0)
+check('負分與 NaN 都當 0', collectorLevelFor(-3) === 0 && collectorLevelFor(Number.NaN) === 0)
+check('1 分 → 等級 1', collectorLevelFor(1) === 1)
+check('9 分還是等級 1', collectorLevelFor(9) === 1)
+check('10 分 → 等級 2', collectorLevelFor(10) === 2)
+check('30 分 → 等級 3', collectorLevelFor(30) === 3)
+check('100 分 → 等級 4', collectorLevelFor(100) === 4)
+check('299 分 → 等級 4', collectorLevelFor(299) === 4)
+check('300 分 → 等級 5', collectorLevelFor(300) === 5)
+check('超過最高門檻仍是 5', collectorLevelFor(99999) === 5)
+check('小數無條件捨去（9.9 → 等級 1）', collectorLevelFor(9.9) === 1)
+check('等級名稱', collectorLevelName(1) === '新手收藏家' && collectorLevelName(5) === '傳奇收藏家')
+check('等級 0 沒有名稱', collectorLevelName(0) === null && collectorLevelName(6) === null)
+check('等級表遞增且共 5 級', COLLECTOR_LEVELS.length === 5 &&
+  COLLECTOR_LEVELS.every((d, i) => i === 0 || d.min > COLLECTOR_LEVELS[i - 1]!.min))
+{
+  const p = collectorProgress(42)
+  check('42 分：等級 3、下一級門檻 100、還差 58', p.level === 3 && p.nextMin === 100 && p.toNext === 58)
+  check('42 分：區間進度 (42-30)/(100-30)', Math.abs(p.ratio - 12 / 70) < 1e-9)
+}
+{
+  const p = collectorProgress(0)
+  check('0 分：等級 0、下一級門檻 1、還差 1、進度 0', p.level === 0 && p.nextMin === 1 && p.toNext === 1 && p.ratio === 0)
+}
+{
+  const p = collectorProgress(500)
+  check('滿級：沒有下一級、進度 1', p.level === 5 && p.nextMin === null && p.toNext === null && p.ratio === 1)
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
