@@ -201,10 +201,23 @@ if (!r2Public) {
 /* ── 4. 其他 HTML 入口要有一模一樣的 CSP ────────────────────────────
    404.html 與五條靜態路由頁都是 seo.mjs 從 index.html 複製出來的真入口。
    任何一份被改到少了 CSP，那條路徑就是沒有保護的 —— 而且從首頁完全看不出來。 */
+const demoDir = join(dist, 'demo')
 for (const f of files) {
   if (f === indexPath) continue
   const other = extractCsp(await readFile(f, 'utf8'))
   const rel = relative(root, f)
+  /* dist/demo/ 是 public/demo/ 原樣複製的靜態示意頁，不是 app 的入口：
+     它們不連後端、不上傳，而 index.html 的 CSP 帶著隨建置環境變動的網域，
+     寫死進靜態檔等於換一次後端就要手改。所以這裡不要求逐字相同，
+     改成要求「自己有 CSP，而且 script-src 不開 inline / eval」—— 保護的底線不變。 */
+  if (f.startsWith(demoDir + '/')) {
+    if (other === null) { fail(`${rel} 沒有 CSP meta（示意頁也要有自己的 CSP）`); continue }
+    const scripts = parse(other).get('script-src') ?? parse(other).get('default-src') ?? []
+    if (scripts.includes("'unsafe-inline'") || scripts.includes("'unsafe-eval'")) {
+      fail(`${rel} 的 script-src 開了 'unsafe-inline' 或 'unsafe-eval'`)
+    }
+    continue
+  }
   if (other === null) fail(`${rel} 沒有 CSP meta（index.html 有，這份沒有）`)
   else if (other !== csp) fail(`${rel} 的 CSP 跟 index.html 不一致`)
 }
