@@ -219,6 +219,12 @@ export const router = createRouter({
       meta: { depth: 1, title: '寶貝球設計' }
     },
     {
+      /* 收藏家徽章比較頁。比照 /design/pack 不掛導覽，網址直達。 */
+      path: '/design/collector', name: 'design-collector',
+      component: () => import('@/pages/DesignCollectorPage.vue'),
+      meta: { depth: 1, title: '收藏家徽章' }
+    },
+    {
       path: '/me/orders', name: 'orders',
       component: () => import('@/pages/OrdersPage.vue'),
       meta: { requiresAuth: true, depth: 2, title: '我的訂單' }
