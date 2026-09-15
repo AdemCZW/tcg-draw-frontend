@@ -74,15 +74,25 @@ const name = computed(() => collectorLevelName(props.level))
 /* 3：金 */
 .lv3 { border-color: color-mix(in srgb, var(--gold) 55%, var(--line)); }
 .lv3 .shield { fill: var(--gold); stroke: var(--gold-deep); }
-.lv3 .num { fill: var(--gold-deep); }
 /* 4：金＋內圈 */
 .lv4 { border-color: var(--gold); }
 .lv4 .shield { fill: var(--gold); stroke: var(--gold-deep); }
 .lv4 .inner { stroke: var(--gold-deep); }
-.lv4 .num { fill: var(--gold-deep); }
 /* 5：全息＋內圈 */
 .lv5 { border-color: var(--holo-b); }
 .lv5 .shield { stroke: var(--ink); }
 .lv5 .inner { stroke: var(--ink); }
-.lv5 .num { fill: var(--ink); }
+
+/* 3／4／5 級的數字：金色盾牌與全息漸層都偏亮、彼此明度又接近
+   （原本 lv3/4 用 --gold-deep 疊在 --gold 上，深色主題對比只有 1.03；
+   lv5 的 --ink 疊在全息漸層上，深色主題對比只有 1.3～2.3），
+   換成淺色字看起來還是「差不多亮」，讀不出數字。
+   --ink／--bg 這類權杖在兩套主題裡明暗會互換，沒有一支「兩套主題都是深色」，
+   所以用 :global([data-theme="light"]) 分開設：
+   深色主題（預設）用 --bg（近黑）疊在偏亮的金／全息底上，
+   淺色主題换成 --ink（該主題下同樣近黑），兩邊都量到 ≥ 4.5:1。 */
+.lv3 .num, .lv4 .num, .lv5 .num { fill: var(--bg); }
+:global([data-theme="light"]) .lv3 .num,
+:global([data-theme="light"]) .lv4 .num,
+:global([data-theme="light"]) .lv5 .num { fill: var(--ink); }
 </style>

@@ -20,7 +20,9 @@ const p = computed(() => collectorProgress(props.points))
     </div>
     <div
       class="bar" role="progressbar"
+      aria-label="升到下一級的進度"
       :aria-valuenow="Math.round(p.ratio * 100)" aria-valuemin="0" aria-valuemax="100"
+      :aria-valuetext="p.toNext === null ? '已達最高等級' : undefined"
     >
       <span class="fill" :style="{ width: `${Math.round(p.ratio * 100)}%` }"></span>
     </div>
