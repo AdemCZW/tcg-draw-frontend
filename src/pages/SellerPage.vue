@@ -5,6 +5,7 @@ import { useSellerStore } from '@/stores/sellers'
 import { usePoolStore } from '@/stores/pools'
 import PoolCard from '@/components/PoolCard.vue'
 import SellerChip from '@/components/SellerChip.vue'
+import CollectorBadge from '@/components/CollectorBadge.vue'
 import CardArt from '@/components/CardArt.vue'
 import TierBadge from '@/components/TierBadge.vue'
 import { isDrawable, isUpcoming, isFinished } from '@/lib/pool-status'
@@ -56,6 +57,7 @@ const gap = computed(() => {
   <div class="container page" v-if="seller">
     <header class="profile card">
       <SellerChip :seller="seller" size="md" :link="false" />
+      <CollectorBadge v-if="seller.collectorLevel" :level="seller.collectorLevel" class="lvBadge" />
       <p class="handle mono muted">@{{ seller.handle }} · 加入於 {{ seller.joinedAt }}</p>
       <p class="bio">{{ seller.bio }}</p>
 
@@ -199,4 +201,5 @@ section + section { margin-top: 30px; }
   .poolGrid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
   dd { font-size: 16px; }
 }
+.lvBadge { margin-top: 8px; }
 </style>

@@ -105,6 +105,7 @@ export const sellers: Seller[] = [
        注意：托管對所有賣家一視同仁，沒有誰是免托管的（見 EscrowNotice）。 */
     id: 's0', handle: 'vaultdraw', name: 'VaultDraw 示範店', tier: 'trusted', avatarHue: 14,
     joinedAt: '2025-01-01', bio: '平台自營池。全數由 VaultDraw 進貨、鑑定、直接出貨，糾紛由平台全責處理。',
+    collectorLevel: 5,
     stats: {
       poolsRun: 310, cardsShipped: 12480, avgShipDays: 1.2, disputeRate: 0.05,
       advertisedTopRate: 3.0, actualTopRate: 3.0, drawsSettled: 24600
@@ -117,6 +118,7 @@ export const sellers: Seller[] = [
   {
     id: 's1', handle: 'vaultkeeper', name: '保庫堂', tier: 'trusted', avatarHue: 28,
     joinedAt: '2025-03-11', bio: 'PSA / BGS 鑑定卡專門。開池前全數實拍上架，出貨附鑑定證書照。',
+    collectorLevel: 3,
     stats: {
       poolsRun: 142, cardsShipped: 3810, avgShipDays: 1.8, disputeRate: 0.2,
       advertisedTopRate: 2.5, actualTopRate: 2.6, drawsSettled: 8420
@@ -130,6 +132,7 @@ export const sellers: Seller[] = [
   {
     id: 's2', handle: 'promo_lab', name: '促販實驗室', tier: 'verified', avatarHue: 260,
     joinedAt: '2026-01-20', bio: '專收日版促販卡與 AR，小池快開快抽。',
+    collectorLevel: 2,
     stats: {
       poolsRun: 23, cardsShipped: 402, avgShipDays: 3.1, disputeRate: 1.1,
       advertisedTopRate: 4.0, actualTopRate: 3.8, drawsSettled: 910
@@ -142,6 +145,7 @@ export const sellers: Seller[] = [
   {
     id: 's3', handle: 'kanto_cards', name: '關都卡舖', tier: 'verified', avatarHue: 140,
     joinedAt: '2025-11-02', bio: '實體店第 8 年，線上同步開池。台北可自取。',
+    collectorLevel: 4,
     stats: {
       poolsRun: 67, cardsShipped: 1520, avgShipDays: 2.4, disputeRate: 0.6,
       advertisedTopRate: 3.0, actualTopRate: 3.1, drawsSettled: 3260
@@ -157,6 +161,7 @@ export const sellers: Seller[] = [
        但那只是還沒開夠多池。 */
     id: 's5', handle: 'grade10_vault', name: '滿分保庫', tier: 'trusted', avatarHue: 46,
     joinedAt: '2025-08-19', bio: '只收 PSA 10。單池 20 籤以內，每張都附鑑定編號可自行查證。',
+    collectorLevel: 1,
     stats: {
       poolsRun: 31, cardsShipped: 590, avgShipDays: 1.5, disputeRate: 0.1,
       advertisedTopRate: 4.0, actualTopRate: 4.2, drawsSettled: 620
@@ -173,6 +178,7 @@ export const sellers: Seller[] = [
        這件事的重點，不是拿來當行銷徽章。 */
     id: 's6', handle: 'nangang_box', name: '南港開箱王', tier: 'verified', avatarHue: 8,
     joinedAt: '2026-02-14', bio: '大量快開，主打銅板價入門池。出貨較慢請見諒。',
+    collectorLevel: 0,
     stats: {
       poolsRun: 88, cardsShipped: 2140, avgShipDays: 4.6, disputeRate: 2.3,
       advertisedTopRate: 3.5, actualTopRate: 2.7, drawsSettled: 5180
@@ -184,6 +190,7 @@ export const sellers: Seller[] = [
   {
     id: 's4', handle: 'newbie_seller', name: '新手賣家', tier: 'pending', avatarHue: 200,
     joinedAt: '2026-08-09', bio: '剛註冊，等待身分驗證中。',
+    collectorLevel: 5,
     stats: {
       poolsRun: 0, cardsShipped: 0, avgShipDays: 0, disputeRate: 0,
       advertisedTopRate: 0, actualTopRate: 0, drawsSettled: 0

@@ -104,6 +104,8 @@ export interface Seller {
   avatarHue: number
   joinedAt: string
   bio: string
+  /** 收藏家等級 0..5（見 src/shared/collector.ts）。後端還沒提供時不存在 */
+  collectorLevel?: number
   stats: {
     poolsRun: number
     cardsShipped: number

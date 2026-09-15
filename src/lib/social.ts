@@ -32,7 +32,12 @@ export interface PublicCard {
  * 講的是整本卡冊，不能拿載進來的那一頁去數，那個數字會隨著捲動一直長大。
  */
 export interface PublicCardbookPage {
-  owner: { name: string; handle: string }
+  owner: {
+    name: string
+    handle: string
+    /** 收藏家等級 0..5。後端還沒提供時不存在，畫面就不顯示徽章 */
+    collectorLevel?: number
+  }
   items: PublicCard[]
   nextCursor: string | null
   summary?: { count: number; tradable: number; totalValue: number }
@@ -161,7 +166,7 @@ export const share = {
       const items = mockBook.slice(from, from + limit)
       const end = from + items.length
       return {
-        owner: { name: '示範收藏家', handle: 'VD-DEMO' },
+        owner: { name: '示範收藏家', handle: 'VD-DEMO', collectorLevel: 3 },
         items,
         nextCursor: end < mockBook.length && items.length ? items[items.length - 1]!.id : null,
         ...(opts.cursor ? {} : { summary: {

@@ -1885,3 +1885,17 @@ export const monitorApi = {
     }
   }
 }
+
+/**
+ * 收藏積分（demo）。後端還沒有這支端點 —— 見
+ * docs/superpowers/specs/2026-09-15-collector-level-design.md 的第二步。
+ * 非 MOCK 一律回 null 而且**不發請求**：正式站打一支不存在的路由只會多一個 404，
+ * 畫面收到 null 就不顯示那一塊。
+ */
+export const collectorApi = {
+  async me(): Promise<{ points: number } | null> {
+    if (!MOCK) return null
+    await delay(120)
+    return { points: 42 }
+  }
+}

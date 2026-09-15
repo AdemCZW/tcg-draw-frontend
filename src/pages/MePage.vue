@@ -15,7 +15,8 @@ import { useOrdersStore } from '@/stores/orders'
 import RollingNumber from '@/components/RollingNumber.vue'
 import { hapticsEnabled, hapticsSupported, setHaptics } from '@/lib/haptics'
 import { FAIRNESS_UI } from '@/lib/config'
-import { trainerCardApi } from '@/lib/api'
+import { trainerCardApi, collectorApi } from '@/lib/api'
+import CollectorProgress from '@/components/CollectorProgress.vue'
 import { computed, ref } from 'vue'
 
 const router = useRouter()
@@ -38,12 +39,15 @@ const orders = useOrdersStore()
    後端，這裡只是決定要把人送到哪一頁。倒向擋住的話，一次網路抖動就會
    讓一個明明符合資格的人看到「你還沒登記過卡」—— 那是憑空的指控。 */
 const trainerEligible = ref<boolean | null>(null)
+/* 收藏家等級。讀不到（或正式站還沒有這支端點）就是 null，整塊不顯示 */
+const collector = ref<{ points: number } | null>(null)
 onMounted(() => {
   wallet.loadLedger()
   orders.load().catch(() => {})
   trainerCardApi.eligibility()
     .then(r => { trainerEligible.value = r.eligible })
     .catch(() => {})
+  collectorApi.me().then(r => { collector.value = r }).catch(() => {})
 })
 
 function logout() {
@@ -156,6 +160,8 @@ const paths: Record<string, string> = {
         <span class="go">儲值 →</span>
       </RouterLink>
     </header>
+
+    <CollectorProgress v-if="collector" :points="collector.points" />
 
     <ul class="menu">
       <li v-for="r in rows" :key="r.name">

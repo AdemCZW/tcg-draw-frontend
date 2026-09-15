@@ -16,6 +16,7 @@ import { useKeyboardInset } from '@/composables/useKeyboardInset'
 import { ApiError } from '@/lib/http'
 import { useAuthStore } from '@/stores/auth'
 import { useInfiniteList } from '@/composables/useInfiniteList'
+import CollectorBadge from '@/components/CollectorBadge.vue'
 import CardArt from '@/components/CardArt.vue'
 import TierBadge from '@/components/TierBadge.vue'
 import CertTag from '@/components/CertTag.vue'
@@ -28,7 +29,7 @@ const auth = useAuthStore()
 
 /* 卡冊本身是分批載入的（別人的收藏可能有幾百張，一次全塞進格線的是卡圖不是資料）。
    持有人與總覽只有第一批帶回來，所以存在列表之外 —— 它們不隨捲動改變。 */
-type Owner = { name: string; handle: string }
+type Owner = { name: string; handle: string; collectorLevel?: number }
 type Summary = { count: number; tradable: number; totalValue: number }
 const owner = ref<Owner | null>(null)
 const summary = ref<Summary | null>(null)
@@ -228,6 +229,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
           <div class="whoText">
             <h1>{{ owner.name }}</h1>
             <p class="handle mono">{{ owner.handle }}</p>
+            <!-- 收藏家等級。分享出去的人第一眼要看得到，所以放在名字正下方而不是統計列裡 -->
+            <CollectorBadge v-if="owner.collectorLevel" :level="owner.collectorLevel" class="lvBadge" />
           </div>
         </div>
 
@@ -531,4 +534,5 @@ h1 { font-size: 21px; margin: 0; line-height: 1.25; overflow-wrap: anywhere; }
   .sheet .btn.sm { padding: 11px 12px; font-size: 13.5px; min-height: 44px; }
   .acts { flex-direction: column; }
 }
+.lvBadge { margin-top: 6px; }
 </style>
